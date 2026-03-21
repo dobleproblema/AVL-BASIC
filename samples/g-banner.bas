@@ -1,0 +1,16 @@
+100 REM Banner
+110 DIM Char$(10)
+120 PAPER 0 : INK 5 'INK "1,1,1" so it becomes invisible
+130 SMALLFONT : CLG
+140 MOVE 0,15
+150 FOR C=0 TO 9 : READ Char$(C) : GDISP Char$(C) : NEXT
+160 PAPER 2 : INK 5
+170 BIGFONT
+180 FOR y=0 TO 15
+190 FOR x=0 TO 79
+200 IF TEST(x,y)<>RGB("black") THEN LOCATE x MOD 40,15*(x\40+1)-y:DISP Char$(x\8)
+210 NEXT x
+220 NEXT y
+225 SCREEN
+230 DATA " ", A, V, L, " ", B, A, S, I, C
+

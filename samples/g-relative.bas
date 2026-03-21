@@ -1,0 +1,12 @@
+10 CLG
+20 PLOT WIDTH\2,HEIGHT\2,"yellow"
+30 DRAWR 50,50,"red"
+40 DRAWR 50,0,"yellow"
+50 DRAWR 0,50, "green"
+60 DRAWR 0,-100, "green"
+70 DRAWR -100,0, "cyan"
+80 MOVER 50,50
+90 DRAWR 0,-50, "yellow"
+100 MOVER 0,50
+110 DRAWR 50,50, "blue"
+

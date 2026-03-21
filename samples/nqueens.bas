@@ -1,0 +1,32 @@
+100 REM N-Queens
+110 N=16
+120 DIM CL(N)
+130 Prev=RW=0
+140 CL(RW)=-1
+150 Done1=Done2=0
+155 T1=TIME
+160 WHILE RW>=0 AND NOT Done1
+170     CL(RW)=CL(RW)+1
+180     WHILE CL(RW)<N AND NOT Done2
+190             Valid=1
+200             FOR Prev=0 TO RW-1
+210                     IF (CL(Prev)=CL(RW) OR ABS(CL(Prev)-CL(RW))=(RW-Prev)) THEN Valid=0:GOTO 230
+220             NEXT
+230             IF Valid THEN Done2=-1 ELSE CL(RW)=CL(RW)+1
+240     WEND
+250     Done2=0
+260     IF CL(RW)>=N THEN CL(RW)=0:RW=RW-1:GOTO 280
+270     IF RW=N-1 THEN Done1=-1 ELSE RW=RW+1:CL(RW)=-1
+280 WEND
+290 IF NOT Done1 THEN PRINT "No solution.":END
+300 PRINT "   "; : FOR C=1 TO N : PRINT USING "##"; C; : NEXT : PRINT
+310 PRINT STRING$(2*N+3,"-")
+320 FOR R=0 TO N-1
+330     PRINT USING "##|";R+1;
+340     FOR C= 0 TO N-1
+350     IF CL(R)=C THEN PRINT "  "; ELSE PRINT "[]";
+360     NEXT
+370     PRINT
+380 NEXT
+390 PRINT : PRINT "Elapsed time:";ROUND(TIME-T1,2)
+

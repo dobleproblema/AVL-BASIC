@@ -1,0 +1,142 @@
+100 REM 3D surface. Rasterization with Z-buffer + Gouraud shading
+105 DEG : T1=TIME
+110 SCRW=WIDTH : SCRH=HEIGHT
+115 REM Mesh and domain parameters
+120 NX=50 : NY=50 : TOT=NX*NY*2
+125 XR0=-2.5 : XR1=2.5 : YR0=-2.5 : YR1=2.5
+130 DEF FNZ(X,Y)=(X^2+3*Y^2)*EXP(1-X^2-Y^2)
+135 REM Camera parameters
+140 SCAL=80 : ALPHA=235 : BETA=45
+145 CA=COS(ALPHA) : SA=SIN(ALPHA) : CB=COS(BETA) : SB=SIN(BETA)
+150 REM Light (in world coordinates)
+155 EL=25 : AZ=135
+160 LX=COS(EL)*COS(AZ) : LY=COS(EL)*SIN(AZ) : LZ=SIN(EL)
+165 REM Color
+170 GRAD=0 '0=Linear blue-red, 1=Rainbow
+175 LUZAMB=0.15 : LUZGAN=0.9
+180 REM Main arrays
+185 DIM ZBUF(SCRW,SCRH)
+190 FOR Y=0 TO SCRH-1 : FOR X=0 TO SCRW-1 : ZBUF(X,Y)=-1E+30 : NEXT X : NEXT Y
+195 DIM VX(NX+1,NY+1), VY(NX+1,NY+1), VZ(NX+1,NY+1)
+200 DIM VI(NX+1,NY+1) 'Vertex brightness (0-255)
+205 DIM TX0(TOT),TY0(TOT), TX1(TOT),TY1(TOT), TX2(TOT),TY2(TOT) 'Projection
+210 DIM TI0(TOT),TI1(TOT),TI2(TOT)                              'Vertex brightness
+215 DIM TR(TOT),TG(TOT),TB(TOT)                                 'Base color
+220 DIM TD0(TOT),TD1(TOT),TD2(TOT)                              'Depth per vertex
+225 DX=(XR1-XR0)/NX : DY=(YR1-YR0)/NY
+230 ZMIN=1E+30 : ZMAX=-1E+30
+235 REM Generate vertices and their brightness
+240 FOR I=0 TO NX
+245   X=XR0+I*DX
+250   FOR J=0 TO NY
+255     Y=YR0+J*DY
+260     Z=FNZ(X,Y)
+265     'Approximate normal using analytical derivatives
+270     FX=2*X*EXP(1-X*X-Y*Y)*(1-(X*X+3*Y*Y))
+275     FY=2*Y*EXP(1-X*X-Y*Y)*(3-(X*X+3*Y*Y))
+280     NXV=-FX : NYV=-FY : NZV=1
+285     LNG=SQR(NXV*NXV+NYV*NYV+1)
+290     DOT=(NXV*LX+NYV*LY+NZV*LZ)/LNG
+295     IF DOT<0 THEN DOT=0
+300     VI(I,J)=INT((LUZAMB+LUZGAN*DOT)*255) 'Intensity (brightness)
+305     IF VI(I,J)>255 THEN VI(I,J)=255
+310     VX(I,J)=X : VY(I,J)=Y : VZ(I,J)=Z
+315     IF Z<ZMIN THEN ZMIN=Z
+320     IF Z>ZMAX THEN ZMAX=Z
+325   NEXT J
+330 NEXT I
+335 REM Build the triangles
+340 K=-1
+345 FOR I=0 TO NX-1
+350   FOR J=0 TO NY-1
+355     GOSUB 435 'Triangle 1: (i,j)-(i+1,j)-(i+1,j+1)
+360     GOSUB 470 'Triangle 2: (i,j)-(i+1,j+1)-(i,j+1)
+365   NEXT J
+370 NEXT I
+375 TOT=K+1
+380 REM Draw
+385 CLG
+390 FOR K=0 TO TOT-1
+395   X0=TX0(K) : Y0=TY0(K) : D0=TD0(K) : BR0=TI0(K)
+400   X1=TX1(K) : Y1=TY1(K) : D1=TD1(K) : BR1=TI1(K)
+405   X2=TX2(K) : Y2=TY2(K) : D2=TD2(K) : BR2=TI2(K)
+410   RC=TR(K) : GC=TG(K) : BC=TB(K)
+415   GOSUB 680 'Raster
+420 NEXT K
+425 PRINT "Elapsed time: "; TIME-T1
+430 END
+435 REM Front triangle (i,j) (i+1,j) (i+1,j+1)
+440 X0=VX(I,J) : Y0=VY(I,J) : Z0=VZ(I,J)
+445 X1=VX(I+1,J) : Y1=VY(I+1,J) : Z1=VZ(I+1,J)
+450 X2=VX(I+1,J+1) : Y2=VY(I+1,J+1) : Z2=VZ(I+1,J+1)
+455 BT0=VI(I,J) : BT1=VI(I+1,J) : BT2=VI(I+1,J+1)
+460 GOSUB 505
+465 RETURN
+470 REM Rear triangle (i,j) (i+1,j+1) (i,j+1)
+475 X0=VX(I,J) : Y0=VY(I,J) : Z0=VZ(I,J)
+480 X1=VX(I+1,J+1) : Y1=VY(I+1,J+1) : Z1=VZ(I+1,J+1)
+485 X2=VX(I,J+1) : Y2=VY(I,J+1) : Z2=VZ(I,J+1)
+490 BT0=VI(I,J) : BT1=VI(I+1,J+1) : BT2=VI(I,J+1)
+495 GOSUB 505
+500 RETURN
+505 REM Process triangle and store it
+510 K=K+1
+515 REM Depth of each vertex
+520 TD0(K)=-SB*(X0*SA+Y0*CA)+CB*Z0
+525 TD1(K)=-SB*(X1*SA+Y1*CA)+CB*Z1
+530 TD2(K)=-SB*(X2*SA+Y2*CA)+CB*Z2
+535 REM Base color (from average height)
+540 ZAVG=(Z0+Z1+Z2)/3
+545 T=(ZAVG-ZMIN)/(ZMAX-ZMIN)
+550 IF GRAD THEN GOSUB 620 ELSE GOSUB 650
+555 TR(K)=R : TG(K)=G : TB(K)=B
+560 TI0(K)=BT0 : TI1(K)=BT1 : TI2(K)=BT2 'Vertex brightness (already computed)
+565 REM Project and shift to the center of the screen
+570 X2P=X0*CA-Y0*SA : Y2P=X0*SA+Y0*CA : Y3P=Y2P*CB+Z0*SB
+575 TX0(K)=X2P*SCAL+SCRW/2 : TY0(K)=Y3P*SCAL+SCRH/2
+580 X2P=X1*CA-Y1*SA : Y2P=X1*SA+Y1*CA : Y3P=Y2P*CB+Z1*SB
+585 TX1(K)=X2P*SCAL+SCRW/2 : TY1(K)=Y3P*SCAL+SCRH/2
+590 X2P=X2*CA-Y2*SA : Y2P=X2*SA+Y2*CA : Y3P=Y2P*CB+Z2*SB
+595 TX2(K)=X2P*SCAL+SCRW/2 : TY2(K)=Y3P*SCAL+SCRH/2
+600 REM Back-face culling
+605 AREA2=(TX1(K)-TX0(K))*(TY2(K)-TY0(K))-(TY1(K)-TY0(K))*(TX2(K)-TX0(K))
+610 IF AREA2<0 THEN K=K-1
+615 RETURN
+620 REM Rainbow (phase-shifted sine waves)
+625 H=T*360
+630 R=INT(127.5*(SIN(H)+1))
+635 G=INT(127.5*(SIN(H+120)+1))
+640 B=INT(127.5*(SIN(H+240)+1))
+645 RETURN
+650 REM Linear blue-red
+655 R=INT(255*T)
+660 G=0
+665 B=INT(255*(1-T))
+670 RETURN
+675 REM Triangle with Gouraud fill + Z-buffer
+680 MINX=INT(MIN(X0,X1,X2)) : MAXX=INT(MAX(X0,X1,X2))
+685 MINY=INT(MIN(Y0,Y1,Y2)) : MAXY=INT(MAX(Y0,Y1,Y2))
+690 IF MINX<0 THEN MINX=0
+695 IF MINY<0 THEN MINY=0
+700 IF MAXX>=SCRW THEN MAXX=SCRW-1
+705 IF MAXY>=SCRH THEN MAXY=SCRH-1
+710 DEN=(X1-X0)*(Y2-Y0)-(Y1-Y0)*(X2-X0)
+715 IF ABS(DEN)<1E-6 THEN RETURN
+720 DEN=1/DEN
+725 FOR Y=MINY TO MAXY
+730   FOR X=MINX TO MAXX
+735     W0=((X1-X)*(Y2-Y)-(Y1-Y)*(X2-X))*DEN
+740     IF W0<0 THEN 790
+745     W1=((X2-X)*(Y0-Y)-(Y2-Y)*(X0-X))*DEN
+750     IF W1<0 THEN 790
+755     W2=1-W0-W1 : IF W2<0 THEN 790
+760     DEPTH=W0*D0+W1*D1+W2*D2
+765     IF DEPTH<=ZBUF(X,Y) THEN 790
+770     ZBUF(X,Y)=DEPTH
+775     BR=W0*BR0+W1*BR1+W2*BR2
+780     INK RGB((RC*BR)\255,(GC*BR)\255,(BC*BR)\255)
+785     PLOT X,Y
+790   NEXT X
+795 NEXT Y
+800 FRAME : RETURN 'Display the triangle and return
+

@@ -1,0 +1,8 @@
+10 CLG
+20 a$=INKEY$
+30 IF a$="" THEN 20
+40 a=ASC(a$)
+50 IF a>31 THEN PRINT a$; ELSE PRINT " ";
+60 PRINT " [";STR$(a);"]"
+70 GOTO 20
+

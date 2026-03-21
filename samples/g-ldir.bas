@@ -1,0 +1,27 @@
+10 CLG
+20 BIGFONT
+30 LDIR 0
+40 MOVE WIDTH\2,HEIGHT\2
+50 DISP "hello "
+55 GDISP "hello"
+60 LDIR 90
+70 DISP "hello "
+75 GDISP "hello "
+80 LDIR 0
+95 GDISP "hello "
+100 LDIR -90
+115 GDISP "hello"
+125 GDISP "hello "
+130 LDIR 180
+140 GDISP "hello"
+150 LDIR 270
+160 GDISP "hello  "
+170 LDIR 135
+180 GDISP " hello"
+190 GDISP "hello"
+200 GDISP "hello "
+210 LDIR 45
+220 GDISP "hello  "
+230 LDIR -90
+240 GDISP " hello"
+

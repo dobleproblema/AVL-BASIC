@@ -1,0 +1,1193 @@
+# AVL BASIC - Complete Manual
+*(Full user manual, 2025 edition)*
+License: GNU GPL version 3 or later. See `COPYING`.
+
+---
+
+Contents
+
+0.  - Requirements and installation
+0.1 - Design motivation
+0.2 - Font limitations
+1.  - Quick start
+1.1 - Code normalization
+2.  - Essential syntax
+3.  - Flow control
+4.  - Data and memory
+4.1 - Matrices and MAT
+5.  - Text input/output in the console
+5.1 - Text input/output in the graphics window
+6.  - Graphics environment
+6.1 - Window and coordinates
+6.2 - Basic plotting
+6.3 - Figures
+6.4 - Colors
+6.5 - Automatic axes
+6.6 - Screenshots and graphics files
+6.7 - Sprites
+6.8 - Mouse in the graphics window
+7.  - Interrupts
+8.  - System, time and debugging
+8.1 - Execution and resumption (RUN - STOP - CONT - END - CTRL+C)
+8.2 - Error handling
+9.  - "Immediate mode only" commands
+9.1 - Commands forbidden in immediate mode
+9.2 - Program editing (EDIT - RENUM - DELETE)
+9.3 - Other immediate utilities
+9.4 - Saving and loading programs
+10. - Built-in functions
+11. - Hexadecimal/Binary and bitwise logic
+
+0. Requirements and installation
+
+Requirements
+- Python 3.8 or later. The interpreter uses Python 3.8 features (for example, the walrus operator `:=`).
+- Tkinter (Tk 8.6+). Tkinter is included in the official Python distributions for Windows and macOS.
+
+Installation by system
+- Windows: install Python from https://www.python.org/downloads/ (tick "Add Python to PATH" during installation). You do not need anything else: Tkinter is already included.
+- macOS: install Python from https://www.python.org/downloads/. Tkinter (Tk 8.6) is already included. Avoid the system Python that comes preinstalled; the python.org build is the recommended one.
+- Linux: besides Python 3, install the Tk/Tkinter packages for your distro.
+  * Debian/Ubuntu: `sudo apt install python3 python3-tk tk`
+  * Fedora: `sudo dnf install python3-tkinter tk`
+  * Arch: `sudo pacman -S tk`
+  * openSUSE: `sudo zypper install python3-tk tk`
+  If you use Anaconda/Miniconda, nothing extra is usually needed; if necessary: `conda install python tk`.
+
+Quick check
+- `python3 -c "import tkinter as tk; print('Tk', tk.TkVersion)"` should print a Tk version (for example, 8.6).
+- Run the interpreter with `python3 basic.py`.
+
+0.1 Design motivation
+
+AVL BASIC is implemented as a single pure-Python file (`basic.py`) using Tk, including the bitmap font definitions themselves. Why?
+- Ease of use: you only need Python 3.8+ and Tk. There are no external dependencies and no package installation.
+- Simple installation and distribution: everything is a single of ~ 700 KB that you can copy and run on any machine.
+- Real portability: it works the same on Windows, macOS and Linux.
+- Reproducibility: because the fonts are embedded in `basic.py`, the visual appearance is identical without depending on system fonts.
+
+0.2 Font limitations
+
+The interpreter includes its own bitmap fonts to ensure a uniform appearance across all platforms. This implies some restrictions on the available character set:
+- At the moment, characters from the Latin alphabets used by most Western and Central European languages are supported.
+- Some special characters, accents or diaereses used by less common Latin alphabet variants are not included (Eastern European languages, for example).
+- Non-Latin alphabets (Greek, Cyrillic, Hebrew, etc.) and Eastern writing systems are not supported.
+
+1. Quick start
+
+10 AFTER 500 GOSUB 80
+20 PENWIDTH 4 : ORIGIN WIDTH\2,HEIGHT\2
+30 FOR I=1 TO 100
+40   T=TIME : A=I*2*PI/100 : X=90+60*SIN(5*A+T)
+50   PLOT X*COS(A+T),X*SIN(A+T),I MOD 7
+60 NEXT I
+70 FRAME : CLG : GOTO 30
+80 CLG : END
+
+Save the file with `SAVE "name"`. If you omit the `.bas` extension or the closing quote, the interpreter adds them automatically; for example, it will turn `save"flower` into `SAVE "flower.bas"`. Type `RUN` in the interpreter console to execute the program.
+
+If the first thing you want to do is try the examples included in the repository, a typical sequence is this:
+
+CD "samples"
+FILES "*.bas"
+RUN "g-demo.bas"
+CD "/"
+
+That is: enter `samples`, list the available examples, run one, and when you want to go back to the interpreter's root directory, use `CD "/"`.
+
+Quick notes
+- Use `RUN` to execute, `STOP` or CTRL+C to pause, and `CONT` to resume.
+- Program lines must start with a line number; working commands (`LIST`, `NEW`, ...) are used in immediate mode, without a line number (see 9).
+- This BASIC is case-insensitive for keywords and names.
+
+1.1 Code normalization
+
+Whenever you enter a line, the console automatically highlights the syntax: for example, keywords in bold italics, comments in green, or variables in cyan. If your terminal supports ANSI-256, a richer palette is used; otherwise the standard 16 colors are used.
+
+It also automatically normalizes what you type both in program lines and in immediate mode: it uppercases keywords, inserts required spaces, closes missing quotes in string commands, and gives numbers a canonical format. Indentation in the code is preserved.
+
+Although uppercase/lowercase is not significant, variables keep the style used the first time that variable appeared throughout the whole program. If you want to change the style of a variable, you must edit, with `EDIT`, any program line that contains it and retype it using the new style.
+
+2. Essential syntax
+
+Rules                Detail
++ Line number        Integer > 0, mandatory. It controls flow (`GOTO`, `GOSUB`, etc.).
++ Separator          : Several statements on the same line or after `THEN/ELSE`.
++ Comments           REM ... | ' ... (the latter does not need `:` before it).
++ Variables          Alphanumeric, 1-11 chars; strings end in $. Everything is global except the arguments of `DEF FN`.
++ Types              64-bit float, 14 significant digits | String | Multidimensional array (`DIM`, indices 0..N).
++ Operators          Arithmetic: + - * / \ ^ MOD | Comparisons: = <> > < >= <= | Logical: AND OR XOR NOT.
+
+Quick notes
+- Arrays start at 0 and the bounds are inclusive (0..N).
+- Functions without arguments are used without parentheses.
+- The `:` separator chains statements on one line; `'` comments to the end of the line.
+- String literals are delimited by double quotes (`"`), and these cannot appear inside them. Nothing is interpreted as a control character. Everything is literal text.
+
+3. Flow control
+
++ IF expression GOTO line [ELSE else-clause]                  `ELSE` always extends to the end of the line.
++ IF expression THEN then-clause [ELSE else-clause]          Clauses may contain several statements separated by `:`
++ IF expression THEN                                         Block form; details below.
++ FOR variable=x TO y [STEP z]
++ NEXT [variable]
++ WHILE expression                                           The loop runs while `expression` is different from 0
++ WEND                                                       Closes the `WHILE` loop
++ ON n GOTO 100,120,140                                      1-based index
++ ON n GOSUB 100,200,300
++ ON ERROR GOTO line
++ ON ERROR RESUME NEXT                                       Enables the "ignore error and continue" mode
++ RESUME [NEXT]                                              After an error, continues at the statement that caused it or the next one
++ RESUME line                                                or at the first statement of the indicated line
+
+Quick notes
+- THEN/ELSE accept both line numbers and complete statements.
+- The block form is enabled when `IF ... THEN` appears by itself on its line: it ends with `END IF` and may include `ELSEIF`/`ELSE`.
+- `ON ... GOTO/GOSUB` uses 1-based indexing; if the index is out of range, there is no jump.
+- `RESUME` repeats the statement that caused the error; `RESUME NEXT` continues with the next one.
+
+Detailed notes (block IF)
+- The line `IF expr THEN` must stand alone; the block ends at `END IF` (or `ENDIF`), and it is not valid to mix other statements on the same line.
+- `ELSEIF` accepts both `ELSEIF` and `ELSE IF`, but it must always end in `THEN`. Each branch is evaluated when no previous branch has been true.
+- `ELSE` is optional and must also occupy the whole line.
+- The code for each branch covers all subsequent numbered lines up to the next block keyword. Within those lines you can still use `:` to chain statements.
+- It works in stored programs; in immediate mode you must use the single-line syntax.
+
+Example
+100 IF V > 50 THEN
+110   PRINT "OK" : GOSUB 900
+120 ELSEIF V = 0 THEN
+130   PRINT "no data"
+140 ELSE
+150   PRINT "value"; V
+160 END IF
+
+4. Data and memory
+
++ DIM var(dim1[,dim2,...])       Indices 0..10 and 0..5 (arbitrary number of dimensions)
++ REDIM var(dim1[,dim2,...])     Changes bounds without losing the existing data that still fits in the new range
++ LET var1[=var2...]=value       LET is optional
++ READ variable-list
++ DATA constant-list
++ RESTORE                        Resets the `DATA` pointer
++ SWAP v1,v2                     Swaps values
++ CLEAR                          Clears all variables
++ NEW                            Clears all variables and the current program. Returns the interpreter to its initial state.
+
+Quick notes (arrays)
+- Each DIM/REDIM dimension indicates the inclusive upper index. Array indices always start at 0, but after `MAT BASE 1` the `MAT` operations ignore the 0 indices.
+- `REDIM` only acts on existing arrays and preserves type and number of dimensions. Elements that still lie within the new bounds are kept; the rest are discarded, and newly created positions are initialized to `0` or `""`.
+- If you normally access an undeclared array, it is created implicitly with bounds 0..10 in each dimension. This does not apply to `MAT` statements.
+
+Notes on `NEW`
+- It clears the program in memory (lines and DATA) and fully resets the state: variables, arrays, `DEF FN` functions (including 0-argument ones), the `DATA` pointer, timers/ISR, and trigonometric mode (radians).
+- It also resets the graphics window and its settings (equivalent to resetting `SCREEN` to its default state).
+- Valid only in immediate mode; inside a program it raises "Instruction not allowed in a program."
+
+Assignment to strings
+
+MID$(str$,pos[,len]) = value$   'pos is 1-based
+
+Quick notes
+- `DATA` and `READ` advance sequentially; `RESTORE` resets the read pointer.
+- `CLEAR` clears variables, arrays and functions, resets the `DATA` pointer, and sets angular mode to radians (it does not clear the loaded program).
+  * `CLEAR INPUT` empties the keyboard/input buffer without changing variables or the loaded program.
+
+
+4.1 Matrices and MAT
+
+Commands
++ MAT name = expression           Elementary operations on matrices and vectors
++ MAT BASE 0|1                    Starting index for `MAT PRINT/INPUT/READ` and structural operations (default 0)
++ MAT PRINT [USING f$;] list      Prints arrays by rows or columns (accepts `ROW`/`COL`)
++ MAT INPUT list                  Requests the array elements in the console
++ MAT READ list                   Consumes `DATA` and fills the arrays
+
+Functions
++ DET(expr)                       Determinant of a numeric matrix (respects `MAT BASE`)
+
+General notes
+- `MAT` works with 1D or 2D arrays. Names without `$` hold numbers; names ending in `$` hold text.
+- The destination array is created automatically with the dimensions of the result, except in `MAT A = CON/ZER/IDN` and `MAT A$ = "..."` or `MAT A = 5`, which require a previous `DIM`.
+- The dimensions represent the inclusive upper index; combine them with `REDIM` to enlarge or trim matrices without recreating them from scratch.
+
+Detailed notes (`MAT name = ...`)
+- Only one matrix operation may appear in the expression. For example, if `A`, `B` and `C` are matrices, `MAT C=A*B` is correct, but `MAT C=C+A*B` is not. In that case it must be split into two `MAT` statements: `MAT A=A*B : MAT C=C+A`.
+- As for scalars, the numeric part may be as complex as needed as long as the final result is a single scalar. For example, if `A` is a scalar and `B` is an array, `MAT B=(A-7*SIN(A/2))*B` is valid, but `MAT B=A*B-2` is not, because it would imply two independent operations on `B`.
+- `MAT A = B` copies another matrix or vector. It also accepts scalars (`MAT A = 5`), which fill every position in the array.
+  * The keywords `CON`, `ZER` and `IDN` fill with 1, 0, or the identity matrix (square matrices only); `IDN` uses `MAT BASE` to place the diagonal.
+- `MAT A = TRN(B)` computes the transpose of a 2D numeric array.
+- `MAT A = INV(B)` inverts a square matrix; if it is singular or not square, "Invalid value" is raised.
+- Arithmetic operations: `+` and `-` add/subtract compatible arrays or combine them with scalars; `*` performs matrix multiplication or scalar multiplication element by element; `/` divides by a scalar; `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
+- Vectors, which are column vectors, are equivalent to one-dimensional arrays. That is, anywhere you can use a vector defined as `DIM A(5)`, a matrix defined as `A(5,0)` (or `A(5,1)` with `MAT BASE 1`) is also valid, and vice versa.
+- Unary `-` changes the sign of the whole matrix (`MAT A = -B`).
+- With text arrays (`$`), only addition is allowed: `MAT A$ = B$ + "suffix"` concatenates element by element; other operations raise "Expression not allowed".
+
+Detailed notes (`MAT BASE`)
+- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, `MAT IDN`, `MAT TRN`, `MAT INV` and `DET`.
+- It does not modify the stored data: it only determines which rows/columns are traversed and where the main diagonal is drawn in `IDN`.
+
+Detailed notes (`MAT PRINT`)
+- Each entry may be written as `A`, `ROW A` or `COL A`; `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
+- `USING` uses the same masks as `PRINT USING`. With `;`, spaces are inserted between columns; with `,`, each field occupies 22 characters.
+- With no arguments, it prints a blank line.
+
+Detailed notes (`MAT INPUT` / `MAT READ`)
+- `MAT INPUT` traverses the elements by rows and respects the current base. For text, quotes are mandatory; empty ENTER or CTRL+C fill the rest with `0` or `""`.
+- `MAT READ` consumes `DATA` in the same order. If the list runs out, "No more DATA to read." is raised.
+- Both commands accept one- or two-dimensional arrays; mixing types raises "Invalid value type."
+
+Related functions
+- `DET(expr)` returns the real-number determinant of a square matrix. It uses `MAT BASE` to determine the active block and returns 0 when the matrix is singular.
+- The reserved words `CON`, `ZER`, `IDN`, `TRN` and `INV` can only be used in the context of `MAT`.
+
+Example
+10 MAT BASE 1
+20 DIM A(2,2), B(2,2)
+30 DATA 1, 3, 5, 7, 2, 3, 4, 5
+40 MAT READ A,B
+50 MAT C = A * B
+60 MAT D = TRN(C)
+70 PRINT USING "det=##"; DET(C)
+80 PRINT : MAT PRINT C;D
+90 MAT BASE 1 : MAT A = IDN
+100 PRINT : MAT PRINT A
+
+5. Text input/output in the console
+
++ PRINT [list]                        `;` as separator concatenates the items in the list; `,` inserts a tab between them
++ INPUT ["prompt"][,|;] var1[,var2...] Interactive input
++ LINE INPUT ["prompt"][,|;] v$       Same as INPUT but reads a single string and keeps commas as part of the input instead of separators
++ CLS                                 Clears the contents of the console
+
+Quick notes
+- `PRINT` with `;` at the end does not add a newline; with `,` it inserts a tab (not fixed spaces).
+- `INPUT` stops execution until the requested values are entered.
+
+Detailed notes (PRINT)
+- Numbers: integers are printed without decimals; reals with up to 14 significant digits (without trailing zeros). Positive values are printed with a leading space; negatives with the `-` sign.
+- The items in the print list may be empty. This is useful to insert extra tab stops. Example: `PRINT ,,`, `PRINT "Hello",,,"Goodbye"`.
+- PRINT USING: `PRINT USING "mask"; exprs` or `PRINT USING var$; exprs`.
+  * Placeholders: `#` (digit or space), `0` (digit or forced zero), and `+` as a prefix (forces the sign to be printed).
+  * The dot in the mask separates the integer and decimal parts; if there is no fractional part in the mask, `.` is not printed.
+  * A leading comma after the optional `+` activates "European" output: the decimal separator and thousands separator are swapped. Example: `PRINT USING ",#,###,###.##"; 1234567.23` prints `1.234.567,23`.
+  * Commas in the integer part are interpreted as thousands separators if they are in valid positions (groups of 3 digits to the right). If the number does not fill whole groups, the extra separators are printed as spaces; if the comma is not in a valid position, it is treated as a literal.
+  * A final suffix `^^^^` or `^^^^^` activates exponential notation: `E`, the exponent sign, and 2 or 3 minimum digits with leading zeros are always printed. If the exponent needs 3 digits and the mask uses `^^^^`, the field grows to `E+308`, etc.
+  * `+` example: `PRINT USING "+###.##"; 7` prints `  +7.00` (two leading spaces to preserve the field width), and `PRINT USING "+###.##"; -7` prints `  -7.00`.
+  * Exponential example: `PRINT USING "0.00^^^^"; 12345` prints `1.23E+04`; with leading European comma, `PRINT USING ",0.00^^^^"; 12345` prints `1,23E+04`.
+  * `+` only forces the sign when it is the first character of the mask; anywhere else it is just a literal.
+  * Numbers longer than the integer part of the mask do not overflow: they are shown in full, expanding to the left.
+  * The format accepts either a literal mask or a non-empty string variable; otherwise, a format error is raised.
+  * With `USING`, `,` and `;` separate and chain items exactly as in normal `PRINT`.
+- Special `PRINT` functions: `SPC(n)` and `TAB(n)`.
+  * `SPC(n)`: prints `n` spaces.
+  * `TAB(n)`: moves the cursor to column `n` (if ANSI is available); in non-ANSI environments, it prints `n` spaces.
+  * Restriction: they may only be used as standalone expressions inside `PRINT` (for example, `PRINT TAB(20), "Hello"`). Outside `PRINT`, or inside a larger expression, they raise "Expression not allowed".
+
+Detailed notes (INPUT)
+- Syntax: `INPUT ["prompt"][,|;] v1[,v2,...]`.
+  * `;` after the prompt appends `? ` at the end (for example, `"Age";` -> `Age? `).
+  * `,` after the prompt prints the text as-is, without `?`.
+  * Without a prompt, the interpreter shows `? ` by default.
+- Separation of fields entered by the user: comma `,`.
+  * To enter a string containing commas, it may be enclosed in quotes or read with `LINE INPUT`.
+  * To obtain a string containing double quotes, you must use `INPUT`, `LINE INPUT`, or concatenate `CHR$(34)` in the desired positions.
+- Assignment and types:
+  * Text variables (`$`): receive the text as-is (without the outer quotes).
+  * Numeric variables: empty strings -> `0`; otherwise they are converted to numbers. Invalid conversion -> "Invalid value type." and `0` is assigned.
+  * Arrays and indices: references with indexed expressions are accepted (for example, `A(I+1,2)`).
+- Number of values: if too few values are entered -> "Number of inputs does not match number of variables."; if too many are entered, the extras are ignored.
+
+5.1 Text input/output in the graphics window
+
++ LOCATE column, row         Moves the text cursor
++ BIGFONT | SMALLFONT        16x16 / 8x16 font (rows/columns scale with MODE)
++ DISP txt$[,ink][,paper]    Prints in text coordinates (ignores ORIGIN)
++ GDISP txt$[,ink][,paper]   Prints in graphics coordinates
++ LDIR degrees               Orientation of GDISP text. `LDIR 0` = horizontal
+
+Quick notes
+- `LOCATE` uses text rows and columns; it scales with `MODE` and the current font (BIG/SMALL).
+- `DISP` and `GDISP` always use the interpreter's embedded internal fonts (`SMALLFONT` or `BIGFONT`).
+- If a character is not defined in the font, `□` (replacement box) is shown.
+- The same applies to control characters, which are not supported by DISP/GDISP. For example: `DISP CHR$(13)` -> `□`.
+- `LDIR` uses degrees; it is rounded to the nearest integer and normalized modulo 360. Positive angles rotate clockwise. It only affects `GDISP` (it is ignored by `DISP`).
+- `DISP` prints text in text coordinates and does not respect `ORIGIN`.
+- `GDISP` prints in graphics coordinates and respects `LDIR` to orient the text. The graphics cursor ends up at the end of the text, according to the current orientation.
+- When printing with `GDISP`, the upper-left corner of the character is what occupies the graphics cursor position.
+- Important: in `GDISP`, `MOVE X,Y` anchors at the upper-left corner of the text.
+- Important: in `SPRITE`/`SPRITE MOVE`, `X,Y` anchors at the lower-left corner of the sprite.
+- Useful conversion when mixing text and sprites: `Ysprite = Ytext - (height - 1)`. With `BIGFONT` (`height=16`): `Ysprite = Ytext - 15`.
+- `DISP` or `GDISP` print text with a transparent background if the `paper` parameter is negative.
+- The cursor may be placed outside the visible area. The text is clipped and may be invisible or only partially visible. The cursor still advances as if the whole text had been emitted.
+  * Example: `LOCATE -3,10 : DISP "siblings"` -> only `lings` will be visible entering from the left edge on row 10.
+  * This applies to all four edges: glyphs are clipped and the graphics cursor ends up after the last character, whether it is visible or not.
+
+
+Notes on DISP
+- `DISP` prints in text coordinates, somewhat like console `PRINT`, but in the graphics window. However, the behavior is different:
+  * `DISP` only accepts strings. To print numbers, they must first be converted to strings with `STR$`.
+  * `DISP` does not accept the separators `,` and `;`: the text to print must be a single string. Strings can be concatenated with `+` and `SPACE$` can be used.
+  * `DISP` leaves the text cursor after the last printed character. This is equivalent to a `PRINT` ending in `;`.
+  * `DISP` does not affect the graphics cursor.
+  * If you want to move to the start of a new line after `DISP`, you must do so explicitly with `LOCATE 0, VPOS+1`.
+  * `DISP USING` is not supported, but the same result can be obtained with the `DEC$` function, which formats using the same rules as `USING`.
+- Examples of `PRINT` output and how to reproduce it with `DISP`:
+  * `PRINT USING "0########## ";B1(A);` -> `DISP DEC$(B1(A), "0########## ")`
+  * `PRINT "NAME","ADDRESS";` -> `DISP "NAME"+SPACE$(8)+"ADDRESS"`  `'SPACE$(8)` instead of the comma (which inserts a tab with PRINT)
+  * `PRINT "NAME: ";X$` -> `DISP "NAME: "+X$ : LOCATE 0,VPOS+1`  'The `LOCATE` places the cursor at the start of the next line, just like a `PRINT` that does not end with `;`
+  * `PRINT 3+4;` -> `DISP STR$(3+4)`
+
+Example
+10 x=13 : y=8 : m=2 : s$=" *   *   *   *   *   *   * "
+20 MODE 640 : SMALLFONT
+30 FOR i=y TO y+12
+40   LOCATE x,i : DISP SPACE$(53),0,m : m=3-m
+50   IF i<y+7 THEN LOCATE x,i : DISP MID$(s$,m+m-1,23),1,4
+60 NEXT i
+70 BIGFONT : LOCATE 17,25 : DISP "U.S.A."
+80 END
+
+6. Graphics environment
+
+6.1 Window and coordinates
+
++ MODE 640|800|1024          640x480 (default), 800x600, 1024x768
++ ORIGIN x,y                 Repositions (0,0) - default is lower-left corner (physical scale only)
++ ORIGIN x,y,l,r,t,b         Logical window + clipping (physical scale only)
++ SCALE xmin,xmax,ymin,ymax[,border]  Global scaling of graphics coordinates
++ SCALE                      Restores physical scale (0..WIDTH-1, 0..HEIGHT-1)
++ SCREEN                     Restores state (see below)
++ SCREEN CLOSE               Closes the graphics window and restores state
++ CLG                        Clears the graphics window with the current PAPER color
++ FRAME                      Immediate refresh
+
+Quick notes
+- `SCREEN` with no arguments restores the default graphics state:
+  * Disables ORIGIN . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `LDIR 0` . `SMALLFONT` . `PAPER 0` . `INK 1`.
+- `SCREEN CLOSE` closes the window and also restores the default graphics state, like `SCREEN`.
+- By default, (0,0) is at the lower-left corner.
+- `ORIGIN x,y` shifts the origin; with 6 arguments it defines a logical window and clipping.
+- `SCALE` remaps the user coordinates used by `PLOT/DRAW/CIRCLE/FILL/SPRITE/TEST/XPOS/YPOS`.
+- `SCALE` does not reposition the graphics cursor: it keeps the same physical point. Therefore, after changing the scale, `XPOS/YPOS` may become different values in user units.
+- When `SCALE xmin,xmax,ymin,ymax[,border]` is enabled, `ORIGIN` and clipping are implicitly reset to physical coordinates (`ORIGIN 0,0` + full window).
+- With `SCALE` active (non-physical), `ORIGIN` raises an error.
+- After `SCALE` with no arguments (physical scale), `ORIGIN` becomes available again.
+- `border` (optional) sets a physical margin in pixels: `xmin/xmax/ymin/ymax` fall at that distance from the edges.
+- `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
+  * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
+
+Example (`SCALE` with border and axes in user units)
+10 SCREEN : CLG
+12 B=80
+15 SCALE 1960,1990,0,200,B
+20 CROSSAT 1960,0
+50 XAXIS 10,1960,1990,0,1
+60 YAXIS 30,0,200
+65 PENWIDTH 4 : INK 2
+80 PLOT 1975,90
+
+6.2 Basic plotting
+
++ MOVE x,y | MOVER dx,dy          Graphics cursor
++ PLOT x,y[,c] / PLOTR dx,dy[,c]  Point
++ DRAW x1,y1[,x2,y2[,c]]          Line; omitting x2,y2 connects cursor -> (x1,y1)
++ DRAWR dx,dy[,c]                 Relative line
++ GRAPH expr|expr$                Plots a function (`expr` literal or string with the expression) using `X`
++ GRAPH expr|expr$,step           Same, with an explicit step
++ GRAPH expr|expr$,var,step       Same, explicitly setting the independent variable
++ GRAPHRANGE xmin,xmax,ymin,ymax  Forces the plotting rectangle for `GRAPH` (must remain inside `SCALE`)
++ GRAPHRANGE                      Returns to the automatic range (`XAXIS/YAXIS` or `SCALE`)
++ PENWIDTH n                      1, 2 or 4 pixels
++ MASK [n]                        Byte specifying an 8-pixel pattern for lines
++ color = TEST(x,y)               Function. Returns the pixel color at (x,y)
+
+Quick notes (plotting)
+- If color `c` is passed to `PLOT/DRAW`, it takes priority over the current `INK`.
+- `MASK` with no arguments is equivalent to `MASK 255` (solid line, no masking).
+- `GRAPH` draws using the current `INK`, `PENWIDTH` and `MASK`.
+- `GRAPH` requires `SCALE` to be active (if the scale is physical, it raises an error).
+- `expr` must be an evaluable numeric expression (for example, `SIN(X)`, `FNX(X)`). `FNX` without parentheses is not valid.
+- You can also pass the formula as a string (`expr$`), for example: `F$="SIN(X)/X" : GRAPH F$`.
+- In `GRAPH expr` and `GRAPH expr,step`, the independent variable is `X`; if `expr` does not depend on `X`, an error is raised.
+- In `GRAPH expr,var,step`, `var` is a numeric variable identifier (without quotes), not an expression, and it must appear inside `expr`; otherwise, an error is raised.
+- `step` must be numeric; if a string/array is passed, `TYPE_MISMATCH` occurs.
+- If `step` is omitted, `GRAPH` uses a default value of about 1 horizontal pixel in the active plotting range.
+- If `expr` returns a non-numeric value, `GRAPH` raises `TYPE_MISMATCH`.
+- `GRAPH` range priority: `GRAPHRANGE` > explicit `XAXIS/YAXIS` ranges > `SCALE`.
+- In `XAXIS/YAXIS`, only the explicitly passed limits count for `GRAPH` (`xmin,xmax` / `ymin,ymax`); axes without those parameters do not change the range.
+- `GRAPHRANGE` is only available with `SCALE` active and must remain within the `SCALE` limits.
+- With large `PENWIDTH` values (especially 4), the pattern may be less noticeable due to stroke overlap.
+- If the function is not defined at some point (for example, asymptotes), `GRAPH` skips those points without stopping the program.
+- `GRAPH` avoids joining the two opposite sides of a discontinuity with a straight line (for example, `TAN`), so it does not draw false asymptotes.
+- `GRAPH` automatically clips to the active rectangle: it does not draw outside the axis/scale range.
+
+6.3 Figures
+
++ CIRCLE x,y,r[,c][,asp]            Full circle/ellipse
++ CIRCLE x,y,r,c,i,f[,asp]          Arc
++ CIRCLER dx,dy,r[,c][,asp]         Full circle/ellipse (relative center)
++ CIRCLER dx,dy,r,c,i,f[,asp]       Arc (relative center)
++ FCIRCLE x,y,r[,c][,asp]           Full filled circle/ellipse
++ FCIRCLE x,y,r,c,i,f[,asp]         Filled sector
++ FCIRCLER dx,dy,r[,c][,asp]        Full filled circle/ellipse (relative center)
++ FCIRCLER dx,dy,r,c,i,f[,asp]      Filled sector (relative center)
++ RECTANGLE x0,y0,x1,y1[,c]         Rectangle (outline)
++ FRECTANGLE x0,y0,x1,y1[,c]        Filled rectangle
++ TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triangle (outline)
++ FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Filled triangle
++ FILL [x,y[,c]]                    Flood-fill; without coordinates it fills from the current position
+
+Quick notes (figures)
+- The angles of `CIRCLE/FCIRCLE` respect `DEG` or `RAD` (see 8).
+- Angular reference on screen: `0 deg` right, `90 deg` down, `180 deg` left, `270 deg` up (increasing clockwise).
+- `asp` controls the aspect ratio of the circle (Y/X).
+- Radius `r` is in user units (if `SCALE` is active, it adapts automatically).
+- `RECTANGLE/TRIANGLE` and their relative versions respect `MASK` and `PENWIDTH` just like `DRAW`.
+
+6.4 Colors
+
++ INK c|r,g,b|"r,g,b"|"tkname"      Color used for drawing
++ PAPER c|r,g,b|"r,g,b"|"tkname"    Color used to clear the screen with `CLG` and as the background color for text printed by `DISP` and `GDISP`
+
+Where `c` may be a color in one of the following formats:
+- 0-31            Predefined palette
+- 32-16777215     Packed RGB. For clarity, it is better to use hexadecimal: `&HRRGGBB` (see section 11)
+- "steelblue"     Predefined color name (X11/Tk)
+- "255,0,0"       String `"r,g,b"`
+- 255,0,0         Three numeric arguments (outside STRING)
+
+Example
+10 DIM Char$(10)
+15 PAPER 0 : INK 5 'INK "1,1,1" so the base text becomes effectively invisible
+20 SMALLFONT : CLG
+25 MOVE 0,15
+30 FOR C=0 TO 9 : READ Char$(C) : GDISP Char$(C) : NEXT
+35 PAPER 2 : INK 5
+40 BIGFONT
+45 FOR y=0 TO 15
+50 FOR x=0 TO 79
+55 IF TEST(x,y)<>RGB("black") THEN LOCATE x MOD 40,15*(x\40+1)-y:DISP Char$(x\8)
+60 NEXT x
+65 NEXT y
+70 SCREEN
+75 DATA " ", A, V, L, " ", B, A, S, I, C
+
+Predefined palette
+#  Color         #   Color
+0  black         16  lightcyan
+1  white         17  hotpink
+2  red           18  gold
+3  green         19  indigo
+4  blue          20  violet
+5  yellow        21  steelblue
+6  magenta       22  salmon
+7  cyan          23  khaki
+8  darkorange    24  pink
+9  purple        25  olive
+10 brown         26  lime
+11 gray          27  navy
+12 lightgreen    28  teal
+13 lightblue     29  tan
+14 lightgray     30  maroon
+15 mediumpurple  31  ivory
+
+Quick notes
+- The predefined color names are the historical X11/Tk names, which largely match the HTML/CSS names. They are case-insensitive.
+
+Example (show all colors from the predefined palette on screen)
+10 SCREEN : MODE 640 : SMALLFONT
+15 MOVE 0,120 : DRAW 640,120
+20 MOVE 0,240 : DRAW 640,240
+25 MOVE 0,360 : DRAW 640,360
+30 FOR X=80 TO 560 STEP 80
+35 MOVE X,0 : DRAW X,480
+40 NEXT X
+45 MOVE 40,540
+50 FOR I=0 TO 7
+55 FOR C=0 TO 24 STEP 8
+60 MOVER 0,-120 : FILL I+C
+65 LOCATE 4+10*I,C+3-C\16 : DISP DEC$(I+C,"0#"),-(I+C=0),-1
+70 NEXT C
+75 MOVER 80,480
+80 NEXT I
+
+6.5 Automatic axes
+
++ CROSSAT xint,yint            Sets the preferred axis crossing point (optional)
++ CROSSAT                      Clears the preferred crossing point
++ XAXIS [ticks][,xmin,xmax][,side][,orient][,subdiv]
++ YAXIS [ticks][,ymin,ymax][,side][,subdiv]
+
+Parameter                Meaning
+- ticks                  Distance between tick marks (user units). If omitted: `1`.
+- xmin,xmax / ymin,ymax  Label values at the ends; with `SCALE` active they also delimit the segment of the axis that is drawn.
+- side                   Position of labels relative to the axis. 0 = below/left . 1 = above/right . <0 = no labels (tick marks only).
+- orient (`XAXIS` only)  0 = horizontal text . 1 = vertical.
+- subdiv                 Number of parts `N` between two main ticks (`N>=1`). If `N=1`, there are no sub-ticks.
+                         With `N>1`, `N-1` sub-ticks are drawn (shorter and without labels).
+- `XAXIS/YAXIS` require `SCALE` to be active (explicitly defined with `SCALE ...`).
+- With the default physical scale (without explicit `SCALE`), `XAXIS/YAXIS` raise an error.
+- If you want axes in physical scale, define an equivalent explicit scale:
+  `SCALE 0,WIDTH-1,0,HEIGHT-1[,border]`.
+- Without `xmin/xmax` or `ymin/ymax`, the active `SCALE` range is used.
+- The axis border is always taken from `BORDER` (defined by `SCALE`).
+- The axis position is taken from `CROSSAT`; if there is no `CROSSAT`, the default crossing point is `(0,0)`.
+- You can skip optional parameters with empty commas. Example:
+  `XAXIS 2,,,,1,5` -> default range/side, `ticks=2`, `orient=1`, and 5 parts between main ticks.
+
+Quick notes (axes)
+- The intersection and tick spacing are expressed in user units (affected by `SCALE`).
+- If `CROSSAT` is present, tick phase uses that crossing point (independently of drawing order).
+- If there is no `CROSSAT`, tick phase uses `(0,0)`.
+- `XAXIS/YAXIS` labels are always drawn with `SMALLFONT`, regardless of the active font (`BIGFONT/SMALLFONT`).
+- `XAXIS/YAXIS` respect `INK` and `MASK` (text labels are not masked).
+- If the resulting tick spacing is too dense, neither marks nor labels are drawn:
+- Threshold with labels: less than 18 pixels per tick.
+- Threshold without labels (`side<0`): less than 9 pixels per tick.
+- If sub-ticks become too dense, they are automatically omitted:
+- Sub-tick threshold: less than 6 pixels between sub-ticks.
+- `YAXIS` avoids overwriting labels already drawn by `XAXIS` at crossings, to keep them readable.
+- Useful trick: to keep the `XAXIS` label at the crossing point centered on its tick (instead of shifted to the right), draw `XAXIS` before defining `CROSSAT`:
+  `XAXIS 10 : CROSSAT 1960,0 : YAXIS 30`
+- If the `ticks` parameter is written as a literal in exponential notation (for example, `1E+5`), the axis labels are also shown in exponential notation.
+- Use them after setting scales to overlay data and axes without recalculating positions.
+
+Example
+10 CLG : B=80
+20 SCALE 1960,1990,0,200,B
+30 CROSSAT 1960,0
+50 XAXIS 10,1960,1990,0,1
+60 YAXIS 30,0,200
+65 PENWIDTH 4 : INK 2
+80 PLOT 1975,90
+
+6.6 Screenshots and graphics files
+
++ SCREEN gscr$                  Variable -> current graphics window
++ gscr$ = SCREEN$               Function. Current graphics window -> variable
++ BSAVE "img.png"[,gscr$]       Screen or variable -> PNG
++ BLOAD "img.png"[,gscr$]       PNG -> screen or variable
+
+Quick notes
+- `SCREEN$` captures the screen into a string; `SCREEN var$` restores a variable to the screen.
+- `BSAVE/BLOAD` with `gscr$` avoid modifying the main screen.
+- PNG file rules: quotes are mandatory, the `.png` extension is required, and paths must always stay within the interpreter's virtual root.
+- In immediate mode, relative paths in `BLOAD/BSAVE` are resolved from the current virtual directory.
+- Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.
+
+Example
+10 MODE 640
+20 BLOAD "img1.png",a$ 'The screen alternates between the two images at high speed
+30 BLOAD "img2.png",b$
+40 t=TIME
+50 FOR c=1 TO 1000
+60 SCREEN a$
+70 SWAP a$,b$
+80 NEXT
+90 PRINT 1000/(TIME-t);" fps"
+
+6.7 Sprites
+
++ SPRITE gscr$,x,y[,t[,id]]     Draws the sprite stored in `gscr$` at `(x,y)`. `t` is an optional transparent color. `id` (integer > 0) sets the sprite-sprite collision identifier.
++ SPRITE HITTEST gscr$,x,y[,t[,id]]
+                                Evaluates collisions for that sprite at `(x,y)` without drawing it or modifying the internal map.
++ SPRITE DEL id                 Removes `id` from the internal sprite-sprite collision map.
++ SPRITE MOVE id,x,y[,t]        Redraws the last sprite associated with `id` at `(x,y)`.
+                                If `t` is omitted, it reuses the transparency saved in the last `SPRITE ... ,id`.
++ gscr$ = SPRITE$(x1,y1,x2,y2)  Captures the logical region defined by the two points and returns the sprite string.
++ COLMODE n                     Enables collision detection in `SPRITE`: 0=off, 1=color, 2=sprite, 3=both.
++ COLCOLOR [c]                  In color collision: without `c`, detects any color different from `PAPER`; with `c`, only that color.
++ COLRESET                      Clears the `HIT*` state and resets the internal sprite occupancy map.
+
+Collision functions
++ HIT                           `-1` if the last call to `SPRITE` collided (of any type), `0` otherwise.
++ HITCOLOR                      Numeric RGB of the detected color (`0` if there was no color collision).
++ HITSPRITE                     `-1` if there was a sprite-sprite collision in the last call to `SPRITE`, `0` otherwise.
++ HITID                         Internal id of the first sprite collided with (0 if there was no collision).
+
+General notes
+- Sprites use the same format as `SCREEN$` and files saved with `BSAVE`: `width x height:hexdata`. You can store them in variables or files and reuse them.
+- `SPRITE$` applies `ORIGIN` and the logical window. If the capture goes outside the screen, it keeps the requested size and fills the out-of-bounds physical areas with black.
+- `SPRITE` respects `ORIGIN`, the graphics window, and canvas clipping. It does not force a refresh; call `FRAME` when you want to display the result.
+- Remember the anchor: `SPRITE ... ,X,Y` uses `Y` as the bottom edge. If you are coming from `GDISP` with `MOVE X,Y` (top edge), convert `Y` with `Ysprite = Ytext - (height - 1)`.
+- `SPRITE HITTEST` uses exactly the same clipping and transparency rules as `SPRITE`, but does not alter either the graphics buffer or the owner map.
+- Parameter `t` accepts any color format (`INK`, `RGB`, palette indices). Pixels of that color are left untouched.
+- If you do not pass `id`, sprite-sprite detection uses an internal identifier based on frame drawing order (`CLG/COLRESET` reset that map).
+- If you pass `id`, that value is used as the sprite identifier for collisions (allowing you to control groups or the "same object" across frames).
+- Redrawing the same `id` at a new position updates its collision footprint (avoiding ghost collisions from old positions).
+- With `COLMODE 2` or `3`, `SPRITE` does not overwrite pixels that already belong to another sprite: it detects the collision and keeps the previous sprite.
+- `SPRITE DEL id` removes the footprint of `id` from the collision map without modifying what is already visible on screen.
+- `SPRITE MOVE id,x,y[,t]` requires that at least one `SPRITE ... ,id` has previously been drawn, so the image is known.
+
+Usage notes
+- You can use `SCREEN var$` to switch quickly between several previously captured screens, but everything you draw must happen in the real window; variables can only be modified manually by manipulating the string that stores the screen.
+- Captured sprites can be stored in string arrays, `DATA`, etc., to build preloaded catalogs, for example with the different frames of an animation.
+
+Recommended patterns (clarity vs performance)
+- Pattern A (clarity / separate logic):
+  * Use `SPRITE HITTEST ...` to detect (`HIT*`) without drawing.
+  * Resolve the game logic (bounces, damage, destruction).
+  * Draw at the end with `SPRITE`/`SPRITE MOVE` (normally with `COLMODE 0`).
+  * Advantage: a very explicit flow that is easy to debug.
+- Pattern B (detection integrated with drawing):
+  * Draw/move directly with `SPRITE` or `SPRITE MOVE` under `COLMODE 2/3`.
+  * Read `HITSPRITE/HITID` right after that same call.
+  * Advantage: a single pass (drawing + detection) and no auxiliary structures.
+- Pattern C (custom physics / many moving objects):
+  * Detect contacts with `SPRITE HITTEST`, with `HIT*`, or even with BASIC geometry if that suits you better.
+  * Resolve the physical response in BASIC (separation, bounces, masses, priorities).
+  * Draw at the end with `SPRITE`/`SPRITE MOVE`, usually in `COLMODE 0`.
+  * Advantage: full control over the physics; it is usually the right option if you want "ball-like" bounces or interaction among many moving bodies.
+- `SPRITE MOVE id,...` is the recommended option for frame-by-frame animation: it reuses the sprite already registered for that `id`.
+- `SPRITE DEL id` is meant for entity creation/removal (disappearances, destruction), not as a bulk operation every frame.
+
+Mental model of the collision engine (the "why")
+- The engine maintains an internal owner map per pixel (which `id` "owns" each visible sprite pixel).
+- That map is not only used to detect collisions: it also affects how drawing behaves in `COLMODE 2/3`.
+- If you draw with `COLMODE 2/3` and the target already belongs to another `id`, a collision is detected and that pixel is not overwritten.
+- Goal: avoid partial visual penetration and "sticking" caused by one sprite overwriting another in the same frame.
+- Practical consequence: to erase/restore background, use `COLMODE 0`; in `COLMODE 2/3` you may leave remnants if you try to "clean" over another sprite.
+- `SPRITE HITTEST` evaluates using the same rules, but does not draw or modify the internal map.
+- `COLRESET` resets that map and the `HIT*` state; use it when your flow manually restores/redraws large areas and you want to realign visual state and collision state.
+
+What the sprite-sprite engine is designed for
+- Detecting visible contact between sprites while drawing, without having to maintain your own occupancy map.
+- Arcade scenes where it matters to know "what I collided with" (`HITID`) and to avoid one sprite partially covering another in the same frame.
+- Projectiles, enemies, bricks, pickups, irregular masks, or any case where detection by visible footprint matters more than exact physics.
+- Flows where stable `id` + `SPRITE MOVE` + `HITSPRITE/HITID` greatly simplify game logic.
+
+Practical strengths
+- Pixel-by-pixel detection based on the real visible footprint of the sprite, not an approximate box.
+- Direct integration with drawing: `COLMODE 2/3` detects and also avoids overwriting already occupied pixels.
+- Explicit `id` for stable identity across frames: useful for `HITID`, `SPRITE MOVE`, and selective cleanup with `SPRITE DEL`.
+- Very convenient for prototypes and 2D games where collision means "contact/impact" more than "rigid-body dynamics".
+- It allows mode combinations: for example, color for the background and sprite-sprite for entities.
+
+What it is not meant to solve by itself
+- It is not a general-purpose physics engine or a rigid-body solver.
+- `COLMODE 2/3` decides collision during drawing, so the result depends on drawing order and on your frame flow.
+- It detects contact well, but the physical response is still your program's responsibility: bounces, separation, masses, friction, priorities, etc.
+- If you want a more convincing simulation of many moving balls/entities, the normal approach is to use the engine for detection and do physical resolution in BASIC (or even detect by geometry if your case allows it).
+
+What `id` adds (and why it matters)
+- Without `id`, each draw uses an ephemeral internal identity (frame drawing order).
+- With `id`, you define a stable object identity across frames.
+- That enables a useful `HITID` (knowing what you collided with).
+- That enables `SPRITE MOVE id,...` (moving using the image already registered for that `id`).
+- That enables `SPRITE DEL id` (removing it from the collision map).
+- In demos like `samples/g-sprite5.bas`, the first `SPRITE ...,id` pass is used to seed the initial state (screen + map + `SPRITE MOVE` registration).
+
+Recommended pattern for a fixed background (without `CLG` per frame)
+- 1. Restore the old sprite backgrounds in `COLMODE 0`.
+- 2. If you manually restored many areas, use `COLRESET` to avoid old footprints remaining in the map.
+- 3. Update physics and use `SPRITE HITTEST` (by color or sprite) to decide bounces/logic.
+- 4. Capture the new background of all sprites before drawing any of them (this avoids "contamination" in captured backgrounds).
+- 5. Draw/move sprites:
+  * Use `COLMODE 2/3` if you want sprite-sprite detection integrated into drawing.
+  * Use `COLMODE 0` if sprite-sprite detection/response is already resolved elsewhere (for example, with BASIC physics).
+- 6. Save those captures as the old background for the next frame.
+
+Typical errors (and their cause)
+- Visual remnants after collisions: restoring with `COLMODE 2/3` instead of `COLMODE 0`.
+- Ghost collisions: restoring the screen but not resetting/updating the owner map.
+- "Contaminated" backgrounds: capturing the new background after other sprites from the same frame have already been drawn.
+
+Example (capture and transparency)
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 INK 14 : FRECTANGLE 160,80,240,160
+30 INK 4 : FCIRCLE 200,120,30
+40 cara$ = SPRITE$(150,70,250,170)
+50 PAPER 1 : CLG
+60 LOCATE 2,24 : DISP "SPRITE$ + SPRITE WITH TRANSPARENCY EXAMPLE",2
+70 SPRITE cara$,40,40,14 'Gray (14) transparent
+80 SPRITE cara$,140,40,4 'Blue (4) transparent
+90 SPRITE cara$,90,100,0 'Black (0) transparent
+100 SPRITE cara$,280,200 'Sprite without transparency
+
+Example (color collisions + sprite-sprite with explicit id)
+10 MODE 640 : SCREEN : PAPER 0 : CLG : SMALLFONT
+20 R=9 : S=2*R+1 : B=16 : DIM S$(3),X(3),Y(3),DX(3),DY(3)
+30 GOSUB 900
+40 X(1)=120 : Y(1)=120 : DX(1)=2 : DY(1)=1
+50 X(2)=320 : Y(2)=220 : DX(2)=-2 : DY(2)=2
+60 X(3)=500 : Y(3)=140 : DX(3)=-1 : DY(3)=-2
+70 MSG$="" : TMSG=0 : TX=264 : TY=34 : BIGFONT
+80 CLG : GOSUB 800
+90 GOTO 100
+100 COLMODE 1 : COLCOLOR 1
+110 FOR I=1 TO 3
+120   OLDX=X(I) : X(I)=X(I)+DX(I)
+130   SPRITE S$(I),X(I),Y(I),0,I
+140   IF HITCOLOR<>0 THEN
+150     X(I)=OLDX : DX(I)=-DX(I)
+160   ENDIF
+170   OLDY=Y(I) : Y(I)=Y(I)+DY(I)
+180   SPRITE S$(I),X(I),Y(I),0,I
+190   IF HITCOLOR<>0 THEN
+200     Y(I)=OLDY : DY(I)=-DY(I)
+210   ENDIF
+220 NEXT I
+230 CLG : GOSUB 800
+240 COLMODE 2
+250 FOR I=1 TO 3
+260   SPRITE S$(I),X(I),Y(I),0,I
+270   IF HITSPRITE THEN
+280     J=HITID
+290     IF J>=1 AND J<=3 THEN
+300       X(I)=X(I)-DX(I) : Y(I)=Y(I)-DY(I)
+310       T=DX(I) : DX(I)=DX(J) : DX(J)=T
+320       T=DY(I) : DY(I)=DY(J) : DY(J)=T
+330       SPRITE S$(I),X(I),Y(I),0,I
+340       MSG$=TRIM$(STR$(J))+" <-> "+TRIM$(STR$(I)) : TMSG=25
+350     ENDIF
+360   ENDIF
+370 NEXT I
+380 IF TMSG>0 THEN MOVE TX,TY : GDISP MSG$,15,-1 : TMSG=TMSG-1
+400 FRAME : PAUSE 10 : GOTO 100
+
+File `samples/g-sprite5.bas` includes this complete example, including the construction of numbered sprites 1, 2 and 3.
+
+6.8 Mouse in the graphics window
+
+Commands
++ ON MOUSE <event> GOSUB <line>   Registers a subroutine to run when the specified event occurs.
++ ON MOUSE <event> GOSUB 0        Disables the routine associated with that event and discards pending activations.
++ MOUSE 1|ON                      Shows the system pointer in the graphics window.
++ MOUSE 0|OFF                     Hides the system pointer in the graphics window.
+
+Available events: `MOVE`, `LEFTDOWN`, `LEFTUP`, `LEFTDRAG`, `RIGHTDOWN`, `RIGHTUP`, `RIGHTDRAG`. The `DRAG` events correspond to mouse movement while the button is held down (`<B1-Motion>` and `<B3-Motion>`).
+
+Helper functions
++ MOUSEX / MOUSEY                  Logical cursor coordinates (same system as `PLOT` and `INK`).
++ MOUSELEFT / MOUSERIGHT           1 if the button is pressed, 0 if it is released.
++ MOUSEEVENT$                      Name of the last received event (for example, `"LEFTUP"`).
+
+Notes
+- Events are generated only when the pointer is over the graphics window and the program is running. There are no global hooks outside the window.
+- `MOUSE` only changes cursor visibility (it does not capture or confine the mouse).
+- Routines registered with `ON MOUSE` are dispatched like interrupts: they respect `DI`/`EI`, are stacked like a `GOSUB`, and must finish with `RETURN`.
+- You can change or disable an event at any time. `ON MOUSE ... GOSUB 0` also removes pending activations of the specified event.
+- Combine `LEFTDOWN` + `LEFTDRAG` + `LEFTUP` (or their right-button equivalents) to implement drag selections. `MOVE` emits motion events even when no buttons are pressed.
+
+Examples (right button exits)
+10 CLG : MODE 1024
+15 ON MOUSE LEFTDOWN GOSUB 35
+20 ON MOUSE LEFTUP GOSUB 45
+25 ON MOUSE RIGHTUP GOSUB 60
+30 PAUSE 'Infinite loop because line 15 consumes the click
+35 x1=MOUSEX : y1=MOUSEY
+40 RETURN
+45 FRECTANGLE x1,y1,MOUSEX,MOUSEY,INT(RND*32)
+50 FRAME
+55 RETURN
+60 SCREEN CLOSE
+65 END
+
+10 CLG : MODE 1024 : MASK &X11000011
+15 ON MOUSE LEFTDOWN GOSUB 35
+20 ON MOUSE LEFTDRAG GOSUB 45
+25 ON MOUSE RIGHTUP GOSUB 60
+30 GOTO 30 'Infinite event-capture loop
+35 MOVE MOUSEX,MOUSEY
+40 RETURN
+45 DRAW MOUSEX,MOUSEY,INT(RND*32)
+50 FRAME
+55 RETURN
+60 SCREEN CLOSE
+65 END
+
+7. Interrupts
+
++ AFTER <timer delay>[, <timer number>] GOSUB [line number]
++ EVERY <time period>[, <timer number>] GOSUB <line number>
++ EI              Enables interrupts that were previously inhibited with `DI`.
++ DI              Inhibits interrupts
++ CANCEL n        Permanently disables current timer `n`
++ REMAIN(n)       Function. Returns the remaining count of the specified timer (0 to 3)
+
+Units and control
+- Time units: `AFTER`/`EVERY` arguments are in 1/50 s "ticks" (0.02 s per tick).
+- Timers: timer number ranges from 0 to 3. The default value is 0.
+- `CANCEL n`: permanently disables the specified timer.
+- `REMAIN(n)`: returns the remaining timer count in ticks (it does not modify the timer).
+
+Example
+10 DEF FNSOL$=CHR$(INT(RND*26+97))
+15 s$=FNSOL$
+20 EVERY 10,1 GOSUB 60   'Generates a letter every 0.2 seconds
+25 AFTER 250,0 GOSUB 50  'Ends after 5 seconds
+30 PRINT "Will I 'guess' the letter I myself picked in 5 seconds? ;)"
+35 IF a$<>s$ THEN 35
+40 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!"
+45 BEEP : END
+50 PRINT : PRINT "Too late. I win too! :DDD"
+55 END
+60 a$=FNSOL$
+65 PRINT UPPER$(a$);" ";
+70 RETURN
+
+Notes
+- `AFTER` and `EVERY` timers have a priority equal to their number. One timer may interrupt the dispatch routine of another with lower priority.
+- Interrupts inhibited with `DI` remain inhibited until they are explicitly re-enabled with `EI`, or implicitly by `RETURN` if the `DI` was inside the subroutine invoked as a result of the interrupt.
+- Mouse events (`ON MOUSE`) have higher priority than timers and can therefore interrupt them.
+
+8. System, time and debugging
+
++ RANDOMIZE [seed]
++ PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed or the graphics window is clicked
++ BEEP                  ASCII tone
++ TRON | TROFF          Step-by-step trace
++ DEG | RAD             Trigonometry in degrees/radians
++ EXIT | QUIT | SYSTEM  Leave the interpreter
+
+Quick notes
+- Regardless of the timer, `PAUSE` always exits the wait when a key is pressed in console programs or when the left mouse button is clicked on the graphics window, if one is open.
+  * This lets `PAUSE` be used to implement the typical "Press a key to continue" behavior, without needing a loop with `INKEY$`.
+- `PAUSE` has lower priority than `ON MOUSE`, so if an `ON MOUSE` consumes the left-button click, `PAUSE` will never receive it.
+  * In that case, `PAUSE` can be used as an "infinite" event-capture loop. See the `ON MOUSE` examples.
+- `TRON` shows the execution trace by lines; `TROFF` disables it.
+- `TRON` shows the current line number in the format `[n]`.
+- `DEG/RAD` affect both trigonometry and drawing angles.
+- `DEBUG [n]` enables/adjusts a "dirty blocks" overlay in the graphics window (for refresh debugging). With a number, it changes block size.
+
+Example (to obtain the expected output, `TRON` must have been executed beforehand)
+10 k=10
+20 FOR j=1 TO 2
+30 l=k+10
+40 PRINT j;k;l
+50 k=k+10
+60 NEXT
+70 END
+
+Expected output
+[10][20][30][40] 1  10  20
+[50][60][30][40] 2  20  30
+[50][60][70]
+
+8.1 Execution and resumption (`RUN` - `STOP` - `CONT` - `END` - `CTRL+C`)
+
++ STOP                  Stops execution while keeping the state (current line, stacks and variables). It can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
++ CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode.
++ END                   Ends the program. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 45) because there is no pending execution to continue.
++ RUN [line]            If a line number is included, the program runs from that line.
+
+Notes
+- `RUN` starts execution with a clean start (state reset). Use `CONT` or `GOTO n` only when you have stopped with `STOP`/`CTRL+C` and want to continue without restarting.
+- `CTRL+C` interrupts execution in the same way as `STOP`; it can also be resumed with `CONT` without losing state.
+
+8.2 Error handling
+
++ ON ERROR GOTO n        Enables a handler; on error, execution jumps to line `n`.
++ ON ERROR GOTO 0        Disables the handler and clears `ERL`/`ERR`.
++ ON ERROR RESUME NEXT   Enables "implicit catch" mode: on error, it behaves like `RESUME NEXT`.
++ ERR                    Function. Numeric code of the last runtime error (0 if none is active).
++ ERL                    Function. Line number where the last error occurred (0 if none is active).
++ RESUME                 Repeats the statement that caused the error.
++ RESUME NEXT            Continues at the next statement on the same line (if any) or on the next line.
++ RESUME n               Continues at the first statement of line `n`.
++ ERROR n                Explicitly raises error `n`. For example, `ERROR 14` raises a syntax error.
+
+Flow and notes
+- Without a handler: on error, execution stops and reports: "Line <n>. <message>".
+- With a handler: when the error occurs, `ERR` and `ERL` are set and execution jumps to the target line; after a successful `RESUME`, both return to 0.
+- Re-entries: if a new error occurs while the handler is running, execution aborts with "Error in the error handler ...".
+- `ERROR n`: if error `n` is not among the interpreter's predefined ones, it is treated as a custom error number.
+
+Example
+10 ON ERROR GOTO 60
+20 ERROR 200 'Custom error
+30 ON ERROR GOTO 0 'Disable custom error handling
+40 GOTO 100 'This error will be shown normally because of ON ERROR GOTO 0 on line 30
+50 END
+60 IF (ERR=200) AND (ERL=20) THEN PRINT "Error 200 occurred on line 20"
+70 RESUME NEXT
+
+Complete table of error codes
+1  Statement not allowed inside a program.
+2  Statement not allowed in immediate mode.
+3  Invalid line format.
+4  Invalid value.
+5  Invalid value type.
+6  Division by zero.
+7  Numeric overflow.
+8  Undefined variable or function.
+9  Invalid name.
+10 Invalid line number.
+11 Target line does not exist.
+12 RETURN without matching GOSUB.
+13 Invalid return line.
+14 Syntax error.
+15 FOR without matching NEXT.
+16 NEXT without matching FOR.
+17 WHILE without matching WEND.
+18 WEND without matching WHILE.
+19 RESUME without ERROR.
+20 Expression must be numeric.
+21 Error while evaluating expression.
+22 Unknown data type.
+23 No more DATA to read.
+24 The line has no DATA for RESTORE.
+25 Invalid argument.
+26 Empty dimension expression.
+27 Error while generating array indices.
+28 Error in PRINT USING format.
+29 Number of inputs does not match number of variables.
+30 Incorrect number of arguments.
+31 Invalid index.
+32 Undefined index.
+33 Index out of range.
+34 Out of range.
+35 Error while evaluating function.
+36 Expression not allowed.
+37 Feature not supported in this environment.
+38 Missing quotes.
+39 File not found.
+40 Execution interrupted by the user.
+41 Only names with extension '.bas' are allowed.
+42 Only names with extension '.png' are allowed.
+43 Error during error handling.
+44 Error while combining files.
+45 There is no stopped program that can be continued.
+
+9. "Immediate mode only" commands
+
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | EXIT | SYSTEM | QUIT
+
+Notes
+- If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
+
+9.1 Commands forbidden in immediate mode:
+
++ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR
+
+Range formats
+1 `n`        Only line `n`
+2 `n-m`      From `n` to `m`, both inclusive
+3 `-m`       From the beginning to line `m`
+4 `n-`       From `n` to the end
+
+9.2 Program editing (`EDIT` - `RENUM` - `DELETE`)
+
++ EDIT n                          Opens a line editor with the contents of line `n` prefilled
++ DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
++ LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
++ RENUM [start[, step]]           Renumbers all lines using positive integer values: default `start=10`, `step=10`.
+
+Notes on `EDIT`
+- It allows modifying both the code and the line number.
+- Enter applies the changes. If you leave only the number with no code, the line is deleted. Esc cancels and leaves the line unchanged.
+- It requires input support with prefill; in environments without this support, `EDIT` is not available.
+- After applying the changes, the interpreter normalizes the line and updates variable styling throughout the program.
+
+Notes on `DELETE`
+- With no arguments: deletes the whole program in memory.
+- Range: accepts the formats indicated in "Range formats".
+- It also removes `DATA` items defined in the affected lines and internally reindexes the `DATA` pointer.
+- Non-numeric parameters or inverted ranges (`n>m`) raise an error.
+
+Notes on `RENUM`
+- It updates line references in `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF ... THEN n`, `ELSE n`, `RESUME n` and `RESTORE n`.
+- If any reference points to a non-existent line, a warning is shown and that number is left unchanged.
+- It does not delete variables or functions; it clears control stacks and adjusts active timer targets so they point to the new lines.
+
+Examples
+EDIT 150         'Edits line 150 (the number can be changed to turn it into another line).
+DELETE 200-400   'Deletes the block of lines 200 to 400.
+RENUM 100,5      'Renumbers starting at 100 with an increment of 5.
+
+9.3 Other immediate utilities
+
++ `RUN n`                              Executes from line `n` with a clean start (variables reset). Use `CONT` to continue after `STOP` or `CTRL+C`.
++ `RUN "prog.bas"`                     Loads and runs the indicated program (clean start).
++ `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
++ `CD "path"`                          Changes the current virtual directory within the interpreter root.
+
+Notes on the `FILES` / `CAT` pattern
+- Quotes are mandatory; only `*` and `?` wildcards are allowed; paths and `..` are not allowed.
+- If omitted, the default pattern is `"*.bas"`.
+- Subdirectories are always shown, ending in `/`, to make navigation easier.
+- The pattern applies only to files.
+
+Notes on `CD`
+- `CD ".."` moves up one level without ever leaving the virtual root.
+- `CD "/"` returns to the virtual root.
+- Paths starting with `/` are interpreted from the virtual root; the rest are interpreted from the current virtual directory.
+- `CD` only changes the current virtual directory visible to the user. `LOAD`, `RUN` and `CHAIN` do not perform any implicit `CD`.
+- In this repository, the included examples are under `samples/`, and their supporting PNG files are under `samples/assets/`.
+
+9.4 Saving and loading programs
+
++ LOAD "prog.bas"            Immediate mode only
++ SAVE "prog.bas"            Immediate mode only
++ RUN "prog.bas"             Loads and runs the file with a "clean" start (variables and stacks are reset)
++ CHAIN "prog.bas" [,line]   Replaces the current program with the indicated one
++ MERGE "prog.bas"           Combines the current program with the indicated one
++ CHAIN MERGE "prog.bas" [,line] [,DELETE line-line]
+                             Same as MERGE, but deleting the line range and with an optional jump to a line
+
+Notes
+- `CHAIN`, `CHAIN MERGE` and `MERGE` do not erase the variables or `DEF FN` functions already loaded.
+- File names: quotes are mandatory; paths relative to the current virtual directory and virtual absolute paths with `/` are accepted.
+- Extension: if missing in `SAVE/LOAD/CHAIN/MERGE`, `.bas` is added; any other extension raises an error.
+- Paths can never leave the virtual root from which the interpreter was launched.
+- When you load a program with `LOAD`, `RUN "file"` or `CHAIN`, AVL BASIC remembers that file's directory as the "program directory".
+- That program directory is used only to resolve relative paths used from inside the program, for example in `BLOAD/BSAVE` and in `CHAIN/MERGE` executed by the program itself. It does not modify the current `CD`.
+- `MERGE` and `CHAIN MERGE` do not change the already associated program directory.
+- If the current program does not come from a file loaded from disk, relative paths used inside the program are resolved from the current virtual directory.
+- To continue after `STOP` or `CTRL+C`, use `CONT`.
+
+10. Built-in functions
+
+Zero-argument functions are used without parentheses.
+
+Numeric and conversions
++ ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
++ SQR | LOG | LOG10 | EXP |
++ SIN | COS | TAN | ASN | ACS | ATN | COT | PI
++ RND
++ TIME
++ MIN | MAX
++ VAL
+
+Strings
++ LEN | LEFT$ | RIGHT$ | MID$ | INSTR
++ ASC | CHR$ | STR$
++ BIN$ | HEX$ | DEC$
++ UPPER$ | LOWER$
++ SPACE$ | STRING$ | TRIM$
+
+Arrays
++ LBOUND(array[,dimension]) | UBOUND(array[,dimension])
+
+Clarifying notes for some functions
+- `ROUND(n[,d])`: "half away from zero" rounding.
+  * `d>0`: decimals; `d=0`: integers; `d<0`: tens/hundreds/...
+  * Examples: `ROUND(2.5)` -> 3; `ROUND(-2.5)` -> -3; `ROUND(1234.5678,3)` -> 1234.568; `ROUND(1234.5678,-2)` -> 1200.
+- `MIN(x1[,x2[,...]])`: returns the smallest value among one or more numeric arguments. Example: `MIN(3,1,2.5,-7)` -> -7.
+- `MAX(x1[,x2[,...]])`: returns the largest value among one or more numeric arguments. Example: `MAX(3,1,2.5,-7)` -> 3.
+- `INSTR([start,] string, substring)`:
+  * Returns the position (1-based) of the first occurrence of `substring` in `string`, or 0 if not found.
+  * With 2 arguments it searches from the first character.
+  * With 3 arguments, `start` indicates the 1-based position from which to begin the search; it must be >=1 or it raises an invalid-argument error.
+  * Examples: `INSTR(1,"hello","lo")` -> 4; `INSTR("hello\nworld","\n")` -> 6.
+- `RND`: returns a real number in [0,1) with uniform distribution. Example: `T=RND` -> 0.732...
+- `TIME`: returns the seconds since the epoch as a real. In practical terms, the resolution is on the order of one millisecond.
+  * Examples: `T=TIME : PAUSE 500 : PRINT TIME-T` -> ~0.5
+- `DEC$(n, f$)`: returns the number `n` as a string formatted with the same mask syntax as `USING`.
+  * Like `PRINT USING`, masks accept the `+` prefix (it must be the first character) to force the result to include the sign; for example, `DEC$(5,"+##")` -> ` +5` and `DEC$(-5,"+##")` -> ` -5`.
+  * It also accepts the optional leading comma for European output, thousands separators with `,`, and exponential notation with `^^^^`/`^^^^^`.
+  * Example: `X$=DEC$(1.729, "0##.##") : PRINT X$` -> 001.73
+  * Example with `+`: `DEC$(-1.23, "+#.##")` -> -1.23 and `DEC$(1.23, "+#.##")` -> +1.23 (in this case there are no spaces because the width matches the number length)
+  * European example: `DEC$(1234567.23, ",#,###,###.##")` -> 1.234.567,23
+  * Exponential example: `DEC$(12345, "0.00^^^^")` -> 1.23E+04
+- `LBOUND(array[,dimension]) | UBOUND(array[,dimension])`: returns the lower or upper bounds of an array's dimensions.
+  * `array` is the name of the array variable to inspect.
+  * `dimension` is an optional parameter used, for multidimensional arrays, to indicate which dimension you want the bound from. If omitted, the default value is 1.
+  * The lower bound will always be 0 or 1, equal to the current value of `MAT BASE`.
+
+Color & screen
++ RGB(n|r,g,b|"r,g,b"|"tkcolor") -> number
++ RGB$(n|r,g,b|"r,g,b"|"tkcolor") -> string `"r,g,b"`
++ WIDTH HEIGHT -> screen size in pixels
++ XMIN XMAX YMIN YMAX BORDER -> current scale parameters
++ XPOS YPOS HPOS VPOS (graphics/text cursor)
++ TEST(x,y) -> pixel color at coordinates x,y
+
+- `XMIN/XMAX/YMIN/YMAX/BORDER` return the active scale of the graphics window.
+- If there is no active graphics window, they return the physical scale: `XMIN=0`, `XMAX=WIDTH-1`, `YMIN=0`, `YMAX=HEIGHT-1`, `BORDER=0`.
+
+System
++ VERSION$
++ INKEY$
++ KEYDOWN(code)
++ ERL | ERR
+
+- `ERR`: numeric code of the last runtime error (0 if none is active).
+- `ERL`: line number where the last error occurred (0 if none is active).
+- `INKEY$`: with an active graphics window, it handles keyboard events; in the console, it reads the standard keyboard.
+- In the GUI, `INKEY$` returns 1 character. For special keys without a visible character, use `ASC(INKEY$)`.
+- `KEYDOWN(code)`: returns `-1` if the key is currently pressed and `0` otherwise.
+- `KEYDOWN` is intended for games (continuous state). `INKEY$` is still useful for discrete key presses.
+- In graphics mode, `INKEY$` and `KEYDOWN` require the window to have keyboard focus.
+- If you have just opened the graphics window, click once inside it to give it focus.
+- GUI codes for special keys:
+- `28` left, `29` right, `30` up, `31` down.
+- `1` Home, `4` End, `11` PageUp, `12` PageDown.
+- `22` Insert, `127` Delete, `8` BackSpace, `9` Tab.
+- `13` Enter and `27` Escape.
+
+Example (move with arrows or A/D)
+10 K$=INKEY$
+20 IF K$<>"" THEN A=ASC(K$)
+30 IF A=28 OR K$="A" OR K$="a" THEN X=X-1
+40 IF A=29 OR K$="D" OR K$="d" THEN X=X+1
+
+Example for games (key state)
+10 IF KEYDOWN(28) THEN X=X-1
+20 IF KEYDOWN(29) THEN X=X+1
+
+Interrupts
++ REMAIN(<timer number>)    Returns the remaining count (in ticks, 1/50 s) of the specified timer (0 to 3).
+
+User-defined functions
++ DEF FNname(arg,...)=expr (single line).
++ DEF FNname(arg,...) (multiline block).
+  - After the `DEF FN` line, the body statements are written as normal BASIC lines.
+  - The block must be closed with `FNEND`. If it is missing, the interpreter warns with "Function badly defined".
+  - The arguments act as local variables: they are restored on exit and may be text if they end in `$`.
+  - To return a numeric or text value, assign to `FNNAME` or use `LET FNNAME = ...`; otherwise, 0 or an empty string is returned.
+  - Inside the block, the function name may be used as a local variable.
+  - Indirect calls between functions are allowed, but a function may not re-enter itself.
+  - Inside the body, nested `DEF FN` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
+
+Definition and usage example
+10 DEF FNCIRC(Radius)
+20 LET FNCIRC = 2 * PI * Radius
+30 FNEND
+40 PRINT FNCIRC(5) : REM -> 31.4159
+
+Function returning text
+10 DEF FNWELCOME$(Name$)
+20 FNWELCOME$ = "Hello " + Name$
+30 FNEND
+40 PRINT FNWELCOME$("AVL")
+
+Using the function name as a local variable
+10 DEF FNF(N)
+20 LET FNF=1
+30 FOR K=1 TO N
+40 FNF = K*FNF
+50 NEXT K
+60 FNEND
+70 PRINT FNF(5)
+
+11. Hexadecimal/Binary and bitwise logic
+
+Numeric literals
+- Hexadecimal: use `&H` followed by hex digits (`0-9A-F`). Example: `&HFF` -> 255.
+- Binary: use `&X` followed by bits (`0-1`). Example: `&X1010` -> 10.
+- A hexadecimal or binary number can be used anywhere a normal decimal number can be used.
+  * Example: `PRINT 12^&X110`, `X$=LEFT$(STRING$(&H1A2,"_"),&HF)`
+- Inside strings, they are not interpreted; convert them with `VAL` if needed.
+- With no digits (`&H`, `&X` alone), they are treated as 0 when converting/reading.
+
+`HEX$` and `BIN$` functions
+- `HEX$(n[, w])`: uppercase hexadecimal string, without prefix.
+  * Without `w`: for `n>=0`, the minimum number of digits; for `n<0`, the minimum multiple of 2 digits (whole bytes) in two's complement.
+  * With `w`: uses exactly `w` digits and masks the least significant `w*4` bits (higher bits are truncated).
+  * Examples: `HEX$(255)` -> `"FF"`; `HEX$(255,4)` -> `"00FF"`; `HEX$(-1)` -> `"FF"`; `HEX$(-1,4)` -> `"FFFF"`.
+- `BIN$(n[, w])`: binary string, without prefix.
+  * Without `w`: for `n>=0`, the minimum number of bits; for `n<0`, the minimum multiple of 8 bits (whole bytes) in two's complement.
+  * With `w`: uses exactly `w` bits and masks to the least significant `w` bits.
+  * Examples: `BIN$(10)` -> `"1010"`; `BIN$(10,8)` -> `"00001010"`; `BIN$(-1)` -> `"11111111"`; `BIN$(-1,4)` -> `"1111"`; `BIN$(10,3)` -> `"010"`.
+
+Conversion from text (`VAL`)
+- `VAL(x$)` accepts `&H` and `&X` prefixes at the beginning of the string: `VAL("&HFF")` -> 255; `VAL("&X1010")` -> 10.
+- If there are no digits after the prefix (`"&H"`, `"&X"`), it returns 0.
+
+Logical operators (bitwise)
+- `AND`, `OR`, `XOR` and `NOT` operate bit by bit on integers.
+- Before applying logical operators, numeric operands are rounded with `ROUND` using "half away from zero". Example: `23.8 AND 1e3` -> 8; `3.4 XOR 2.6` -> 0.
+- Precedence: `NOT` > `AND` > `XOR` > `OR` (left-associative). Example: `45 XOR 123 AND 145` -> 60.
+- True/false: comparisons and logical results are represented as `-1` (true) and `0` (false). Example: `PRINT 7=7` -> `-1`; `PRINT NOT 0` -> `-1`; `PRINT NOT -1` -> `0`.

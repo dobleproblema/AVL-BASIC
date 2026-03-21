@@ -1,0 +1,10 @@
+100 MODE 1024
+110 B=25 'Border discarded at each end so the labels fit
+120 SCREEN : CLG
+130 SCALE -10,0,-1.5,1.5,B
+140 XAXIS 1
+150 YAXIS 1,,,1
+160 PENWIDTH 2 : INK 2
+170 GRAPH "SIN(X^2)-EXP(COS(X)/2)+1"
+180 END
+

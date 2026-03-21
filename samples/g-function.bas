@@ -1,0 +1,10 @@
+100 DEF FNX(P)=SIN(P) 'The one-variable function we want to plot
+110 MODE 800
+120 B=20
+130 SCREEN : CLG
+140 SCALE -PI,PI,-1,1.5,B
+150 XAXIS PI/2,-PI,PI,1,1
+160 YAXIS 0.5,-1,1.5,1
+170 PENWIDTH 2 : INK 2
+180 GRAPH "FNX(X)",0.01
+

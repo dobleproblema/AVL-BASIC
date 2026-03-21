@@ -1,0 +1,9 @@
+10 'WIDTH 4 : PLOT 320,200
+20 a$=INKEY$
+30 IF a$="" THEN 20
+40 'FRAME
+44 a=ASC(a$)
+45 IF a>31 THEN PRINT a$; ELSE PRINT " ";
+50 PRINT " [";STR$(a);"]"
+60 GOTO 20
+
