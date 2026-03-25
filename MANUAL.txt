@@ -36,7 +36,8 @@ Contents
 9.3 - Other immediate utilities
 9.4 - Saving and loading programs
 10. - Built-in functions
-11. - Hexadecimal/Binary and bitwise logic
+11. - User-defined functions
+12. - Hexadecimal/Binary and bitwise logic
 
 0. Requirements and installation
 
@@ -1130,7 +1131,8 @@ Example for games (key state)
 Interrupts
 + REMAIN(<timer number>)    Returns the remaining count (in ticks, 1/50 s) of the specified timer (0 to 3).
 
-User-defined functions
+11. User-defined functions
+
 + DEF FNname(arg,...)=expr (single line).
 + DEF FNname(arg,...) (multiline block).
   - After the `DEF FN` line, the body statements are written as normal BASIC lines.
@@ -1162,7 +1164,7 @@ Using the function name as a local variable
 60 FNEND
 70 PRINT FNF(5)
 
-11. Hexadecimal/Binary and bitwise logic
+12. Hexadecimal/Binary and bitwise logic
 
 Numeric literals
 - Hexadecimal: use `&H` followed by hex digits (`0-9A-F`). Example: `&HFF` -> 255.
