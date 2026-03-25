@@ -35,7 +35,8 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 9.2 - Otras utilidades inmediatas
 9.3 - Guardar y cargar programas
 10. - Funciones integradas
-11. - Hexadecimal/Binario y lógica bit a bit
+11. - Funciones definidas por el usuario
+12. - Hexadecimal/Binario y lógica bit a bit
 
 0. Requisitos e instalación
 
@@ -1130,7 +1131,8 @@ Ejemplo para juegos (estado de tecla)
 Interrupciones
 + REMAIN (<número de temporizador>)    Devuelve la cuenta restante (en ticks, 1/50 s) del temporizador especificado (0 a 3).
 
-Funciones definidas por usuario
+11. Funciones definidas por usuario
+
 + DEF FNname(arg,…)=expr (una sola línea).
 + DEF FNname(arg,...) (bloque multilinea).
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
@@ -1162,7 +1164,7 @@ Uso del nombre de la función como variable local
 60 FNEND
 70 PRINT FNF(5)
 
-11. Hexadecimal/Binario y lógica bit a bit
+12. Hexadecimal/Binario y lógica bit a bit
 
 Literales numéricos
 - Hexadecimal: use `&H` seguido de dígitos hex (`0–9A–F`). Ej.: `&HFF` → 255.
