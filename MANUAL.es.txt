@@ -973,7 +973,7 @@ Formato de rangos
 + EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
-+ RENUM [inicio[, paso]]          Renumera todas las líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`.
++ RENUM [inicio[, paso[, desde]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`.
 
 Notas sobre EDIT
 - Permite modificar tanto el código como el número de línea.
@@ -989,6 +989,8 @@ Notas sobre DELETE
 
 Notas sobre RENUM
 - Actualiza las referencias a líneas en `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF … THEN n`, `ELSE n`, `RESUME n` y `RESTORE n`.
+- Con el tercer parámetro opcional, solo se renumeran las líneas cuyo número actual sea `>= desde`.
+- La renumeración parcial solo se acepta si la secuencia final de números de línea sigue siendo estrictamente creciente; en caso contrario da `INVALID_ARGUMENT`.
 - Si alguna referencia apunta a una línea inexistente, se avisa y ese número se deja sin cambiar.
 - No borra variables ni funciones; limpia las pilas de control y ajusta los objetivos de temporizadores activos para que apunten a las nuevas líneas.
 
@@ -996,6 +998,7 @@ Ejemplos
 EDIT 150         'Edita la línea 150 (se puede cambiar el número para convertirla en otra línea).
 DELETE 200-400   'Borra el bloque de líneas 200 a 400.
 RENUM 100,5      'Renumera empezando en 100 con incrementos de 5.
+RENUM 1000,10,500 'Renumera solo el bloque a partir de la línea 500.
 
 9.3 Otras utilidades inmediatas
 

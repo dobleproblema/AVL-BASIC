@@ -6896,6 +6896,51 @@ def test_string_square_bracket_access_rejects_invalid_forms(run_basic_interprete
     assert message in output
 
 
+def test_renum_with_third_parameter_renumbers_only_tail_block(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 GOSUB 500',
+        '20 END',
+        '500 GOSUB 20',
+        '510 RETURN',
+        'RENUM 1000,10,500',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        '10 GOSUB 1000',
+        '20 END',
+        '1000 GOSUB 20',
+        '1010 RETURN',
+    ]
+
+
+def test_renum_with_third_parameter_rejects_incompatible_numbering(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 PRINT "A"',
+        '20 GOSUB 500',
+        '30 END',
+        '500 PRINT "S"',
+        '510 RETURN',
+        'RENUM 25,10,500',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert "Invalid argument." in output
+    lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
+    assert lines[0] == 'Invalid argument.'
+    assert lines[1:] == [
+        '10 PRINT "A"',
+        '20 GOSUB 500',
+        '30 END',
+        '500 PRINT "S"',
+        '510 RETURN',
+    ]
+
+
 def test_line_input_allows_commas_without_quotes(run_basic_interpreter):
     commands = [
         'NEW',

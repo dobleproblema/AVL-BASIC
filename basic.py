@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.2"
+__version__ = "1.5.3"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -5753,49 +5753,61 @@ class BasicInterpreter:
         args = args.strip()
         start_default = 10
         step_default = 10
+        from_default = 0
 
         if not args:
-            # No parameters: start=10, step=10
-            start, step = start_default, step_default
+            start, step, from_line = start_default, step_default, from_default
         else:
-            # Split arguments by comma
             parts = [part.strip() for part in args.split(',')]
 
             if len(parts) == 1:
-                # One parameter: start=<part1>, step=10
                 if not parts[0].isdigit():
                     self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                     return
                 start = int(parts[0])
                 step = step_default
+                from_line = from_default
             elif len(parts) == 2:
-                # Two parameters: start=<part1>, step=<part2>
                 if not (parts[0].isdigit() and parts[1].isdigit()):
                     self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                     return
                 start, step = int(parts[0]), int(parts[1])
+                from_line = from_default
+            elif len(parts) == 3:
+                if not (parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit()):
+                    self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
+                    return
+                start, step, from_line = int(parts[0]), int(parts[1]), int(parts[2])
             else:
-                # Incorrect number of parameters
                 self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                 return
 
-        # Create the mapping from old line numbers to new ones
+        if start <= 0 or step <= 0 or from_line < 0:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
+            return
+
+        renum_lines = [line for line in self.line_numbers if line >= from_line]
+        if not renum_lines:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
+            return
+
         old_to_new = {}
-        new_program = {}
-        new_line_numbers = []
+        next_line = start
+        for old_line in renum_lines:
+            old_to_new[old_line] = next_line
+            next_line += step
 
-        for old_line in self.line_numbers:
-            old_to_new[old_line] = start
-            new_program[start] = self.program[old_line]
-            new_line_numbers.append(start)
-            start += step
+        projected_line_numbers = [old_to_new.get(old_line, old_line) for old_line in self.line_numbers]
+        if any(a >= b for a, b in zip(projected_line_numbers, projected_line_numbers[1:])):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
+            return
 
-        # Function to replace line numbers using a mapping
+        existing_lines = set(self.line_numbers)
+
         def replace_numbers(code, keywords):
             for keyword in keywords:
-                # Pattern that captures the keyword followed by one or more comma-separated numbers
                 pattern = rf'\b{keyword}\b\s+(\d+(?:\s*,\s*\d+)*)'
-                
+
                 def replacer(match):
                     targets = match.group(1)
                     numbers = re.findall(r'\d+', targets)
@@ -5804,88 +5816,84 @@ class BasicInterpreter:
                         target = int(num)
                         if target in old_to_new:
                             new_numbers.append(str(old_to_new[target]))
-                        elif int(num) != 0:
+                        elif target in existing_lines:
+                            new_numbers.append(num)
+                        elif target != 0:
                             print(num)
                             self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND, only_message=True)
-                            new_numbers.append(num)  # Keep the original number if the mapping is not found
+                            new_numbers.append(num)
                         else:
-                            new_numbers.append(str(0))  # Keep the original number if it is 0
+                            new_numbers.append('0')
                     return f"{keyword} " + ", ".join(new_numbers)
-                
+
                 code = re.sub(pattern, replacer, code, flags=re.IGNORECASE)
             return code
 
-        # Update references in GOTO and GOSUB, including ON GOTO and ON GOSUB
-        for old_line, new_line in old_to_new.items():
-            # Work on a copy to avoid accidental aliasing
-            entry = new_program[new_line]
+        new_program = {}
+        new_line_numbers = []
+
+        for old_line in self.line_numbers:
+            new_line = old_to_new.get(old_line, old_line)
+            entry = self.program[old_line].copy()
             code = entry['code']
 
-            # Replace GOTO and GOSUB (also covers the GOSUB inside AFTER/EVERY)
             code = replace_numbers(code, ['GOTO', 'GOSUB', 'ON GOTO', 'ON GOSUB'])
 
-            # Handle implicit IF-THEN-ELSE
-            # Pattern for THEN <number>
             pattern_then = r'\bTHEN\s+(\d+)'
+
             def replace_then(match):
                 num = int(match.group(1))
                 if num in old_to_new:
                     return f"THEN {old_to_new[num]}"
-                else:
-                    self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND, only_message=True)
-                    return match.group(0)  # Keep the original
-            
+                if num in existing_lines:
+                    return match.group(0)
+                self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND, only_message=True)
+                return match.group(0)
+
             code = re.sub(pattern_then, replace_then, code, flags=re.IGNORECASE)
 
-            # Pattern for ELSE <number>
             pattern_else = r'\bELSE\s+(\d+)'
+
             def replace_else(match):
                 num = int(match.group(1))
                 if num in old_to_new:
                     return f"ELSE {old_to_new[num]}"
-                else:
-                    self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND, only_message=True)
-                    return match.group(0)  # Keep the original
-            
+                if num in existing_lines:
+                    return match.group(0)
+                self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND, only_message=True)
+                return match.group(0)
+
             code = re.sub(pattern_else, replace_else, code, flags=re.IGNORECASE)
 
-            # Handle other instructions that reference lines, such as RESUME and RESTORE
             code = replace_numbers(code, ['RESUME', 'RESTORE'])
 
-            # Update the line text
             entry['code'] = code
-
-            # Recompute the per-line executable cache (commands + metadata + IR)
             self._refresh_entry_exec_cache(entry)
 
-        # Install the new program and auxiliary tables
+            new_program[new_line] = entry
+            new_line_numbers.append(new_line)
+
         self.program = new_program
         self.line_numbers = new_line_numbers
         self._line_to_index = {ln: i for i, ln in enumerate(self.line_numbers)}
         self._if_block_info_dirty = True
 
-        # Rebuild the DATA index so it reflects the renumbered lines
         if self.data_line_map:
             self.data_line_map = {
-                old_to_new[old_ln]: entry
+                old_to_new.get(old_ln, old_ln): entry
                 for old_ln, entry in self.data_line_map.items()
-                if old_ln in old_to_new
             }
 
-        # Update active timers so they point to the new renumbered lines
         for t in self.timers:
             if t.get('active') and t.get('target_line') is not None:
                 old_tgt = t['target_line']
                 if old_tgt in old_to_new:
                     new_tgt = old_to_new[old_tgt]
                     t['target_line'] = new_tgt
-                    # Recompute the O(1) target index
                     t['target_idx'] = self._line_to_index.get(new_tgt)
                 else:
-                    # If the target does not exist after RENUM, leave it as is (triggering will fail with the usual error)
                     t['target_idx'] = self._line_to_index.get(old_tgt)
 
-        # Keep variable/graphics state; clear control stacks but not timers
         self.reset_state(variables=False, graphics=False)
     
     @lru_cache(maxsize=65536)

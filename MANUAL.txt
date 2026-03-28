@@ -973,7 +973,7 @@ Range formats
 + EDIT n                          Opens a line editor with the contents of line `n` prefilled
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
-+ RENUM [start[, step]]           Renumbers all lines using positive integer values: default `start=10`, `step=10`.
++ RENUM [start[, step[, from]]]   Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`.
 
 Notes on `EDIT`
 - It allows modifying both the code and the line number.
@@ -989,6 +989,8 @@ Notes on `DELETE`
 
 Notes on `RENUM`
 - It updates line references in `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF ... THEN n`, `ELSE n`, `RESUME n` and `RESTORE n`.
+- With the optional third parameter, only lines whose current number is `>= from` are renumbered.
+- Partial renumbering is only accepted if the resulting line-number sequence remains strictly increasing; otherwise it raises `INVALID_ARGUMENT`.
 - If any reference points to a non-existent line, a warning is shown and that number is left unchanged.
 - It does not delete variables or functions; it clears control stacks and adjusts active timer targets so they point to the new lines.
 
@@ -996,6 +998,7 @@ Examples
 EDIT 150         'Edits line 150 (the number can be changed to turn it into another line).
 DELETE 200-400   'Deletes the block of lines 200 to 400.
 RENUM 100,5      'Renumbers starting at 100 with an increment of 5.
+RENUM 1000,10,500 'Renumbers only the block from line 500 onward.
 
 9.3 Other immediate utilities
 
