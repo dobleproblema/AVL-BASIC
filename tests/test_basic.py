@@ -6848,6 +6848,54 @@ def test_print_number_call_reports_syntax_error(run_basic_interpreter, statement
     assert "SyntaxWarning" not in output
     assert "Invalid value type." not in output
 
+
+def test_string_square_bracket_access_is_one_based():
+    interpreter = BasicInterpreter()
+    interpreter.variables['A$'] = 'HOLA'
+
+    assert interpreter.evaluate_expression('A$[1]') == 'H'
+    assert interpreter.evaluate_expression('A$[3]') == 'L'
+
+
+def test_string_square_bracket_access_supports_string_array_elements(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 DIM A$(2)',
+        '20 A$(1)="HOLA"',
+        '30 PRINT A$(1)[3]',
+        '40 END',
+        'RUN',
+        'EXIT',
+    ])
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == ['L']
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ('PRINT "HOLA"[2]', 'Syntax error.'),
+        ('PRINT A$[1:2]', 'Syntax error.'),
+        ('PRINT [1,2]', 'Syntax error.'),
+        ('PRINT "hola".upper()', 'Syntax error.'),
+        ('PRINT A$[0]', 'Invalid index.'),
+        ('PRINT A$[-1]', 'Invalid index.'),
+        ('PRINT A$[1.5]', 'Invalid index.'),
+        ('PRINT A$[5]', 'Index out of range.'),
+        ('PRINT N[1]', 'Invalid value type.'),
+    ],
+)
+def test_string_square_bracket_access_rejects_invalid_forms(run_basic_interpreter, statement, message):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 A$="HOLA":N=123',
+        f'20 {statement}',
+        '30 END',
+        'RUN',
+        'EXIT',
+    ])
+    assert message in output
+
+
 def test_line_input_allows_commas_without_quotes(run_basic_interpreter):
     commands = [
         'NEW',

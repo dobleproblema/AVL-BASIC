@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.0"
+__version__ = "1.5.2"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -997,6 +997,43 @@ class _BoolToMinusOne(ast.NodeTransformer):
     def visit_Compare(self, node):
         self.generic_visit(node)
         return ast.UnaryOp(op=ast.USub(), operand=node)   # -( X >= 4 )
+
+
+class _BasicExprAstValidator(ast.NodeVisitor):
+    """Reject Python-only syntax that should not leak into BASIC expressions."""
+
+    _FORBIDDEN_NODES = (
+        ast.Attribute,
+        ast.Subscript,
+        ast.List,
+        ast.Dict,
+        ast.Set,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+        ast.Lambda,
+        ast.NamedExpr,
+        ast.Await,
+        ast.Yield,
+        ast.YieldFrom,
+        ast.JoinedStr,
+        ast.FormattedValue,
+        ast.Slice,
+        ast.Starred,
+    )
+
+    def generic_visit(self, node):
+        if isinstance(node, self._FORBIDDEN_NODES):
+            raise SyntaxError
+        super().generic_visit(node)
+
+    def visit_Call(self, node):
+        if not isinstance(node.func, ast.Name):
+            raise SyntaxError
+        if node.keywords:
+            raise SyntaxError
+        self.generic_visit(node)
 
 VALID_VARIABLES = set()
 letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -4625,6 +4662,7 @@ class BasicInterpreter:
         self.variable_case_map = {}  # {"FOO$": "Foo$", "X": "X"}
         self._eval_base = {"__builtins__": {}, **allowed_names}
         self._eval_base["__ARR"] = self._make_arr_wrapper()
+        self._eval_base["__STRCHR"] = self._make_strchr_wrapper()
         self._fast_math_aliases: dict[str, str] = {}
         self._fast_math_allowed: set[str] = set()
         self._fast_math_arity: dict[str, tuple[int, ...]] = {}
@@ -4874,6 +4912,7 @@ class BasicInterpreter:
         self._fn_aliases = {k.upper(): v for k, v in allowed_names.items()}
         self._eval_base = {"__builtins__": {}, **allowed_names}
         self._eval_base["__ARR"] = self._make_arr_wrapper()
+        self._eval_base["__STRCHR"] = self._make_strchr_wrapper()
         self._fast_expr_cache = {}
         self._fast_math_aliases = {}
         self._fast_math_allowed = set()
@@ -15611,6 +15650,7 @@ class BasicInterpreter:
         else:
             self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
             raise ReturnMain
+
     # "str_d": lambda x: str(BasicInterpreter.format_number(x)),
     @_fun_handler('STR$')
     def _str_d(self, args):
@@ -16293,6 +16333,117 @@ class BasicInterpreter:
                     if not inner:
                         raise SyntaxError
             idx += 1
+
+    @staticmethod
+    @lru_cache(maxsize=65536)
+    def _rewrite_square_bracket_string_access(expr: str) -> str:
+        """
+        Rewrite `A$[N]`-style access into the internal helper `__STRCHR(A$,N)`.
+        Only variable or array references may appear before `[`.
+        Any other use of square brackets is rejected as BASIC syntax.
+        """
+
+        def parse_string(text: str, start: int) -> int:
+            i = start + 1
+            n = len(text)
+            while i < n:
+                if text[i] == '"':
+                    if i + 1 < n and text[i + 1] == '"':
+                        i += 2
+                        continue
+                    return i + 1
+                i += 1
+            return n
+
+        def parse_bracket(text: str, start: int) -> tuple[int, bool]:
+            i = start + 1
+            n = len(text)
+            paren_level = 0
+            has_top_level_comma = False
+            has_top_level_colon = False
+            while i < n:
+                ch = text[i]
+                if ch == '"':
+                    i = parse_string(text, i)
+                    continue
+                if ch == '(':
+                    paren_level += 1
+                elif ch == ')':
+                    if paren_level > 0:
+                        paren_level -= 1
+                elif ch == '[':
+                    raise SyntaxError
+                elif ch == ',' and paren_level == 0:
+                    has_top_level_comma = True
+                elif ch == ':' and paren_level == 0:
+                    has_top_level_colon = True
+                elif ch == ']' and paren_level == 0:
+                    return i, (has_top_level_comma or has_top_level_colon)
+                i += 1
+            raise SyntaxError
+
+        parts = []
+        i = 0
+        n = len(expr)
+
+        while i < n:
+            ch = expr[i]
+
+            if ch == '"':
+                end = parse_string(expr, i)
+                parts.append(expr[i:end])
+                i = end
+                continue
+
+            if ch.isalpha() and (i == 0 or not expr[i - 1].isalnum()):
+                start = i
+                j = i + 1
+                count = 1
+                while j < n and count < 11 and expr[j].isalnum():
+                    j += 1
+                    count += 1
+                if j < n and expr[j] == '$':
+                    j += 1
+
+                var_name = expr[start:j]
+                if not is_valid_varname(var_name):
+                    parts.append(ch)
+                    i += 1
+                    continue
+
+                ref_end = j
+                if ref_end < n and expr[ref_end] == '(':
+                    ref_end = BasicInterpreter.find_closing_paren(expr, ref_end) + 1
+
+                lookahead = ref_end
+                while lookahead < n and expr[lookahead].isspace():
+                    lookahead += 1
+
+                if lookahead < n and expr[lookahead] == '[':
+                    close_idx, invalid_index_syntax = parse_bracket(expr, lookahead)
+                    index_expr = expr[lookahead + 1:close_idx].strip()
+                    if not index_expr or invalid_index_syntax:
+                        raise SyntaxError
+                    ref_text = expr[start:ref_end]
+                    parts.append(f'__STRCHR({ref_text},{index_expr})')
+                    i = close_idx + 1
+                    continue
+
+                parts.append(expr[start:ref_end])
+                i = ref_end
+                continue
+
+            if ch in '[]':
+                raise SyntaxError
+
+            parts.append(ch)
+            i += 1
+
+        return ''.join(parts)
+
+    @staticmethod
+    def _validate_expr_ast(tree: ast.AST):
+        _BasicExprAstValidator().visit(tree)
     
     @staticmethod
     def _replace_arrays_no_value(expr: str) -> str:
@@ -16379,6 +16530,7 @@ class BasicInterpreter:
         It is cached because it no longer depends on values.
         """
 
+        expr_basic = BasicInterpreter._rewrite_square_bracket_string_access(expr_basic)
         BasicInterpreter._ensure_no_tuple_literals(expr_basic)
 
         var_set = set()
@@ -16440,7 +16592,9 @@ class BasicInterpreter:
             py_expr = BasicInterpreter._unmask_string_literals(py_expr, literals)
             py_expr = py_expr.encode('unicode_escape').decode('utf-8')
 
-        code_obj = compile(py_expr, "<BASIC-expr>", "eval")
+        tree = ast.parse(py_expr, mode='eval')
+        BasicInterpreter._validate_expr_ast(tree)
+        code_obj = compile(tree, "<BASIC-expr>", "eval")
         return code_obj, tuple(var_list)
 
     @staticmethod
@@ -16449,6 +16603,10 @@ class BasicInterpreter:
         Variant of _prepare_expr that returns (py_expr, var_list) without compiling,
         for use in fast-path lambdas.
         """
+        rewritten_expr = BasicInterpreter._rewrite_square_bracket_string_access(expr_basic)
+        if rewritten_expr != expr_basic:
+            raise SyntaxError
+        expr_basic = rewritten_expr
         BasicInterpreter._ensure_no_tuple_literals(expr_basic)
 
         var_set = set()
@@ -16497,6 +16655,8 @@ class BasicInterpreter:
             py_expr = BasicInterpreter._unmask_string_literals(py_expr, literals)
             py_expr = py_expr.encode('unicode_escape').decode('utf-8')
 
+        tree = ast.parse(py_expr, mode='eval')
+        BasicInterpreter._validate_expr_ast(tree)
         return py_expr, tuple(var_list)
 
     # The part of the evaluator that depends on variable values and cannot be cached
@@ -16643,7 +16803,38 @@ class BasicInterpreter:
         except Exception as e:
             self.handle_error(ErrorCode.EVAL_ERROR);     
             raise ReturnMain
-        
+
+    def _basic_strchr(self, value, index):
+        if not isinstance(value, str):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        if isinstance(index, float):
+            if not index.is_integer():
+                self.handle_error(ErrorCode.INVALID_INDEX)
+                raise ReturnMain
+            index = int(index)
+        elif isinstance(index, int):
+            index = int(index)
+        else:
+            self.handle_error(ErrorCode.INVALID_INDEX)
+            raise ReturnMain
+
+        if index <= 0:
+            self.handle_error(ErrorCode.INVALID_INDEX)
+            raise ReturnMain
+        if index > len(value):
+            self.handle_error(ErrorCode.INDEX_OUT_OF_BOUNDS)
+            raise ReturnMain
+
+        return value[index - 1]
+
+    def _make_strchr_wrapper(self):
+        def __STRCHR(value, index):
+            return self._basic_strchr(value, index)
+
+        return __STRCHR
+
     def _make_arr_wrapper(self):
         def __ARR(var_name: str, idx_tuple):
             if not isinstance(idx_tuple, tuple):
@@ -16726,7 +16917,7 @@ class BasicInterpreter:
         while i < n:
             c = expr[i]
 
-            if c.isalpha() and (i == 0 or not expr[i - 1].isalnum()):
+            if c.isalpha() and (i == 0 or not (expr[i - 1].isalnum() or expr[i - 1] == '_')):
                 j = i + 1
                 count = 1
 
@@ -16793,7 +16984,7 @@ class BasicInterpreter:
                     i += 1
                 tokens.append(("literal", ''.join(literal_chars)))
 
-            elif c.isalpha() and (i == 0 or not expr[i - 1].isalnum()):
+            elif c.isalpha() and (i == 0 or not (expr[i - 1].isalnum() or expr[i - 1] == '_')):
                 j = i + 1
                 count = 1
 

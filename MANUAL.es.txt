@@ -1072,6 +1072,10 @@ Notas aclaratorias para algunas funciones
   • Con 2 argumentos busca desde el primer caracter.
   • Con 3 argumentos, `inicio` indica la posicion 1-basada desde donde empezar la busqueda; debe ser >=1 o da INVALID_ARGUMENT.
   • Ejemplos: `INSTR(1,"hola","la")` -> 3; `INSTR("hola\nmundo","\n")` -> 5.
+- `cadena$[n]`: extensión de AVL BASIC que devuelve el carácter individual situado en la posición `n` (desde 1).
+  • Solo admite variables de cadena o elementos de arrays de cadenas a la izquierda.
+  • `n` debe ser un entero positivo; `n<1` da `INVALID_INDEX` y `n>LEN(cadena$)` da `INDEX_OUT_OF_BOUNDS`.
+  • No admite slicing; para subcadenas hay que usar `MID$`.
 - RND: devuelve un real en [0,1) con distribucion uniforme. Ej.: `T=RND` -> 0.732...
 - TIME: devuelve los segundos desde el epoch como real. La resolución, a nivel práctico, es del orden de un milisegundo. 
   • Ejemplos: `T=TIME : PAUSE 500 : PRINT TIME-T` -> ~0.5

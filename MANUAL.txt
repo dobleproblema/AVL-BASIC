@@ -1072,6 +1072,10 @@ Clarifying notes for some functions
   * With 2 arguments it searches from the first character.
   * With 3 arguments, `start` indicates the 1-based position from which to begin the search; it must be >=1 or it raises an invalid-argument error.
   * Examples: `INSTR(1,"hello","lo")` -> 4; `INSTR("hello\nworld","\n")` -> 6.
+- `string$[n]`: AVL BASIC extension that returns the single character at 1-based position `n`.
+  * It only accepts string variables or string array elements on the left side.
+  * `n` must be a positive integer; `n<1` raises `INVALID_INDEX` and `n>LEN(string$)` raises `INDEX_OUT_OF_BOUNDS`.
+  * It does not support slices; use `MID$` when you need substrings.
 - `RND`: returns a real number in [0,1) with uniform distribution. Example: `T=RND` -> 0.732...
 - `TIME`: returns the seconds since the epoch as a real. In practical terms, the resolution is on the order of one millisecond.
   * Examples: `T=TIME : PAUSE 500 : PRINT TIME-T` -> ~0.5
