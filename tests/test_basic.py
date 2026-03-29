@@ -8739,6 +8739,105 @@ def test_resume_next_advances_to_next_statement_inside_multiline_function(run_ba
     assert ' 9' in output
 
 
+def test_on_error_resume_next_shorthand_advances_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '1 ON ERROR RESUME NEXT',
+        '10 DEF FNF(X,Y)',
+        '20 LET FNF=X',
+        '30 IF Y<X THEN 50',
+        '35 LET FNF=X/0',
+        '40 LET FNF=Y',
+        '50 FNEND',
+        '60 PRINT FNF(2,9)',
+        '65 END',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Division by zero.' not in output
+    assert 'Error in error handler' not in output
+    assert ' 9' in output
+
+
+def test_on_error_resume_next_shorthand_advances_to_next_statement_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 ON ERROR RESUME NEXT',
+        '20 DEF FNF(X)',
+        '30 LET FNF=1/X : LET FNF=9',
+        '40 FNEND',
+        '50 PRINT FNF(0)',
+        '60 END',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Division by zero.' not in output
+    assert 'Error in error handler' not in output
+    assert ' 9' in output
+
+
+def test_on_error_goto_rejects_multiline_function_body_as_handler_target(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNF(X)',
+        '20 FNF=X',
+        '30 FNEND',
+        '40 ON ERROR GOTO 20',
+        '50 X=1/0',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 40. Invalid target line.' in output
+
+
+def test_resume_rejects_multiline_function_body_as_target(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNF(X)',
+        '20 FNF=X',
+        '30 FNEND',
+        '40 ON ERROR GOTO 100',
+        '50 X=1/0',
+        '60 END',
+        '100 RESUME 20',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Error in error handler: Invalid target line.' in output
+
+
+def test_resume_to_same_multiline_function_body_line_remains_valid(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '100 ON ERROR GOTO 210',
+        '110 DEF FNFACT(N)',
+        '120 K=0 : R=1',
+        '130 IF N<=1 THEN R=R/K',
+        '135 GOTO 170',
+        '140 FOR I=1 TO N',
+        '150 R=R*I',
+        '160 NEXT',
+        '170 FNFACT=R',
+        '180 FNEND',
+        '190 PRINT FNFACT(1)',
+        '200 END',
+        '210 K=1 : R=19 : RESUME 170',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert ' 19' in output
+
+
 def test_tron_traces_error_handler_inside_multiline_function(run_basic_interpreter):
     commands = [
         'NEW',

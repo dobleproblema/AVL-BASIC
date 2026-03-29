@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -5060,6 +5060,9 @@ class BasicInterpreter:
                # Jump to the error handler
                 target_line = int(self.error_handler_line)
                 if target_line in self.program:
+                    if target_line in self._fn_body_lines:
+                        self.handle_error(ErrorCode.INVALID_TARGET_LINE)
+                        return
                     # Avoid O(n) lookup on every error
                     self.current_line = self._line_to_index.get(target_line, self.line_numbers.index(target_line))
                     self.current_command_index = 0
@@ -8269,6 +8272,8 @@ class BasicInterpreter:
                 self.erl_value = "0"
                 self.erc_value = [0, 0]
                 self.err_value = "0"
+            elif target_line in self._fn_body_lines:
+                self.handle_error(ErrorCode.INVALID_TARGET_LINE)
             elif target_line in self.program:
                 self.error_handler_line = target_line
                 self.error_handler_resume_next = False
@@ -8278,6 +8283,15 @@ class BasicInterpreter:
 
         self.handle_error(ErrorCode.SYNTAX_ERROR)
         return True
+
+    def _is_valid_resume_target(self, target_line: int) -> bool:
+        frame = self._current_function_frame()
+        if frame is not None:
+            owner = self.fn_line_owner.get(target_line)
+            if owner is None:
+                return True
+            return owner == frame['fn_name']
+        return target_line not in self._fn_body_lines
   
     def execute_command(self, cmd, is_program=False):
         try:
@@ -11583,9 +11597,28 @@ class BasicInterpreter:
                             break
                         self.execute_command(cmd, is_program=True)
                 except ReturnMain:
-                    if not self.in_error_handler:
-                        raise
                     error_line_idx = last_error_line_idx
+                    if not self.in_error_handler:
+                        if self.error_handler_resume_next and getattr(self, '_resume_target_line', None) is not None:
+                            # ON ERROR RESUME NEXT leaves current_line on the real landing
+                            # line. To stay inside the current function body we must move
+                            # back to the usual "pre-increment" state expected by the
+                            # outer line loop; otherwise the function frame would unwind
+                            # and restore the caller state.
+                            resume_idx = self.current_line
+                            self._resume_target_line = None
+                            if body_start_idx <= resume_idx <= body_end_idx:
+                                self.current_line = resume_idx - 1
+                                break
+                            if resume_idx < 0:
+                                resume_idx = error_line_idx
+                            self.current_line = resume_idx
+                            if not self.resume_keep_index:
+                                self.current_command_index = 0
+                            resume_outside = True
+                            fnend_found = True
+                            break
+                        raise
                     self._execute_error_handler_inline()
                     if not self.running or self.stopped or self.in_error_handler:
                         raise
@@ -14554,6 +14587,9 @@ class BasicInterpreter:
 
         if target_line not in self.program:
             self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND)
+            return
+        if t not in ("", "0") and t_upper != "NEXT" and not self._is_valid_resume_target(target_line):
+            self.handle_error(ErrorCode.INVALID_TARGET_LINE)
             return
 
         # Actual control transfer
