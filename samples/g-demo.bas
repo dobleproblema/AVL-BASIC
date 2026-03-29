@@ -4,7 +4,7 @@
 130 X1=W/2 : Y1=H/2
 140 R1=R2=F9=0
 150 F=16 : V=2 : A=320 : B=0
-160 T$="(c) 2025, Jose Antonio Avila - It really works! · "
+160 T$="(c) 2025, Jose Antonio Avila - It really, *REALLY* works! · "
 170 W=-360
 180 T$=T$+T$
 190 T1=TIME
