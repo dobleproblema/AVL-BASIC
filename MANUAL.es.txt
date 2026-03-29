@@ -1149,6 +1149,8 @@ Interrupciones
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
   - Dentro del cuerpo no se permiten DEF FN anidados ni comandos de control inmediato (ON ERROR, RESUME, CHAIN, MERGE, AFTER, EVERY, DI, EI).
+  - Si la función ya ha sido definida, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la función desde fuera: el intérprete lo rechaza con `Invalid target line`.
+  - Si el salto intenta entrar en esas líneas antes de ejecutar la línea `DEF FN`, el intérprete todavía no sabe que pertenecen al cuerpo de una función. En ese caso no puede aplicar esa protección específica, y la primera línea alcanzada se interpreta como una sentencia normal. Por ejemplo, saltar a `FNF=X` antes de ejecutar `DEF FNF(X)` acaba dando `Syntax error`.
 
 Ejemplo de definición y uso
 10 DEF FNCIRC(Radio)

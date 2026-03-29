@@ -1149,6 +1149,8 @@ Interrupts
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
   - Inside the body, nested `DEF FN` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
+  - Once the function has been defined, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the function body from outside; the interpreter rejects this with `Invalid target line`.
+  - If execution jumps into those lines before the `DEF FN` line has been executed, the interpreter still does not know that they belong to a function body. In that case it cannot apply that specific protection yet, and the first reached line is parsed as a normal statement. For example, jumping to `FNF=X` before executing `DEF FNF(X)` ends with `Syntax error`.
 
 Definition and usage example
 10 DEF FNCIRC(Radius)
