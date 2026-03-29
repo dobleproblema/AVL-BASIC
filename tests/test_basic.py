@@ -8695,3 +8695,68 @@ def test_gui_special_keysym_mapping_for_inkey_contains_arrow_keys():
     assert _GUI_KEYSYM_TO_CODE["Right"] == 29
     assert _GUI_KEYSYM_TO_CODE["Up"] == 30
     assert _GUI_KEYSYM_TO_CODE["Down"] == 31
+
+
+def test_resume_next_advances_to_next_line_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '1 ON ERROR GOTO 100',
+        '10 DEF FNF(X,Y)',
+        '20 LET FNF=X',
+        '30 IF Y<X THEN 50',
+        '35 LET FNF=X/0',
+        '40 LET FNF=Y',
+        '50 FNEND',
+        '60 PRINT FNF(2,9)',
+        '65 END',
+        '100 RESUME NEXT',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 100. Error while handling errors.' not in output
+    assert ' 9' in output
+
+
+def test_resume_next_advances_to_next_statement_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 ON ERROR GOTO 100',
+        '20 DEF FNF(X)',
+        '30 LET FNF=1/X : LET FNF=9',
+        '40 FNEND',
+        '50 PRINT FNF(0)',
+        '60 END',
+        '100 RESUME NEXT',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Error in error handler' not in output
+    assert 'Division by zero.' not in output
+    assert ' 9' in output
+
+
+def test_tron_traces_error_handler_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '1 ON ERROR GOTO 100',
+        '10 DEF FNF(X,Y)',
+        '20 LET FNF=X',
+        '30 IF Y<X THEN 50',
+        '35 LET FNF=X/0',
+        '40 LET FNF=Y',
+        '50 FNEND',
+        '60 PRINT FNF(2,9)',
+        '65 END',
+        '100 RESUME NEXT',
+        'TRON',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '[1][10][60][20][30][35][100][40][50] 9' in output
+    assert '[65]' in output

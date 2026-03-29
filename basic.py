@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.3"
+__version__ = "1.5.4"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -11589,33 +11589,22 @@ class BasicInterpreter:
                     self._execute_error_handler_inline()
                     if not self.running or self.stopped or self.in_error_handler:
                         raise
-                    resume_line = getattr(self, '_resume_target_line', None)
-                    if resume_line is None:
-                        resume_line = last_error_line
-                    resume_idx = None
-                    if resume_line is not None:
-                        resume_idx = self._line_to_index.get(resume_line)
-                        if resume_idx is None:
-                            try:
-                                resume_idx = self.line_numbers.index(resume_line)
-                            except ValueError:
-                                resume_idx = error_line_idx
-                    if resume_idx is not None and body_start_idx <= resume_idx <= body_end_idx:
-                        self.current_line = resume_idx
-                        self._resume_target_line = None
-                        continue
-                    if resume_line is not None:
-                        if resume_idx is None:
-                            resume_idx = error_line_idx
-                        self.current_line = resume_idx
-                        self.current_command_index = 0
-                        self.resume_keep_index = False
-                        resume_outside = True
-                        fnend_found = True
-                        self._resume_target_line = None
-                        break
+                    # execute_resume() leaves current_line in the same "pre-increment"
+                    # state used by the main interpreter loop. Re-entering the current
+                    # command loop here would retry the failing instruction instead of
+                    # letting the outer line loop land on the resume destination.
+                    resume_idx = self.current_line + 1
                     self._resume_target_line = None
-                    raise
+                    if body_start_idx <= resume_idx <= body_end_idx:
+                        break
+                    if resume_idx < 0:
+                        resume_idx = error_line_idx
+                    self.current_line = resume_idx
+                    if not self.resume_keep_index:
+                        self.current_command_index = 0
+                    resume_outside = True
+                    fnend_found = True
+                    break
 
                 if not self.running or self.stopped:
                     break
@@ -11695,6 +11684,10 @@ class BasicInterpreter:
 
                 self.if_skip = False
                 self.cur_if_id = None
+
+                if self.trace_on:
+                    if not self.for_stack or not self.for_stack[-1].loopback:
+                        self._trace_print(line_num)
 
                 while self.running and self.in_error_handler and self.current_command_index < len_commands:
                     cmd = commands[self.current_command_index]
