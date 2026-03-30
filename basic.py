@@ -11289,6 +11289,13 @@ class BasicInterpreter:
         frame.pop('return_array', None)
         frame['return_value'] = ArrayValue(result_dims, array_type, new_data)
 
+    def _copy_array_info(self, array_info):
+        return {
+            'dims': tuple(array_info['dims']),
+            'type': array_info['type'],
+            'data': array_info['data'].copy(),
+        }
+
     def execute_def_fn(self, definition):
         match = DEFFN_REGEX.match(definition)
         if match:
@@ -11357,7 +11364,7 @@ class BasicInterpreter:
 
                 prev_array = arrays.get(param_upper, missing)
                 saved_arrays[param_upper] = None if prev_array is missing else prev_array
-                arrays[param_upper] = source_array
+                arrays[param_upper] = self._copy_array_info(source_array)
                 continue
 
             if is_string:
@@ -14729,17 +14736,7 @@ class BasicInterpreter:
                         source_name = None
 
                     if source_name is not None:
-                        source = self.arrays.get(source_name)
-                        if source is None:
-                            self.handle_error(ErrorCode.UNDEFINED); return
-                        if name.endswith('$'):
-                            if source['type'] != 'string':
-                                self.handle_error(ErrorCode.TYPE_MISMATCH); return
-                        else:
-                            if source['type'] != 'number':
-                                self.handle_error(ErrorCode.TYPE_MISMATCH); return
-                        repl[name_up] = source_name
-                        continue
+                        self.handle_error(ErrorCode.TYPE_MISMATCH); return
 
                     if name.endswith('$'):
                         if not isinstance(value, str):

@@ -1142,15 +1142,15 @@ Interrupciones
 
 + DEF FNname(arg,…)=expr (una sola línea).
 + DEF FNname(arg,...) (bloque multilinea).
+  - Todos los parámetros de `DEF FN` son locales y se pasan por valor; en las funciones multilinea los arrays se copian localmente, y en las funciones de una sola línea no se admiten arrays como argumentos.
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con FNEND. Si falta, el interprete avisara con "Funcion mal definida".
   - Los argumentos actuan como variables locales: se restauran al salir y pueden ser de texto si terminan en $.
-  - Si un argumento recibe un array, se enlaza por referencia al array existente. Dentro de la función, el nombre del parámetro actúa como alias local de ese array y cualquier cambio sobre sus elementos afecta al original.
-  - Esto no encapsula el array: salvo los argumentos y el nombre de la propia función, el resto de variables y arrays siguen siendo globales. Pasar un array como argumento sirve sobre todo para dar un nombre local al array y reutilizar la función con distintos arrays.
-  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar.
-  - Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
+  - Las funciones de una sola línea solo admiten argumentos escalares y solo pueden devolver escalares.
+  - En una función multilinea, un argumento puede recibir un array completo. En ese caso se crea una copia local del array para ese parámetro.
+  - Los cambios sobre ese parámetro-array local, incluidos `REDIM` o `MAT A=...`, solo afectan a la copia local y no al array original del llamador.
+  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Para devolver un valor numerico o de texto asigna a FNNAME o usa LET FNNAME = ..., de lo contrario se devuelve 0 o cadena vacia.
-  - Las funciones de una sola línea solo pueden devolver escalares.
   - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
@@ -1179,13 +1179,15 @@ Uso del nombre de la función como variable local
 60 FNEND
 70 PRINT FNF(5)
 
-Parámetros de array como alias local
+Parámetros de array como copia local
 10 DIM T(15)
-20 DEF FNSET(A,I,V)
-30 A(I)=V
-40 FNSET=A(I)
-50 FNEND
-60 PRINT FNSET(T,12,8) : REM -> 8
+20 T(12)=3
+30 DEF FNSET(A,I,V)
+40 A(I)=V
+50 FNSET=A(I)
+60 FNEND
+70 PRINT FNSET(T,12,8) : REM -> 8
+80 PRINT T(12)         : REM -> 3
 
 Retorno de array con MAT
 10 DEF FNSUMA(X,Y)

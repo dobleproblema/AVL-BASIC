@@ -5422,7 +5422,7 @@ SUMA DE LOS CUADRADOS DE LOS ERRORES= 0.062765106441994'''
 30 DEF FNSUM(X,Y)=X(0)+Y(1)
 40 PRINT FNSUM(A,B)''',
 
-''' 5'''
+'''Line 40. Invalid value type.'''
 ),
 (
 '''10 DEF FNMUL(X,Y)
@@ -8878,13 +8878,28 @@ def test_multiline_function_plain_assignment_cannot_return_array(run_basic_inter
     assert 'Line 25. Invalid value type.' in output
 
 
+def test_single_line_function_cannot_accept_array_argument(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNR(X)=X(0)',
+        '20 DIM A(1),B(1)',
+        '30 MAT A=CON',
+        '40 MAT B=FNR(A)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 40. Invalid value type.' in output
+
+
 def test_single_line_function_cannot_return_array(run_basic_interpreter):
     commands = [
         'NEW',
-        '10 DEF FNR(X)=X',
-        '20 DIM A(1,1),B(1,1)',
-        '30 MAT A=CON',
-        '40 MAT B=FNR(A)',
+        '10 DIM A(1,1),B(1,1)',
+        '20 MAT A=CON',
+        '30 DEF FNR()=A',
+        '40 MAT B=FNR()',
         'RUN',
         'EXIT',
     ]
@@ -8922,3 +8937,43 @@ def test_multiline_function_mat_return_rejects_three_dimensional_array(run_basic
 
     output = run_basic_interpreter(commands)
     assert 'Line 60. Invalid number of dimensions.' in output
+
+
+def test_multiline_function_array_argument_is_local_copy(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNCOPY(A)',
+        '20 A(1)=9',
+        '30 FNCOPY=A(1)',
+        '40 FNEND',
+        '50 DIM Z(2)',
+        '60 Z(1)=3',
+        '70 PRINT FNCOPY(Z)',
+        '80 PRINT Z(1)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert ' 9' in output
+    assert ' 3' in output
+
+
+def test_multiline_function_redim_on_array_argument_is_local(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNRESIZE(A)',
+        '20 REDIM A(5)',
+        '30 A(5)=7',
+        '40 FNRESIZE=UBOUND(A)',
+        '50 FNEND',
+        '60 DIM Z(2)',
+        '70 PRINT FNRESIZE(Z)',
+        '80 PRINT UBOUND(Z)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert ' 5' in output
+    assert ' 2' in output
