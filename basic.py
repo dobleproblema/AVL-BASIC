@@ -527,9 +527,11 @@ CMD_FLAG_ALLOW_FOR = 1 << 1       # FOR / NEXT
 CMD_FLAG_ALLOW_WHILE = 1 << 2     # WHILE / WEND
 CMD_FLAG_HAS_GOSUB = 1 << 3       # contiene "GOSUB"
 CMD_FLAG_HAS_GOTO = 1 << 4        # contiene "GOTO"
-CMD_FLAG_FN_FORBIDDEN = 1 << 5    # not allowed inside multiline DEF FN
+CMD_FLAG_FN_FORBIDDEN = 1 << 5    # not allowed inside multiline DEF FN / DEF SUB
 CMD_FLAG_IS_FNEND = 1 << 6        # FNEND command
 CMD_FLAG_NEXT_OR_WEND = 1 << 7    # starts with NEXT or WEND
+CMD_FLAG_IS_SUBEND = 1 << 8       # SUBEND command
+CMD_FLAG_IS_SUBEXIT = 1 << 9      # SUBEXIT command
 
 CMD_FLOW_NONE = 0
 CMD_FLOW_NEXT = 1
@@ -571,7 +573,8 @@ _FAST_EXPR_CACHE_MISS = object()
 RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', 'MAT', 'ROW',
                   'COL', 'BASE', 'USING', 'INPUT', 'LINE', 'RANDOMIZE', 'ERROR', 'GOTO',
                   'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'NEXT', 'STEP', 
-                  'RETURN', 'GOSUB', 'ON', 'DEF', 'READ', 'RESTORE', 'STOP', 'END',
+                  'RETURN', 'GOSUB', 'ON', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'CALL', 'LOCAL',
+                  'READ', 'RESTORE', 'STOP', 'END',
                   'SAVE', 'LOAD', 'EDIT', 'RENUM', 'NEW', 'WHILE', 'WEND', 'LIST',
                   'RUN', 'CONT', 'RESUME', 'TRON', 'TROFF', 'FILES', 'CAT', 'CD', 'DELETE',
                   'EXIT', 'QUIT', 'SYSTEM', 'SWAP', 'BEEP', 'DEBUG', 'MOVE', 'MOVER',
@@ -686,6 +689,15 @@ DEFFN_MULTI_REGEX = re.compile(
     re.IGNORECASE
 )
 
+DEFSUB_MULTI_REGEX = re.compile(
+    rf'^SUB\s+({VARIABLE_PATTERN})'        # Subroutine name
+    rf'(?:\s*\(\s*([A-Z0-9\$, ]*)\s*\))?'  # argumentos opcionales
+    rf'\s*$',
+    re.IGNORECASE
+)
+
+LOCAL_CMD_REGEX = re.compile(r'^LOCAL(?:\s+(.*))?$', re.IGNORECASE)
+
 NUMBER_REGEX = re.compile(
     r"(?<![\w\$\)])"               # Not preceded by a letter/digit/$ or ')'
     r"([+-]?(?:\d+\.\d*|\d+|\.\d+)(?:[eE][+-]?\d+)?)"  # literal
@@ -713,6 +725,16 @@ SYNTAX_HIGHLIGHT_REGEX = re.compile(fr'''
     (?P<other>\S) |                                          # Other characters
     (?P<space>\s+)                                           # Whitespace
 ''', re.IGNORECASE | re.VERBOSE)
+
+CALL_SUB_HIGHLIGHT_REGEX = re.compile(
+    fr'^(\s*)(CALL)(\s+)({VARIABLE_PATTERN})(.*)$',
+    re.IGNORECASE,
+)
+
+DEF_SUB_HIGHLIGHT_REGEX = re.compile(
+    fr'^(\s*)(DEF)(\s+)(SUB)(\s+)({VARIABLE_PATTERN})(.*)$',
+    re.IGNORECASE,
+)
 
 ANSI_REGEX = re.compile(
     r'''
@@ -1377,6 +1399,9 @@ class ErrorCode(Enum):
     ENDIF_WITH_NO_IF = (51, "END IF without matching IF.")
     DIMENSION_MISMATCH = (52, "Invalid number of dimensions.")
     MAT_IDN_DIMENSION = (53, "MAT IDN requires a two-dimensional square matrix.")
+    SUBROUTINE_FORBIDDEN = (54, "Instruction not allowed inside a subroutine.")
+    SUBEND_WITHOUT_DEF = (55, "Malformed subroutine.")
+    LOCAL_NOT_AT_START = (56, "LOCAL must appear in the initial block of a function or subroutine.")
     
     def __init__(self, code, message):
         self.code = code
@@ -1486,6 +1511,71 @@ def syntax_highlight(line):
     statements = BasicInterpreter.split_commands(stripped_line)
     highlighted_statements = []
 
+    def highlight_generic_statement(statement_text):
+        highlighted_statement = ''
+        for match in SYNTAX_HIGHLIGHT_REGEX.finditer(statement_text):
+            if match.group('comment'):
+                rem_match = re.match(r'\bREM\b', match.group('comment'), re.IGNORECASE)
+                if rem_match:
+                    rem = rem_match.group()
+                    comment_text = match.group('comment')[rem_match.end():]
+                    highlighted_statement += f"{KEYWORD_STYLE}{rem}{RESET}{COMMENT_STYLE}{comment_text}{RESET}"
+                else:
+                    highlighted_statement += match.group('comment')
+            elif match.group('string'):
+                highlighted_statement += f"{STRING_STYLE}{match.group('string')}{RESET}"
+            elif match.group('binumber'):
+                highlighted_statement += f"{HEADER_STYLE}&X{BIN_STYLE}{match.group('binumber')[2:]}{RESET}"
+            elif match.group('hexnumber'):
+                highlighted_statement += f"{HEADER_STYLE}&H{HEX_STYLE}{match.group('hexnumber')[2:].upper()}{RESET}"
+            elif match.group('variable'):
+                highlighted_statement += f"{VARIABLE_STYLE}{match.group('variable')}{RESET}"
+            elif match.group('number'):
+                highlighted_statement += f"{NUMBER_STYLE}{match.group('number')}{RESET}"
+            elif match.group('midcand'):
+                if is_real_mid_command(statement_text, match):
+                    highlighted_statement += f"{KEYWORD_STYLE}{match.group('midcand').upper()}{RESET}"
+                else:
+                    highlighted_statement += f"{OTHER_STYLE}{match.group('midcand')}{RESET}"
+            elif match.group('reserved'):
+                highlighted_statement += f"{KEYWORD_STYLE}{match.group('reserved').upper()}{RESET}"
+            elif match.group('other'):
+                highlighted_statement += f"{OTHER_STYLE}{match.group('other')}{RESET}"
+            elif match.group('space'):
+                highlighted_statement += match.group('space')
+        return highlighted_statement
+
+    def highlight_subroutine_statement(statement_text):
+        match = DEF_SUB_HIGHLIGHT_REGEX.match(statement_text)
+        if match:
+            leading, def_kw, gap1, sub_kw, gap2, sub_name, rest = match.groups()
+            highlighted = (
+                leading
+                + f"{KEYWORD_STYLE}{def_kw.upper()}{RESET}"
+                + gap1
+                + f"{KEYWORD_STYLE}{sub_kw.upper()}{RESET}"
+                + gap2
+                + f"{KEYWORD_STYLE}{sub_name.upper()}{RESET}"
+            )
+            if rest:
+                highlighted += highlight_generic_statement(rest)
+            return highlighted
+
+        match = CALL_SUB_HIGHLIGHT_REGEX.match(statement_text)
+        if match:
+            leading, call_kw, gap, sub_name, rest = match.groups()
+            highlighted = (
+                leading
+                + f"{KEYWORD_STYLE}{call_kw.upper()}{RESET}"
+                + gap
+                + f"{KEYWORD_STYLE}{sub_name.upper()}{RESET}"
+            )
+            if rest:
+                highlighted += highlight_generic_statement(rest)
+            return highlighted
+
+        return None
+
     for statement in statements:
         stripped_statement = statement.lstrip()
 
@@ -1536,48 +1626,9 @@ def syntax_highlight(line):
             highlighted_statement += ', '.join(highlighted_params)
             #highlighted_statements.append(highlighted_statement)
         else:
-            # Use the original regex for other statements
-            highlighted_statement = ''
-            for match in SYNTAX_HIGHLIGHT_REGEX.finditer(statement):
-                if match.group('comment'):
-                    # Highlight the comment: leave 'REM' plain, highlight the comment text
-                    rem_match = re.match(r'\bREM\b', match.group('comment'), re.IGNORECASE)
-                    if rem_match:
-                        rem = rem_match.group()
-                        comment_text = match.group('comment')[rem_match.end():]
-                        highlighted_statement += f"{KEYWORD_STYLE}{rem}{RESET}{COMMENT_STYLE}{comment_text}{RESET}"
-                    else:
-                        highlighted_statement += match.group('comment')
-                elif match.group('string'):
-                    # Highlight the literal string
-                    highlighted_statement += f"{STRING_STYLE}{match.group('string')}{RESET}"
-                elif match.group('binumber'):
-                    # Highlight binary numbers
-                    highlighted_statement += f"{HEADER_STYLE}&X{BIN_STYLE}{match.group('binumber')[2:]}{RESET}"
-                elif match.group('hexnumber'):
-                    # Highlight hexadecimal numbers
-                    highlighted_statement += f"{HEADER_STYLE}&H{HEX_STYLE}{match.group('hexnumber')[2:].upper()}{RESET}"
-                elif match.group('variable'):
-                    # Highlight the variable
-                    highlighted_statement += f"{VARIABLE_STYLE}{match.group('variable')}{RESET}"
-                elif match.group('number'):
-                    # Highlight the numeric literal
-                    highlighted_statement += f"{NUMBER_STYLE}{match.group('number')}{RESET}"
-                elif match.group('midcand'):
-                    if is_real_mid_command(statement, match):
-                        # Highlight the keyword
-                        highlighted_statement += f"{KEYWORD_STYLE}{match.group('midcand').upper()}{RESET}"
-                    else:
-                        highlighted_statement += f"{OTHER_STYLE}{match.group('midcand')}{RESET}"
-                elif match.group('reserved'):
-                    # Highlight the keyword
-                    highlighted_statement += f"{KEYWORD_STYLE}{match.group('reserved').upper()}{RESET}"
-                elif match.group('other'):
-                    # Other characters left unhighlighted
-                    highlighted_statement += f"{OTHER_STYLE}{match.group('other')}{RESET}"
-                elif match.group('space'):
-                    # Spaces left unhighlighted
-                    highlighted_statement += match.group('space')
+            highlighted_statement = highlight_subroutine_statement(statement)
+            if highlighted_statement is None:
+                highlighted_statement = highlight_generic_statement(statement)
         highlighted_statements.append(highlighted_statement)
 
     # Rebuild the highlighted line
@@ -4654,6 +4705,11 @@ class BasicInterpreter:
         self.fn_local_stack = []       # Stack of multiline function frames
         self.fn_call_stack = []        # Tracks active multiline functions
         self.fn_line_owner: dict[int, str] = {}  # Line-number-to-multiline-function map
+        self.subs_multiline = {}  # multiline DEF SUB
+        self._sub_body_lines: set[int] = set()  # Lines belonging to multiline DEF SUB bodies
+        self.sub_local_stack = []      # Stack of multiline subroutine frames
+        self.sub_call_stack = []       # Tracks active multiline subroutines
+        self.sub_line_owner: dict[int, str] = {}  # Line-number-to-multiline-subroutine map
         self.zero_arg_functions: set[str] = set()  # To speed up the special case of zero-argument functions
         self.data = []  # Stores DATA items
         self.data_line_map = {}    # Map from DATA lines to indices in self.data
@@ -4917,6 +4973,11 @@ class BasicInterpreter:
         self.fn_local_stack.clear()
         self.fn_call_stack.clear()
         self.fn_line_owner.clear()
+        self.subs_multiline.clear()
+        self._sub_body_lines.clear()
+        self.sub_local_stack.clear()
+        self.sub_call_stack.clear()
+        self.sub_line_owner.clear()
         self.zero_arg_functions.clear()
 
         global dollar_functions_map
@@ -5074,7 +5135,7 @@ class BasicInterpreter:
                # Jump to the error handler
                 target_line = int(self.error_handler_line)
                 if target_line in self.program:
-                    if target_line in self._fn_body_lines:
+                    if self._is_protected_body_line(target_line):
                         self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                         return
                     # Avoid O(n) lookup on every error
@@ -5565,8 +5626,8 @@ class BasicInterpreter:
                 self.add_program_line(line)
 
     def cmd_merge(self, args: str, is_program: bool = False):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
         # Syntax: MERGE <file name (expr)>
         args = args.strip()
         if not args:
@@ -5586,8 +5647,8 @@ class BasicInterpreter:
             raise ReturnMain
 
     def cmd_chain_merge(self, args: str, is_program: bool = False):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
         # Syntax: CHAIN MERGE <file>[, <line expr>] [, DELETE <range>]
         raw = args.strip()
         if not raw:
@@ -5646,8 +5707,8 @@ class BasicInterpreter:
             pass
 
     def cmd_chain(self, args: str, is_program: bool = False):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
         # Syntax: CHAIN <file>[, <line expr>]
         raw = args.strip()
         if not raw:
@@ -5958,11 +6019,16 @@ class BasicInterpreter:
     
     def delete_program_line(self, line_num):
         if line_num in self.program:
-            owner = self.fn_line_owner.get(line_num)
-            if owner:
-                self._detach_multiline_function(owner)
+            fn_owner = self.fn_line_owner.get(line_num)
+            if fn_owner:
+                self._detach_multiline_function(fn_owner)
+            sub_owner = self.sub_line_owner.get(line_num)
+            if sub_owner:
+                self._detach_multiline_sub(sub_owner)
             self.fn_line_owner.pop(line_num, None)
             self._fn_body_lines.discard(line_num)
+            self.sub_line_owner.pop(line_num, None)
+            self._sub_body_lines.discard(line_num)
             del self.program[line_num]
             self.line_numbers.remove(line_num)
             self._line_to_index = {ln: i for i, ln in enumerate(self.line_numbers)}
@@ -7060,7 +7126,7 @@ class BasicInterpreter:
                 lin_orig = self.current_line
                 entry = self.program[line_num]
 
-                if line_num in self._fn_body_lines:
+                if self._is_protected_body_line(line_num):
                     self.current_line += 1
                     continue
 
@@ -7272,12 +7338,16 @@ class BasicInterpreter:
             flags |= CMD_FLAG_HAS_GOTO
         if cmd_up == 'FNEND':
             flags |= CMD_FLAG_IS_FNEND
+        if cmd_up == 'SUBEND':
+            flags |= CMD_FLAG_IS_SUBEND
+        if cmd_up == 'SUBEXIT':
+            flags |= CMD_FLAG_IS_SUBEXIT
         if cmd_up.startswith(('NEXT', 'WEND')):
             flags |= CMD_FLAG_NEXT_OR_WEND
 
         if cmd_up.startswith('ON ERROR') or cmd_up.startswith('RESUME') \
            or cmd_up.startswith('CHAIN MERGE') or cmd_up in {'CHAIN', 'MERGE', 'AFTER', 'EVERY', 'DI', 'EI'} \
-           or cmd_up.startswith('DEF FN'):
+           or cmd_up.startswith('DEF FN') or cmd_up.startswith('DEF SUB'):
             flags |= CMD_FLAG_FN_FORBIDDEN
 
         flow_kind = CMD_FLOW_NONE
@@ -7596,13 +7666,13 @@ class BasicInterpreter:
             self.execute_return()
             return
         if kind == IR_DI:
-            if self._inside_function():
-                self._function_error()
+            if (frame := self._current_routine_frame()) is not None:
+                self._routine_error(frame)
             self.interrupts_mask = True
             return
         if kind == IR_EI:
-            if self._inside_function():
-                self._function_error()
+            if (frame := self._current_routine_frame()) is not None:
+                self._routine_error(frame)
             self.interrupts_mask = False
             return
         # Safe IR: FOR/NEXT/WHILE/WEND call the existing handlers
@@ -7831,14 +7901,14 @@ class BasicInterpreter:
         return int(ticks_val), int(timer_no), int(target_ln)
 
     def execute_after(self, s):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
         ticks, timer_no, target_ln = self._parse_after_every(s)
         self._schedule_timer(ticks, timer_no, target_ln, mode='AFTER')
 
     def execute_every(self, s):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
         ticks, timer_no, target_ln = self._parse_after_every(s)
         self._schedule_timer(ticks, timer_no, target_ln, mode='EVERY')
 
@@ -7852,8 +7922,8 @@ class BasicInterpreter:
         self._cancel_timer(n)
 
     def execute_on_mouse(self, cmd):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
 
         match = re.match(r'ON\s+MOUSE\s+([A-Z0-9]+)\s+GOSUB\s+(.+)', cmd, re.IGNORECASE)
         if not match:
@@ -7895,8 +7965,8 @@ class BasicInterpreter:
         self._mouse_enabled = True
 
     def execute_MOUSE(self, arg_string):
-        if self._inside_function():
-            self._function_error()
+        if (frame := self._current_routine_frame()) is not None:
+            self._routine_error(frame)
 
         parts = BasicInterpreter.split_arguments(arg_string) if arg_string else []
         if len(parts) != 1:
@@ -8286,7 +8356,7 @@ class BasicInterpreter:
                 self.erl_value = "0"
                 self.erc_value = [0, 0]
                 self.err_value = "0"
-            elif target_line in self._fn_body_lines:
+            elif self._is_protected_body_line(target_line):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
             elif target_line in self.program:
                 self.error_handler_line = target_line
@@ -8299,13 +8369,13 @@ class BasicInterpreter:
         return True
 
     def _is_valid_resume_target(self, target_line: int) -> bool:
-        frame = self._current_function_frame()
+        frame = self._current_routine_frame()
         if frame is not None:
-            owner = self.fn_line_owner.get(target_line)
-            if owner is None:
+            owner_kind, owner_name = self._get_routine_owner(target_line)
+            if owner_kind is None:
                 return True
-            return owner == frame['fn_name']
-        return target_line not in self._fn_body_lines
+            return owner_kind == frame['kind'] and owner_name == frame['name']
+        return not self._is_protected_body_line(target_line)
   
     def execute_command(self, cmd, is_program=False):
         try:
@@ -8324,19 +8394,38 @@ class BasicInterpreter:
             first_word_upper = first_word.upper()
 
             inside_fn = self._inside_function()
+            inside_sub = self._inside_subroutine()
             if inside_fn:
                 if self._maybe_handle_function_assignment(raw_cmd):
                     return
 
                 if upper_cmd_stripped.startswith('ON ERROR') or first_word_upper == 'RESUME' \
                    or upper_cmd_stripped.startswith('CHAIN MERGE') or first_word_upper in {'AFTER', 'EVERY', 'DI', 'EI', 'CHAIN', 'MERGE'} \
-                   or upper_cmd_stripped.startswith('DEF FN'):
+                   or first_word_upper == 'CALL' \
+                   or upper_cmd_stripped.startswith('DEF FN') or upper_cmd_stripped.startswith('DEF SUB'):
                     self._function_error()
+            elif inside_sub:
+                if upper_cmd_stripped.startswith('ON ERROR') or first_word_upper == 'RESUME' \
+                   or upper_cmd_stripped.startswith('CHAIN MERGE') or first_word_upper in {'AFTER', 'EVERY', 'DI', 'EI', 'CHAIN', 'MERGE'} \
+                   or upper_cmd_stripped.startswith('DEF FN') or upper_cmd_stripped.startswith('DEF SUB'):
+                    self._subroutine_error()
 
             if first_word_upper == 'FNEND':
-                if self._inside_function():
+                if inside_fn:
                     return
                 self.handle_error(ErrorCode.FNEND_WITHOUT_DEF)
+                return
+
+            if first_word_upper == 'SUBEND':
+                if inside_sub:
+                    return
+                self.handle_error(ErrorCode.SUBEND_WITHOUT_DEF)
+                return
+
+            if first_word_upper == 'SUBEXIT':
+                if inside_sub:
+                    return
+                self.handle_error(ErrorCode.SYNTAX_ERROR)
                 return
 
             if self._handle_on_error_directive(cmd):
@@ -8385,6 +8474,12 @@ class BasicInterpreter:
             elif first_word == 'GOSUB':
                 self.execute_gosub(cmd[5:].strip())
                 return
+            elif first_word == 'CALL':
+                self.execute_call(cmd[4:].strip())
+                return
+            elif first_word == 'LOCAL':
+                self.execute_local(cmd[5:].strip())
+                return
             elif first_word == 'WHILE':
                 self.execute_while(cmd[5:].strip())
                 return
@@ -8417,6 +8512,10 @@ class BasicInterpreter:
                 self.execute_return()
             elif first_word == 'GOSUB':
                 self.execute_gosub(cmd[5:].strip())
+            elif first_word == 'CALL':
+                self.execute_call(cmd[4:].strip())
+            elif first_word == 'LOCAL':
+                self.execute_local(cmd[5:].strip())
             elif first_word == 'PRINT':
                 self.execute_print(cmd[5:].strip())
             elif first_word == 'MAT':
@@ -8449,8 +8548,10 @@ class BasicInterpreter:
                 self.execute_MOUSE(arg_string)
             elif first_word == 'ON':
                 self.execute_on(cmd, is_program)
-            elif cmd.startswith('DEF FN'):
+            elif upper_cmd_stripped.startswith('DEF FN'):
                 self.execute_def_fn(cmd[6:].strip())
+            elif upper_cmd_stripped.startswith('DEF SUB'):
+                self.execute_def_sub(cmd[3:].strip())
             elif first_word == 'READ':
                 self.execute_read(cmd[4:].strip())      
             elif first_word == 'RESTORE':
@@ -10384,14 +10485,14 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.TARGET_LINE_NOT_FOUND)
             return
 
-        if self._inside_function():
-            frame = self._current_function_frame()
-            owner = self.fn_line_owner.get(target_line)
-            if owner and owner != frame['fn_name']:
+        frame = self._current_routine_frame()
+        if frame is not None:
+            owner_kind, owner_name = self._get_routine_owner(target_line)
+            if owner_kind is not None and (owner_kind != frame['kind'] or owner_name != frame['name']):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
         else:
-            if target_line in self._fn_body_lines:
+            if self._is_protected_body_line(target_line):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
 
@@ -10962,11 +11063,58 @@ class BasicInterpreter:
     def _current_function_frame(self):
         return self.fn_local_stack[-1] if self.fn_local_stack else None
 
+    def _inside_subroutine(self) -> bool:
+        if self.in_error_handler or self.fn_local_stack:
+            return False
+        if self.sub_local_stack:
+            return True
+        if self.current_line is None:
+            return False
+        try:
+            line_num = self.line_numbers[self.current_line]
+        except (IndexError, TypeError):
+            return False
+        return line_num in self.sub_line_owner
+
+    def _current_sub_frame(self):
+        return self.sub_local_stack[-1] if self.sub_local_stack else None
+
+    def _current_routine_frame(self):
+        if self.fn_local_stack:
+            return self.fn_local_stack[-1]
+        if self.sub_local_stack:
+            return self.sub_local_stack[-1]
+        return None
+
+    def _get_routine_owner(self, line_num: int):
+        fn_owner = self.fn_line_owner.get(line_num)
+        if fn_owner is not None:
+            return ('function', fn_owner)
+        sub_owner = self.sub_line_owner.get(line_num)
+        if sub_owner is not None:
+            return ('sub', sub_owner)
+        return (None, None)
+
+    def _is_protected_body_line(self, line_num: int) -> bool:
+        return line_num in self._fn_body_lines or line_num in self._sub_body_lines
+
     def _function_error(self, message=None):
         if message is None:
             self.handle_error(ErrorCode.FUNCTION_FORBIDDEN)
         else:
             self.handle_error(message)
+
+    def _subroutine_error(self, message=None):
+        if message is None:
+            self.handle_error(ErrorCode.SUBROUTINE_FORBIDDEN)
+        else:
+            self.handle_error(message)
+
+    def _routine_error(self, frame, message=None):
+        if frame.get('kind') == 'sub':
+            self._subroutine_error(message)
+        else:
+            self._function_error(message)
 
     def _register_python_function(self, func_name: str, python_func):
         if func_name.endswith('$'):
@@ -11163,6 +11311,122 @@ class BasicInterpreter:
         for idx in meta.get('body_indices', []):
             line = self.line_numbers[idx]
             self.fn_line_owner.pop(line, None)
+            self._fn_body_lines.discard(line)
+
+    def _detach_multiline_sub(self, sub_name: str):
+        meta = self.subs_multiline.pop(sub_name, None)
+        if not meta:
+            return
+        for idx in meta.get('body_indices', []):
+            line = self.line_numbers[idx]
+            self.sub_line_owner.pop(line, None)
+            self._sub_body_lines.discard(line)
+
+    def _mark_routine_body_lines(self, body_indices, owner_name, owner_map, body_lines):
+        for idx in body_indices:
+            line_num = self.line_numbers[idx]
+            body_lines.add(line_num)
+            owner_map[line_num] = owner_name
+
+    def _parse_local_statement(self, statement: str):
+        statement = statement.strip()
+        if not statement:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
+        local_specs = []
+        for item in BasicInterpreter.split_dim_args(statement):
+            item = item.strip()
+            if not item:
+                self.handle_error(ErrorCode.SYNTAX_ERROR)
+                return None
+
+            if VAR_PATTERN.fullmatch(item):
+                local_specs.append(('scalar', item.upper()))
+                continue
+
+            match = DIM_REGEX.match(item)
+            if not match:
+                self.handle_error(ErrorCode.SYNTAX_ERROR)
+                return None
+
+            local_specs.append(('array', match.group(1).upper(), match.group(2).strip()))
+
+        if not local_specs:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
+        return tuple(local_specs)
+
+    def _raise_definition_scan_error(self, line_index, command_index, commands_in_line, error_code):
+        self.current_line = line_index
+        self.current_command_index = command_index
+        self.commands_in_line = commands_in_line
+        self.handle_error(error_code)
+
+    def _collect_leading_local_specs(self, body_indices, terminator_cmd):
+        local_specs = []
+        seen_nonlocal = False
+        seen_names = set()
+
+        for idx in body_indices:
+            line_num = self.line_numbers[idx]
+            entry = self.program[line_num]
+            commands = entry.get('exec_cmds')
+            if commands is None:
+                self._refresh_entry_exec_cache(entry)
+                commands = entry.get('exec_cmds')
+
+            for cmd_idx, cmd in enumerate(commands):
+                stripped = cmd.strip()
+                if not stripped:
+                    continue
+
+                upper = stripped.upper()
+                if upper == terminator_cmd:
+                    return tuple(local_specs)
+
+                if upper.startswith('REM'):
+                    continue
+
+                match = LOCAL_CMD_REGEX.match(stripped)
+                if match:
+                    if seen_nonlocal:
+                        self._raise_definition_scan_error(
+                            idx,
+                            cmd_idx,
+                            len(commands),
+                            ErrorCode.LOCAL_NOT_AT_START,
+                        )
+                        return None
+
+                    parsed_specs = self._parse_local_statement((match.group(1) or '').strip())
+                    if parsed_specs is None:
+                        return None
+
+                    for spec in parsed_specs:
+                        name = spec[1]
+                        if name in seen_names:
+                            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+                            return None
+                        seen_names.add(name)
+                        local_specs.append(spec)
+                    continue
+
+                seen_nonlocal = True
+
+        return tuple(local_specs)
+
+    def _validate_local_specs(self, routine_name, arg_names, local_specs):
+        forbidden = set(arg_names)
+        forbidden.add(routine_name)
+
+        for spec in local_specs:
+            if spec[1] in forbidden:
+                self.handle_error(ErrorCode.INVALID_ARGUMENT)
+                return False
+
+        return True
 
     def _define_multiline_function(self, definition: str):
         match = DEFFN_MULTI_REGEX.match(definition)
@@ -11199,8 +11463,6 @@ class BasicInterpreter:
                 commands = entry.get('exec_cmds')
 
             body_indices.append(idx)
-            self._fn_body_lines.add(line_num)
-            self.fn_line_owner[line_num] = func_name
 
             if commands and all(c.strip().upper() == 'FNEND' for c in commands):
                 fnend_found = True
@@ -11210,20 +11472,30 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.FNEND_WITHOUT_DEF)
             return
 
+        local_specs = self._collect_leading_local_specs(body_indices, 'FNEND')
+        if local_specs is None:
+            return
+        if not self._validate_local_specs(func_name, args, local_specs):
+            return
+
         body_start_idx = body_indices[0]
         body_end_idx = body_indices[-1]
         arg_specs = tuple((arg, arg.endswith('$')) for arg in args)
         meta = {
+            'kind': 'function',
+            'name': func_name,
             'args': args,
             'arg_specs': arg_specs,
             'body_indices': body_indices,
             'body_start_idx': body_start_idx,
             'body_end_idx': body_end_idx,
             'has_if_blocks': None,
+            'local_specs': local_specs,
             'zero_args': len(args) == 0,
             'default': '' if func_name.endswith('$') else 0.0,
         }
 
+        self._mark_routine_body_lines(body_indices, func_name, self.fn_line_owner, self._fn_body_lines)
         self.functions_multiline[func_name] = meta
         self.functions.pop(func_name, None)
 
@@ -11334,7 +11606,108 @@ class BasicInterpreter:
 
         self._define_multiline_function(definition)
 
-    def _bind_multiline_call_args(self, meta, call_args, saved_vars, saved_arrays):
+    def _define_multiline_sub(self, definition: str):
+        match = DEFSUB_MULTI_REGEX.match(definition)
+        if not match:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return
+
+        sub_name = match.group(1).upper()
+        if not is_valid_varname(sub_name):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            return
+
+        args_str = (match.group(2) or '').strip()
+        args = [arg.strip().upper() for arg in args_str.split(',') if arg.strip()] if args_str else []
+
+        seen_args = set()
+        for arg in args:
+            if not is_valid_varname(arg) or arg == sub_name or arg in seen_args:
+                self.handle_error(ErrorCode.INVALID_ARGUMENT)
+                return
+            seen_args.add(arg)
+
+        self._detach_multiline_sub(sub_name)
+
+        def_index = self.current_line
+        body_indices: list[int] = []
+        subend_found = False
+
+        for idx in range(def_index + 1, len(self.line_numbers)):
+            line_num = self.line_numbers[idx]
+            entry = self.program[line_num]
+            commands = entry.get('exec_cmds')
+            if commands is None:
+                self._refresh_entry_exec_cache(entry)
+                commands = entry.get('exec_cmds')
+
+            body_indices.append(idx)
+
+            if commands and all(c.strip().upper() == 'SUBEND' for c in commands):
+                subend_found = True
+                break
+
+        if not subend_found:
+            self.handle_error(ErrorCode.SUBEND_WITHOUT_DEF)
+            return
+
+        local_specs = self._collect_leading_local_specs(body_indices, 'SUBEND')
+        if local_specs is None:
+            return
+        if not self._validate_local_specs(sub_name, args, local_specs):
+            return
+
+        body_start_idx = body_indices[0]
+        body_end_idx = body_indices[-1]
+        self._mark_routine_body_lines(body_indices, sub_name, self.sub_line_owner, self._sub_body_lines)
+        self.subs_multiline[sub_name] = {
+            'kind': 'sub',
+            'name': sub_name,
+            'args': args,
+            'arg_specs': tuple((arg, arg.endswith('$')) for arg in args),
+            'body_indices': body_indices,
+            'body_start_idx': body_start_idx,
+            'body_end_idx': body_end_idx,
+            'has_if_blocks': None,
+            'local_specs': local_specs,
+            'zero_args': len(args) == 0,
+        }
+
+    def execute_def_sub(self, definition: str):
+        self._define_multiline_sub(definition)
+
+    def execute_call(self, definition: str):
+        text = definition.strip()
+        if not text:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            raise ReturnMain
+
+        match = re.match(rf'^({VARIABLE_PATTERN})(.*)$', text, re.IGNORECASE)
+        if not match:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+
+        sub_name = match.group(1).upper()
+        rest = match.group(2).strip()
+
+        if rest:
+            if not (rest.startswith('(') and rest.endswith(')')):
+                self.handle_error(ErrorCode.SYNTAX_ERROR)
+                raise ReturnMain
+            args_text = rest[1:-1].strip()
+            arg_exprs = BasicInterpreter.split_arguments(args_text) if args_text else []
+        else:
+            arg_exprs = []
+
+        call_args = tuple(self.evaluate_expression(expr) for expr in arg_exprs)
+        self._invoke_multiline_sub(sub_name, call_args)
+
+    def execute_local(self, _definition: str):
+        if self._current_routine_frame() is None:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            raise ReturnMain
+
+    def _bind_multiline_call_args(self, meta, call_args, saved_vars, saved_arrays, *, copy_arrays=True):
         variables = self.variables
         arrays = self.arrays
         missing = object()
@@ -11364,7 +11737,7 @@ class BasicInterpreter:
 
                 prev_array = arrays.get(param_upper, missing)
                 saved_arrays[param_upper] = None if prev_array is missing else prev_array
-                arrays[param_upper] = self._copy_array_info(source_array)
+                arrays[param_upper] = self._copy_array_info(source_array) if copy_arrays else source_array
                 continue
 
             if is_string:
@@ -11384,7 +11757,39 @@ class BasicInterpreter:
                         self.handle_error(ErrorCode.TYPE_MISMATCH)
                         continue
 
-    def _restore_multiline_call_args(self, func_name: str, saved_vars: dict, saved_arrays: dict):
+    def _bind_multiline_local_specs(self, meta, saved_vars, saved_arrays):
+        variables = self.variables
+        arrays = self.arrays
+        missing = object()
+
+        for spec in meta.get('local_specs', ()):
+            kind = spec[0]
+            name = spec[1]
+
+            if kind == 'scalar':
+                prev_value = variables.get(name, missing)
+                saved_vars[name] = (prev_value is not missing, None if prev_value is missing else prev_value)
+                variables[name] = '' if name.endswith('$') else 0.0
+                continue
+
+            dims = self._evaluate_dimension_list(spec[2])
+            if dims is None:
+                raise ReturnMain
+
+            default_value = '' if name.endswith('$') else 0.0
+            data = self._build_array_data(dims, default_value)
+            if data is None:
+                raise ReturnMain
+
+            prev_array = arrays.get(name, missing)
+            saved_arrays[name] = None if prev_array is missing else prev_array
+            arrays[name] = {
+                'dims': dims,
+                'type': 'string' if name.endswith('$') else 'number',
+                'data': data,
+            }
+
+    def _restore_multiline_call_args(self, saved_vars: dict, saved_arrays: dict):
         arrays = self.arrays
         variables = self.variables
 
@@ -11399,8 +11804,6 @@ class BasicInterpreter:
                 variables[name] = value
             else:
                 variables.pop(name, None)
-
-        variables.pop(func_name, None)
 
     def _invoke_multiline_function(self, func_name: str, call_args: tuple):
         meta = self.functions_multiline.get(func_name)
@@ -11433,6 +11836,8 @@ class BasicInterpreter:
         )
 
         frame = {
+            'kind': 'function',
+            'name': func_name,
             'fn_name': func_name,
             'meta': meta,
             'saved_vars': {},
@@ -11446,7 +11851,11 @@ class BasicInterpreter:
         }
 
         frame['default'] = meta['default']
+        missing = object()
+        prev_value = self.variables.get(func_name, missing)
+        frame['saved_vars'][func_name] = (prev_value is not missing, None if prev_value is missing else prev_value)
         self._bind_multiline_call_args(meta, call_args, frame['saved_vars'], frame['saved_arrays'])
+        self._bind_multiline_local_specs(meta, frame['saved_vars'], frame['saved_arrays'])
 
         self.fn_call_stack.append(func_name)
         self.fn_local_stack.append(frame)
@@ -11483,16 +11892,89 @@ class BasicInterpreter:
             return str(result_value)
         return self.validate_number_basic(result_value)
 
+    def _invoke_multiline_sub(self, sub_name: str, call_args: tuple):
+        meta = self.subs_multiline.get(sub_name)
+        if meta is None:
+            self.handle_error(ErrorCode.UNDEFINED)
+            raise ReturnMain
+
+        if sub_name in self.sub_call_stack:
+            self._subroutine_error()
+
+        expected_args = meta['args']
+        if len(call_args) != len(expected_args):
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+
+        saved_state = (
+            self.current_line,
+            getattr(self, 'current_command_index', 0),
+            getattr(self, 'commands_in_line', 0),
+            self.if_skip,
+            self.cur_if_id,
+            getattr(self, 'last_next', False),
+            getattr(self, 'last_wend', False),
+            self.last_gosub,
+            getattr(self, 'resume_keep_index', False),
+            self.for_skip,
+            self.while_skip,
+            getattr(self, 'on_gosub', False),
+            getattr(self, 'on_goto', False),
+            self.if_block_stack,
+        )
+
+        frame = {
+            'kind': 'sub',
+            'name': sub_name,
+            'sub_name': sub_name,
+            'meta': meta,
+            'saved_vars': {},
+            'saved_arrays': {},
+            'for_depth': len(self.for_stack),
+            'while_depth': len(self.while_stack),
+            'gosub_depth': len(self.gosub_stack),
+            'saved_state': saved_state,
+            'resume_outside': False,
+        }
+
+        missing = object()
+        prev_value = self.variables.get(sub_name, missing)
+        frame['saved_vars'][sub_name] = (prev_value is not missing, None if prev_value is missing else prev_value)
+        self._bind_multiline_call_args(meta, call_args, frame['saved_vars'], frame['saved_arrays'], copy_arrays=False)
+        self._bind_multiline_local_specs(meta, frame['saved_vars'], frame['saved_arrays'])
+
+        self.sub_call_stack.append(sub_name)
+        self.sub_local_stack.append(frame)
+
+        self.current_line = meta['body_start_idx']
+        self.current_command_index = 0
+        self.if_block_stack = []
+
+        try:
+            self._execute_multiline_function_body(frame)
+        except ReturnMain:
+            self._cleanup_function_frame(frame)
+            raise
+
+        resume_outside = frame['resume_outside']
+        self._cleanup_function_frame(frame)
+
+        if resume_outside:
+            raise ReturnMain
+
     def _execute_multiline_function_body(self, frame):
         meta = frame['meta']
+        frame_kind = frame['kind']
         body_start_idx = meta['body_start_idx']
         body_end_idx = meta['body_end_idx']
         base_gosub = frame['gosub_depth']
         _poll_isr = self._poll_interrupts
         cmd = ''
         prev_cmd_kind = CMD_PREV_OTHER
-        fnend_found = False
+        routine_done = False
         resume_outside = False
+        end_flag = CMD_FLAG_IS_SUBEND if frame_kind == 'sub' else CMD_FLAG_IS_FNEND
+        exit_flag = CMD_FLAG_IS_SUBEXIT if frame_kind == 'sub' else 0
+        malformed_error = ErrorCode.SUBEND_WITHOUT_DEF if frame_kind == 'sub' else ErrorCode.FNEND_WITHOUT_DEF
 
         has_if_blocks = meta.get('has_if_blocks')
         if has_if_blocks is None or self._if_block_info_dirty:
@@ -11509,13 +11991,13 @@ class BasicInterpreter:
 
         while self.running:
             if self.current_line >= len(self.line_numbers):
-                self.handle_error(ErrorCode.FNEND_WITHOUT_DEF)
+                self.handle_error(malformed_error)
 
             line_idx = self.current_line
             line_num = self.line_numbers[line_idx]
 
             if (line_idx < body_start_idx or line_idx > body_end_idx) and len(self.gosub_stack) == base_gosub:
-                self._function_error()
+                self._routine_error(frame)
 
             entry = self.program[line_num]
             commands = entry.get('exec_cmds')
@@ -11607,7 +12089,7 @@ class BasicInterpreter:
                 self.on_gosub = self.on_goto = False
 
                 if cmd_flags & CMD_FLAG_FN_FORBIDDEN:
-                    self._function_error()
+                    self._routine_error(frame)
 
                 ir_node = None
                 if ir_list and self.current_command_index < len(ir_list) and not self.in_error_handler \
@@ -11620,8 +12102,8 @@ class BasicInterpreter:
                     if ir_node is not None:
                         self._execute_ir(ir_node)
                     else:
-                        if cmd_flags & CMD_FLAG_IS_FNEND:
-                            fnend_found = True
+                        if (cmd_flags & end_flag) or (exit_flag and (cmd_flags & exit_flag)):
+                            routine_done = True
                             break
                         self.execute_command(cmd, is_program=True)
                 except ReturnMain:
@@ -11644,7 +12126,7 @@ class BasicInterpreter:
                             if not self.resume_keep_index:
                                 self.current_command_index = 0
                             resume_outside = True
-                            fnend_found = True
+                            routine_done = True
                             break
                         raise
                     self._execute_error_handler_inline()
@@ -11664,7 +12146,7 @@ class BasicInterpreter:
                     if not self.resume_keep_index:
                         self.current_command_index = 0
                     resume_outside = True
-                    fnend_found = True
+                    routine_done = True
                     break
 
                 if not self.running or self.stopped:
@@ -11682,7 +12164,7 @@ class BasicInterpreter:
 
                 self.current_command_index += 1
 
-            if fnend_found:
+            if routine_done:
                 break
 
             if not self.running or self.stopped:
@@ -11793,13 +12275,18 @@ class BasicInterpreter:
             self.if_block_stack = saved_if_stack
 
     def _cleanup_function_frame(self, frame):
-        func_name = frame['fn_name']
-        self._restore_multiline_call_args(func_name, frame.get('saved_vars', {}), frame.get('saved_arrays', {}))
+        self._restore_multiline_call_args(frame.get('saved_vars', {}), frame.get('saved_arrays', {}))
 
-        if self.fn_local_stack:
-            self.fn_local_stack.pop()
-        if self.fn_call_stack:
-            self.fn_call_stack.pop()
+        if frame.get('kind') == 'sub':
+            if self.sub_local_stack:
+                self.sub_local_stack.pop()
+            if self.sub_call_stack:
+                self.sub_call_stack.pop()
+        else:
+            if self.fn_local_stack:
+                self.fn_local_stack.pop()
+            if self.fn_call_stack:
+                self.fn_call_stack.pop()
 
         del self.for_stack[frame['for_depth']:]
         del self.while_stack[frame['while_depth']:]
@@ -14592,14 +15079,14 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.INVALID_LINE_NUMBER)
             return
 
-        if self._inside_function():
-            frame = self._current_function_frame()
-            owner = self.fn_line_owner.get(target)
-            if owner != frame['fn_name']:
+        frame = self._current_routine_frame()
+        if frame is not None:
+            owner_kind, owner_name = self._get_routine_owner(target)
+            if owner_kind != frame['kind'] or owner_name != frame['name']:
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
         else:
-            if target in self._fn_body_lines:
+            if self._is_protected_body_line(target):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
 

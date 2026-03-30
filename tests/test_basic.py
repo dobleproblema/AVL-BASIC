@@ -15,12 +15,16 @@ from basic import (
     GraphicsWindow,
     DirtyGrid,
     BasicInterpreter,
+    KEYWORD_STYLE,
+    VARIABLE_STYLE,
+    RESET,
     ReturnMain,
     _key_q,
     _GUI_KEYSYM_TO_CODE,
     _tk_event_to_key_codes,
     big_bitmap_font,
     small_bitmap_font,
+    syntax_highlight,
 )
 
 DEFAULT_SESSION_NOISE_PATTERNS = [
@@ -8977,3 +8981,271 @@ def test_multiline_function_redim_on_array_argument_is_local(run_basic_interpret
     output = run_basic_interpreter(commands)
     assert ' 5' in output
     assert ' 2' in output
+
+
+def test_multiline_function_local_scalars_hide_globals_and_restore_them(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 A=7:B$="OUT"',
+        '20 DEF FNF(X)',
+        '30 LOCAL A,B$',
+        '40 A=A+X',
+        '50 B$="IN"',
+        '60 FNF=A',
+        '70 FNEND',
+        '80 PRINT FNF(3)',
+        '90 PRINT A',
+        '100 PRINT B$',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 3\n 7\nOUT\n' in output
+
+
+def test_multiline_function_local_array_does_not_modify_global_array(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DIM D(2)',
+        '20 D(1)=4',
+        '30 DEF FNF()',
+        '40 LOCAL D(3)',
+        '50 D(1)=9',
+        '60 FNF=D(1)',
+        '70 FNEND',
+        '80 PRINT FNF()',
+        '90 PRINT D(1)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 9\n 4\n' in output
+
+
+def test_multiline_subroutine_local_declarations_coexist_with_reference_parameters(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 A=1',
+        '20 DIM D(2),Z(2)',
+        '30 D(1)=4:Z(1)=1',
+        '40 DEF SUB WORK(T)',
+        '50 LOCAL A,D(3)',
+        '60 A=7',
+        '70 D(1)=9',
+        '80 T(1)=5',
+        '90 PRINT A',
+        '100 PRINT D(1)',
+        '110 SUBEND',
+        '120 CALL WORK(Z)',
+        '130 PRINT A',
+        '140 PRINT D(1)',
+        '150 PRINT Z(1)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 7\n 9\n 1\n 4\n 5\n' in output
+
+
+def test_local_must_appear_in_initial_block_of_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNF(X)',
+        '20 A=X',
+        '30 LOCAL B',
+        '40 FNF=A',
+        '50 FNEND',
+        '60 PRINT FNF(2)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 30. LOCAL must appear in the initial block of a multiline function or subroutine.' in output
+
+
+def test_local_must_appear_in_initial_block_of_multiline_subroutine(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB WORK(X)',
+        '20 PRINT X',
+        '30 LOCAL B',
+        '40 SUBEND',
+        '50 CALL WORK(2)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 30. LOCAL must appear in the initial block of a multiline function or subroutine.' in output
+
+
+def test_multiline_subroutine_passes_scalars_by_value(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB INC(X)',
+        '20 X=X+1',
+        '30 PRINT X',
+        '40 SUBEND',
+        '50 A=4',
+        '60 CALL INC(A)',
+        '70 PRINT A',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert ' 5' in output
+    assert ' 4' in output
+
+
+def test_multiline_subroutine_passes_arrays_by_reference_and_restores_sub_name(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB TOUCH(A)',
+        '20 TOUCH=7',
+        '30 A(1)=9',
+        '40 PRINT TOUCH',
+        '50 SUBEND',
+        '60 TOUCH=2',
+        '70 DIM Z(2)',
+        '80 Z(1)=3',
+        '90 CALL TOUCH(Z)',
+        '100 PRINT TOUCH',
+        '110 PRINT Z(1)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 7\n 2\n 9\n' in output
+
+
+def test_multiline_subroutine_subexit_stops_execution_early(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB EARLY()',
+        '20 PRINT 1',
+        '30 SUBEXIT',
+        '40 PRINT 2',
+        '50 SUBEND',
+        '60 CALL EARLY()',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n' in output
+    assert '\n 2\n' not in output
+
+
+def test_on_error_goto_rejects_multiline_subroutine_body_as_handler_target(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB T()',
+        '20 PRINT 1',
+        '30 SUBEND',
+        '40 ON ERROR GOTO 20',
+        '50 X=1/0',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 40. Invalid target line.' in output
+
+
+def test_goto_rejects_multiline_subroutine_body_from_outside(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB T()',
+        '20 PRINT 1',
+        '30 SUBEND',
+        '40 GOTO 20',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 40. Invalid target line.' in output
+
+
+def test_resume_next_advances_inside_multiline_subroutine(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '1 ON ERROR GOTO 100',
+        '10 DEF SUB SHOW(X,Y)',
+        '20 PRINT X',
+        '30 IF Y<X THEN 50',
+        '35 A=X/0',
+        '40 PRINT Y',
+        '50 SUBEND',
+        '60 CALL SHOW(2,9)',
+        '65 END',
+        '100 RESUME NEXT',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 100. Error while handling errors.' not in output
+    assert ' 2' in output
+    assert ' 9' in output
+
+
+def test_call_is_not_allowed_inside_multiline_function(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNF()',
+        '20 CALL SHOW()',
+        '30 FNF=1',
+        '40 FNEND',
+        '50 DEF SUB SHOW()',
+        '60 SUBEND',
+        '70 PRINT FNF()',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 20. Instruction not allowed inside a function.' in output
+
+
+def test_syntax_highlight_uses_keyword_style_for_subroutine_names():
+    highlighted_def = syntax_highlight('10 DEF SUB POINT(X)')
+    highlighted_call = syntax_highlight('20 CALL POINT()')
+
+    keyword_name = f'{KEYWORD_STYLE}POINT{RESET}'
+    variable_name = f'{VARIABLE_STYLE}POINT{RESET}'
+
+    assert keyword_name in highlighted_def
+    assert keyword_name in highlighted_call
+    assert variable_name not in highlighted_def
+    assert variable_name not in highlighted_call
+
+
+def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '1 ON ERROR GOTO 100',
+        '10 DEF SUB SHOW(X,Y)',
+        '20 PRINT X',
+        '30 IF Y<X THEN 50',
+        '35 A=X/0',
+        '40 PRINT Y',
+        '50 SUBEND',
+        '60 CALL SHOW(2,9)',
+        '65 END',
+        '100 RESUME NEXT',
+        'TRON',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '[1][10][60][20] 2' in output
+    assert '[30][35][100][40] 9' in output
+    assert '[50][65]' in output

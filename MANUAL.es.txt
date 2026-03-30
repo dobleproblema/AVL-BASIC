@@ -1138,7 +1138,7 @@ Ejemplo para juegos (estado de tecla)
 Interrupciones
 + REMAIN (<número de temporizador>)    Devuelve la cuenta restante (en ticks, 1/50 s) del temporizador especificado (0 a 3).
 
-11. Funciones definidas por usuario
+11. Funciones y subrutinas definidas por usuario
 
 + DEF FNname(arg,…)=expr (una sola línea).
 + DEF FNname(arg,...) (bloque multilinea).
@@ -1149,6 +1149,8 @@ Interrupciones
   - Las funciones de una sola línea solo admiten argumentos escalares y solo pueden devolver escalares.
   - En una función multilinea, un argumento puede recibir un array completo. En ese caso se crea una copia local del array para ese parámetro.
   - Los cambios sobre ese parámetro-array local, incluidos `REDIM` o `MAT A=...`, solo afectan a la copia local y no al array original del llamador.
+  - Una función multilinea puede empezar con una o varias instrucciones `LOCAL`. `LOCAL` solo se permite como parte del bloque inicial del cuerpo.
+  - `LOCAL A,B$,D(10)` declara variables escalares o de texto locales, inicializadas a `0` o `""`, y arrays locales con almacenamiento propio. Todos esos locales se restauran o desaparecen al salir de la función.
   - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Para devolver un valor numerico o de texto asigna a FNNAME o usa LET FNNAME = ..., de lo contrario se devuelve 0 o cadena vacia.
   - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
@@ -1198,6 +1200,38 @@ Retorno de array con MAT
 60 MAT B=2*A
 70 MAT C=FNSUMA(A,B)
 80 MAT PRINT C
+
+Subrutinas multilinea
++ DEF SUB nombre(arg,...)
++ CALL nombre(...) o CALL nombre (sin paréntesis si no hay argumentos).
+  - Tras la linea `DEF SUB` se escriben las instrucciones del cuerpo como lineas BASIC normales.
+  - El bloque debe cerrarse con `SUBEND`. Si falta, el interprete avisara con "Subrutina mal definida".
+  - `SUBEXIT` permite salir antes de llegar a `SUBEND`.
+  - Las subrutinas no devuelven valor.
+  - Los argumentos escalares y de texto son locales y se pasan por valor.
+  - En una subrutina multilinea, un argumento puede recibir un array completo. En ese caso el parámetro actua como alias local por referencia al array original del llamador.
+  - Los cambios sobre ese parámetro-array, incluidos `REDIM` o `MAT A=...`, modifican el array original del llamador.
+  - Una subrutina multilinea puede empezar con una o varias instrucciones `LOCAL`. `LOCAL` solo se permite como parte del bloque inicial del cuerpo.
+  - `LOCAL A,B$,D(10)` declara variables escalares o de texto locales, inicializadas a `0` o `""`, y arrays locales con almacenamiento propio. Todos esos locales se restauran o desaparecen al salir de la subrutina.
+  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
+  - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
+  - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en si misma.
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
+  - Si la subrutina ya ha sido definida, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la subrutina desde fuera: el intérprete lo rechaza con `Invalid target line`.
+  - `ON ERROR`, `RESUME NEXT` y `TRON` funcionan dentro de `CALL` igual que en las funciones multilinea, con las mismas restricciones de salto.
+
+Ejemplo de subrutina
+10 DEF SUB TOCA(X,A)
+20 X=X+1
+30 A(1)=9
+40 PRINT X
+50 SUBEND
+60 DIM Z(2)
+70 Z(1)=3
+80 Y=4
+90 CALL TOCA(Y,Z)
+100 PRINT Y       : REM -> 4
+110 PRINT Z(1)    : REM -> 9
 
 12. Hexadecimal/Binario y lógica bit a bit
 

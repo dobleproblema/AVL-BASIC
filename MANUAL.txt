@@ -1138,7 +1138,7 @@ Example for games (key state)
 Interrupts
 + REMAIN(<timer number>)    Returns the remaining count (in ticks, 1/50 s) of the specified timer (0 to 3).
 
-11. User-defined functions
+11. User-defined functions and subroutines
 
 + DEF FNname(arg,...)=expr (single line).
 + DEF FNname(arg,...) (multiline block).
@@ -1149,6 +1149,8 @@ Interrupts
   - Single-line functions only accept scalar arguments and may only return scalars.
   - In a multiline function, an argument may receive a whole array. In that case a local copy of the array is created for that parameter.
   - Changes to that local array parameter, including `REDIM` or `MAT A=...`, only affect the local copy and never the caller's original array.
+  - A multiline function may start with one or more `LOCAL` statements. `LOCAL` is only allowed as part of the initial body block.
+  - `LOCAL A,B$,D(10)` declares local scalar or string variables, initialized to `0` or `""`, and local arrays with their own storage. All those locals are restored or disappear when the function exits.
   - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. Parentheses are only used to access array elements (`A` is the scalar, `A(3)` or `A(I)` are array elements). There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - To return a numeric or text value, assign to `FNNAME` or use `LET FNNAME = ...`; otherwise, 0 or an empty string is returned.
   - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
@@ -1198,6 +1200,38 @@ Array return with MAT
 60 MAT B=2*A
 70 MAT C=FNSUMA(A,B)
 80 MAT PRINT C
+
+Multiline subroutines
++ DEF SUB name(arg,...)
++ CALL name(...) or CALL name (without parentheses if there are no arguments).
+  - After the `DEF SUB` line, the body statements are written as normal BASIC lines.
+  - The block must be closed with `SUBEND`. If it is missing, the interpreter warns with "Subroutine badly defined".
+  - `SUBEXIT` leaves the subroutine before reaching `SUBEND`.
+  - Subroutines do not return a value.
+  - Scalar and text arguments are local and passed by value.
+  - In a multiline subroutine, an argument may receive a whole array. In that case the parameter acts as a local alias passed by reference to the caller's original array.
+  - Changes to that array parameter, including `REDIM` or `MAT A=...`, modify the caller's original array.
+  - A multiline subroutine may start with one or more `LOCAL` statements. `LOCAL` is only allowed as part of the initial body block.
+  - `LOCAL A,B$,D(10)` declares local scalar or string variables, initialized to `0` or `""`, and local arrays with their own storage. All those locals are restored or disappear when the subroutine exits.
+  - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
+  - Inside the block, the subroutine name may be used as a local variable. Its previous value is restored on exit.
+  - Indirect calls between subroutines are allowed, but a subroutine may not re-enter itself.
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
+  - Once the subroutine has been defined, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the subroutine body from outside; the interpreter rejects this with `Invalid target line`.
+  - `ON ERROR`, `RESUME NEXT`, and `TRON` work inside `CALL` exactly as they do in multiline functions, with the same jump restrictions.
+
+Subroutine example
+10 DEF SUB TOUCH(X,A)
+20 X=X+1
+30 A(1)=9
+40 PRINT X
+50 SUBEND
+60 DIM Z(2)
+70 Z(1)=3
+80 Y=4
+90 CALL TOUCH(Y,Z)
+100 PRINT Y       : REM -> 4
+110 PRINT Z(1)    : REM -> 9
 
 12. Hexadecimal/Binary and bitwise logic
 

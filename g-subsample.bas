@@ -1,0 +1,15 @@
+10 DEF SUB POINT(x,y)
+15   LOCAL c(20),r,g,b
+20   LOCAL h
+25   r=INT(RND*256) : g=INT(RND*256) : b=INT(RND*256)
+30   c(5)=RGB(r,g,b)
+35   PLOT x,y,c(5)
+40 SUBEND
+45 'Programa principal
+50 CLG : PENWIDTH 4
+55 FOR r=1 TO 5
+60 PRINT c(5);"(";r;g;b;")";
+65 CALL POINT(INT(RND*640),INT(RND*480))
+70 FRAME : PAUSE 10
+75 NEXT r
+80 PRINT c(15)
