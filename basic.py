@@ -1656,6 +1656,20 @@ class ArrayReference:
         return f"ArrayReference({self.name!r})"
 
 
+class ArrayValue:
+    """Materialized array value returned by a multiline function."""
+
+    __slots__ = ("dims", "type", "data")
+
+    def __init__(self, dims, array_type, data):
+        self.dims = tuple(dims)
+        self.type = array_type
+        self.data = data.copy()
+
+    def __repr__(self):
+        return f"ArrayValue(dims={self.dims!r}, type={self.type!r}, size={len(self.data)})"
+
+
 class ArrayAwareFloat(float):
     __slots__ = ("array_name",)
 
@@ -11246,7 +11260,7 @@ class BasicInterpreter:
         return True
 
     def _assign_function_return_value(self, frame, value):
-        frame['return_value'] = value
+        frame.pop('return_array', None)
 
         array_name = None
         if isinstance(value, ArrayReference):
@@ -11255,18 +11269,25 @@ class BasicInterpreter:
             array_name = value.array_name
 
         if array_name is not None:
-            array_info = self.arrays.get(array_name)
-            if array_info is None:
-                self.handle_error(ErrorCode.UNDEFINED)
-                return True
-            frame['return_value'] = ArrayReference(array_name)
-            frame['return_array'] = array_name
-            if 'saved_arrays' in frame:
-                if frame['fn_name'] not in frame['saved_arrays']:
-                    frame['saved_arrays'][frame['fn_name']] = self.arrays.get(frame['fn_name']) if frame['fn_name'] in self.arrays else None
-            self.arrays[frame['fn_name']] = array_info
-        else:
-            self.set_variable(frame['fn_name'], value)
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        self.set_variable(frame['fn_name'], value)
+        frame['return_value'] = value
+
+    def _assign_function_array_return_value(self, frame, result_dims, new_data, array_type):
+        if len(result_dims) not in (1, 2):
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            raise ReturnMain
+
+        fn_name = frame['fn_name']
+        expected_type = 'string' if fn_name.endswith('$') else 'number'
+        if array_type != expected_type:
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        frame.pop('return_array', None)
+        frame['return_value'] = ArrayValue(result_dims, array_type, new_data)
 
     def execute_def_fn(self, definition):
         match = DEFFN_REGEX.match(definition)
@@ -12413,19 +12434,32 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.SYNTAX_ERROR)
             return
 
-        if not VAR_PATTERN.fullmatch(left_name):
+        frame = self._current_function_frame()
+        fn_return_frame = None
+        left_upper = left_name.upper()
+        if frame is not None and left_upper == frame['fn_name']:
+            fn_return_frame = frame
+        elif not VAR_PATTERN.fullmatch(left_name):
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
             return
 
-        array_name = left_name.upper()
-        array_info = self.arrays.get(array_name)
+        array_name = left_upper
+        array_info = None if fn_return_frame is not None else self.arrays.get(array_name)
         array_type = 'string' if array_name.endswith('$') else 'number'
 
         if array_info is not None and array_info['type'] != array_type:
             self.handle_error(ErrorCode.TYPE_MISMATCH)
             return
 
+        if array_info is not None and len(array_info['dims']) > 2:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return
+
         rhs_upper = right_expr.upper()
+
+        if fn_return_frame is not None and rhs_upper in {'CON', 'ZER', 'IDN'}:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            return
 
         if array_type != 'number':
             string_binary_result = self._try_execute_string_mat_operation(right_expr)
@@ -12433,7 +12467,7 @@ class BasicInterpreter:
                 return
             if string_binary_result is not None:
                 result_dims, new_data = string_binary_result
-                self._set_array_data(array_name, array_info, result_dims, new_data, 'string')
+                self._store_mat_assignment_result(array_name, array_info, result_dims, new_data, 'string', fn_return_frame)
                 return
 
             if rhs_upper in {'CON', 'ZER', 'IDN'}:
@@ -12448,14 +12482,18 @@ class BasicInterpreter:
                 self.handle_error(ErrorCode.EVAL_ERROR)
                 return
 
-            source_name = self._get_array_name_from_evaluated(evaluated)
+            _, source_info = self._resolve_array_info_from_evaluated(evaluated)
 
-            if source_name is not None:
-                source_info = self._get_array_or_error(source_name, 'string')
-                if source_info is None:
+            if source_info is not None:
+                if source_info['type'] != 'string':
+                    self.handle_error(ErrorCode.TYPE_MISMATCH)
                     return
                 new_data = source_info['data'].copy()
-                self._set_array_data(array_name, array_info, source_info['dims'], new_data, 'string')
+                self._store_mat_assignment_result(array_name, array_info, source_info['dims'], new_data, 'string', fn_return_frame)
+                return
+
+            if fn_return_frame is not None:
+                self.handle_error(ErrorCode.TYPE_MISMATCH)
                 return
 
             if not isinstance(evaluated, str):
@@ -12498,7 +12536,7 @@ class BasicInterpreter:
             if trn_result is False:
                 return
             result_dims, new_data = trn_result
-            self._set_array_data(array_name, array_info, result_dims, new_data, 'number')
+            self._store_mat_assignment_result(array_name, array_info, result_dims, new_data, 'number', fn_return_frame)
             return
 
         inv_arg = self._parse_mat_function_call(right_expr, 'INV')
@@ -12509,7 +12547,7 @@ class BasicInterpreter:
             if inv_result is False:
                 return
             result_dims, new_data = inv_result
-            self._set_array_data(array_name, array_info, result_dims, new_data, 'number')
+            self._store_mat_assignment_result(array_name, array_info, result_dims, new_data, 'number', fn_return_frame)
             return
 
         binary_result = self._try_execute_mat_binary_operation(right_expr)
@@ -12517,7 +12555,7 @@ class BasicInterpreter:
             return
         if binary_result is not None:
             result_dims, new_data = binary_result
-            self._set_array_data(array_name, array_info, result_dims, new_data, 'number')
+            self._store_mat_assignment_result(array_name, array_info, result_dims, new_data, 'number', fn_return_frame)
             return
 
         unary_result = self._try_execute_mat_unary_operation(right_expr)
@@ -12525,7 +12563,7 @@ class BasicInterpreter:
             return
         if unary_result is not None:
             result_dims, new_data = unary_result
-            self._set_array_data(array_name, array_info, result_dims, new_data, 'number')
+            self._store_mat_assignment_result(array_name, array_info, result_dims, new_data, 'number', fn_return_frame)
             return
 
         try:
@@ -12536,19 +12574,23 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.EVAL_ERROR)
             return
 
-        source_name = self._get_array_name_from_evaluated(evaluated)
+        _, source_info = self._resolve_array_info_from_evaluated(evaluated)
 
-        if source_name is not None:
-            source_info = self._get_array_or_error(source_name, 'number')
-            if source_info is None:
+        if source_info is not None:
+            if source_info['type'] != 'number':
+                self.handle_error(ErrorCode.TYPE_MISMATCH)
                 return
 
             new_data = source_info['data'].copy()
-            self._set_array_data(array_name, array_info, source_info['dims'], new_data, 'number')
+            self._store_mat_assignment_result(array_name, array_info, source_info['dims'], new_data, 'number', fn_return_frame)
             return
 
         if self._mat_expression_contains_array_reference(right_expr):
             self.handle_error(ErrorCode.FORBIDDEN_EXPRESION)
+            return
+
+        if fn_return_frame is not None:
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
             return
 
         if array_info is None:
@@ -13315,23 +13357,19 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.EVAL_ERROR)
             return None
 
-        array_info = None
-        array_name = self._get_array_name_from_evaluated(value)
+        array_name, array_info = self._resolve_array_info_from_evaluated(value)
 
-        if array_name is not None:
-            array_info = self.arrays.get(array_name)
-        elif is_valid_simple_varname(expr):
+        if array_info is None and is_valid_simple_varname(expr):
             candidate_name = expr.upper()
             array_info = self.arrays.get(candidate_name)
             if array_info is not None:
                 array_name = candidate_name
 
-        if array_name is None:
-            self.handle_error(ErrorCode.TYPE_MISMATCH)
-            return None
-
         if array_info is None:
-            self.handle_error(ErrorCode.UNDEFINED)
+            if array_name is None:
+                self.handle_error(ErrorCode.TYPE_MISMATCH)
+            else:
+                self.handle_error(ErrorCode.UNDEFINED)
             return None
 
         return array_name, array_info
@@ -13546,6 +13584,20 @@ class BasicInterpreter:
             return value.array_name
         return None
 
+    def _resolve_array_info_from_evaluated(self, value):
+        if isinstance(value, ArrayValue):
+            return None, {
+                'dims': value.dims,
+                'type': value.type,
+                'data': value.data,
+            }
+
+        array_name = self._get_array_name_from_evaluated(value)
+        if array_name is None:
+            return None, None
+
+        return array_name, self.arrays.get(array_name)
+
     def _fill_array_data(self, array_info, fill_value):
         for key in array_info['data']:
             array_info['data'][key] = fill_value
@@ -13560,6 +13612,17 @@ class BasicInterpreter:
         else:
             array_info['dims'] = result_dims
             array_info['data'] = new_data
+
+    def _store_mat_assignment_result(self, array_name, array_info, result_dims, new_data, array_type, return_frame=None):
+        if len(result_dims) not in (1, 2):
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return
+
+        if return_frame is not None:
+            self._assign_function_array_return_value(return_frame, result_dims, new_data, array_type)
+            return
+
+        self._set_array_data(array_name, array_info, result_dims, new_data, array_type)
 
     def _compute_matrix_determinant(self, array_info):
         dims = array_info['dims']
@@ -14700,10 +14763,8 @@ class BasicInterpreter:
 
                 # Evaluate with the usual engine
                 result = self.evaluate_expression(expr_ready)
-                if isinstance(result, ArrayReference):
-                    return result
-                if isinstance(result, (ArrayAwareFloat, ArrayAwareString)):
-                    return ArrayReference(result.array_name)
+                if isinstance(result, (ArrayReference, ArrayAwareFloat, ArrayAwareString, ArrayValue)):
+                    self.handle_error(ErrorCode.TYPE_MISMATCH); return
                 return result
             except ReturnMain:
                 raise

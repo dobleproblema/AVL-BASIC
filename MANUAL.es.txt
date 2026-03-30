@@ -1145,7 +1145,13 @@ Interrupciones
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con FNEND. Si falta, el interprete avisara con "Funcion mal definida".
   - Los argumentos actuan como variables locales: se restauran al salir y pueden ser de texto si terminan en $.
+  - Si un argumento recibe un array, se enlaza por referencia al array existente. Dentro de la función, el nombre del parámetro actúa como alias local de ese array y cualquier cambio sobre sus elementos afecta al original.
+  - Esto no encapsula el array: salvo los argumentos y el nombre de la propia función, el resto de variables y arrays siguen siendo globales. Pasar un array como argumento sirve sobre todo para dar un nombre local al array y reutilizar la función con distintos arrays.
+  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar.
+  - Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Para devolver un valor numerico o de texto asigna a FNNAME o usa LET FNNAME = ..., de lo contrario se devuelve 0 o cadena vacia.
+  - Las funciones de una sola línea solo pueden devolver escalares.
+  - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
   - Dentro del cuerpo no se permiten DEF FN anidados ni comandos de control inmediato (ON ERROR, RESUME, CHAIN, MERGE, AFTER, EVERY, DI, EI).
@@ -1172,6 +1178,24 @@ Uso del nombre de la función como variable local
 50 NEXT K
 60 FNEND
 70 PRINT FNF(5)
+
+Parámetros de array como alias local
+10 DIM T(15)
+20 DEF FNSET(A,I,V)
+30 A(I)=V
+40 FNSET=A(I)
+50 FNEND
+60 PRINT FNSET(T,12,8) : REM -> 8
+
+Retorno de array con MAT
+10 DEF FNSUMA(X,Y)
+20 MAT FNSUMA=X+Y
+30 FNEND
+40 DIM A(1,1),B(1,1),C(1,1)
+50 MAT A=CON
+60 MAT B=2*A
+70 MAT C=FNSUMA(A,B)
+80 MAT PRINT C
 
 12. Hexadecimal/Binario y lógica bit a bit
 

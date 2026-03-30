@@ -1145,7 +1145,13 @@ Interrupts
   - After the `DEF FN` line, the body statements are written as normal BASIC lines.
   - The block must be closed with `FNEND`. If it is missing, the interpreter warns with "Function badly defined".
   - The arguments act as local variables: they are restored on exit and may be text if they end in `$`.
+  - If an argument receives an array, it is bound by reference to the existing array. Inside the function, the parameter name acts as a local alias for that array, and any changes to its elements affect the original.
+  - This does not encapsulate the array: apart from the arguments and the function name itself, the remaining variables and arrays are still global. Passing an array as an argument is mainly useful to give that array a local name and to reuse the function with different arrays.
+  - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar.
+  - Parentheses are only used to access array elements (`A` is the scalar, `A(3)` or `A(I)` are array elements). There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - To return a numeric or text value, assign to `FNNAME` or use `LET FNNAME = ...`; otherwise, 0 or an empty string is returned.
+  - Single-line functions may only return scalars.
+  - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
   - Inside the body, nested `DEF FN` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
@@ -1172,6 +1178,24 @@ Using the function name as a local variable
 50 NEXT K
 60 FNEND
 70 PRINT FNF(5)
+
+Array parameters as a local alias
+10 DIM T(15)
+20 DEF FNSET(A,I,V)
+30 A(I)=V
+40 FNSET=A(I)
+50 FNEND
+60 PRINT FNSET(T,12,8) : REM -> 8
+
+Array return with MAT
+10 DEF FNSUMA(X,Y)
+20 MAT FNSUMA=X+Y
+30 FNEND
+40 DIM A(1,1),B(1,1),C(1,1)
+50 MAT A=CON
+60 MAT B=2*A
+70 MAT C=FNSUMA(A,B)
+80 MAT PRINT C
 
 12. Hexadecimal/Binary and bitwise logic
 

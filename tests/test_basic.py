@@ -5436,8 +5436,7 @@ SUMA DE LOS CUADRADOS DE LOS ERRORES= 0.062765106441994'''
 ),
 (
 '''10 DEF FNM(x,y)
-20 MAT w=x+y
-30 FNM=w
+20 MAT FNM=x+y
 40 FNEND
 50 DIM a(1,1),b(1,1)
 60 MAT a=3 : MAT b=2
@@ -5536,8 +5535,7 @@ U.S. Drivers
 ),
 (
 '''10 DEF FNM(X,Y)
-20 MAT W=X+Y
-30 FNM=W
+20 MAT FNM=X+Y
 40 FNEND
 50 DIM A(1,1),B(1,1),C(1,1)
 60 MAT A=CON
@@ -5551,9 +5549,11 @@ U.S. Drivers
 (
 '''10 DIM A(1,1),B(1,1)
 20 MAT A=CON
-30 DEF FNR(X)=X
-40 MAT B=FNR(A)
-50 MAT PRINT B''',
+30 DEF FNR(X)
+40 MAT FNR=X
+50 FNEND
+60 MAT B=FNR(A)
+70 MAT PRINT B''',
 
 ''' 1   1
  1   1'''
@@ -8859,3 +8859,66 @@ def test_tron_traces_error_handler_inside_multiline_function(run_basic_interpret
     output = run_basic_interpreter(commands)
     assert '[1][10][60][20][30][35][100][40][50] 9' in output
     assert '[65]' in output
+
+
+def test_multiline_function_plain_assignment_cannot_return_array(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNZ(A)',
+        '20 A(12)=8',
+        '25 FNZ=A',
+        '30 FNEND',
+        '40 DIM Z(12),V(12)',
+        '50 MAT V=FNZ(Z)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 25. Invalid value type.' in output
+
+
+def test_single_line_function_cannot_return_array(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNR(X)=X',
+        '20 DIM A(1,1),B(1,1)',
+        '30 MAT A=CON',
+        '40 MAT B=FNR(A)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 40. Invalid value type.' in output
+
+
+def test_mat_assignment_rejects_three_dimensional_array(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DIM A(1,2,3),B(1,2,3)',
+        '20 A(1,2,3)=7',
+        '30 MAT A=B',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 30. Invalid number of dimensions.' in output
+
+
+def test_multiline_function_mat_return_rejects_three_dimensional_array(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNR(A)',
+        '20 MAT FNR=A',
+        '30 FNEND',
+        '40 DIM A(1,2,3),B(1,2,3)',
+        '50 A(1,2,3)=7',
+        '60 MAT B=FNR(A)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 60. Invalid number of dimensions.' in output
