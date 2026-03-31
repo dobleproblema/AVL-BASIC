@@ -1,7 +1,7 @@
 10 REM Example showing how DEF SUB works with local variables
 15 DEF SUB POINT(x,y)
-20   LOCAL c(20),r,g,b
-25   LOCAL h 'LOCAL declarations must be defined in the lines immediately after DEF SUB
+20   LOCAL c(20)
+25   LOCAL r,g,b 'LOCAL declarations must be defined in the lines immediately after DEF SUB
 30   r=INT(RND*256) : g=INT(RND*256) : b=INT(RND*256)
 35   c(5)=RGB(r,g,b)
 40   PLOT x,y,c(5)
