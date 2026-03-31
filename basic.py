@@ -532,6 +532,7 @@ CMD_FLAG_IS_FNEND = 1 << 6        # FNEND command
 CMD_FLAG_NEXT_OR_WEND = 1 << 7    # starts with NEXT or WEND
 CMD_FLAG_IS_SUBEND = 1 << 8       # SUBEND command
 CMD_FLAG_IS_SUBEXIT = 1 << 9      # SUBEXIT command
+CMD_FLAG_IS_FNEXIT = 1 << 10      # FNEXIT command
 
 CMD_FLOW_NONE = 0
 CMD_FLOW_NEXT = 1
@@ -573,7 +574,7 @@ _FAST_EXPR_CACHE_MISS = object()
 RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', 'MAT', 'ROW',
                   'COL', 'BASE', 'USING', 'INPUT', 'LINE', 'RANDOMIZE', 'ERROR', 'GOTO',
                   'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'NEXT', 'STEP', 
-                  'RETURN', 'GOSUB', 'ON', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'CALL', 'LOCAL',
+                  'RETURN', 'GOSUB', 'ON', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'FNEXIT', 'CALL', 'LOCAL',
                   'READ', 'RESTORE', 'STOP', 'END',
                   'SAVE', 'LOAD', 'EDIT', 'RENUM', 'NEW', 'WHILE', 'WEND', 'LIST',
                   'RUN', 'CONT', 'RESUME', 'TRON', 'TROFF', 'FILES', 'CAT', 'CD', 'DELETE',
@@ -4731,6 +4732,7 @@ class BasicInterpreter:
         self.erc_value = [0,0]
         self.err_value = "0"
         self._resume_target_line = None
+        self._loop_exit_jump = False
         self.line_editor = os.name == 'nt' or (os.name != 'nt' and hasattr(sys.stdin, 'fileno'))
         self.graphics_window = None
         self.variable_case_map = {}  # {"FOO$": "Foo$", "X": "X"}
@@ -5058,6 +5060,7 @@ class BasicInterpreter:
         self.erc_value = [0,0]
         self.err_value = "0"
         self._resume_target_line = None
+        self._loop_exit_jump = False
         global RADIANS
         RADIANS = True
 
@@ -7226,6 +7229,10 @@ class BasicInterpreter:
                         else:
                             _exec_cmd(cmd, is_program=True)
 
+                        if self._loop_exit_jump:
+                            self._loop_exit_jump = False
+                            break
+
                         if cmd_flow_kind != CMD_FLOW_NONE:
                             # If the instruction is NEXT or WEND and the loop has ended, or it has not ended but we are already
                             # positioned on the corresponding FOR or WHILE line, keep processing the current line
@@ -7347,8 +7354,12 @@ class BasicInterpreter:
             flags |= CMD_FLAG_IS_FNEND
         if cmd_up == 'SUBEND':
             flags |= CMD_FLAG_IS_SUBEND
-        if cmd_up == 'SUBEXIT':
+        if cmd_up in ('SUBEXIT', 'EXIT SUB'):
             flags |= CMD_FLAG_IS_SUBEXIT
+        if cmd_up in ('FNEXIT', 'EXIT FN'):
+            flags |= CMD_FLAG_IS_FNEXIT
+        if cmd_up in ('EXIT FOR', 'EXIT WHILE'):
+            flags |= CMD_FLAG_NEXT_OR_WEND
         if cmd_up.startswith(('NEXT', 'WEND')):
             flags |= CMD_FLAG_NEXT_OR_WEND
 
@@ -7390,6 +7401,131 @@ class BasicInterpreter:
         entry['exec_cmds'] = exec_cmds
         entry['cmd_meta'] = cmd_meta
         entry['ir_cmds'] = ir_cmds
+
+    @staticmethod
+    def _parse_exit_scope(cmd: str):
+        upper = cmd.strip().upper()
+        if upper == 'SUBEXIT' or upper == 'EXIT SUB':
+            return 'SUB'
+        if upper == 'FNEXIT' or upper == 'EXIT FN':
+            return 'FN'
+        if upper == 'EXIT FOR':
+            return 'FOR'
+        if upper == 'EXIT WHILE':
+            return 'WHILE'
+        return None
+
+    def _find_matching_loop_terminator(self, open_prefix: str, close_prefix: str, from_line_idx: int, from_cmd_idx: int):
+        depth = 0
+        for line_idx in range(from_line_idx, len(self.line_numbers)):
+            line_num = self.line_numbers[line_idx]
+            entry = self.program[line_num]
+            commands = entry.get('exec_cmds')
+            if commands is None:
+                self._refresh_entry_exec_cache(entry)
+                commands = entry.get('exec_cmds')
+
+            start_cmd = from_cmd_idx if line_idx == from_line_idx else 0
+            for cmd_idx in range(start_cmd, len(commands)):
+                upper = commands[cmd_idx].strip().upper()
+                if upper.startswith(open_prefix):
+                    depth += 1
+                elif upper.startswith(close_prefix):
+                    if depth == 0:
+                        return line_idx, cmd_idx
+                    depth -= 1
+        return None
+
+    @staticmethod
+    def _stack_position_at_or_after(loop, line_idx: int, cmd_idx: int) -> bool:
+        return (loop.line > line_idx) or (loop.line == line_idx and loop.command_index >= cmd_idx)
+
+    def _discard_loops_from_position(self, line_idx: int, cmd_idx: int):
+        while self.for_stack and self._stack_position_at_or_after(self.for_stack[-1], line_idx, cmd_idx):
+            self.for_stack.pop()
+        while self.while_stack and self._stack_position_at_or_after(self.while_stack[-1], line_idx, cmd_idx):
+            self.while_stack.pop()
+
+        self.for_skip = self.for_stack[-1].never_executing if self.for_stack else False
+        self.while_skip = self.while_stack[-1].never_executing if self.while_stack else False
+
+    def _discard_immediate_loops_from_position(self, line_idx: int, cmd_idx: int):
+        while self.immediate_for_stack and self._stack_position_at_or_after(self.immediate_for_stack[-1], line_idx, cmd_idx):
+            self.immediate_for_stack.pop()
+        while self.immediate_while_stack and self._stack_position_at_or_after(self.immediate_while_stack[-1], line_idx, cmd_idx):
+            self.immediate_while_stack.pop()
+
+        self.for_skip = self.immediate_for_stack[-1].never_executing if self.immediate_for_stack else False
+        self.while_skip = self.immediate_while_stack[-1].never_executing if self.immediate_while_stack else False
+
+    def _exit_active_loop(self, loop_kind: str):
+        if self.running:
+            line_idx = self.current_line
+            cmd_idx = self.current_command_index
+            if loop_kind == 'FOR':
+                stack = self.for_stack
+                error_code = ErrorCode.NEXT_WITH_NO_FOR
+                malformed_error = ErrorCode.FOR_WITH_NO_NEXT
+                open_prefix = 'FOR'
+                close_prefix = 'NEXT'
+            else:
+                stack = self.while_stack
+                error_code = ErrorCode.WEND_WITH_NO_WHILE
+                malformed_error = ErrorCode.WHILE_WITH_NO_WEND
+                open_prefix = 'WHILE'
+                close_prefix = 'WEND'
+
+            if not stack:
+                self.handle_error(error_code)
+                return
+
+            target_loop = stack[-1]
+            target = self._find_matching_loop_terminator(open_prefix, close_prefix, line_idx, cmd_idx + 1)
+            if target is None:
+                self.handle_error(malformed_error)
+                return
+
+            self._discard_loops_from_position(target_loop.line, target_loop.command_index)
+            target_line, target_cmd = target
+            if target_line != line_idx:
+                self.current_line = target_line
+                self.current_command_index = target_cmd + 1
+                self.resume_keep_index = True
+                self._loop_exit_jump = True
+            else:
+                self.current_line = target_line
+                self.current_command_index = target_cmd
+                self._loop_exit_jump = False
+            return
+
+        line_idx = self.immediate_current_line
+        cmd_idx = self.immediate_current_command_index
+        if loop_kind == 'FOR':
+            stack = self.immediate_for_stack
+            error_code = ErrorCode.NEXT_WITH_NO_FOR
+            malformed_error = ErrorCode.FOR_WITH_NO_NEXT
+            open_prefix = 'FOR'
+            close_prefix = 'NEXT'
+        else:
+            stack = self.immediate_while_stack
+            error_code = ErrorCode.WEND_WITH_NO_WHILE
+            malformed_error = ErrorCode.WHILE_WITH_NO_WEND
+            open_prefix = 'WHILE'
+            close_prefix = 'WEND'
+
+        if not stack:
+            self.handle_error(error_code)
+            return
+
+        target_loop = stack[-1]
+        target = self._find_matching_loop_terminator(open_prefix, close_prefix, line_idx, cmd_idx + 1)
+        if target is None:
+            self.handle_error(malformed_error)
+            return
+
+        self._discard_immediate_loops_from_position(target_loop.line, target_loop.command_index)
+        self.immediate_current_line, self.immediate_current_command_index = target
+        self._loop_exit_jump = False
 
     @staticmethod
     @lru_cache(maxsize=65536)
@@ -8399,6 +8535,7 @@ class BasicInterpreter:
             upper_cmd = cmd.upper()
             upper_cmd_stripped = cmd.lstrip().upper()
             first_word_upper = first_word.upper()
+            exit_scope = BasicInterpreter._parse_exit_scope(upper_cmd_stripped)
 
             inside_fn = inside_sub = False
             if self._has_multiline_routines or self.fn_local_stack or self.sub_local_stack:
@@ -8431,10 +8568,24 @@ class BasicInterpreter:
                 self.handle_error(ErrorCode.SUBEND_WITHOUT_DEF)
                 return
 
-            if first_word_upper == 'SUBEXIT':
+            if exit_scope == 'FN':
+                if inside_fn:
+                    return
+                self.handle_error(ErrorCode.SYNTAX_ERROR)
+                return
+
+            if exit_scope == 'SUB':
                 if inside_sub:
                     return
                 self.handle_error(ErrorCode.SYNTAX_ERROR)
+                return
+
+            if exit_scope == 'FOR':
+                self._exit_active_loop('FOR')
+                return
+
+            if exit_scope == 'WHILE':
+                self._exit_active_loop('WHILE')
                 return
 
             if upper_cmd_stripped.startswith('ON ERROR') and self._handle_on_error_directive(cmd):
@@ -12024,7 +12175,7 @@ class BasicInterpreter:
         routine_done = False
         resume_outside = False
         end_flag = CMD_FLAG_IS_SUBEND if frame_kind == 'sub' else CMD_FLAG_IS_FNEND
-        exit_flag = CMD_FLAG_IS_SUBEXIT if frame_kind == 'sub' else 0
+        exit_flag = CMD_FLAG_IS_SUBEXIT if frame_kind == 'sub' else CMD_FLAG_IS_FNEXIT
         malformed_error = ErrorCode.SUBEND_WITHOUT_DEF if frame_kind == 'sub' else ErrorCode.FNEND_WITHOUT_DEF
 
         has_if_blocks = meta.get('has_if_blocks')
@@ -12201,6 +12352,10 @@ class BasicInterpreter:
                     break
 
                 if not self.running or self.stopped:
+                    break
+
+                if self._loop_exit_jump:
+                    self._loop_exit_jump = False
                     break
 
                 if cmd_flow_kind != CMD_FLOW_NONE:

@@ -2004,6 +2004,20 @@ COT-90 -6.1232339957368E-17'''
  7\t50'''
 ),
 (
+'''10 FOR x=1 TO 10
+11 IF x=5 THEN EXIT FOR
+20 FOR y=1 TO 10
+21 IF y=6 THEN EXIT FOR
+30 FOR z=1 TO 10
+31 IF z=7 THEN EXIT FOR
+40 NEXT
+50 NEXT
+60 NEXT
+70 PRINT x;y;z''',
+
+''' 5  6  7'''
+),
+(
 '''10 FOR I=0 TO 10
 20 PRINT I
 30 IF I=5 THEN 50
@@ -9140,6 +9154,111 @@ def test_multiline_subroutine_subexit_stops_execution_early(run_basic_interprete
     output = run_basic_interpreter(commands)
     assert '\n 1\n' in output
     assert '\n 2\n' not in output
+
+
+def test_multiline_subroutine_exit_sub_stops_execution_early(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB EARLY()',
+        '20 PRINT 1',
+        '30 EXIT SUB',
+        '40 PRINT 2',
+        '50 SUBEND',
+        '60 CALL EARLY()',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n' in output
+    assert '\n 2\n' not in output
+
+
+def test_multiline_function_exit_fn_stops_execution_early(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNSIGN(X)',
+        '20 IF X<0 THEN FNSIGN=-1:EXIT FN',
+        '30 FNSIGN=1',
+        '40 FNEND',
+        '50 PRINT FNSIGN(-2)',
+        '60 PRINT FNSIGN(3)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n-1\n 1\n' in output
+
+
+def test_multiline_function_fnexit_alias_stops_execution_early(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNF()',
+        '20 FNF=7',
+        '30 FNEXIT',
+        '40 FNF=9',
+        '50 FNEND',
+        '60 PRINT FNF()',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 7\n' in output
+    assert '\n 9\n' not in output
+
+
+def test_exit_for_discards_nested_while_state(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 FOR I=1 TO 3',
+        '20 WHILE 1',
+        '30 PRINT I',
+        '40 EXIT FOR',
+        '50 WEND',
+        '60 NEXT I',
+        '70 PRINT 9',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n 9\n' in output
+    assert 'WEND without WHILE.' not in output
+    assert 'NEXT without FOR.' not in output
+
+
+def test_exit_for_same_line_continues_after_matching_next(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 FOR I=1 TO 3:PRINT I:EXIT FOR:NEXT I:PRINT 9',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n 9\n' in output
+
+
+def test_exit_while_discards_nested_for_state(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 WHILE 1',
+        '20 FOR J=1 TO 3',
+        '30 PRINT J',
+        '40 EXIT WHILE',
+        '50 NEXT J',
+        '60 WEND',
+        '70 PRINT 9',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n 9\n' in output
+    assert 'WEND without WHILE.' not in output
+    assert 'NEXT without FOR.' not in output
 
 
 def test_deleting_multiline_function_definition_line_invalidates_runtime_metadata():
