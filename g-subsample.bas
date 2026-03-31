@@ -5,7 +5,7 @@
 30   c(5)=RGB(r,g,b)
 35   PLOT x,y,c(5)
 40 SUBEND
-45 'Programa principal
+45 'Main
 50 CLG : PENWIDTH 4
 55 FOR r=1 TO 5
 60 PRINT c(5);"(";r;g;b;")";
