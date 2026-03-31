@@ -1,13 +1,15 @@
-10 DEF SUB Point(x,y)
-15 LOCAL c(20),r,g,b
-20 r=INT(RND*256) : g=INT(RND*256) : b=INT(RND*256)
-25 c(5)=RGB(r,g,b)
-30 PLOT x,y,c(5)
-35 SUBEND
-40 CLG : PENWIDTH 4
-45 FOR r=1 TO 5
-50 PRINT c(5);"(";r;g;b;")";
-55 CALL Point(INT(RND*640),INT(RND*480))
-60 FRAME : PAUSE 10
-65 NEXT r
-70 PRINT c(15)
+10 DEF SUB POINT(x,y)
+15   LOCAL c(20),r,g,b
+20   LOCAL h
+25   r=INT(RND*256) : g=INT(RND*256) : b=INT(RND*256)
+30   c(5)=RGB(r,g,b)
+35   PLOT x,y,c(5)
+40 SUBEND
+45 'Main
+50 CLG : PENWIDTH 4
+55 FOR r=1 TO 5
+60 PRINT c(5);"(";r;g;b;")";
+65 CALL POINT(INT(RND*640),INT(RND*480))
+70 FRAME : PAUSE 10
+75 NEXT r
+80 PRINT c(15) 'Will fail because the array c(20) was local to the SUB
