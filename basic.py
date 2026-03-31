@@ -4704,12 +4704,16 @@ class BasicInterpreter:
         self._fn_body_lines: set[int] = set()  # Lines belonging to multiline DEF FN bodies
         self.fn_local_stack = []       # Stack of multiline function frames
         self.fn_call_stack = []        # Tracks active multiline functions
+        self.fn_def_line_owner: dict[int, str] = {}  # Definition-line-to-multiline-function map
         self.fn_line_owner: dict[int, str] = {}  # Line-number-to-multiline-function map
         self.subs_multiline = {}  # multiline DEF SUB
         self._sub_body_lines: set[int] = set()  # Lines belonging to multiline DEF SUB bodies
         self.sub_local_stack = []      # Stack of multiline subroutine frames
         self.sub_call_stack = []       # Tracks active multiline subroutines
+        self.sub_def_line_owner: dict[int, str] = {}  # Definition-line-to-multiline-subroutine map
         self.sub_line_owner: dict[int, str] = {}  # Line-number-to-multiline-subroutine map
+        self._has_multiline_routines = False
+        self._has_protected_body_lines = False
         self.zero_arg_functions: set[str] = set()  # To speed up the special case of zero-argument functions
         self.data = []  # Stores DATA items
         self.data_line_map = {}    # Map from DATA lines to indices in self.data
@@ -4972,12 +4976,16 @@ class BasicInterpreter:
         self._fn_body_lines.clear()
         self.fn_local_stack.clear()
         self.fn_call_stack.clear()
+        self.fn_def_line_owner.clear()
         self.fn_line_owner.clear()
         self.subs_multiline.clear()
         self._sub_body_lines.clear()
         self.sub_local_stack.clear()
         self.sub_call_stack.clear()
+        self.sub_def_line_owner.clear()
         self.sub_line_owner.clear()
+        self._has_multiline_routines = False
+        self._has_protected_body_lines = False
         self.zero_arg_functions.clear()
 
         global dollar_functions_map
@@ -4996,6 +5004,11 @@ class BasicInterpreter:
         self._install_internal_eval_helpers()
         self._install_fast_math_helpers()
         update_mismatch_pattern()
+
+    def _refresh_multiline_runtime_flags(self):
+        """Refresh hot-path caches derived from multiline routine metadata."""
+        self._has_multiline_routines = bool(self.functions_multiline or self.subs_multiline)
+        self._has_protected_body_lines = bool(self._fn_body_lines or self._sub_body_lines)
 
     def reset_state(self, variables=True, graphics=False):
         if variables == True:
@@ -5135,7 +5148,7 @@ class BasicInterpreter:
                # Jump to the error handler
                 target_line = int(self.error_handler_line)
                 if target_line in self.program:
-                    if self._is_protected_body_line(target_line):
+                    if self._has_protected_body_lines and self._is_protected_body_line(target_line):
                         self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                         return
                     # Avoid O(n) lookup on every error
@@ -6019,16 +6032,7 @@ class BasicInterpreter:
     
     def delete_program_line(self, line_num):
         if line_num in self.program:
-            fn_owner = self.fn_line_owner.get(line_num)
-            if fn_owner:
-                self._detach_multiline_function(fn_owner)
-            sub_owner = self.sub_line_owner.get(line_num)
-            if sub_owner:
-                self._detach_multiline_sub(sub_owner)
-            self.fn_line_owner.pop(line_num, None)
-            self._fn_body_lines.discard(line_num)
-            self.sub_line_owner.pop(line_num, None)
-            self._sub_body_lines.discard(line_num)
+            self._invalidate_multiline_metadata_for_line(line_num)
             del self.program[line_num]
             self.line_numbers.remove(line_num)
             self._line_to_index = {ln: i for i, ln in enumerate(self.line_numbers)}
@@ -6068,6 +6072,9 @@ class BasicInterpreter:
         else:
             # Convert to uppercase except inside strings, variable names, and REM comments
             code = BasicInterpreter.normalize_code(code)
+
+            if line_num in self.program:
+                self._invalidate_multiline_metadata_for_line(line_num)
 
             if is_editing:
                 _ = self.update_variable_case_from_line(code)
@@ -7126,7 +7133,7 @@ class BasicInterpreter:
                 lin_orig = self.current_line
                 entry = self.program[line_num]
 
-                if self._is_protected_body_line(line_num):
+                if self._has_protected_body_lines and self._is_protected_body_line(line_num):
                     self.current_line += 1
                     continue
 
@@ -8356,7 +8363,7 @@ class BasicInterpreter:
                 self.erl_value = "0"
                 self.erc_value = [0, 0]
                 self.err_value = "0"
-            elif self._is_protected_body_line(target_line):
+            elif self._has_protected_body_lines and self._is_protected_body_line(target_line):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
             elif target_line in self.program:
                 self.error_handler_line = target_line
@@ -8375,7 +8382,7 @@ class BasicInterpreter:
             if owner_kind is None:
                 return True
             return owner_kind == frame['kind'] and owner_name == frame['name']
-        return not self._is_protected_body_line(target_line)
+        return (not self._has_protected_body_lines) or (not self._is_protected_body_line(target_line))
   
     def execute_command(self, cmd, is_program=False):
         try:
@@ -8393,8 +8400,10 @@ class BasicInterpreter:
             upper_cmd_stripped = cmd.lstrip().upper()
             first_word_upper = first_word.upper()
 
-            inside_fn = self._inside_function()
-            inside_sub = self._inside_subroutine()
+            inside_fn = inside_sub = False
+            if self._has_multiline_routines or self.fn_local_stack or self.sub_local_stack:
+                inside_fn = self._inside_function()
+                inside_sub = self._inside_subroutine()
             if inside_fn:
                 if self._maybe_handle_function_assignment(raw_cmd):
                     return
@@ -8428,7 +8437,7 @@ class BasicInterpreter:
                 self.handle_error(ErrorCode.SYNTAX_ERROR)
                 return
 
-            if self._handle_on_error_directive(cmd):
+            if upper_cmd_stripped.startswith('ON ERROR') and self._handle_on_error_directive(cmd):
                 return
 
             # Fast path: very frequent commands that do not need argument parsing
@@ -10492,7 +10501,7 @@ class BasicInterpreter:
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
         else:
-            if self._is_protected_body_line(target_line):
+            if self._has_protected_body_lines and self._is_protected_body_line(target_line):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
 
@@ -11096,7 +11105,7 @@ class BasicInterpreter:
         return (None, None)
 
     def _is_protected_body_line(self, line_num: int) -> bool:
-        return line_num in self._fn_body_lines or line_num in self._sub_body_lines
+        return self._has_protected_body_lines and (line_num in self._fn_body_lines or line_num in self._sub_body_lines)
 
     def _function_error(self, message=None):
         if message is None:
@@ -11308,19 +11317,53 @@ class BasicInterpreter:
         meta = self.functions_multiline.pop(func_name, None)
         if not meta:
             return
+        def_line = meta.get('def_line')
+        if def_line is not None:
+            self.fn_def_line_owner.pop(def_line, None)
         for idx in meta.get('body_indices', []):
             line = self.line_numbers[idx]
             self.fn_line_owner.pop(line, None)
             self._fn_body_lines.discard(line)
+        self._refresh_multiline_runtime_flags()
 
     def _detach_multiline_sub(self, sub_name: str):
         meta = self.subs_multiline.pop(sub_name, None)
         if not meta:
             return
+        def_line = meta.get('def_line')
+        if def_line is not None:
+            self.sub_def_line_owner.pop(def_line, None)
         for idx in meta.get('body_indices', []):
             line = self.line_numbers[idx]
             self.sub_line_owner.pop(line, None)
             self._sub_body_lines.discard(line)
+        self._refresh_multiline_runtime_flags()
+
+    def _invalidate_multiline_metadata_for_line(self, line_num: int):
+        refresh_multiline_flags = False
+
+        fn_owner = self.fn_def_line_owner.get(line_num) or self.fn_line_owner.get(line_num)
+        if fn_owner:
+            self._detach_multiline_function(fn_owner)
+        else:
+            self.fn_def_line_owner.pop(line_num, None)
+            self.fn_line_owner.pop(line_num, None)
+            if line_num in self._fn_body_lines:
+                self._fn_body_lines.discard(line_num)
+                refresh_multiline_flags = True
+
+        sub_owner = self.sub_def_line_owner.get(line_num) or self.sub_line_owner.get(line_num)
+        if sub_owner:
+            self._detach_multiline_sub(sub_owner)
+        else:
+            self.sub_def_line_owner.pop(line_num, None)
+            self.sub_line_owner.pop(line_num, None)
+            if line_num in self._sub_body_lines:
+                self._sub_body_lines.discard(line_num)
+                refresh_multiline_flags = True
+
+        if refresh_multiline_flags:
+            self._refresh_multiline_runtime_flags()
 
     def _mark_routine_body_lines(self, body_indices, owner_name, owner_map, body_lines):
         for idx in body_indices:
@@ -11481,11 +11524,13 @@ class BasicInterpreter:
         body_start_idx = body_indices[0]
         body_end_idx = body_indices[-1]
         arg_specs = tuple((arg, arg.endswith('$')) for arg in args)
+        def_line = self.line_numbers[def_index]
         meta = {
             'kind': 'function',
             'name': func_name,
             'args': args,
             'arg_specs': arg_specs,
+            'def_line': def_line,
             'body_indices': body_indices,
             'body_start_idx': body_start_idx,
             'body_end_idx': body_end_idx,
@@ -11496,8 +11541,10 @@ class BasicInterpreter:
         }
 
         self._mark_routine_body_lines(body_indices, func_name, self.fn_line_owner, self._fn_body_lines)
+        self.fn_def_line_owner[def_line] = func_name
         self.functions_multiline[func_name] = meta
         self.functions.pop(func_name, None)
+        self._refresh_multiline_runtime_flags()
 
         if meta['zero_args']:
             self.zero_arg_functions.add(func_name)
@@ -11659,12 +11706,15 @@ class BasicInterpreter:
 
         body_start_idx = body_indices[0]
         body_end_idx = body_indices[-1]
+        def_line = self.line_numbers[def_index]
         self._mark_routine_body_lines(body_indices, sub_name, self.sub_line_owner, self._sub_body_lines)
+        self.sub_def_line_owner[def_line] = sub_name
         self.subs_multiline[sub_name] = {
             'kind': 'sub',
             'name': sub_name,
             'args': args,
             'arg_specs': tuple((arg, arg.endswith('$')) for arg in args),
+            'def_line': def_line,
             'body_indices': body_indices,
             'body_start_idx': body_start_idx,
             'body_end_idx': body_end_idx,
@@ -11672,6 +11722,7 @@ class BasicInterpreter:
             'local_specs': local_specs,
             'zero_args': len(args) == 0,
         }
+        self._refresh_multiline_runtime_flags()
 
     def execute_def_sub(self, definition: str):
         self._define_multiline_sub(definition)
@@ -15086,7 +15137,7 @@ class BasicInterpreter:
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
         else:
-            if self._is_protected_body_line(target):
+            if self._has_protected_body_lines and self._is_protected_body_line(target):
                 self.handle_error(ErrorCode.INVALID_TARGET_LINE)
                 return
 

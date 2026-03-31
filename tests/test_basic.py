@@ -9142,6 +9142,69 @@ def test_multiline_subroutine_subexit_stops_execution_early(run_basic_interprete
     assert '\n 2\n' not in output
 
 
+def test_deleting_multiline_function_definition_line_invalidates_runtime_metadata():
+    interpreter = BasicInterpreter()
+    for line in [
+        '10 DEF FNF(X)',
+        '20 LOCAL A',
+        '30 FNF=X',
+        '40 FNEND',
+        '50 END',
+    ]:
+        interpreter.add_program_line(line)
+
+    interpreter.current_line = interpreter._line_to_index[10]
+    interpreter.execute_command('DEF FNF(X)')
+
+    assert interpreter._has_multiline_routines is True
+    assert interpreter._has_protected_body_lines is True
+    assert sorted(interpreter._fn_body_lines) == [20, 30, 40]
+    assert interpreter.fn_def_line_owner == {10: 'FNF'}
+    assert interpreter.fn_line_owner == {20: 'FNF', 30: 'FNF', 40: 'FNF'}
+    assert 'FNF' in interpreter.functions_multiline
+
+    interpreter.delete_program_line(10)
+
+    assert interpreter.functions_multiline == {}
+    assert interpreter._fn_body_lines == set()
+    assert interpreter.fn_def_line_owner == {}
+    assert interpreter.fn_line_owner == {}
+    assert interpreter._has_multiline_routines is False
+    assert interpreter._has_protected_body_lines is False
+
+
+def test_overwriting_multiline_subroutine_body_line_invalidates_runtime_metadata():
+    interpreter = BasicInterpreter()
+    for line in [
+        '10 DEF SUB WORK(X)',
+        '20 LOCAL A',
+        '30 A=X+1',
+        '40 PRINT A',
+        '50 SUBEND',
+        '60 END',
+    ]:
+        interpreter.add_program_line(line)
+
+    interpreter.current_line = interpreter._line_to_index[10]
+    interpreter.execute_command('DEF SUB WORK(X)')
+
+    assert interpreter._has_multiline_routines is True
+    assert interpreter._has_protected_body_lines is True
+    assert sorted(interpreter._sub_body_lines) == [20, 30, 40, 50]
+    assert interpreter.sub_def_line_owner == {10: 'WORK'}
+    assert interpreter.sub_line_owner == {20: 'WORK', 30: 'WORK', 40: 'WORK', 50: 'WORK'}
+    assert 'WORK' in interpreter.subs_multiline
+
+    interpreter.add_program_line('20 REM rewritten body')
+
+    assert interpreter.subs_multiline == {}
+    assert interpreter._sub_body_lines == set()
+    assert interpreter.sub_def_line_owner == {}
+    assert interpreter.sub_line_owner == {}
+    assert interpreter._has_multiline_routines is False
+    assert interpreter._has_protected_body_lines is False
+
+
 def test_on_error_goto_rejects_multiline_subroutine_body_as_handler_target(run_basic_interpreter):
     commands = [
         'NEW',
