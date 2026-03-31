@@ -12,4 +12,4 @@
 65 CALL POINT(INT(RND*640),INT(RND*480))
 70 FRAME : PAUSE 10
 75 NEXT r
-80 PRINT c(15)
+80 PRINT c(15) 'Will fail because the array c(20) was local to the SUB
