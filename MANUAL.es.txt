@@ -131,8 +131,10 @@ Notas rápidas
 + IF expresion THEN                                            Forma en bloque; detalles más abajo.
 + FOR variable=x TO y [STEP z]
 + NEXT [variable]
++ EXIT FOR                                                     Sale anticipadamente del bucle `FOR` actual
 + WHILE expresión                                              El bucle se ejecuta mientras `expresión` sea distinto de 0
 + WEND                                                         Cierra el bucle `WHILE`
++ EXIT WHILE                                                   Sale anticipadamente del bucle `WHILE` actual
 + ON n GOTO 100,120,140                                        Índice 1-based
 + ON n GOSUB 100,200,300
 + ON ERROR GOTO línea
@@ -1153,6 +1155,7 @@ Interrupciones
   - `LOCAL A,B$,D(10)` declara variables escalares o de texto locales, inicializadas a `0` o `""`, y arrays locales con almacenamiento propio. Todos esos locales se restauran o desaparecen al salir de la función.
   - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Para devolver un valor numerico o de texto asigna a FNNAME o usa LET FNNAME = ..., de lo contrario se devuelve 0 o cadena vacia.
+  - `EXIT FN` permite salir antes de llegar a `FNEND`. `FNEXIT` es un alias. `EXIT FN` no acepta expresión: la función devuelve el valor que tenga ya asignado su nombre en ese momento.
   - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
@@ -1206,7 +1209,7 @@ Subrutinas multilinea
 + CALL nombre(...) o CALL nombre (sin paréntesis si no hay argumentos).
   - Tras la linea `DEF SUB` se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con `SUBEND`. Si falta, el interprete avisara con "Subrutina mal definida".
-  - `SUBEXIT` permite salir antes de llegar a `SUBEND`.
+  - `EXIT SUB` permite salir antes de llegar a `SUBEND`. `SUBEXIT` es un alias.
   - Las subrutinas no devuelven valor.
   - Los argumentos escalares y de texto son locales y se pasan por valor.
   - En una subrutina multilinea, un argumento puede recibir un array completo. En ese caso el parámetro actua como alias local por referencia al array original del llamador.

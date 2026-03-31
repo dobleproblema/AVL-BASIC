@@ -132,8 +132,10 @@ Quick notes
 + IF expression THEN                                         Block form; details below.
 + FOR variable=x TO y [STEP z]
 + NEXT [variable]
++ EXIT FOR                                                   Leaves the current `FOR` loop early
 + WHILE expression                                           The loop runs while `expression` is different from 0
 + WEND                                                       Closes the `WHILE` loop
++ EXIT WHILE                                                 Leaves the current `WHILE` loop early
 + ON n GOTO 100,120,140                                      1-based index
 + ON n GOSUB 100,200,300
 + ON ERROR GOTO line
@@ -1153,6 +1155,7 @@ Interrupts
   - `LOCAL A,B$,D(10)` declares local scalar or string variables, initialized to `0` or `""`, and local arrays with their own storage. All those locals are restored or disappear when the function exits.
   - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. Parentheses are only used to access array elements (`A` is the scalar, `A(3)` or `A(I)` are array elements). There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - To return a numeric or text value, assign to `FNNAME` or use `LET FNNAME = ...`; otherwise, 0 or an empty string is returned.
+  - `EXIT FN` leaves the function before reaching `FNEND`. `FNEXIT` is an alias. `EXIT FN` does not accept an expression: the function returns whatever value has already been assigned to its name at that point.
   - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
@@ -1206,7 +1209,7 @@ Multiline subroutines
 + CALL name(...) or CALL name (without parentheses if there are no arguments).
   - After the `DEF SUB` line, the body statements are written as normal BASIC lines.
   - The block must be closed with `SUBEND`. If it is missing, the interpreter warns with "Subroutine badly defined".
-  - `SUBEXIT` leaves the subroutine before reaching `SUBEND`.
+  - `EXIT SUB` leaves the subroutine before reaching `SUBEND`. `SUBEXIT` is an alias.
   - Subroutines do not return a value.
   - Scalar and text arguments are local and passed by value.
   - In a multiline subroutine, an argument may receive a whole array. In that case the parameter acts as a local alias passed by reference to the caller's original array.
