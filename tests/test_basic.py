@@ -6914,6 +6914,49 @@ def test_string_square_bracket_access_rejects_invalid_forms(run_basic_interprete
     assert message in output
 
 
+def test_variable_names_accept_up_to_32_base_characters(run_basic_interpreter):
+    long_name = 'A' * 32
+    long_string_name = long_name + '$'
+    output = run_basic_interpreter([
+        'NEW',
+        f'10 {long_name}=7',
+        f'20 {long_string_name}="OK"',
+        f'30 PRINT {long_name}',
+        f'40 PRINT {long_string_name}',
+        'RUN',
+        'EXIT',
+    ])
+
+    assert '\n 7\nOK\n' in output
+
+
+def test_variable_names_reject_more_than_32_base_characters(run_basic_interpreter):
+    too_long_name = 'A' * 33
+    output = run_basic_interpreter([
+        'NEW',
+        f'10 {too_long_name}=7',
+        'RUN',
+        'EXIT',
+    ])
+
+    assert 'Syntax error.' in output
+
+
+def test_multiline_subroutine_names_accept_up_to_32_base_characters(run_basic_interpreter):
+    sub_name = 'A' * 32
+    output = run_basic_interpreter([
+        'NEW',
+        f'10 DEF SUB {sub_name}()',
+        '20 PRINT 7',
+        '30 SUBEND',
+        f'40 CALL {sub_name}()',
+        'RUN',
+        'EXIT',
+    ])
+
+    assert '\n 7\n' in output
+
+
 def test_renum_with_third_parameter_renumbers_only_tail_block(run_basic_interpreter):
     output = run_basic_interpreter([
         'NEW',
@@ -9399,14 +9442,21 @@ def test_call_is_not_allowed_inside_multiline_function(run_basic_interpreter):
 def test_syntax_highlight_uses_keyword_style_for_subroutine_names():
     highlighted_def = syntax_highlight('10 DEF SUB POINT(X)')
     highlighted_call = syntax_highlight('20 CALL POINT()')
+    highlighted_if_call = syntax_highlight('30 IF OK THEN CALL POINT() ELSE CALL OTHER()')
 
     keyword_name = f'{KEYWORD_STYLE}POINT{RESET}'
+    keyword_other = f'{KEYWORD_STYLE}OTHER{RESET}'
     variable_name = f'{VARIABLE_STYLE}POINT{RESET}'
+    variable_other = f'{VARIABLE_STYLE}OTHER{RESET}'
 
     assert keyword_name in highlighted_def
     assert keyword_name in highlighted_call
+    assert keyword_name in highlighted_if_call
+    assert keyword_other in highlighted_if_call
     assert variable_name not in highlighted_def
     assert variable_name not in highlighted_call
+    assert variable_name not in highlighted_if_call
+    assert variable_other not in highlighted_if_call
 
 
 def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):

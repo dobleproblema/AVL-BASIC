@@ -114,7 +114,7 @@ Reglas                Detalle
 + Nº de línea         Entero > 0, obligatorio. Gobiernan flujo (`GOTO`, `GOSUB`, etc.).
 + Separador           : Varias instrucciones en la misma línea o tras `THEN/ELSE`.
 + Comentarios         REM …  ·  ' … (este último no necesita : antes).
-+ Variables           Alfanum 1-11 car.; cadenas terminan en $. Todo es global salvo los argumentos de `DEF FN`.
++ Variables           Alfanum 1-32 car.; cadenas terminan en $. Globales por defecto; los parámetros de `DEF FN`/`DEF SUB` y las variables `LOCAL` son locales.
 + Tipos               Float 64-bit, 14 digitos significativos | String | Array multidim (`DIM`, índices 0..N).
 + Operadores          Aritméticos: + - * / \ ^ MOD | Comparaciones: = <> > < >= <= | Lógicos: AND OR XOR NOT.
 

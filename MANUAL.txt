@@ -115,7 +115,7 @@ Rules                Detail
 + Line number        Integer > 0, mandatory. It controls flow (`GOTO`, `GOSUB`, etc.).
 + Separator          : Several statements on the same line or after `THEN/ELSE`.
 + Comments           REM ... | ' ... (the latter does not need `:` before it).
-+ Variables          Alphanumeric, 1-11 chars; strings end in $. Everything is global except the arguments of `DEF FN`.
++ Variables          Alphanumeric, 1-32 chars; strings end in $. Global by default; `DEF FN`/`DEF SUB` parameters and `LOCAL` variables are local.
 + Types              64-bit float, 14 significant digits | String | Multidimensional array (`DIM`, indices 0..N).
 + Operators          Arithmetic: + - * / \ ^ MOD | Comparisons: = <> > < >= <= | Logical: AND OR XOR NOT.
 

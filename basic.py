@@ -620,10 +620,13 @@ KEYWORDS = frozenset(RESERVED_WORDS)
 FUNCTIONS_OPERATORS = FUNCTIONS | PRINT_FUNCTIONS | OPERATORS
 NORM_RESERVED = frozenset(word.rstrip('$') for word in RESERVED_WORDS | FUNCTIONS | PRINT_FUNCTIONS | OPERATORS)
 
+MAX_VAR_BASE_LEN = 32
+_VAR_BODY_PATTERN = rf'[A-Z][A-Z0-9]{{0,{MAX_VAR_BASE_LEN - 1}}}'
+
 VARIABLE_PATTERN = (
     rf'(?!(?:{"|".join(NORM_RESERVED)})\$?\b)'   # No sea palabra reservada
     rf'(?!FN)'                                   # Must not start with FN
-    rf'[A-Z][A-Z0-9]{{0,10}}\$?'                 # Normalized name
+    rf'{_VAR_BODY_PATTERN}\$?'                   # Normalized name
 )
 
 VAR_PATTERN = re.compile(VARIABLE_PATTERN, re.IGNORECASE)
@@ -632,7 +635,7 @@ VAR_PATTERN = re.compile(VARIABLE_PATTERN, re.IGNORECASE)
 STRING_VARIABLE_PATTERN = (
     rf'(?!(?:{"|".join(NORM_RESERVED)})\$?\b)'
     rf'(?!FN)'
-    rf'[A-Z][A-Z0-9]{{0,10}}\$' 
+    rf'{_VAR_BODY_PATTERN}\$' 
 )
 
 # Identifier pattern, without the ^...$ anchors
@@ -648,7 +651,7 @@ _VAR_OR_ARRAY_RE = re.compile(
 )
 
 # Extract the V_* names that actually appear in the final Python code:
-_VIDENT_RE = re.compile(r'\bV_([A-Z0-9]{1,11})(?:_STR)?\b')
+_VIDENT_RE = re.compile(rf'\bV_([A-Z0-9]{{1,{MAX_VAR_BASE_LEN}}})(?:_STR)?\b')
 
 OPERATOR_PATTERN = r'\b(?:MOD)\b|<=|>=|<>|=|\^|\\'
 _OPERATOR_MAP = {'AND': '&', 'OR': '|', 'XOR': '^'}
@@ -729,6 +732,11 @@ SYNTAX_HIGHLIGHT_REGEX = re.compile(fr'''
 
 CALL_SUB_HIGHLIGHT_REGEX = re.compile(
     fr'^(\s*)(CALL)(\s+)({VARIABLE_PATTERN})(.*)$',
+    re.IGNORECASE,
+)
+
+CALL_SUB_INLINE_HIGHLIGHT_REGEX = re.compile(
+    fr'\b(?P<call>CALL)(?P<gap>\s+)(?P<sub>{VARIABLE_PATTERN})(?=\W|$)',
     re.IGNORECASE,
 )
 
@@ -1093,19 +1101,23 @@ VALID_VARIABLES = frozenset(VALID_VARIABLES)
 @lru_cache(maxsize=65536)
 def is_valid_varname(name: str) -> bool:
     name = name.upper()
-    if not (1 <= len(name) <= 11):
+    name_len = len(name)
+    if name_len == 0:
+        return False
+    has_dollar = name.endswith('$')
+    base_len = name_len - 1 if has_dollar else name_len
+    if not (1 <= base_len <= MAX_VAR_BASE_LEN):
         return False
     if name in VALID_VARIABLES:
         return True
-    if name.endswith('$'):
-        name = name[:-1]
-    if name in NORM_RESERVED:
+    base_name = name[:-1] if has_dollar else name
+    if base_name in NORM_RESERVED:
         return False
-    if name.startswith('FN'):
+    if base_name.startswith('FN'):
         return False
-    if not name[0].isalpha():
+    if not base_name[0].isalpha():
         return False
-    if not all(c.isalnum() for c in name[1:]):
+    if not all(c.isalnum() for c in base_name[1:]):
         return False
     return True
 
@@ -1460,10 +1472,8 @@ def split_data_parameters(params_str):
     return params
 
 @lru_cache(maxsize=65536)
-def is_real_mid_command(stmt: str, match: re.Match) -> bool:
-    """Return True if the MID$ found is in command position."""
-    pos = match.start('midcand')
-
+def is_command_position(stmt: str, pos: int) -> bool:
+    """Return True if `pos` is at command position within a BASIC statement."""
     # 1. backtrack over spaces
     i = pos - 1
     while i >= 0 and stmt[i].isspace():
@@ -1476,10 +1486,16 @@ def is_real_mid_command(stmt: str, match: re.Match) -> bool:
 
     # 2. preceded by THEN or ELSE (ignoring spaces)?
     j = i
-    while j >= 0 and not stmt[j].isspace():
+    while j >= 0 and not stmt[j].isspace() and stmt[j] != ':':
         j -= 1
     token = stmt[j+1:i+1].upper()
     return token in ('THEN', 'ELSE')
+
+
+@lru_cache(maxsize=65536)
+def is_real_mid_command(stmt: str, match: re.Match) -> bool:
+    """Return True if the MID$ found is in command position."""
+    return is_command_position(stmt, match.start('midcand'))
     
 def syntax_highlight(line):
     """
@@ -1562,18 +1578,27 @@ def syntax_highlight(line):
                 highlighted += highlight_generic_statement(rest)
             return highlighted
 
-        match = CALL_SUB_HIGHLIGHT_REGEX.match(statement_text)
-        if match:
-            leading, call_kw, gap, sub_name, rest = match.groups()
-            highlighted = (
-                leading
-                + f"{KEYWORD_STYLE}{call_kw.upper()}{RESET}"
-                + gap
-                + f"{KEYWORD_STYLE}{sub_name.upper()}{RESET}"
+        parts = []
+        cursor = 0
+        for match in CALL_SUB_INLINE_HIGHLIGHT_REGEX.finditer(statement_text):
+            if not is_command_position(statement_text, match.start('call')):
+                continue
+
+            prefix = statement_text[cursor:match.start('call')]
+            if prefix:
+                parts.append(highlight_generic_statement(prefix))
+            parts.append(
+                f"{KEYWORD_STYLE}{match.group('call').upper()}{RESET}"
+                + match.group('gap')
+                + f"{KEYWORD_STYLE}{match.group('sub').upper()}{RESET}"
             )
+            cursor = match.end('sub')
+
+        if parts:
+            rest = statement_text[cursor:]
             if rest:
-                highlighted += highlight_generic_statement(rest)
-            return highlighted
+                parts.append(highlight_generic_statement(rest))
+            return ''.join(parts)
 
         return None
 
