@@ -16759,6 +16759,7 @@ class BasicInterpreter:
         Scanner without regular expressions.
         Return tuples (False, 'text') or (True, (name, args_tuple)).
         It is suitable for LRU because it does not execute handlers.
+        String literals are treated as opaque text.
         """
         parts, last = [], 0
         n = len(expr)
@@ -16770,6 +16771,14 @@ class BasicInterpreter:
 
         while i < n:
             ch = expr[i]
+
+            if ch == '"':
+                i += 1
+                while i < n and expr[i] != '"':
+                    i += 1
+                if i < n:
+                    i += 1
+                continue
 
             # Fast path: it does not start a word
             if not ch.isalpha():

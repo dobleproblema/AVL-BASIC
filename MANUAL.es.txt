@@ -459,6 +459,24 @@ Donde c puede ser un color en uno de los siguientes formatos:
 - "255,0,0"       Cadena "r,g,b"
 - 255,0,0         Tres argumentos numéricos (fuera de STRING)
 
+Formas equivalentes válidas con `INK` y `PAPER`
+- `INK 2`                          Índice de la paleta predefinida
+- `INK 1231233`                    RGB empaquetado de 24 bits
+- `INK "red"`                      Nombre de color Tk/X11
+- `INK 128,128,128`                Tres componentes numéricos
+- `PAPER "0,128,0"`                Cadena `"r,g,b"`
+- `INK RGB(128,0,128)`             `RGB()` devuelve un color numérico
+- `INK RGB$(128,0,128)`            `RGB$()` devuelve una cadena `"r,g,b"`
+- `INK RGB("128","128","128")`     `RGB()` también acepta tres cadenas
+- `INK RGB("128,128,128")`         O una sola cadena con comas
+
+Notas rápidas
+- `INK` y `PAPER` son especiales: aceptan tanto un único valor de color como la forma `r,g,b` con tres argumentos separados.
+- En el resto de órdenes gráficas que aceptan color (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.) el color debe llegar como un único valor o expresión.
+- Por eso son válidos `FILL 320,240,"red"`, `FILL 320,240,RGB("128","128","128")`, `FILL 320,240,RGB$("128,128,128")` o `FILL 320,240,121344`, pero no `FILL 320,240,1,2,1`, que produce `Incorrect number of arguments`.
+- Si prefieres legibilidad, usa `RGB(...)`, `RGB$(...)` o `&HRRGGBB` en lugar de un entero decimal de 24 bits.
+- El sample `g-colors.bas` muestra visualmente varias de estas combinaciones.
+
 Ejemplo
 10 DIM Char$(10)
 15 PAPER 0 : INK 5 'INK "1,1,1" para que sea 'invisible' el texto base

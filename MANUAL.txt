@@ -460,6 +460,24 @@ Where `c` may be a color in one of the following formats:
 - "255,0,0"       String `"r,g,b"`
 - 255,0,0         Three numeric arguments (outside STRING)
 
+Equivalent valid forms with `INK` and `PAPER`
+- `INK 2`                          Predefined palette index
+- `INK 1231233`                    Packed 24-bit RGB value
+- `INK "red"`                      Tk/X11 color name
+- `INK 128,128,128`                Three numeric components
+- `PAPER "0,128,0"`                String `"r,g,b"`
+- `INK RGB(128,0,128)`             `RGB()` returns a numeric color
+- `INK RGB$(128,0,128)`            `RGB$()` returns a string `"r,g,b"`
+- `INK RGB("128","128","128")`     `RGB()` also accepts three strings
+- `INK RGB("128,128,128")`         Or a single comma-separated string
+
+Quick notes
+- `INK` and `PAPER` are special: they accept either a single color value or the `r,g,b` form with three separate arguments.
+- In the rest of the graphics commands that accept color (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.), the color must arrive as a single value or expression.
+- That is why `FILL 320,240,"red"`, `FILL 320,240,RGB("128","128","128")`, `FILL 320,240,RGB$("128,128,128")`, and `FILL 320,240,121344` are valid, but `FILL 320,240,1,2,1` is not and yields `Incorrect number of arguments`.
+- For readability, prefer `RGB(...)`, `RGB$(...)`, or `&HRRGGBB` over a raw 24-bit decimal integer.
+- Sample `g-colors.bas` shows several of these combinations visually.
+
 Example
 10 DIM Char$(10)
 15 PAPER 0 : INK 5 'INK "1,1,1" so the base text becomes effectively invisible

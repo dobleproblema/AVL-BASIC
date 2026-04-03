@@ -7101,6 +7101,26 @@ def test_input_with_outer_quotes_keeps_internal_quotes(run_basic_interpreter):
     ]
 
 
+def test_builtin_function_names_inside_string_literals_are_not_parsed(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 PRINT "rgb"+CHR$(34)',
+        '20 PRINT CHR$(34)+"rgb"',
+        '30 PRINT "sin"+CHR$(34)',
+        '40 END',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        'rgb"',
+        '"rgb',
+        'sin"',
+    ]
+
+
 def test_line_input_preserves_internal_quotes(run_basic_interpreter):
     commands = [
         'NEW',
