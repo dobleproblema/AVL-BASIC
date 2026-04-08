@@ -599,7 +599,10 @@ FUNCTIONS = ('ABS', 'INT', 'FIX', 'SGN', 'LEN', 'LBOUND', 'FRAC', 'SGN', 'SQR', 
              'ERR', 'XPOS', 'YPOS', 'HPOS', 'VPOS', 'RGB', 'RGB$', 'INKEY$', 'KEYDOWN', 'SCREEN$',
              'SPRITE$', 'WIDTH', 'HEIGHT', 'XMIN', 'XMAX', 'YMIN', 'YMAX', 'BORDER',
              'REMAIN', 'HIT', 'HITCOLOR', 'HITSPRITE', 'HITID', 'ZER', 'CON', 'IDN', 'DET',
-             'TRN', 'INV', 'MOUSEX', 'MOUSEY', 'MOUSELEFT', 'MOUSERIGHT', 'MOUSEEVENT$' 
+             'TRN', 'INV', 'MOUSEX', 'MOUSEY', 'MOUSELEFT', 'MOUSERIGHT', 'MOUSEEVENT$',
+             'ABSUM', 'AMAX', 'AMAXCOL', 'AMAXROW', 'AMIN', 'AMINCOL', 'AMINROW',
+             'CNORM', 'CNORMCOL', 'DOT', 'FNORM', 'LBND', 'MAXAB', 'MAXABCOL', 'MAXABROW',
+             'RNORM', 'RNORMROW', 'SUM', 'UBND'
             )
 
 PRINT_FUNCTIONS = frozenset({'SPC', 'TAB'})
@@ -637,6 +640,8 @@ STRING_VARIABLE_PATTERN = (
     rf'(?!FN)'
     rf'{_VAR_BODY_PATTERN}\$' 
 )
+
+FN_IDENTIFIER_PATTERN = rf'(?:{_VAR_BODY_PATTERN}\$?)'
 
 # Identifier pattern, without the ^...$ anchors
 ID_PATTERN = rf'(?:{VARIABLE_PATTERN})'
@@ -680,14 +685,14 @@ ADD_LINE_REGEX = re.compile(r'^\s*(\d+)([ \t]*)(.*)$')
 ONGOTO_REGEX = re.compile(fr'^ON\s+(.+?)\s+(GOTO|GOSUB)\s+([0-9]+(?:\s*,\s*[0-9]+)*)$', re.IGNORECASE)
 
 DEFFN_REGEX = re.compile(
-    rf'^({VARIABLE_PATTERN})'              # Function name
+    rf'^({FN_IDENTIFIER_PATTERN})'         # Function name after FN
     rf'(?:\s*\(\s*([A-Z0-9\$, ]*)\s*\))?'  # grupo (…) opcional
     rf'\s*=\s*(.+)$',
     re.IGNORECASE
 )
 
 DEFFN_MULTI_REGEX = re.compile(
-    rf'^({VARIABLE_PATTERN})'              # Function name
+    rf'^({FN_IDENTIFIER_PATTERN})'         # Function name after FN
     rf'(?:\s*\(\s*([A-Z0-9\$, ]*)\s*\))?'  # argumentos opcionales
     rf'\s*$',
     re.IGNORECASE
@@ -1124,6 +1129,23 @@ def is_valid_varname(name: str) -> bool:
 @lru_cache(maxsize=65536)
 def is_valid_simple_varname(name: str) -> bool:
     return is_valid_varname(name) and '(' not in name
+
+@lru_cache(maxsize=65536)
+def is_valid_fn_identifier(name: str) -> bool:
+    name = name.upper()
+    name_len = len(name)
+    if name_len == 0:
+        return False
+    has_dollar = name.endswith('$')
+    base_len = name_len - 1 if has_dollar else name_len
+    if not (1 <= base_len <= MAX_VAR_BASE_LEN):
+        return False
+    base_name = name[:-1] if has_dollar else name
+    if not base_name[0].isalpha():
+        return False
+    if not all(c.isalnum() for c in base_name[1:]):
+        return False
+    return True
 
 # Define the mapping of user-defined functions ending in $
 dollar_functions_map = {}
@@ -4711,6 +4733,8 @@ class BasicInterpreter:
         self.variables = {}  # Floating-point and string variables
         self.arrays = {}  # Arrays
         self.mat_base = 0  # Base index for MAT operations
+        self._last_array_function_context = {}
+        self._reset_array_function_state()
         self.current_line = None  # Current line for execution
         self.immediate_current_line = None  # Current line for execution
         self.running = False  # Execution state
@@ -5032,6 +5056,15 @@ class BasicInterpreter:
         self._install_fast_math_helpers()
         update_mismatch_pattern()
 
+    def _reset_array_function_state(self):
+        self._last_array_function_context = {
+            'AMAX': {'row': None, 'col': None},
+            'AMIN': {'row': None, 'col': None},
+            'CNORM': {'row': None, 'col': None},
+            'MAXAB': {'row': None, 'col': None},
+            'RNORM': {'row': None, 'col': None},
+        }
+
     def _refresh_multiline_runtime_flags(self):
         """Refresh hot-path caches derived from multiline routine metadata."""
         self._has_multiline_routines = bool(self.functions_multiline or self.subs_multiline)
@@ -5042,6 +5075,7 @@ class BasicInterpreter:
             self.variables.clear()
             self.arrays.clear()
             self.mat_base = 0
+            self._reset_array_function_state()
             self.timers = [
                 {'active': False, 'mode': None, 'period': 0.0, 'target_line': None, 'next_fire': 0.0, 'priority': i}
                 for i in range(4)
@@ -5096,6 +5130,7 @@ class BasicInterpreter:
             self.variables.clear()
             self.arrays.clear()
             self.mat_base = 0
+            self._reset_array_function_state()
             self._reset_function_environment()
             self.data_pointer = 0
             global RADIANS
@@ -11654,7 +11689,7 @@ class BasicInterpreter:
             return
 
         func_identifier = match.group(1).upper()
-        if not is_valid_varname(func_identifier):
+        if not is_valid_fn_identifier(func_identifier):
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
             return
 
@@ -11795,7 +11830,7 @@ class BasicInterpreter:
         match = DEFFN_REGEX.match(definition)
         if match:
             func_identifier = match.group(1).upper()
-            if not is_valid_varname(func_identifier):
+            if not is_valid_fn_identifier(func_identifier):
                 self.handle_error(ErrorCode.INVALID_ARGUMENT)
                 return
 
@@ -14111,12 +14146,194 @@ class BasicInterpreter:
 
         return array_name, array_info
 
-    def _get_array_bounds_dimension_index(self, dims, dim_expr):
+    def _set_last_array_function_context(self, func_name, row=None, col=None):
+        self._last_array_function_context[func_name] = {'row': row, 'col': col}
+
+    def _get_last_array_function_index(self, func_name, axis):
+        context = self._last_array_function_context.get(func_name)
+        if not context:
+            return 0
+        value = context.get(axis)
+        return 0 if value is None else value
+
+    def _return_numeric_function_result(self, value):
+        try:
+            value = self.validate_number_basic(value)
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW)
+            raise ReturnMain
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        return str(value)
+
+    def _analyze_numeric_array(self, array_info):
+        dims = array_info['dims']
+        if len(dims) not in (1, 2):
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+
+        shape = self._mat_get_effective_shape(array_info)
+        if shape is None:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+
+        rows, cols = shape
+        base_index = max(self.mat_base, 0)
+        max_float = sys.float_info.max
+
+        analysis = {
+            'shape': shape,
+            'base': base_index,
+            'rows': rows,
+            'cols': cols,
+            'is_vector': cols == 1,
+            'empty': rows == 0 or cols == 0,
+            'sum': 0.0,
+            'abs_sum': 0.0,
+            'fnorm': 0.0,
+            'max': -max_float,
+            'max_pos': None,
+            'min': max_float,
+            'min_pos': None,
+            'max_abs': 0.0,
+            'max_abs_pos': None,
+            'col_norm': 0.0,
+            'col_norm_col': None,
+            'row_norm': 0.0,
+            'row_norm_row': None,
+        }
+
+        if analysis['empty']:
+            return analysis
+
+        row_abs_sums = [0.0] * rows
+        col_abs_sums = [0.0] * cols
+        data = array_info['data']
+
+        try:
+            if len(dims) == 1:
+                for row_offset, row in enumerate(range(base_index, dims[0] + 1)):
+                    numeric_value = data[(row,)] + 0.0
+                    col = base_index
+                    abs_value = abs(numeric_value)
+
+                    analysis['sum'] += numeric_value
+                    analysis['abs_sum'] += abs_value
+                    analysis['fnorm'] += numeric_value * numeric_value
+                    row_abs_sums[row_offset] += abs_value
+                    col_abs_sums[0] += abs_value
+
+                    if analysis['max_pos'] is None or numeric_value > analysis['max']:
+                        analysis['max'] = numeric_value
+                        analysis['max_pos'] = (row, col)
+                    if analysis['min_pos'] is None or numeric_value < analysis['min']:
+                        analysis['min'] = numeric_value
+                        analysis['min_pos'] = (row, col)
+                    if analysis['max_abs_pos'] is None or abs_value > analysis['max_abs']:
+                        analysis['max_abs'] = abs_value
+                        analysis['max_abs_pos'] = (row, col)
+            else:
+                for row_offset, row in enumerate(range(base_index, dims[0] + 1)):
+                    for col_offset, col in enumerate(range(base_index, dims[1] + 1)):
+                        numeric_value = data[(row, col)] + 0.0
+                        abs_value = abs(numeric_value)
+
+                        analysis['sum'] += numeric_value
+                        analysis['abs_sum'] += abs_value
+                        analysis['fnorm'] += numeric_value * numeric_value
+                        row_abs_sums[row_offset] += abs_value
+                        col_abs_sums[col_offset] += abs_value
+
+                        if analysis['max_pos'] is None or numeric_value > analysis['max']:
+                            analysis['max'] = numeric_value
+                            analysis['max_pos'] = (row, col)
+                        if analysis['min_pos'] is None or numeric_value < analysis['min']:
+                            analysis['min'] = numeric_value
+                            analysis['min_pos'] = (row, col)
+                        if analysis['max_abs_pos'] is None or abs_value > analysis['max_abs']:
+                            analysis['max_abs'] = abs_value
+                            analysis['max_abs_pos'] = (row, col)
+        except KeyError:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW)
+            return None
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            return None
+
+        try:
+            analysis['fnorm'] = math.sqrt(analysis['fnorm'])
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW)
+            return None
+        except ValueError:
+            self.handle_error(ErrorCode.INVALID_VALUE)
+            return None
+
+        for idx, value in enumerate(col_abs_sums):
+            if analysis['col_norm_col'] is None or value > analysis['col_norm']:
+                analysis['col_norm'] = value
+                analysis['col_norm_col'] = base_index + idx
+
+        for idx, value in enumerate(row_abs_sums):
+            if analysis['row_norm_row'] is None or value > analysis['row_norm']:
+                analysis['row_norm'] = value
+                analysis['row_norm_row'] = base_index + idx
+
+        return analysis
+
+    def _get_numeric_vector_values(self, array_info):
+        dims = array_info['dims']
+        if len(dims) not in (1, 2):
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+
+        shape = self._mat_get_effective_shape(array_info)
+        if shape is None:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+
+        rows, cols = shape
+        if cols != 1:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+
+        base_index = max(self.mat_base, 0)
+        values = []
+        data = array_info['data']
+
+        try:
+            if len(dims) == 1:
+                for row in range(base_index, dims[0] + 1):
+                    values.append(data[(row,)] + 0.0)
+            else:
+                for row in range(base_index, dims[0] + 1):
+                    values.append(data[(row, base_index)] + 0.0)
+        except KeyError:
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            return None
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW)
+            return None
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            return None
+
+        return values
+
+    def _get_array_bounds_dimension_index(self, dims, dim_expr, *, round_input=False, max_dimensions=None):
         if not dims:
             self.handle_error(ErrorCode.DIMENSION_MISMATCH)
             return None
 
         if dim_expr is None:
+            if max_dimensions is not None and max_dimensions < 1:
+                self.handle_error(ErrorCode.INDEX_OUT_OF_BOUNDS)
+                return None
             return 1
 
         dim_expr = dim_expr.strip()
@@ -14137,12 +14354,16 @@ class BasicInterpreter:
             return None
 
         try:
-            dim_index = int(dim_value)
+            if round_input:
+                dim_index = int(BasicInterpreter.round_half_up(dim_value))
+            else:
+                dim_index = int(dim_value)
         except (TypeError, ValueError):
             self.handle_error(ErrorCode.TYPE_MISMATCH)
             return None
 
-        if dim_index < 1 or dim_index > len(dims):
+        upper_limit = len(dims) if max_dimensions is None else min(len(dims), max_dimensions)
+        if dim_index < 1 or dim_index > upper_limit:
             self.handle_error(ErrorCode.INDEX_OUT_OF_BOUNDS)
             return None
 
@@ -16110,6 +16331,245 @@ class BasicInterpreter:
 
         return str(det_value)
 
+    @_fun_handler('ABSUM')
+    def _absum(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        return self._return_numeric_function_result(analysis['abs_sum'])
+
+    @_fun_handler('AMAX')
+    def _amax(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        row, col = (analysis['max_pos'] if analysis['max_pos'] is not None else (None, None))
+        self._set_last_array_function_context('AMAX', row, col)
+        return self._return_numeric_function_result(analysis['max'])
+
+    @_fun_handler('AMAXCOL')
+    def _amaxcol(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('AMAX', 'col'))
+
+    @_fun_handler('AMAXROW')
+    def _amaxrow(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('AMAX', 'row'))
+
+    @_fun_handler('AMIN')
+    def _amin(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        row, col = (analysis['min_pos'] if analysis['min_pos'] is not None else (None, None))
+        self._set_last_array_function_context('AMIN', row, col)
+        return self._return_numeric_function_result(analysis['min'])
+
+    @_fun_handler('AMINCOL')
+    def _amincol(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('AMIN', 'col'))
+
+    @_fun_handler('AMINROW')
+    def _aminrow(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('AMIN', 'row'))
+
+    @_fun_handler('CNORM')
+    def _cnorm(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        self._set_last_array_function_context('CNORM', None, analysis['col_norm_col'])
+        return self._return_numeric_function_result(analysis['col_norm'])
+
+    @_fun_handler('CNORMCOL')
+    def _cnormcol(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('CNORM', 'col'))
+
+    @_fun_handler('DOT')
+    def _dot(self, args):
+        if len(args) != 2:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        left_info = self._get_numeric_array_info_from_expression(args[0])
+        if left_info is None:
+            raise ReturnMain
+        right_info = self._get_numeric_array_info_from_expression(args[1])
+        if right_info is None:
+            raise ReturnMain
+
+        _, left_array = left_info
+        _, right_array = right_info
+        left_values = self._get_numeric_vector_values(left_array)
+        if left_values is None:
+            raise ReturnMain
+        right_values = self._get_numeric_vector_values(right_array)
+        if right_values is None:
+            raise ReturnMain
+
+        if len(left_values) != len(right_values):
+            self.handle_error(ErrorCode.DIMENSION_MISMATCH)
+            raise ReturnMain
+
+        try:
+            total = 0.0
+            for left_value, right_value in zip(left_values, right_values):
+                total += left_value * right_value
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW)
+            raise ReturnMain
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        return self._return_numeric_function_result(total)
+
+    @_fun_handler('FNORM')
+    def _fnorm(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        return self._return_numeric_function_result(analysis['fnorm'])
+
+    @_fun_handler('MAXAB')
+    def _maxab(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        row, col = (analysis['max_abs_pos'] if analysis['max_abs_pos'] is not None else (None, None))
+        self._set_last_array_function_context('MAXAB', row, col)
+        return self._return_numeric_function_result(analysis['max_abs'])
+
+    @_fun_handler('MAXABCOL')
+    def _maxabcol(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('MAXAB', 'col'))
+
+    @_fun_handler('MAXABROW')
+    def _maxabrow(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('MAXAB', 'row'))
+
+    @_fun_handler('RNORM')
+    def _rnorm(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        self._set_last_array_function_context('RNORM', analysis['row_norm_row'], None)
+        return self._return_numeric_function_result(analysis['row_norm'])
+
+    @_fun_handler('RNORMROW')
+    def _rnormrow(self, args):
+        if args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        return self._return_numeric_function_result(self._get_last_array_function_index('RNORM', 'row'))
+
+    @_fun_handler('SUM')
+    def _sum_array(self, args):
+        if len(args) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_numeric_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        analysis = self._analyze_numeric_array(array_info)
+        if analysis is None:
+            raise ReturnMain
+
+        return self._return_numeric_function_result(analysis['sum'])
+
     @_fun_handler('TRN')
     def _forbidden_trn(self, args):
         self.handle_error(ErrorCode.FORBIDDEN_EXPRESION)
@@ -16304,6 +16764,31 @@ class BasicInterpreter:
 
         lower_bound = 1 if self.mat_base >= 1 else 0
         return str(lower_bound)
+
+    @_fun_handler('LBND')
+    def _lbnd(self, args):
+        if len(args) not in (1, 2):
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        dim_expr = args[1] if len(args) == 2 else None
+        dim_index = self._get_array_bounds_dimension_index(
+            array_info['dims'],
+            dim_expr,
+            round_input=True,
+            max_dimensions=2,
+        )
+        if dim_index is None:
+            raise ReturnMain
+
+        lower_bound = 1 if self.mat_base >= 1 else 0
+        return str(lower_bound)
+
     @_fun_handler('UBOUND')
     def _ubound(self, args):
         if len(args) not in (1, 2):
@@ -16322,6 +16807,31 @@ class BasicInterpreter:
 
         upper_bound = array_info['dims'][dim_index - 1]
         return str(upper_bound)
+
+    @_fun_handler('UBND')
+    def _ubnd(self, args):
+        if len(args) not in (1, 2):
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        info = self._get_array_info_from_expression(args[0])
+        if info is None:
+            raise ReturnMain
+
+        _, array_info = info
+        dim_expr = args[1] if len(args) == 2 else None
+        dim_index = self._get_array_bounds_dimension_index(
+            array_info['dims'],
+            dim_expr,
+            round_input=True,
+            max_dimensions=2,
+        )
+        if dim_index is None:
+            raise ReturnMain
+
+        upper_bound = array_info['dims'][dim_index - 1]
+        return str(upper_bound)
+
     @_fun_handler('FIX')
     def _fix(self, args):
         if len(args)==1:
@@ -17484,6 +17994,7 @@ class BasicInterpreter:
     # The part of the evaluator that depends on variable values and cannot be cached
     def evaluate_expression(self, expr_basic: str, is_print=False):
         expr_basic = expr_basic.strip()
+        expr_upper = expr_basic.upper()
         # Shortcut for a number
         num_val = BasicInterpreter.is_number(expr_basic)
         if num_val is not None:
@@ -17496,13 +18007,14 @@ class BasicInterpreter:
         # frame = self._current_function_frame()
         if self.fn_local_stack:
             fn_name = self.fn_local_stack[-1]['fn_name']
-            if expr_basic.upper() == fn_name:
+            if expr_upper == fn_name:
                 return self.get_simple_variable(fn_name)
             expr_basic = self._replace_function_variable_usage(expr_basic, fn_name)
+            expr_upper = expr_basic.upper()
 
         # Shortcut for a simple scalar variable (without parentheses)
         if is_valid_simple_varname(expr_basic):
-            return self.get_simple_variable(expr_basic.upper())
+            return self.get_simple_variable(expr_upper)
         
         # Global fast path for pure mathematical expressions
         fast_expr = self._fast_expr_cache.get(expr_basic, _FAST_EXPR_CACHE_MISS)

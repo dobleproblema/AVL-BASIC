@@ -208,6 +208,17 @@ Commands
 
 Functions
 + DET(expr)                       Determinant of a numeric matrix (respects `MAT BASE`)
++ ABSUM(expr)                     Sum of the absolute values of all elements
++ AMAX(expr) | AMAXCOL | AMAXROW  Maximum element and its associated column/row
++ AMIN(expr) | AMINCOL | AMINROW  Minimum element and its associated column/row
++ CNORM(expr) | CNORMCOL          Column norm and the corresponding column
++ DOT(v1,v2)                      Dot product of two compatible numeric vectors
++ FNORM(expr)                     Frobenius norm
++ LBND(array[,dimension])         Matrix-ROM variant of `LBOUND`
++ MAXAB(expr) | MAXABCOL | MAXABROW  Largest absolute value and its associated column/row
++ RNORM(expr) | RNORMROW          Row norm and the corresponding row
++ SUM(expr)                       Algebraic sum of all elements
++ UBND(array[,dimension])         Matrix-ROM variant of `UBOUND`
 
 General notes
 - `MAT` works with 1D or 2D arrays. Names without `$` hold numbers; names ending in `$` hold text.
@@ -242,6 +253,14 @@ Detailed notes (`MAT INPUT` / `MAT READ`)
 
 Related functions
 - `DET(expr)` returns the real-number determinant of a square matrix. It uses `MAT BASE` to determine the active block and returns 0 when the matrix is singular.
+- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN`, and `MAXAB` work with one- or two-dimensional numeric arrays and respect the active base just like the other `MAT` operations.
+- `CNORM(expr)` returns the largest sum of absolute values by column; `CNORMCOL` returns the corresponding column from the last successfully executed `CNORM`.
+- `RNORM(expr)` returns the largest sum of absolute values by row; `RNORMROW` returns the corresponding row from the last successfully executed `RNORM`.
+- `AMAXCOL/AMAXROW`, `AMINCOL/AMINROW`, and `MAXABCOL/MAXABROW` recover the column/row from the last successfully executed `AMAX`, `AMIN`, or `MAXAB`. If there is no previous result yet, they return 0.
+- `MAXAB(expr)` returns the largest absolute value in the array, while separately keeping the row and column where it appeared.
+- `FNORM(expr)` is the square root of the sum of squares of all elements (Frobenius norm).
+- `DOT(v1,v2)` requires two numeric vectors of the same length. One-dimensional arrays and one-column matrices are accepted interchangeably.
+- `LBND/UBND` are the HP-85 Matrix ROM style variants of `LBOUND/UBOUND`: they only accept one- or two-dimensional arrays and round the dimension the same way as `ROUND`, so `UBND(A,1.6)` queries the second dimension.
 - The reserved words `CON`, `ZER`, `IDN`, `TRN` and `INV` can only be used in the context of `MAT`.
 
 Example
@@ -1083,6 +1102,7 @@ Strings
 
 Arrays
 + LBOUND(array[,dimension]) | UBOUND(array[,dimension])
++ LBND(array[,dimension]) | UBND(array[,dimension])   Matrix-style aliases for 1D or 2D arrays
 
 Clarifying notes for some functions
 - `ROUND(n[,d])`: "half away from zero" rounding.
@@ -1113,6 +1133,10 @@ Clarifying notes for some functions
   * `array` is the name of the array variable to inspect.
   * `dimension` is an optional parameter used, for multidimensional arrays, to indicate which dimension you want the bound from. If omitted, the default value is 1.
   * The lower bound will always be 0 or 1, equal to the current value of `MAT BASE`.
+- `LBND(array[,dimension]) | UBND(array[,dimension])`: variants inspired by the HP-85 Matrix ROM.
+  * They only accept one- or two-dimensional arrays.
+  * If `dimension` has a fractional part, it is rounded using the same rule as `ROUND`.
+  * `LBND` returns 0 or 1 according to the active `MAT BASE`; `UBND` returns the inclusive upper index of the selected dimension.
 
 Color & screen
 + RGB(n|r,g,b|"r,g,b"|"tkcolor") -> number
@@ -1163,6 +1187,7 @@ Interrupts
 + DEF FNname(arg,...)=expr (single line).
 + DEF FNname(arg,...) (multiline block).
   - All `DEF FN` parameters are local and passed by value; in multiline functions arrays are copied locally, and in single-line functions arrays are not accepted as arguments.
+  - The identifier that follows `FN` may reuse the name of a built-in function. For example, `DEF FNSIN=125` and `DEF FNSUM(X)=X+1` are valid.
   - After the `DEF FN` line, the body statements are written as normal BASIC lines.
   - The block must be closed with `FNEND`. If it is missing, the interpreter warns with "Function badly defined".
   - The arguments act as local variables: they are restored on exit and may be text if they end in `$`.

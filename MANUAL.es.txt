@@ -207,6 +207,17 @@ Comandos
 
 Funciones
 + DET(expr)                        Determinante de una matriz numérica (respeta `MAT BASE`)
++ ABSUM(expr)                      Suma de los valores absolutos de todos los elementos
++ AMAX(expr) | AMAXCOL | AMAXROW   Máximo elemento y su columna/fila asociada
++ AMIN(expr) | AMINCOL | AMINROW   Mínimo elemento y su columna/fila asociada
++ CNORM(expr) | CNORMCOL           Norma de columna y columna correspondiente
++ DOT(v1,v2)                       Producto escalar de dos vectores numéricos compatibles
++ FNORM(expr)                      Norma de Frobenius
++ LBND(array[,dimensión])          Variante matricial de `LBOUND`
++ MAXAB(expr) | MAXABCOL | MAXABROW  Mayor valor absoluto y su columna/fila asociada
++ RNORM(expr) | RNORMROW           Norma de fila y fila correspondiente
++ SUM(expr)                        Suma algebraica de todos los elementos
++ UBND(array[,dimensión])          Variante matricial de `UBOUND`
 
 Notas generales
 - `MAT` trabaja con arrays de 1 o 2 dimensiones. Los nombres sin `$` manejan números; los que terminan en `$` manejan texto.
@@ -241,6 +252,14 @@ Notas detalladas (`MAT INPUT` / `MAT READ`)
 
 Funciones relacionadas
 - `DET(expr)` devuelve un número real con el determinante de una matriz cuadrada. Usa `MAT BASE` para determinar el bloque activo y devuelve 0 cuando la matriz es singular.
+- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN` y `MAXAB` trabajan con arrays numéricos de una o dos dimensiones y respetan la base activa igual que las demás operaciones `MAT`.
+- `CNORM(expr)` devuelve la mayor suma de valores absolutos por columna; `CNORMCOL` devuelve la columna correspondiente del último `CNORM` ejecutado correctamente.
+- `RNORM(expr)` devuelve la mayor suma de valores absolutos por fila; `RNORMROW` devuelve la fila correspondiente del último `RNORM` ejecutado correctamente.
+- `AMAXCOL/AMAXROW`, `AMINCOL/AMINROW` y `MAXABCOL/MAXABROW` recuperan la columna/fila del último `AMAX`, `AMIN` o `MAXAB` ejecutado correctamente. Si todavía no existe un resultado previo, devuelven 0.
+- `MAXAB(expr)` devuelve el valor absoluto máximo del array, conservando aparte la fila y la columna donde apareció.
+- `FNORM(expr)` es la raíz cuadrada de la suma de cuadrados de todos los elementos (norma de Frobenius).
+- `DOT(v1,v2)` exige dos vectores numéricos de la misma longitud. Los arrays de una dimensión y las matrices de una sola columna se aceptan indistintamente.
+- `LBND/UBND` son las variantes del ROM matricial de `LBOUND/UBOUND`: solo aceptan arrays de una o dos dimensiones y redondean la dimensión igual que `ROUND`, de modo que `UBND(A,1.6)` consulta la segunda dimensión.
 - Las palabras reservadas `CON`, `ZER`, `IDN`, `TRN` e `INV` solo pueden usarse en el contexto de `MAT`.
 
 Ejemplo
@@ -1083,6 +1102,7 @@ Cadenas
 
 Arrays
 + LBOUND(array[,dimensión]) | UBOUND(array[,dimensión])
++ LBND(array[,dimensión]) | UBND(array[,dimensión])   Alias matriciales para arrays de 1 o 2 dimensiones
 
 Notas aclaratorias para algunas funciones
 - ROUND(n[,d]): redondeo "medio hacia afuera" (away-from-zero).
@@ -1113,6 +1133,10 @@ Notas aclaratorias para algunas funciones
   • `array` es el nombre de la variable de array a comprobar.
   • `dimensión` es un parámetro opcional utilizado para indicar, para arrays de múltiples dimensiones, la dimensión de la que queremos obtener el límite. Si no se indica, el valor por defecto es 1.
   • El límite inferior siempre será 0 o 1, siendo igual al valor actual de MAT BASE.
+- `LBND(array[,dimensión]) | UBND(array[,dimensión])`: versiones inspiradas en el módulo matricial del HP-85.
+  • Solo admiten arrays de una o dos dimensiones.
+  • Si `dimensión` tiene parte decimal, se redondea con el mismo criterio que `ROUND`.
+  • `LBND` devuelve 0 o 1 según el `MAT BASE` activo; `UBND` devuelve el índice superior inclusivo de la dimensión seleccionada.
 
 Color & pantalla
 + RGB(n|r,g,b|"r,g,b"|"colortk") → número
@@ -1163,6 +1187,7 @@ Interrupciones
 + DEF FNname(arg,…)=expr (una sola línea).
 + DEF FNname(arg,...) (bloque multilinea).
   - Todos los parámetros de `DEF FN` son locales y se pasan por valor; en las funciones multilinea los arrays se copian localmente, y en las funciones de una sola línea no se admiten arrays como argumentos.
+  - El identificador que sigue a `FN` puede reutilizar el nombre de una función integrada. Por ejemplo, `DEF FNSIN=125` y `DEF FNSUM(X)=X+1` son válidas.
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con FNEND. Si falta, el interprete avisara con "Funcion mal definida".
   - Los argumentos actuan como variables locales: se restauran al salir y pueden ser de texto si terminan en $.

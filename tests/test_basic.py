@@ -5778,6 +5778,94 @@ texto'''
 -9'''
 ),
 (
+'''10 MAT BASE 1
+20 DIM A(3,3),V1(3),V2(3),B(3,5)
+30 DATA -3,2,3,5,-3,5,2,5,-1
+40 DATA 2,1,3,1,4,2
+50 MAT READ A
+60 MAT READ V1,V2
+70 IF ABSUM(A)<>29 THEN PRINT "E1"
+80 IF AMAX(A)<>5 OR AMAXCOL<>1 OR AMAXROW<>2 THEN PRINT "E2"
+90 IF AMIN(A)<>-3 OR AMINCOL<>1 OR AMINROW<>1 THEN PRINT "E3"
+100 IF CNORM(A)<>10 OR CNORMCOL<>1 THEN PRINT "E4"
+110 IF DOT(V1,V2)<>12 THEN PRINT "E5"
+120 IF ROUND(FNORM(A),2)<>10.54 THEN PRINT "E6"
+130 IF LBND(A)<>1 THEN PRINT "E7"
+140 IF MAXAB(A)<>5 OR MAXABCOL<>1 OR MAXABROW<>2 THEN PRINT "E8"
+150 IF RNORM(A)<>13 OR RNORMROW<>2 THEN PRINT "E9"
+160 IF SUM(A)<>15 THEN PRINT "E10"
+170 IF UBND(B,1.4)<>3 OR UBND(B,1.6)<>5 THEN PRINT "E11"
+180 PRINT "OK"
+190 END''',
+
+'''OK'''
+),
+(
+'''10 MAT BASE 1
+20 DIM V(3),M(3,1)
+30 DATA 2,1,3,2,1,3
+40 MAT READ V,M
+50 IF AMAX(V)<>3 OR AMAXCOL<>1 OR AMAXROW<>3 THEN PRINT "E1"
+60 IF CNORM(V)<>6 OR CNORMCOL<>1 THEN PRINT "E2"
+70 IF AMAX(M)<>3 OR AMAXCOL<>1 OR AMAXROW<>3 THEN PRINT "E3"
+80 IF CNORM(M)<>6 OR CNORMCOL<>1 THEN PRINT "E4"
+90 PRINT "OK"
+100 END''',
+
+'''OK'''
+),
+(
+'''10 MAT BASE 1
+20 DIM V1(3),V2(3),M1(3,1),M2(3,1)
+30 DATA 2,1,3,1,4,2,2,1,3,1,4,2
+40 MAT READ V1,V2,M1,M2
+50 IF DOT(V1,V2)<>12 THEN PRINT "E1"
+60 IF DOT(M1,V2)<>12 THEN PRINT "E2"
+70 IF DOT(V1,M2)<>12 THEN PRINT "E3"
+80 IF DOT(M1,M2)<>12 THEN PRINT "E4"
+90 DOT=7
+100 END''',
+
+'''Line 90. Syntax error.'''
+),
+(
+'''10 MAT BASE 1
+20 DIM A(3,3),V1(3),V2(3)
+30 DATA -3,2,3,5,-3,5,2,5,-1
+40 DATA 2,1,3,1,4,2
+50 F$="###"
+60 MAT READ A
+70 MAT READ V1,V2
+80 PRINT USING F$;AMAX(A)
+90 PRINT USING F$;AMAXCOL
+100 PRINT USING F$;AMAXROW
+110 PRINT USING F$;AMIN(A)
+120 PRINT USING F$;AMINCOL
+130 PRINT USING F$;AMINROW
+140 PRINT USING F$;CNORM(A)
+150 PRINT USING F$;CNORMCOL
+160 PRINT USING F$;MAXAB(A)
+170 PRINT USING F$;MAXABCOL
+180 PRINT USING F$;MAXABROW
+190 PRINT USING F$;RNORM(A)
+200 PRINT USING F$;RNORMROW
+210 END''',
+
+'''  5
+  1
+  2
+ -3
+  1
+  1
+ 10
+  1
+  5
+  1
+  2
+ 13
+  2'''
+),
+(
 '''10 DIM A(0,0)
 20 DATA 2
 30 MAT READ A
@@ -6609,6 +6697,73 @@ Vector error:
  32
  32\t 32\t 0\t 0\t 0\t
 Line 80. Index out of range.'''
+),
+(
+'''100 MAT BASE 1
+110 DIM A(3,3),b(3,3),V1(3),V2(3)
+120 DATA -3, 2, 3, 5, -3, 5, 2, 5, -1
+130 DATA 2, 1, 3, 1, 4, 2
+140 I1$="###"
+150 I2$="###.##"
+160 MAT READ A
+170 MAT READ V1,V2
+180 MAT PRINT A;V1;V2;
+190 PRINT
+200 PRINT USING I1$;ABSUM(A)
+210 PRINT USING I1$;AMAX(A)
+220 PRINT USING I1$;AMAXCOL
+230 PRINT USING I1$;AMAXROW
+240 PRINT USING I1$;AMIN(A)
+250 PRINT USING I1$;AMINCOL
+260 PRINT USING I1$;AMINROW
+270 PRINT USING I1$;CNORM(A)
+280 PRINT USING I1$;CNORMCOL
+290 PRINT USING I1$;DET(A)
+300 PRINT USING I1$;DOT(V1,V2)
+310 PRINT USING I2$;FNORM(A)
+320 PRINT USING I1$;LBND(A,1)
+330 PRINT USING I1$;MAXAB(A)
+340 PRINT USING I1$;MAXABCOL
+350 PRINT USING I1$;MAXABROW
+360 PRINT USING I1$;RNORM(A)
+370 PRINT USING I1$;RNORMROW
+380 PRINT USING I1$;SUM(A)
+390 N=2
+400 PRINT USING I1$;UBND(A,N)
+410 END''',
+
+'''-3   2   3
+ 5  -3   5
+ 2   5  -1
+
+ 2
+ 1
+ 3
+
+ 1
+ 4
+ 2
+
+ 29
+  5
+  1
+  2
+ -3
+  1
+  1
+ 10
+  1
+189
+ 12
+ 10.54
+  1
+  5
+  1
+  2
+ 13
+  2
+ 15
+  3'''
 ),
 ('''10 DIM A(5),B(2,4),
 20 IF LBOUND(A)<>0 THEN PRINT "E1": END
@@ -9141,7 +9296,7 @@ def test_local_must_appear_in_initial_block_of_multiline_function(run_basic_inte
     ]
 
     output = run_basic_interpreter(commands)
-    assert 'Line 30. LOCAL must appear in the initial block of a multiline function or subroutine.' in output
+    assert 'Line 30. LOCAL must appear in the initial block of a function or subroutine.' in output
 
 
 def test_local_must_appear_in_initial_block_of_multiline_subroutine(run_basic_interpreter):
@@ -9157,7 +9312,7 @@ def test_local_must_appear_in_initial_block_of_multiline_subroutine(run_basic_in
     ]
 
     output = run_basic_interpreter(commands)
-    assert 'Line 30. LOCAL must appear in the initial block of a multiline function or subroutine.' in output
+    assert 'Line 30. LOCAL must appear in the initial block of a function or subroutine.' in output
 
 
 def test_multiline_subroutine_passes_scalars_by_value(run_basic_interpreter):
@@ -9477,6 +9632,22 @@ def test_syntax_highlight_uses_keyword_style_for_subroutine_names():
     assert variable_name not in highlighted_call
     assert variable_name not in highlighted_if_call
     assert variable_other not in highlighted_if_call
+
+
+def test_syntax_highlight_does_not_treat_array_rom_functions_as_variables():
+    highlighted = syntax_highlight('10 PRINT AMAXCOL: X=DOT(V1,V2): X=5')
+
+    keyword_amaxcol = f'{KEYWORD_STYLE}AMAXCOL{RESET}'
+    keyword_dot = f'{KEYWORD_STYLE}DOT{RESET}'
+    variable_x = f'{VARIABLE_STYLE}X{RESET}'
+    variable_amaxcol = f'{VARIABLE_STYLE}AMAXCOL{RESET}'
+    variable_dot = f'{VARIABLE_STYLE}DOT{RESET}'
+
+    assert keyword_amaxcol not in highlighted
+    assert keyword_dot not in highlighted
+    assert variable_amaxcol not in highlighted
+    assert variable_dot not in highlighted
+    assert variable_x in highlighted
 
 
 def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):
