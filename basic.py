@@ -1814,6 +1814,7 @@ class ForLoop:
 graphics_width = 640
 graphics_height = 480
 block_size = 20
+_SMALL_PUT_REGION_AREA = 256
 
 class GraphicsWindow:
     COLLISION_OFF = 0
@@ -1952,11 +1953,14 @@ class GraphicsWindow:
         self.root.configure(bg=self.background_color)
 
         self.buffer = [self.background_color] * (self.width * self.height)
+        fill_rgb = self._get_rgb_bytes(self.background_color)
+        self._buffer_rgb = bytearray(fill_rgb * (self.width * self.height))
         self._init_collision_engine(reset_mode=True)
         # If it contains hexdata, the visible screen comes from SCREEN and the buffer
         # has not been rebuilt yet. It is synchronized on demand.
         self._pending_screen_hex = None
         self.tk_image = tk.PhotoImage(width=self.width, height=self.height)
+        self._scratch_images = {}
         self.photo_id = self.canvas.create_image(0, 0, anchor='nw', image=self.tk_image)
 
         self._init_gui_keyboard()
@@ -2144,6 +2148,7 @@ class GraphicsWindow:
             return
 
         self.buffer[:] = ["#" + pending_hex[i:i + 6] for i in range(0, len(pending_hex), 6)]
+        self._buffer_rgb[:] = bytes.fromhex(pending_hex)
         self._pending_screen_hex = None
     
     def _init_gui_keyboard(self):
@@ -2282,6 +2287,20 @@ class GraphicsWindow:
     @lru_cache(maxsize=65536)
     def _rgb_hex(self, color: str) -> str:
         """Return an 'rrggbb' string (without #) from a Tk color name/hex value."""
+        if isinstance(color, str):
+            color_lower = color.lower()
+            if color_lower.startswith("#"):
+                hexstr = color_lower[1:]
+                if len(hexstr) == 3 and all(ch in "0123456789abcdef" for ch in hexstr):
+                    return "".join(ch * 2 for ch in hexstr)
+                if len(hexstr) == 6 and all(ch in "0123456789abcdef" for ch in hexstr):
+                    return hexstr
+
+            rgb = GraphicsWindow.COLOR_MAP.get(color_lower)
+            if rgb is not None:
+                r, g, b = rgb
+                return f"{r:02x}{g:02x}{b:02x}"
+
         r16, g16, b16 = self.root.winfo_rgb(color)          # 0-65535
         return f"{r16>>8:02x}{g16>>8:02x}{b16>>8:02x}"      # 0-255 -> 2 digits
 
@@ -2398,6 +2417,43 @@ class GraphicsWindow:
         self.tk_image = tk.PhotoImage(data=ppm_str, format="PPM")
         self.canvas.itemconfig(self.photo_id, image=self.tk_image)
 
+    def _region_to_ppm(self, x1: int, y1: int, x2: int, y2: int) -> str:
+        """Encode a buffer region as a binary PPM string accepted by Tk."""
+        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
+            self._rebuild_rgb_shadow()
+        stride = self.width * 3
+        row_bytes = (x2 - x1) * 3
+        start_offset = x1 * 3
+        rows = []
+        for y in range(y1, y2):
+            row_start = y * stride + start_offset
+            rows.append(self._buffer_rgb[row_start:row_start + row_bytes])
+        header = f"P6\n{x2 - x1} {y2 - y1}\n255\n".encode("ascii")
+        return (header + b"".join(rows)).decode("latin-1")
+
+    def _blit_region_ppm(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        """Upload a dirty rectangle using a reusable scratch PPM image plus copy."""
+        region_size = (x2 - x1, y2 - y1)
+        ppm_str = self._region_to_ppm(x1, y1, x2, y2)
+        scratch = self._scratch_images.get(region_size)
+        if scratch is None:
+            scratch = tk.PhotoImage(master=self.root, data=ppm_str, format="PPM")
+            self._scratch_images[region_size] = scratch
+        else:
+            scratch.configure(data=ppm_str, format="PPM")
+        self.tk_image.tk.call(str(self.tk_image), "copy", str(scratch), "-to", x1, y1)
+
+    def _blit_region_put(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        """Upload a tiny dirty rectangle using PhotoImage.put()."""
+        buf = self.buffer
+        width = self.width
+        rows = []
+        for y in range(y1, y2):
+            row_start = y * width + x1
+            row_end = y * width + x2
+            rows.append("{" + " ".join(buf[row_start:row_end]) + "}")
+        self.tk_image.put(" ".join(rows), to=(x1, y1, x2, y2))
+
     # Put a serialized string on the canvas
     def restore_screen(self, s: str) -> None:
         res, hexdata = s.split(":", 1)
@@ -2412,6 +2468,7 @@ class GraphicsWindow:
 
         # Lazy synchronization: avoids rebuilding the buffer on every SCREEN.
         self._pending_screen_hex = hexdata
+        self._buffer_rgb[:] = rgb_bytes
         self.reset_collision_state(clear_owner=True)
 
         # Blit to the canvas
@@ -2541,7 +2598,7 @@ class GraphicsWindow:
                 row_base = dst_y * W
                 row_dst_start = row_base + x_start
                 row_dst_end = row_base + x_end + 1
-                buf[row_dst_start:row_dst_end] = row_colors[col_start:col_end]
+                self._set_buffer_colors(row_dst_start, row_colors[col_start:col_end])
                 if owners is not None:
                     owners[row_dst_start:row_dst_end] = [draw_sprite_id] * span
                     if touched_indices is not None:
@@ -2594,7 +2651,7 @@ class GraphicsWindow:
                         if touched_indices is not None:
                             touched_indices.append(dst_index)
 
-                    buf[dst_index] = color
+                    self._set_buffer_pixel(dst_index, color)
                     drawn_any = True
                     dst_index += 1
 
@@ -2797,10 +2854,13 @@ class GraphicsWindow:
         # 2. Canvas and PhotoImage
         self.canvas.config(width=new_w, height=new_h, bg=self.background_color)
         self.tk_image = tk.PhotoImage(width=new_w, height=new_h)
+        self._scratch_images = {}
         self.canvas.itemconfig(self.photo_id, image=self.tk_image)
 
         # 3. Buffers and auxiliary structures
         self.buffer = [self.background_color] * (new_w * new_h)
+        fill_rgb = self._get_rgb_bytes(self.background_color)
+        self._buffer_rgb = bytearray(fill_rgb * (new_w * new_h))
         self._pending_screen_hex = None
         self.dirty_grid = DirtyGrid(new_w, new_h, block_size)
         self._init_collision_engine(reset_mode=False)
@@ -2896,9 +2956,10 @@ class GraphicsWindow:
     
         # 1. Clear the buffer only inside the window
         width_win = self.w_right - self.w_left + 1
+        bg_rgb = self._get_rgb_bytes(self.background_color)
         for y in range(self.w_top, self.w_bottom + 1):
             i0 = y * self.width + self.w_left
-            self.buffer[i0:i0 + width_win] = [self.background_color] * width_win
+            self._set_buffer_fill(i0, i0 + width_win, self.background_color, bg_rgb)
 
         # 2. Put the pixels into the image
         self.tk_image.put(
@@ -3818,7 +3879,7 @@ class GraphicsWindow:
 
             x_left, x_right = (start_x, end_x) if start_x <= end_x else (end_x, start_x)
             row = ty1 * W
-            buf[row + x_left : row + x_right + 1] = [color] * (x_right - x_left + 1)
+            self._set_buffer_fill(row + x_left, row + x_right + 1, color)
 
             row_block = ty1 // block_size
             col_start = x_left // block_size
@@ -3840,7 +3901,7 @@ class GraphicsWindow:
             last_block_row = -1
 
             while True:
-                buf[idx] = color
+                self._set_buffer_pixel(idx, color)
                 block_row = y // block_size
                 if block_row != last_block_row:
                     mark_row_mask(block_row, block_mask)
@@ -3864,7 +3925,7 @@ class GraphicsWindow:
 
         while True:
             if not (skip_first_pixel and first_pixel):
-                buf[y * W + x] = color
+                self._set_buffer_pixel(y * W + x, color)
                 block_x = x // block_size
                 block_y = y // block_size
                 if block_x != last_block_x or block_y != last_block_y:
@@ -3914,8 +3975,7 @@ class GraphicsWindow:
 
             if y_start == y_end:
                 row = y_start * W
-                span = [c] * (x_end - x_start + 1)
-                buf[row + x_start : row + x_end + 1] = span
+                self._set_buffer_fill(row + x_start, row + x_end + 1, c)
                 mark_scan(x_start, x_end, y_start)
                 self.move_cursor(x1, y1)
                 return
@@ -3923,17 +3983,16 @@ class GraphicsWindow:
             if x_start == x_end:
                 idx = y_start * W + x_start
                 for y in range(y_start, y_end + 1):
-                    buf[idx] = c
+                    self._set_buffer_pixel(idx, c)
                     mark_scan(x_start, x_start, y)
                     idx += W
                 self.move_cursor(x1, y1)
                 return
 
-            span = [c] * (x_end - x_start + 1)
             row_top = y_start * W
             row_bottom = y_end * W
-            buf[row_top + x_start : row_top + x_end + 1] = span
-            buf[row_bottom + x_start : row_bottom + x_end + 1] = span
+            self._set_buffer_fill(row_top + x_start, row_top + x_end + 1, c)
+            self._set_buffer_fill(row_bottom + x_start, row_bottom + x_end + 1, c)
             mark_scan(x_start, x_end, y_start)
             mark_scan(x_start, x_end, y_end)
 
@@ -3941,8 +4000,8 @@ class GraphicsWindow:
                 left_idx = (y_start + 1) * W + x_start
                 right_idx = (y_start + 1) * W + x_end
                 for y in range(y_start + 1, y_end):
-                    buf[left_idx] = c
-                    buf[right_idx] = c
+                    self._set_buffer_pixel(left_idx, c)
+                    self._set_buffer_pixel(right_idx, c)
                     mark_scan(x_start, x_start, y)
                     if x_start != x_end:
                         mark_scan(x_end, x_end, y)
@@ -4053,7 +4112,7 @@ class GraphicsWindow:
                     xR = min(x_max_win, xR)
                     if xL <= xR:
                         row = y * W
-                        buf[row + xL : row + xR + 1] = [col] * (xR - xL + 1)
+                        self._set_buffer_fill(row + xL, row + xR + 1, col)
                         mark_scan(xL, xR, y)
                 x1_fp += dx1
                 x2_fp += dx2
@@ -4076,7 +4135,7 @@ class GraphicsWindow:
                     xR = min(x_max_win, xR)
                     if xL <= xR:
                         row = y * W
-                        buf[row + xL : row + xR + 1] = [col] * (xR - xL + 1)
+                        self._set_buffer_fill(row + xL, row + xR + 1, col)
                         mark_scan(xL, xR, y)
                 x1_fp += dx1
                 x2_fp += dx2
@@ -4116,10 +4175,9 @@ class GraphicsWindow:
             return # everything outside the window
 
         # Bulk copy row by row
-        span = [c] * (x_end - x_start + 1) # replicate the color
         for y in range(y_start, y_end + 1):
             row = y * W
-            buf[row + x_start : row + x_end + 1] = span
+            self._set_buffer_fill(row + x_start, row + x_end + 1, c)
 
         # Global mark (optional)
         mark_range(x_start, y_start, x_end, y_end)
@@ -4214,7 +4272,7 @@ class GraphicsWindow:
 
             row = y * W
             if full_circle:
-                buf[row + x_left : row + x_right + 1] = [c] * (x_right - x_left + 1)
+                self._set_buffer_fill(row + x_left, row + x_right + 1, c)
                 mark_scan(x_left, x_right, y)
                 continue
 
@@ -4228,7 +4286,7 @@ class GraphicsWindow:
                 if angle < start_angle:
                     angle += 2.0 * math.pi
                 if start_angle <= angle <= end_angle:
-                    buf[row + x] = c
+                    self._set_buffer_pixel(row + x, c)
                     if first is None:
                         first = x
                     last = x
@@ -4385,8 +4443,6 @@ class GraphicsWindow:
 
         # Utilities
         mark_scan  = self.dirty_grid.mark_dirty_scanline
-        span_color = [fc]  # will be replicated by width
-
         # Span queue (xL, xR, y)
         q = deque()
         q.append((tx, tx, ty)) # Seed: 1-pixel span
@@ -4412,7 +4468,7 @@ class GraphicsWindow:
                 right += 1
 
             # Paint the span in one go (only now do we know the real width)
-            buf[row + left : row + right + 1] = span_color * (right - left + 1)
+            self._set_buffer_fill(row + left, row + right + 1, fc)
             mark_scan(left, right, cy)
 
             # Update the filled-area bounds
@@ -4522,6 +4578,54 @@ class GraphicsWindow:
 
         return color
 
+    @classmethod
+    @lru_cache(maxsize=65536)
+    def _get_rgb_bytes(cls, color):
+        color_value = cls._get_rgb_number(color)
+        return bytes((
+            (color_value >> 16) & 0xFF,
+            (color_value >> 8) & 0xFF,
+            color_value & 0xFF,
+        ))
+
+    def _set_buffer_pixel(self, idx: int, color, rgb_bytes=None):
+        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
+            self._rebuild_rgb_shadow()
+        self.buffer[idx] = color
+        rgb = rgb_bytes if rgb_bytes is not None else self._get_rgb_bytes(color)
+        rgb_idx = idx * 3
+        self._buffer_rgb[rgb_idx:rgb_idx + 3] = rgb
+
+    def _set_buffer_fill(self, start: int, end: int, color, rgb_bytes=None):
+        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
+            self._rebuild_rgb_shadow()
+        if end <= start:
+            return
+        count = end - start
+        self.buffer[start:end] = [color] * count
+        rgb = rgb_bytes if rgb_bytes is not None else self._get_rgb_bytes(color)
+        self._buffer_rgb[start * 3:end * 3] = rgb * count
+
+    def _set_buffer_colors(self, start: int, colors):
+        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
+            self._rebuild_rgb_shadow()
+        count = len(colors)
+        if count == 0:
+            return
+        end = start + count
+        self.buffer[start:end] = colors
+        self._buffer_rgb[start * 3:end * 3] = b"".join(self._get_rgb_bytes(color) for color in colors)
+
+    def _rebuild_rgb_shadow(self):
+        rgb = bytearray(len(self.buffer) * 3)
+        pos = 0
+        get_rgb_bytes = self._get_rgb_bytes
+        for color in self.buffer:
+            color_rgb = get_rgb_bytes(color)
+            rgb[pos:pos + 3] = color_rgb
+            pos += 3
+        self._buffer_rgb = rgb
+
 
     def _set_pixel(self, x, y, color):
         # First, check that the pixel is inside the drawing window
@@ -4529,12 +4633,12 @@ class GraphicsWindow:
             return
         # Then verify that it is inside the canvas bounds
         if 0 <= x < self.width and 0 <= y < self.height:
-            self.buffer[self._index(x, y)] = color
+            self._set_buffer_pixel(self._index(x, y), color)
         
     def _set_pixel_no_origin(self, x, y, color):
         # Then verify that it is inside the canvas bounds
         if 0 <= x < self.width and 0 <= y < self.height:
-            self.buffer[self._index(x, y)] = color
+            self._set_buffer_pixel(self._index(x, y), color)
 
     def _draw_pixel(self, x, y, color):
         if self.pen_width == 1:
@@ -4555,34 +4659,31 @@ class GraphicsWindow:
             x2 = self.width
         if y2 is None: 
             y2 = self.height
+        if x1 >= x2 or y1 >= y2:
+            return
 
-        buf = self.buffer
-        width = self.width
-        rows = []
-        for y in range(y1, y2):
-            row_start = y * width + x1
-            row_end = y * width + x2
-            rows.append("{" + " ".join(buf[row_start:row_end]) + "}")
-        pixel_data = " ".join(rows)
-
-        self.tk_image.put(pixel_data, to=(x1, y1, x2, y2))
+        area = (x2 - x1) * (y2 - y1)
+        if area <= _SMALL_PUT_REGION_AREA:
+            self._blit_region_put(x1, y1, x2, y2)
+        else:
+            self._blit_region_ppm(x1, y1, x2, y2)
 
         # for item in self.text_items:
         #     self.canvas.tag_raise(item, self.photo_id)
 
     def update_canvas(self, full_update=False):
         if full_update:
-            self.draw_image(0, 0)
+            self._blit_region_ppm(0, 0, self.width, self.height)
         else:
             regions = self.dirty_grid.get_dirty_regions()
             if not regions:
                 self.canvas.update_idletasks()  # Lighter than root.update()
                 return
-
             for x1, y1, x2, y2 in regions:
                 self.draw_image(x1, y1, x2, y2)
 
-                if self.debug_dirty:
+            if self.debug_dirty:
+                for x1, y1, x2, y2 in regions:
                     rect = self.canvas.create_rectangle(
                         x1, y1, x2, y2,
                         outline='yellow',

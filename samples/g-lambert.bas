@@ -68,7 +68,7 @@
 435 X2=VX(I,J+1) : Y2=VY(I,J+1) : Z2=VZ(I,J+1)
 440 GOSUB 450
 445 RETURN
-450 REM Main subroutine: back-face culling and triangle construction
+450 REM Main subroutine: back-face culling AND TRIANGLE construction
 455 REM Compute the normal and do back-face culling
 460 UX=X1-X0 : UY=Y1-Y0 : UZ=Z1-Z0
 465 VX=X2-X0 : VY=Y2-Y0 : VZ=Z2-Z0
@@ -124,9 +124,8 @@
 715 REM Flat shading (Lambert)
 720 LNG=SQR(NXV*NXV+NYV*NYV+NZV*NZV)
 725 IF LNG=0 THEN DOT=0:GOTO 750
-730 DOT=(NXV*LX+NYV*LY+NZV*LZ)/LNG : IF DOT<0 THEN DOT=0
-735 DOT=LUZAMB+LUZGAN*DOT
-740 IF DOT>1 THEN DOT=1
-745 R=INT(R*DOT) : G=INT(G*DOT) : B=INT(B*DOT)
+730 DT=(NXV*LX+NYV*LY+NZV*LZ)/LNG : IF DT<0 THEN DT=0
+735 DT=LUZAMB+LUZGAN*DT
+740 IF DT>1 THEN DT=1
+745 R=INT(R*DT) : G=INT(G*DT) : B=INT(B*DT)
 750 RETURN
-

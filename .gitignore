@@ -5,3 +5,5 @@ basic.spec
 __pycache__/
 *.pyc
 .vscode/
+tools/bench_buffer_ops.py
+tools/bench_tk_render.py
