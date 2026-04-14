@@ -7585,6 +7585,9 @@ class SpriteTestWindow(GraphicsWindow):
         self.w_top = 0
         self.w_bottom = height - 1
         self.buffer = [fill_value] * (width * height)
+        fill_rgb = GraphicsWindow._get_rgb_bytes(fill_value)
+        self._buffer_rgb = bytearray(fill_rgb * (width * height))
+        self._pending_screen_hex = None
         self.dirty_grid = DirtyGrid(width, height, max(width, height) or 1)
         self.current_color = GraphicsWindow._resolve_color("#ffffff")
         self.background_color = fill_value

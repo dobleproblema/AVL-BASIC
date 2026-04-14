@@ -1814,7 +1814,7 @@ class ForLoop:
 graphics_width = 640
 graphics_height = 480
 block_size = 20
-_SMALL_PUT_REGION_AREA = 256
+_SMALL_PUT_REGION_AREA = 512
 
 class GraphicsWindow:
     COLLISION_OFF = 0
@@ -2419,8 +2419,6 @@ class GraphicsWindow:
 
     def _region_to_ppm(self, x1: int, y1: int, x2: int, y2: int) -> str:
         """Encode a buffer region as a binary PPM string accepted by Tk."""
-        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
-            self._rebuild_rgb_shadow()
         stride = self.width * 3
         row_bytes = (x2 - x1) * 3
         start_offset = x1 * 3
@@ -2957,9 +2955,14 @@ class GraphicsWindow:
         # 1. Clear the buffer only inside the window
         width_win = self.w_right - self.w_left + 1
         bg_rgb = self._get_rgb_bytes(self.background_color)
-        for y in range(self.w_top, self.w_bottom + 1):
-            i0 = y * self.width + self.w_left
-            self._set_buffer_fill(i0, i0 + width_win, self.background_color, bg_rgb)
+        if self.w_left == 0 and self.w_right == self.width - 1:
+            start = self.w_top * self.width
+            end = (self.w_bottom + 1) * self.width
+            self._set_buffer_fill(start, end, self.background_color, bg_rgb)
+        else:
+            for y in range(self.w_top, self.w_bottom + 1):
+                i0 = y * self.width + self.w_left
+                self._set_buffer_fill(i0, i0 + width_win, self.background_color, bg_rgb)
 
         # 2. Put the pixels into the image
         self.tk_image.put(
@@ -4237,12 +4240,18 @@ class GraphicsWindow:
         full_circle, start_angle, end_angle = self._resolve_arc_span(inicio, final)
 
         c  = self._get_rgb_color(color) if color else self.current_color
-        buf, W, H = self.buffer, self.width, self.height
+        c_rgb = self._get_rgb_bytes(c)
+        c_r, c_g, c_b = c_rgb
+        buf, rgb_buf, W, H = self.buffer, self._buffer_rgb, self.width, self.height
         mark_scan = self.dirty_grid.mark_dirty_scanline
+        atan2 = math.atan2
+        two_pi = 2.0 * math.pi
 
         # Screen center
         tx0, ty0 = self._transform_graphic(x0, y0)
         rx, ry = self._scaled_radii_to_logical(r, aspecto)
+        inv_rx = 1.0 / rx
+        inv_ry = 1.0 / ry
 
         y_start = int(ty0 - ry)
         y_end   = int(ty0 + ry)
@@ -4256,10 +4265,7 @@ class GraphicsWindow:
         # Scan-line sweep
         for y in range(y_start, y_end + 1):
             dy = y - ty0
-            try:
-                dx = math.sqrt(max(0.0, 1.0 - (dy / ry) ** 2)) * rx
-            except ZeroDivisionError:          # r = 0
-                dx = 0.0
+            dx = math.sqrt(max(0.0, 1.0 - (dy * inv_ry) ** 2)) * rx
 
             x_left  = int(tx0 - dx)
             x_right = int(tx0 + dx)
@@ -4272,21 +4278,27 @@ class GraphicsWindow:
 
             row = y * W
             if full_circle:
-                self._set_buffer_fill(row + x_left, row + x_right + 1, c)
+                self._set_buffer_fill(row + x_left, row + x_right + 1, c, c_rgb)
                 mark_scan(x_left, x_right, y)
                 continue
 
             # Filled sector: preserve the scan-line optimization for full circles
             # and apply angular filtering only when i/f are requested.
             first = last = None
-            ndy = (y - ty0) / ry
+            ndy = dy * inv_ry
+            row_rgb = row * 3
             for x in range(x_left, x_right + 1):
-                ndx = (x - tx0) / rx
-                angle = math.atan2(ndy, ndx)
+                ndx = (x - tx0) * inv_rx
+                angle = atan2(ndy, ndx)
                 if angle < start_angle:
-                    angle += 2.0 * math.pi
+                    angle += two_pi
                 if start_angle <= angle <= end_angle:
-                    self._set_buffer_pixel(row + x, c)
+                    idx = row + x
+                    buf[idx] = c
+                    rgb_idx = row_rgb + x * 3
+                    rgb_buf[rgb_idx] = c_r
+                    rgb_buf[rgb_idx + 1] = c_g
+                    rgb_buf[rgb_idx + 2] = c_b
                     if first is None:
                         first = x
                     last = x
@@ -4375,12 +4387,10 @@ class GraphicsWindow:
         bg = self._get_rgb_color(bg_color) if (bg_color is not None and not transparent) else self.background_color
         if mode == 'text':
             tx, ty, angle = self.text_cursor_col * w, self.text_cursor_row * h, 0
-            set_pixel = self._set_pixel_no_origin
         elif mode == 'graphic':
             x, y = self.get_cursor_position()
             tx, ty = self._transform_graphic(x, y)
             angle = self.ldir % 360
-            set_pixel = self._set_pixel
         else:
             self._basic.handle_error(ErrorCode.INVALID_ARGUMENT)
             raise ReturnMain
@@ -4388,29 +4398,70 @@ class GraphicsWindow:
         radians = math.radians(-angle)
         cos_a, sin_a = math.cos(radians), math.sin(radians)
         dx, dy = w * cos_a, w * sin_a
+        col_rx = [col * cos_a for col in range(w)]
+        col_ry = [col * sin_a for col in range(w)]
+        row_rx = [-row * sin_a for row in range(h)]
+        row_ry = [row * cos_a for row in range(h)]
+        text_mode = mode == 'text'
+        fg_rgb = self._get_rgb_bytes(fg)
+        fg_r, fg_g, fg_b = fg_rgb
+        bg_rgb = self._get_rgb_bytes(bg)
+        bg_r, bg_g, bg_b = bg_rgb
+        buf = self.buffer
+        rgb_buf = self._buffer_rgb
+        width = self.width
+        height = self.height
+        wl = self.w_left
+        wr = self.w_right
+        wt = self.w_top
+        wb = self.w_bottom
+        mark_dirty = self.dirty_grid.mark_dirty
         # Fallback for unsupported characters: '□'. If it does not exist in the font, use any glyph.
         placeholder = glyphs.get('□', next(iter(glyphs.values())))
 
         for char in text:
             rows = glyphs.get(char, placeholder)
             for row_idx, bits in enumerate(rows):
+                row_base_x = tx + row_rx[row_idx]
+                row_base_y = ty + row_ry[row_idx]
                 for col_idx in range(w):
                     on = (bits >> (w - 1 - col_idx)) & 1
                     if not on and transparent:
                         continue
-                    rx = col_idx * cos_a - row_idx * sin_a
-                    ry = col_idx * sin_a + row_idx * cos_a
-                    px = int(round(tx + rx))
-                    py = int(round(ty + ry))
-                    set_pixel(px, py, fg if on else bg)
-                    self.dirty_grid.mark_dirty(px, py)
+                    px = int(round(row_base_x + col_rx[col_idx]))
+                    py = int(round(row_base_y + col_ry[col_idx]))
+                    if text_mode:
+                        if not (0 <= px < width and 0 <= py < height):
+                            continue
+                    else:
+                        if not (
+                            wl <= px <= wr and
+                            wt <= py <= wb and
+                            0 <= px < width and
+                            0 <= py < height
+                        ):
+                            continue
+
+                    idx = py * width + px
+                    rgb_idx = idx * 3
+                    if on:
+                        buf[idx] = fg
+                        rgb_buf[rgb_idx] = fg_r
+                        rgb_buf[rgb_idx + 1] = fg_g
+                        rgb_buf[rgb_idx + 2] = fg_b
+                    else:
+                        buf[idx] = bg
+                        rgb_buf[rgb_idx] = bg_r
+                        rgb_buf[rgb_idx + 1] = bg_g
+                        rgb_buf[rgb_idx + 2] = bg_b
+                    mark_dirty(px, py)
 
             tx += dx
             ty += dy
-            if mode == 'text':
+            if text_mode:
                 self.text_cursor_col += 1
 
-        if mode == 'graphic':
+        if not text_mode:
             self.move_cursor(int(round(x + dx * len(text))), int(round(y - dy * len(text))))
         
     def fill(self, x=None, y=None, fill_color=None):
@@ -4589,16 +4640,12 @@ class GraphicsWindow:
         ))
 
     def _set_buffer_pixel(self, idx: int, color, rgb_bytes=None):
-        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
-            self._rebuild_rgb_shadow()
         self.buffer[idx] = color
         rgb = rgb_bytes if rgb_bytes is not None else self._get_rgb_bytes(color)
         rgb_idx = idx * 3
         self._buffer_rgb[rgb_idx:rgb_idx + 3] = rgb
 
     def _set_buffer_fill(self, start: int, end: int, color, rgb_bytes=None):
-        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
-            self._rebuild_rgb_shadow()
         if end <= start:
             return
         count = end - start
@@ -4607,8 +4654,6 @@ class GraphicsWindow:
         self._buffer_rgb[start * 3:end * 3] = rgb * count
 
     def _set_buffer_colors(self, start: int, colors):
-        if len(getattr(self, "_buffer_rgb", ())) != len(self.buffer) * 3:
-            self._rebuild_rgb_shadow()
         count = len(colors)
         if count == 0:
             return
