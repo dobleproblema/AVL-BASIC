@@ -62,6 +62,7 @@ RADIANS = True
 IMPLICIT_ARRAY_DIM = 10
 
 _NOWAIT = _tkinter.DONT_WAIT
+_WINDOW_NOWAIT = _tkinter.WINDOW_EVENTS | _tkinter.DONT_WAIT
 
 _FASTPATH_LOGICAL_RE = re.compile(r'\b(AND|OR|XOR|NOT)\b', re.IGNORECASE)
 _FASTPATH_FN_RE = re.compile(r'\bFN[A-Z][A-Z0-9$]*', re.IGNORECASE)
@@ -1314,12 +1315,12 @@ def _flush_console_input():
             # descriptor not attached to a terminal (e.g. in an IDE)
             pass
 
-def _scan_gui_once(root, *, sleep_when_idle=True):
+def _scan_gui_once(root, *, sleep_when_idle=True, flags=_NOWAIT):
     """
     Process at most ONE pending event.
     If there was none, sleep for 0.5 ms to reduce CPU usage.
     """
-    processed = root.tk.dooneevent(_NOWAIT)   # 0 or 1
+    processed = root.tk.dooneevent(flags)   # 0 or 1
     if not processed and sleep_when_idle:
         time.sleep(0.0005)   # 0,5 ms -> latencia imperceptible
     return processed
@@ -1815,6 +1816,9 @@ graphics_width = 640
 graphics_height = 480
 block_size = 20
 _SMALL_PUT_REGION_AREA = 512
+_RUN_GUI_POLL_INTERVAL = 0.05
+_FRAME_GUI_POLL_GRACE = 0.2
+_RUN_GUI_POLL_LINE_BUDGET = 64
 
 class GraphicsWindow:
     COLLISION_OFF = 0
@@ -1950,6 +1954,7 @@ class GraphicsWindow:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.closed = False
+        self.close_requested = False
         self.root.configure(bg=self.background_color)
 
         self.buffer = [self.background_color] * (self.width * self.height)
@@ -1989,9 +1994,10 @@ class GraphicsWindow:
         self.root.minsize(width, height)
         self.root.maxsize(width, height)
 
-    def on_close(self):
+    def _finalize_close(self):
         if self.closed:
             return
+        self.close_requested = False
         self.closed = True
         self.tk_image = None
         try:
@@ -2006,6 +2012,28 @@ class GraphicsWindow:
             self.root.destroy()
         except tk.TclError:
             pass
+
+    def on_close(self, *, force=False):
+        if self.closed:
+            return
+        if self.close_requested and not force:
+            return
+
+        basic = getattr(self, "_basic", None)
+        if not force and basic is not None:
+            if getattr(basic, "running", False) or getattr(basic, "_pause_active", False):
+                self.close_requested = True
+                try:
+                    self.root.withdraw()
+                except tk.TclError:
+                    pass
+                try:
+                    self.root.update_idletasks()
+                except tk.TclError:
+                    pass
+                return
+
+        self._finalize_close()
 
     @classmethod
     def _x11_hidden_cursor_spec(cls):
@@ -2922,6 +2950,9 @@ class GraphicsWindow:
                 # Process the Tk event queue
                 self.root.update_idletasks()
                 self.root.update()
+
+                if self.close_requested:
+                    raise KeyboardInterrupt
 
                 # ISR?
                 if interrupt_hook and interrupt_hook():
@@ -4965,9 +4996,53 @@ class BasicInterpreter:
         self._mouse_event_priority = MOUSE_EVENT_PRIORITY
         self._mouse_enabled = False
         self._mouse_cursor_visible_requested = True
+        self._last_frame_presented = 0.0
         self.graph_x_axis_range = None  # (xmin, xmax) of the last valid XAXIS
         self.graph_y_axis_range = None  # (ymin, ymax) of the last valid YAXIS
         self.graph_custom_range = None  # (xmin, xmax, ymin, ymax) from GRAPHRANGE
+
+    def _pump_graphics_window(self, next_poll_deadline: float | None):
+        gw = self.graphics_window
+        if gw is None or getattr(gw, "closed", False):
+            return next_poll_deadline
+        if getattr(gw, "close_requested", False):
+            raise KeyboardInterrupt
+
+        now = time.monotonic()
+        if not self._mouse_enabled:
+            last_frame = getattr(self, "_last_frame_presented", 0.0)
+            if last_frame and (now - last_frame) < _FRAME_GUI_POLL_GRACE:
+                return max(next_poll_deadline or 0.0, last_frame + _FRAME_GUI_POLL_GRACE)
+
+        if self._mouse_enabled or next_poll_deadline is None or now >= next_poll_deadline:
+            try:
+                poll_flags = _NOWAIT if self._mouse_enabled else _WINDOW_NOWAIT
+                _scan_gui_once(gw.root, sleep_when_idle=False, flags=poll_flags)
+            except tk.TclError:
+                return now + _RUN_GUI_POLL_INTERVAL
+            if getattr(gw, "close_requested", False):
+                raise KeyboardInterrupt
+            return now + _RUN_GUI_POLL_INTERVAL
+
+        return next_poll_deadline
+
+    def _finalize_pending_graphics_close(self):
+        gw = self.graphics_window
+        if gw is None or gw.closed or not getattr(gw, "close_requested", False):
+            return
+        gw.on_close(force=True)
+
+    def _service_graphics_window_after_frame(self):
+        gw = self.graphics_window
+        self._last_frame_presented = time.monotonic()
+        if gw is None or getattr(gw, "closed", False):
+            return
+        try:
+            _scan_gui_once(gw.root, sleep_when_idle=False, flags=_WINDOW_NOWAIT)
+        except tk.TclError:
+            return
+        if getattr(gw, "close_requested", False):
+            raise KeyboardInterrupt
 
 
 
@@ -7245,6 +7320,7 @@ class BasicInterpreter:
                 # If you are already handling an error, simply stop execution
                 self.handle_error(ErrorCode.HANDLER_ERROR, only_message=True)
             self.running = False
+            self._finalize_pending_graphics_close()
             return
         except Exception as e:
             # Handling of other unexpected errors
@@ -7320,6 +7396,8 @@ class BasicInterpreter:
             # Local shortcuts to reduce lookups in the hot loop
             _exec_cmd = self.execute_command
             _poll_isr = self._poll_interrupts
+            next_gui_poll = None
+            gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
 
             # If a start line is provided, set it as the current line
             try:
@@ -7338,6 +7416,13 @@ class BasicInterpreter:
             self._ensure_if_block_metadata()
 
             while self.running and self.current_line < len(self.line_numbers):
+                if self._mouse_enabled:
+                    next_gui_poll = self._pump_graphics_window(next_gui_poll)
+                else:
+                    gui_poll_budget -= 1
+                    if gui_poll_budget <= 0:
+                        next_gui_poll = self._pump_graphics_window(next_gui_poll)
+                        gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
                 line_num = self.line_numbers[self.current_line]
                 lin_orig = self.current_line
                 entry = self.program[line_num]
@@ -7396,9 +7481,8 @@ class BasicInterpreter:
                     cont = False
 
                     while self.running and self.current_command_index < len_commands:
-                        # Handle timers (software interrupts)
-                        if self._mouse_enabled and self.graphics_window and not self.graphics_window.closed:
-                            _scan_gui_once(self.graphics_window.root, sleep_when_idle=False)
+                        if self._mouse_enabled:
+                            next_gui_poll = self._pump_graphics_window(next_gui_poll)
 
                         pending_mouse = self._mouse_enabled and bool(self._mouse_event_queue)
                         pending_timer = self._next_isr_time is not None
@@ -7490,6 +7574,7 @@ class BasicInterpreter:
                         self.handle_error(ErrorCode.HANDLER_ERROR, only_message=True)
                     self.running = False
                     self.stopped = True
+                    self._finalize_pending_graphics_close()
                     break
                 except Exception as e:
                     # Handling of other unexpected errors
@@ -9259,6 +9344,7 @@ class BasicInterpreter:
                     self.ensure_graphics_window()
                     # Force immediate screen update
                     self.graphics_window.update_canvas()
+                    self._service_graphics_window_after_frame()
                 else:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
@@ -12383,6 +12469,8 @@ class BasicInterpreter:
         end_flag = CMD_FLAG_IS_SUBEND if frame_kind == 'sub' else CMD_FLAG_IS_FNEND
         exit_flag = CMD_FLAG_IS_SUBEXIT if frame_kind == 'sub' else CMD_FLAG_IS_FNEXIT
         malformed_error = ErrorCode.SUBEND_WITHOUT_DEF if frame_kind == 'sub' else ErrorCode.FNEND_WITHOUT_DEF
+        next_gui_poll = None
+        gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
 
         has_if_blocks = meta.get('has_if_blocks')
         if has_if_blocks is None or self._if_block_info_dirty:
@@ -12398,6 +12486,13 @@ class BasicInterpreter:
             self._ensure_if_block_metadata()
 
         while self.running:
+            if self._mouse_enabled:
+                next_gui_poll = self._pump_graphics_window(next_gui_poll)
+            else:
+                gui_poll_budget -= 1
+                if gui_poll_budget <= 0:
+                    next_gui_poll = self._pump_graphics_window(next_gui_poll)
+                    gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
             if self.current_line >= len(self.line_numbers):
                 self.handle_error(malformed_error)
 
@@ -12469,8 +12564,8 @@ class BasicInterpreter:
             broke_for_interrupt = False
 
             while self.running and self.current_command_index < len_commands:
-                if self._mouse_enabled and self.graphics_window and not self.graphics_window.closed:
-                    _scan_gui_once(self.graphics_window.root, sleep_when_idle=False)
+                if self._mouse_enabled:
+                    next_gui_poll = self._pump_graphics_window(next_gui_poll)
 
                 pending_mouse = self._mouse_enabled and bool(self._mouse_event_queue)
                 pending_timer = self._next_isr_time is not None
@@ -12596,9 +12691,18 @@ class BasicInterpreter:
         saved_if_stack = [state.copy() for state in self.if_block_stack]
         self.if_block_stack = []
         self._ensure_if_block_metadata()
+        next_gui_poll = None
+        gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
 
         try:
             while self.running and self.in_error_handler and 0 <= self.current_line < len(self.line_numbers):
+                if self._mouse_enabled:
+                    next_gui_poll = self._pump_graphics_window(next_gui_poll)
+                else:
+                    gui_poll_budget -= 1
+                    if gui_poll_budget <= 0:
+                        next_gui_poll = self._pump_graphics_window(next_gui_poll)
+                        gui_poll_budget = _RUN_GUI_POLL_LINE_BUDGET
                 line_idx = self.current_line
                 line_num = self.line_numbers[line_idx]
                 entry = self.program[line_num]
@@ -12645,6 +12749,8 @@ class BasicInterpreter:
                         self._trace_print(line_num)
 
                 while self.running and self.in_error_handler and self.current_command_index < len_commands:
+                    if self._mouse_enabled:
+                        next_gui_poll = self._pump_graphics_window(next_gui_poll)
                     cmd = commands[self.current_command_index]
                     cmd_flags, cmd_flow_kind, _ = cmd_meta[self.current_command_index]
                     last_seen_cmd_flags = cmd_flags

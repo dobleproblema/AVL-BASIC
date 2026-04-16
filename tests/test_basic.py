@@ -8786,6 +8786,20 @@ class _ScreenCloseWindowStub:
         self.closed = True
 
 
+class _RootCloseStub:
+    def __init__(self):
+        self.calls = []
+
+    def withdraw(self):
+        self.calls.append("withdraw")
+
+    def update_idletasks(self):
+        self.calls.append("update")
+
+    def destroy(self):
+        self.calls.append("destroy")
+
+
 def test_on_mouse_registers_and_clears_handlers():
     interpreter = _make_mouse_test_interpreter()
 
@@ -8879,6 +8893,69 @@ def test_screen_close_releases_graphics_window_reference():
 
     assert stub.calls == ["reset", "close"]
     assert interpreter.graphics_window is None
+
+
+def test_graphics_window_close_requests_interrupt_while_program_running():
+    gw = GraphicsWindow.__new__(GraphicsWindow)
+    gw.closed = False
+    gw.close_requested = False
+    gw.tk_image = object()
+    gw.root = _RootCloseStub()
+    gw._basic = SimpleNamespace(running=True, _pause_active=False)
+
+    gw.on_close()
+
+    assert gw.close_requested is True
+    assert gw.closed is False
+    assert gw.root.calls == ["withdraw", "update"]
+
+
+def test_graphics_window_force_close_destroys_window():
+    gw = GraphicsWindow.__new__(GraphicsWindow)
+    gw.closed = False
+    gw.close_requested = True
+    gw.tk_image = object()
+    gw.root = _RootCloseStub()
+    gw._basic = SimpleNamespace(running=True, _pause_active=False)
+
+    gw.on_close(force=True)
+
+    assert gw.close_requested is False
+    assert gw.closed is True
+    assert gw.tk_image is None
+    assert gw.root.calls == ["withdraw", "update", "destroy"]
+
+
+def test_pump_graphics_window_raises_keyboard_interrupt_when_close_requested(monkeypatch):
+    interpreter = _make_mouse_test_interpreter()
+    stub = SimpleNamespace(closed=False, close_requested=False, root=object())
+    interpreter.graphics_window = stub
+
+    def fake_scan(_root, *, sleep_when_idle=False, flags=None):
+        stub.close_requested = True
+        return 1
+
+    monkeypatch.setattr("basic._scan_gui_once", fake_scan)
+
+    with pytest.raises(KeyboardInterrupt):
+        interpreter._pump_graphics_window(None)
+
+
+def test_service_graphics_window_after_frame_raises_keyboard_interrupt_when_close_requested(monkeypatch):
+    interpreter = _make_mouse_test_interpreter()
+    stub = SimpleNamespace(closed=False, close_requested=False, root=object())
+    interpreter.graphics_window = stub
+
+    def fake_scan(_root, *, sleep_when_idle=False, flags=None):
+        stub.close_requested = True
+        return 1
+
+    monkeypatch.setattr("basic._scan_gui_once", fake_scan)
+
+    with pytest.raises(KeyboardInterrupt):
+        interpreter._service_graphics_window_after_frame()
+
+    assert interpreter._last_frame_presented > 0.0
 
 
 def test_tk_event_to_key_codes_maps_special_and_alpha_keys():
