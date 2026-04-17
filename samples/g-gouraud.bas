@@ -36,9 +36,9 @@
 275     FY=2*Y*EXP(1-X*X-Y*Y)*(3-(X*X+3*Y*Y))
 280     NXV=-FX : NYV=-FY : NZV=1
 285     LNG=SQR(NXV*NXV+NYV*NYV+1)
-290     DOT=(NXV*LX+NYV*LY+NZV*LZ)/LNG
-295     IF DOT<0 THEN DOT=0
-300     VI(I,J)=INT((LUZAMB+LUZGAN*DOT)*255) 'Intensity (brightness)
+290     DT=(NXV*LX+NYV*LY+NZV*LZ)/LNG
+295     IF DT<0 THEN DT=0
+300     VI(I,J)=INT((LUZAMB+LUZGAN*DT)*255) 'Intensity (brightness)
 305     IF VI(I,J)>255 THEN VI(I,J)=255
 310     VX(I,J)=X : VY(I,J)=Y : VZ(I,J)=Z
 315     IF Z<ZMIN THEN ZMIN=Z

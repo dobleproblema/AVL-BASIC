@@ -908,13 +908,13 @@ Salida esperada
 8.1 Ejecución, pausa y reanudación (RUN · STOP · CONT · END · CTRL+C)
 
 + STOP                  Detiene la ejecución manteniendo el estado (línea actual, pilas y variables). Permite reanudar con `CONT` desde el punto donde se detuvo o, con `GOTO n`, desde cualquier línea.
-+ CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar  el valor de variables o ejecutar instrucciones en modo inmediato.
++ CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
 + END                   Finaliza el programa. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 45) porque no hay ejecución pendiente que continuar.
 + RUN [numlin]          Si se incluye el número de línea, el programa se ejecuta desde esa línea.
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
-- CTRL+C interrumpe la ejecución de forma equivalente a `STOP`; también se puede reanudar con `CONT` sin perder el estado.
+- CTRL+C interrumpe la ejecución de forma equivalente a `STOP`; también se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
 
 8.2 Procesamiento de errores
 
@@ -1041,7 +1041,7 @@ RENUM 1000,10,500 'Renumera solo el bloque a partir de la línea 500.
 
 9.3 Otras utilidades inmediatas
 
-+ `RUN n`                              Ejecuta desde la línea `n` con arranque limpio (variables reiniciadas). Usa `CONT` para continuar tras `STOP` o CTRL+C.
++ `RUN n`                              Ejecuta desde la línea `n` con arranque limpio (variables reiniciadas). Usa `CONT` para continuar tras `STOP` o `CTRL+C` cuando el contexto de ejecución siga siendo reanudable.
 + `RUN "prog.bas"`                     Carga y ejecuta el programa indicado (arranque limpio).
 + `FILES "patrón"` | `CAT "patrón"`    Lista el contenido del directorio virtual actual.
 + `CD "ruta"`                          Cambia el directorio virtual actual dentro de la raíz del intérprete.
@@ -1078,7 +1078,7 @@ Notas
 - Ese directorio del programa solo sirve para resolver rutas relativas usadas desde dentro del programa, por ejemplo en `BLOAD/BSAVE` y en `CHAIN/MERGE` ejecutados por el propio programa. No modifica el `CD` actual.
 - `MERGE` y `CHAIN MERGE` no cambian el directorio del programa ya asociado.
 - Si el programa actual no proviene de un fichero cargado desde disco, las rutas relativas usadas dentro del programa se resuelven desde el directorio virtual actual.
-- Para continuar tras `STOP` o CRTL+C, usa `CONT`.
+- Para continuar tras `STOP` o `CTRL+C`, usa `CONT`. Si la interrupción vino de cerrar una ventana gráfica, `CONT` no es válido.
 
 10. Funciones integradas
 

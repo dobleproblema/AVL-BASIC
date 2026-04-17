@@ -15,6 +15,7 @@ from basic import (
     GraphicsWindow,
     DirtyGrid,
     BasicInterpreter,
+    ErrorCode,
     KEYWORD_STYLE,
     VARIABLE_STYLE,
     RESET,
@@ -8800,6 +8801,22 @@ class _RootCloseStub:
         self.calls.append("destroy")
 
 
+class _PendingCloseWindowStub:
+    def __init__(self, *, close_requested=False):
+        self.closed = False
+        self.close_requested = close_requested
+        self.force_close_calls = []
+
+    def update_canvas(self):
+        pass
+
+    def on_close(self, *, force=False):
+        self.force_close_calls.append(force)
+        if force:
+            self.close_requested = False
+            self.closed = True
+
+
 def test_on_mouse_registers_and_clears_handlers():
     interpreter = _make_mouse_test_interpreter()
 
@@ -8877,6 +8894,10 @@ def test_mouse_command_toggles_cursor_visibility():
     assert interpreter._mouse_cursor_visible_requested is True
     assert stub.calls[-1] is True
 
+    interpreter.execute_command('MOUSE OFF')
+    assert interpreter._mouse_cursor_visible_requested is False
+    assert stub.calls[-1] is False
+
 
 def test_mouse_command_rejects_invalid_visibility_value():
     interpreter = _make_mouse_test_interpreter()
@@ -8908,6 +8929,98 @@ def test_graphics_window_close_requests_interrupt_while_program_running():
     assert gw.close_requested is True
     assert gw.closed is False
     assert gw.root.calls == ["withdraw", "update"]
+
+
+def test_run_program_fallthrough_clears_running_before_window_close():
+    interpreter = BasicInterpreter()
+    interpreter.add_program_line("10 REM done")
+
+    gw = GraphicsWindow.__new__(GraphicsWindow)
+    gw.closed = False
+    gw.close_requested = False
+    gw.tk_image = object()
+    gw.root = _RootCloseStub()
+    gw._basic = interpreter
+    gw.update_canvas = lambda: None
+    interpreter.graphics_window = gw
+
+    interpreter.run_program()
+    assert interpreter.running is False
+
+    gw.on_close()
+
+    assert gw.close_requested is False
+    assert gw.closed is True
+    assert gw.root.calls == ["withdraw", "update", "destroy"]
+
+
+def test_execute_cont_resumes_only_when_marked_resumable():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.running = False
+    interpreter.stopped = True
+    interpreter._cont_allowed = True
+    interpreter.current_line = 0
+
+    calls = []
+    interpreter.run_program = lambda *args, **kwargs: calls.append((args, kwargs))
+
+    interpreter.execute_cont()
+
+    assert interpreter.running is True
+    assert interpreter._cont_allowed is False
+    assert calls == [((), {"start_line_or_filename": 100, "clean": False})]
+
+
+def test_execute_cont_rejects_non_resumable_stopped_program():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.running = False
+    interpreter.stopped = True
+    interpreter._cont_allowed = False
+    interpreter.current_line = 0
+
+    calls = []
+    errors = []
+    interpreter.run_program = lambda *args, **kwargs: calls.append((args, kwargs))
+    interpreter.handle_error = lambda code, only_message=False: errors.append((code, only_message))
+
+    interpreter.execute_cont()
+
+    assert calls == []
+    assert errors == [(ErrorCode.NO_STOPPED_PROGRAM, True)]
+
+
+def test_run_program_keyboard_interrupt_from_window_close_disables_cont():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.program = {100: {'code': 'PRINT 1'}}
+    interpreter.line_numbers = [100]
+    interpreter._line_to_index = {100: 0}
+    interpreter.graphics_window = _PendingCloseWindowStub(close_requested=True)
+    interpreter.execute_command = lambda _cmd, is_program=True: (_ for _ in ()).throw(KeyboardInterrupt)
+
+    interpreter.run_program()
+
+    assert interpreter.running is False
+    assert interpreter.stopped is True
+    assert interpreter._cont_allowed is False
+    assert interpreter.graphics_window.force_close_calls == [True]
+    assert interpreter.graphics_window.closed is True
+
+
+def test_run_program_keyboard_interrupt_without_window_close_keeps_cont_available():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.program = {100: {'code': 'PRINT 1'}}
+    interpreter.line_numbers = [100]
+    interpreter._line_to_index = {100: 0}
+    interpreter.graphics_window = _PendingCloseWindowStub(close_requested=False)
+    interpreter.execute_command = lambda _cmd, is_program=True: (_ for _ in ()).throw(KeyboardInterrupt)
+
+    interpreter.run_program()
+
+    assert interpreter.running is False
+    assert interpreter.stopped is True
+    assert interpreter._cont_allowed is True
+    assert interpreter.graphics_window.force_close_calls == []
+    assert interpreter.graphics_window.closed is False
 
 
 def test_graphics_window_force_close_destroys_window():
@@ -9728,6 +9841,18 @@ def test_syntax_highlight_does_not_treat_array_rom_functions_as_variables():
     assert variable_amaxcol not in highlighted
     assert variable_dot not in highlighted
     assert variable_x in highlighted
+
+
+def test_syntax_highlight_treats_mouse_off_as_reserved_word():
+    highlighted = syntax_highlight('10 MOUSE OFF')
+
+    keyword_mouse = f'{KEYWORD_STYLE}MOUSE{RESET}'
+    keyword_off = f'{KEYWORD_STYLE}OFF{RESET}'
+    variable_off = f'{VARIABLE_STYLE}OFF{RESET}'
+
+    assert keyword_mouse in highlighted
+    assert keyword_off in highlighted
+    assert variable_off not in highlighted
 
 
 def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):

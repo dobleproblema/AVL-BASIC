@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.6"
+__version__ = "1.5.7"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -575,7 +575,7 @@ _FAST_EXPR_CACHE_MISS = object()
 RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', 'MAT', 'ROW',
                   'COL', 'BASE', 'USING', 'INPUT', 'LINE', 'RANDOMIZE', 'ERROR', 'GOTO',
                   'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'NEXT', 'STEP', 
-                  'RETURN', 'GOSUB', 'ON', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'FNEXIT', 'CALL', 'LOCAL',
+                  'RETURN', 'GOSUB', 'ON', 'OFF', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'FNEXIT', 'CALL', 'LOCAL',
                   'READ', 'RESTORE', 'STOP', 'END',
                   'SAVE', 'LOAD', 'EDIT', 'RENUM', 'NEW', 'WHILE', 'WEND', 'LIST',
                   'RUN', 'CONT', 'RESUME', 'TRON', 'TROFF', 'FILES', 'CAT', 'CD', 'DELETE',
@@ -4916,6 +4916,7 @@ class BasicInterpreter:
         self.immediate_current_line = None  # Current line for execution
         self.running = False  # Execution state
         self.stopped = False # Whether the STOP instruction has been executed
+        self._cont_allowed = False  # CONT is valid only after resumable stops/interruption
         self.while_stack = []  # Stack used to handle WHILE-WEND
         self.for_stack = []  # Stack used to handle FOR-NEXT
         self.immediate_while_stack = []  # Stack used to handle WHILE-WEND
@@ -5332,6 +5333,7 @@ class BasicInterpreter:
         self.expression_cache.clear()
         self.current_line = None
         self.running = False
+        self._cont_allowed = False
         self.while_skip = False
         self.for_skip = False
         self.error_handler_line = None
@@ -7313,6 +7315,10 @@ class BasicInterpreter:
             raise ReturnMain
         except KeyboardInterrupt:
             # Handle CTRL+C cleanly
+            window_close_interrupt = bool(
+                self.graphics_window is not None
+                and getattr(self.graphics_window, "close_requested", False)
+            )
             if not self.in_error_handler:
                 _flush_console_input()
                 self.handle_error(ErrorCode.KEYBOARD_INTERRUPT, only_message=True)
@@ -7320,6 +7326,7 @@ class BasicInterpreter:
                 # If you are already handling an error, simply stop execution
                 self.handle_error(ErrorCode.HANDLER_ERROR, only_message=True)
             self.running = False
+            self._cont_allowed = not window_close_interrupt
             self._finalize_pending_graphics_close()
             return
         except Exception as e:
@@ -7338,8 +7345,9 @@ class BasicInterpreter:
         It may only be used after STOP or an interruption.
         It does not clear variables or stacks.
         """
-        if not self.running and self.stopped and self.current_line is not None and self.current_line < len(self.line_numbers):
+        if not self.running and self.stopped and self._cont_allowed and self.current_line is not None and self.current_line < len(self.line_numbers):
             self.running = True
+            self._cont_allowed = False
             self.run_program(start_line_or_filename=self.line_numbers[self.current_line], clean=False)
         else:
             self.handle_error(ErrorCode.NO_STOPPED_PROGRAM, only_message=True)
@@ -7384,6 +7392,7 @@ class BasicInterpreter:
             
             self.running = True
             self.stopped = False
+            self._cont_allowed = False
             self.last_next = False
             self.last_wend = False
             self.for_skip = False
@@ -7566,6 +7575,10 @@ class BasicInterpreter:
                     raise ReturnMain
                 except KeyboardInterrupt:
                     # Handle CTRL+C cleanly
+                    window_close_interrupt = bool(
+                        self.graphics_window is not None
+                        and getattr(self.graphics_window, "close_requested", False)
+                    )
                     _flush_console_input()
                     if not self.in_error_handler:
                         self.handle_error(ErrorCode.KEYBOARD_INTERRUPT, only_message=True)
@@ -7574,6 +7587,7 @@ class BasicInterpreter:
                         self.handle_error(ErrorCode.HANDLER_ERROR, only_message=True)
                     self.running = False
                     self.stopped = True
+                    self._cont_allowed = not window_close_interrupt
                     self._finalize_pending_graphics_close()
                     break
                 except Exception as e:
@@ -7589,6 +7603,8 @@ class BasicInterpreter:
                 if start_idx is not None:
                     self.current_line = start_idx
                 self.handle_error(ErrorCode.IF_WITH_NO_ENDIF)
+            elif self.running and self.current_line >= len(self.line_numbers):
+                self.running = False
         finally:
             if self.graphics_window is not None and not self.graphics_window.closed:
                 self.graphics_window.update_canvas()   
@@ -9028,6 +9044,7 @@ class BasicInterpreter:
             elif first_word == 'STOP':
                 self.running = False
                 self.stopped = True
+                self._cont_allowed = True
             elif first_word == 'END':
                 if len(args) > 0:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)

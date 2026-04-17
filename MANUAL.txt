@@ -908,13 +908,13 @@ Expected output
 8.1 Execution and resumption (`RUN` - `STOP` - `CONT` - `END` - `CTRL+C`)
 
 + STOP                  Stops execution while keeping the state (current line, stacks and variables). It can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
-+ CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode.
++ CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. If the interruption was caused by closing a graphics window, `CONT` is not available.
 + END                   Ends the program. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 45) because there is no pending execution to continue.
 + RUN [line]            If a line number is included, the program runs from that line.
 
 Notes
 - `RUN` starts execution with a clean start (state reset). Use `CONT` or `GOTO n` only when you have stopped with `STOP`/`CTRL+C` and want to continue without restarting.
-- `CTRL+C` interrupts execution in the same way as `STOP`; it can also be resumed with `CONT` without losing state.
+- `CTRL+C` interrupts execution in the same way as `STOP`; it can also be resumed with `CONT` without losing state, except when that interruption was triggered by closing a graphics window.
 
 8.2 Error handling
 
@@ -1041,7 +1041,7 @@ RENUM 1000,10,500 'Renumbers only the block from line 500 onward.
 
 9.3 Other immediate utilities
 
-+ `RUN n`                              Executes from line `n` with a clean start (variables reset). Use `CONT` to continue after `STOP` or `CTRL+C`.
++ `RUN n`                              Executes from line `n` with a clean start (variables reset). Use `CONT` to continue after `STOP` or `CTRL+C` when the execution context is still resumable.
 + `RUN "prog.bas"`                     Loads and runs the indicated program (clean start).
 + `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
 + `CD "path"`                          Changes the current virtual directory within the interpreter root.
@@ -1078,7 +1078,7 @@ Notes
 - That program directory is used only to resolve relative paths used from inside the program, for example in `BLOAD/BSAVE` and in `CHAIN/MERGE` executed by the program itself. It does not modify the current `CD`.
 - `MERGE` and `CHAIN MERGE` do not change the already associated program directory.
 - If the current program does not come from a file loaded from disk, relative paths used inside the program are resolved from the current virtual directory.
-- To continue after `STOP` or `CTRL+C`, use `CONT`.
+- To continue after `STOP` or `CTRL+C`, use `CONT`. If the interruption came from closing a graphics window, `CONT` is not valid.
 
 10. Built-in functions
 
