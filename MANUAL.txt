@@ -243,6 +243,7 @@ Detailed notes (`MAT BASE`)
 
 Detailed notes (`MAT PRINT`)
 - Each entry may be written as `A`, `ROW A` or `COL A`; `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
+- `MAT PRINT` only accepts array references in those forms; it does not accept expressions such as `TRN(A)` or `A+B`. To print a computed result first assign it with `MAT B = ...` and then print `B`.
 - `USING` uses the same masks as `PRINT USING`. With `;`, spaces are inserted between columns; with `,`, each field occupies 22 characters.
 - With no arguments, it prints a blank line.
 

@@ -242,6 +242,7 @@ Notas detalladas (`MAT BASE`)
 
 Notas detalladas (`MAT PRINT`)
 - Cada entrada puede escribirse como `A`, `ROW A` o `COL A`; `ROW` muestra la matriz por filas normalmente (es el valor implícito), `COL` transpone la matriz para mostrar las columnas como filas y viceversa.
+- `MAT PRINT` solo acepta referencias de array en esas formas; no admite expresiones como `TRN(A)` o `A+B`. Para imprimir un resultado calculado, asígnalo antes con `MAT B = ...` y luego imprime `B`.
 - `USING` emplea las mismas máscaras que `PRINT USING`. Con `;` se insertan espacios entre columnas; con `,` cada campo ocupa 22 caracteres.
 - Sin argumentos imprime una línea en blanco.
 

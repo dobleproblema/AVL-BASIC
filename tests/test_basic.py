@@ -9855,6 +9855,32 @@ def test_syntax_highlight_treats_mouse_off_as_reserved_word():
     assert variable_off not in highlighted
 
 
+def test_mat_print_rejects_transpose_expression(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DIM A(1,1)',
+        '20 MAT PRINT TRN(A)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 20. Expression not allowed.' in output
+
+
+def test_mat_print_rejects_matrix_expression(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DIM A(1,1),B(1,1)',
+        '20 MAT PRINT A+B',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert 'Line 20. Expression not allowed.' in output
+
+
 def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):
     commands = [
         'NEW',

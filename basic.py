@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.7"
+__version__ = "1.5.8"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -14977,6 +14977,10 @@ class BasicInterpreter:
 
                 if not array_name:
                     self.handle_error(ErrorCode.SYNTAX_ERROR)
+                    return
+
+                if not is_valid_simple_varname(array_name):
+                    self.handle_error(ErrorCode.FORBIDDEN_EXPRESION)
                     return
 
                 array_entries.append((orientation, array_name.upper(), sep))
