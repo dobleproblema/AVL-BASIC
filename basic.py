@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.8"
+__version__ = "1.5.9"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -13139,9 +13139,17 @@ class BasicInterpreter:
         assignments = []
         current = []
         i = v = 0
+        paren_level = 0
+        in_quotes = False
         while i < len(expr):
             char = expr[i]
-            if char == '=':
+            if char == '"':
+                in_quotes = not in_quotes
+            elif char == '(' and not in_quotes:
+                paren_level += 1
+            elif char == ')' and not in_quotes and paren_level > 0:
+                paren_level -= 1
+            if char == '=' and not in_quotes and paren_level == 0:
                 part = ''.join(current).strip()
                 if VARIABLE_AND_ARRAY_REGEX.match(part):
                     assignments.append(part)

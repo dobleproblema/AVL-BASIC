@@ -9881,6 +9881,52 @@ def test_mat_print_rejects_matrix_expression(run_basic_interpreter):
     assert 'Line 20. Expression not allowed.' in output
 
 
+def test_chained_assignment_uses_comparisons_only_in_rhs_context(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 B=7',
+        '20 A=7=7',
+        '30 C=(B=7)',
+        '40 B=1',
+        '50 D=B-1=0',
+        '60 B=2',
+        '70 E=(B=7)',
+        '80 F=B-1=0',
+        '90 PRINT A;C;D;E;F',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n-1 -1 -1  0  0\n' in output
+
+
+def test_chained_assignment_accepts_comparisons_inside_array_indices(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DIM A(10)',
+        '20 B=0',
+        '30 A(B=7)=1',
+        '40 PRINT A(0);A(1)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1  0\n' in output
+
+
+def test_immediate_assignment_accepts_comparisons_inside_array_indices():
+    interpreter = BasicInterpreter()
+
+    interpreter.execute_command('DIM A(10)')
+    interpreter.execute_command('B=0')
+    interpreter.execute_command('A(B=7)=1')
+
+    assert interpreter.evaluate_expression('A(0)') == 1
+    assert interpreter.evaluate_expression('A(1)') == 0
+
+
 def test_tron_traces_error_handler_inside_multiline_subroutine(run_basic_interpreter):
     commands = [
         'NEW',
