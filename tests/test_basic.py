@@ -9884,6 +9884,24 @@ def test_syntax_highlight_uses_keyword_style_for_subroutine_names():
     assert variable_other not in highlighted_if_call
 
 
+def test_syntax_highlight_uses_keyword_style_for_function_control_words():
+    highlighted_def = syntax_highlight('10 DEF FN F(X)')
+    highlighted_exit = syntax_highlight('20 EXIT FN')
+    highlighted_end = syntax_highlight('30 FNEND')
+
+    keyword_fn = f'{KEYWORD_STYLE}FN{RESET}'
+    keyword_fnend = f'{KEYWORD_STYLE}FNEND{RESET}'
+    variable_fn = f'{VARIABLE_STYLE}FN{RESET}'
+    variable_fnend = f'{VARIABLE_STYLE}FNEND{RESET}'
+
+    assert keyword_fn in highlighted_def
+    assert keyword_fn in highlighted_exit
+    assert keyword_fnend in highlighted_end
+    assert variable_fn not in highlighted_def
+    assert variable_fn not in highlighted_exit
+    assert variable_fnend not in highlighted_end
+
+
 def test_syntax_highlight_does_not_treat_array_rom_functions_as_variables():
     highlighted = syntax_highlight('10 PRINT AMAXCOL: X=DOT(V1,V2): X=5')
 

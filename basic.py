@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.10"
+__version__ = "1.5.11"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -575,7 +575,7 @@ _FAST_EXPR_CACHE_MISS = object()
 RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', 'MAT', 'ROW',
                   'COL', 'BASE', 'USING', 'INPUT', 'LINE', 'RANDOMIZE', 'ERROR', 'GOTO',
                   'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'NEXT', 'STEP', 
-                  'RETURN', 'GOSUB', 'ON', 'OFF', 'DEF', 'SUB', 'SUBEND', 'SUBEXIT', 'FNEXIT', 'CALL', 'LOCAL',
+                  'RETURN', 'GOSUB', 'ON', 'OFF', 'DEF', 'FN', 'FNEND', 'FNEXIT', 'SUB', 'SUBEND', 'SUBEXIT', 'CALL', 'LOCAL',
                   'READ', 'RESTORE', 'STOP', 'END',
                   'SAVE', 'LOAD', 'EDIT', 'RENUM', 'NEW', 'WHILE', 'WEND', 'LIST',
                   'RUN', 'CONT', 'RESUME', 'TRON', 'TROFF', 'FILES', 'CAT', 'CD', 'DELETE',
