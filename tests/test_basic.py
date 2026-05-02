@@ -9621,6 +9621,46 @@ def test_multiline_function_fnexit_alias_stops_execution_early(run_basic_interpr
     assert '\n 9\n' not in output
 
 
+def test_while_evaluates_zero_arg_function_without_parentheses(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNZERO',
+        '20 FNZERO=0',
+        '30 FNEND',
+        '40 C=0',
+        '50 WHILE FNZERO=0',
+        '60 C=C+1',
+        '70 IF C=2 THEN EXIT WHILE',
+        '80 WEND',
+        '90 PRINT C',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 2\n' in output
+
+
+def test_while_not_evaluates_zero_arg_function_without_parentheses(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF FNFALSE',
+        '20 FNFALSE=0',
+        '30 FNEND',
+        '40 C=0',
+        '50 WHILE NOT FNFALSE',
+        '60 C=C+1',
+        '70 IF C=2 THEN EXIT WHILE',
+        '80 WEND',
+        '90 PRINT C',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 2\n' in output
+
+
 def test_exit_for_discards_nested_while_state(run_basic_interpreter):
     commands = [
         'NEW',

@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.11"
+__version__ = "1.5.12"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -11186,6 +11186,11 @@ class BasicInterpreter:
         if not condition:
             self.handle_error(ErrorCode.SYNTAX_ERROR)
             return
+        if self.zero_arg_functions:
+            try:
+                condition = self._fix_zero_arg_calls(condition)
+            except Exception:
+                pass
         
         # Current stack and position references
         if self.running:
