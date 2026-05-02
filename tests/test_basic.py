@@ -17,6 +17,7 @@ from basic import (
     BasicInterpreter,
     ErrorCode,
     KEYWORD_STYLE,
+    NUMBER_STYLE,
     VARIABLE_STYLE,
     RESET,
     ReturnMain,
@@ -9652,6 +9653,27 @@ def test_exit_for_same_line_continues_after_matching_next(run_basic_interpreter)
     assert '\n 1\n 9\n' in output
 
 
+def test_exit_for_inside_multiline_if_discards_if_state(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 FOR I=1 TO 1',
+        '20 FOR J=1 TO 3',
+        '30 IF J=2 THEN',
+        '40 PRINT J',
+        '50 EXIT FOR',
+        '60 ENDIF',
+        '70 NEXT J',
+        '80 NEXT I',
+        '90 PRINT 9',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 2\n 9\n' in output
+    assert 'IF without matching END IF.' not in output
+
+
 def test_exit_while_discards_nested_for_state(run_basic_interpreter):
     commands = [
         'NEW',
@@ -9670,6 +9692,25 @@ def test_exit_while_discards_nested_for_state(run_basic_interpreter):
     assert '\n 1\n 9\n' in output
     assert 'WEND without WHILE.' not in output
     assert 'NEXT without FOR.' not in output
+
+
+def test_exit_while_inside_multiline_if_discards_if_state(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 WHILE 1',
+        '20 IF 1 THEN',
+        '30 PRINT 1',
+        '40 EXIT WHILE',
+        '50 ENDIF',
+        '60 WEND',
+        '70 PRINT 9',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 1\n 9\n' in output
+    assert 'IF without matching END IF.' not in output
 
 
 def test_deleting_multiline_function_definition_line_invalidates_runtime_metadata():
@@ -9807,6 +9848,22 @@ def test_call_is_not_allowed_inside_multiline_function(run_basic_interpreter):
     assert 'Line 20. Instruction not allowed inside a function.' in output
 
 
+def test_inf_constant_is_available_in_compound_expressions(run_basic_interpreter):
+    commands = [
+        'PRINT INF',
+        'PRINT 1<INF',
+        'PRINT 0>-INF',
+        'PRINT INF+1',
+        'PRINT SQR(INF)',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n inf\n' in output
+    assert output.count('\n-1\n') == 2
+    assert output.count('Numeric overflow.') == 2
+
+
 def test_syntax_highlight_uses_keyword_style_for_subroutine_names():
     highlighted_def = syntax_highlight('10 DEF SUB POINT(X)')
     highlighted_call = syntax_highlight('20 CALL POINT()')
@@ -9841,6 +9898,16 @@ def test_syntax_highlight_does_not_treat_array_rom_functions_as_variables():
     assert variable_amaxcol not in highlighted
     assert variable_dot not in highlighted
     assert variable_x in highlighted
+
+
+def test_syntax_highlight_treats_inf_like_pi_not_as_number_or_variable():
+    highlighted = syntax_highlight('10 FOR X=1 TO inf')
+
+    number_inf = f'{NUMBER_STYLE}INF{RESET}'
+    variable_inf = f'{VARIABLE_STYLE}INF{RESET}'
+
+    assert number_inf not in highlighted
+    assert variable_inf not in highlighted
 
 
 def test_syntax_highlight_treats_mouse_off_as_reserved_word():

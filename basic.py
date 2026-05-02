@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.9"
+__version__ = "1.5.10"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -607,6 +607,7 @@ FUNCTIONS = ('ABS', 'INT', 'FIX', 'SGN', 'LEN', 'LBOUND', 'FRAC', 'SGN', 'SQR', 
             )
 
 PRINT_FUNCTIONS = frozenset({'SPC', 'TAB'})
+NUMERIC_CONSTANTS = frozenset({'INF'})
 
 RESERVED_WORDS = frozenset(RESERVED_WORDS)
 FUNCTIONS = frozenset(FUNCTIONS)
@@ -621,8 +622,8 @@ MARKERS = [f"_{i}_" for i in range(128)]  # 128 should be more than enough
 _FUN_DISPATCH: dict[str, callable] = {}
 
 KEYWORDS = frozenset(RESERVED_WORDS)
-FUNCTIONS_OPERATORS = FUNCTIONS | PRINT_FUNCTIONS | OPERATORS
-NORM_RESERVED = frozenset(word.rstrip('$') for word in RESERVED_WORDS | FUNCTIONS | PRINT_FUNCTIONS | OPERATORS)
+FUNCTIONS_OPERATORS = FUNCTIONS | PRINT_FUNCTIONS | OPERATORS | NUMERIC_CONSTANTS
+NORM_RESERVED = frozenset(word.rstrip('$') for word in RESERVED_WORDS | FUNCTIONS | PRINT_FUNCTIONS | OPERATORS | NUMERIC_CONSTANTS)
 
 MAX_VAR_BASE_LEN = 32
 _VAR_BODY_PATTERN = rf'[A-Z][A-Z0-9]{{0,{MAX_VAR_BASE_LEN - 1}}}'
@@ -1725,6 +1726,7 @@ allowed_names_original = {
     "spc": lambda x: ' ' * int(x),
     "tab": lambda x: (sys.stdout.write(f'\033[{int(x + .5)}G'), '')[-1] if ANSI_ENABLED else ' ' * int(x),
     "__CHR": lambda x: chr(int(x)),
+    "inf": math.inf,
 }
 
 allowed_names = allowed_names_original.copy()
@@ -7794,6 +7796,7 @@ class BasicInterpreter:
 
             self._discard_loops_from_position(target_loop.line, target_loop.command_index)
             target_line, target_cmd = target
+            self._sync_if_stack_to_line_index(target_line)
             if target_line != line_idx:
                 self.current_line = target_line
                 self.current_command_index = target_cmd + 1

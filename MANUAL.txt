@@ -1088,7 +1088,7 @@ Zero-argument functions are used without parentheses.
 Numeric and conversions
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP |
-+ SIN | COS | TAN | ASN | ACS | ATN | COT | PI
++ SIN | COS | TAN | ASN | ACS | ATN | COT | PI | INF
 + RND
 + TIME
 + MIN | MAX
@@ -1111,6 +1111,7 @@ Clarifying notes for some functions
   * Examples: `ROUND(2.5)` -> 3; `ROUND(-2.5)` -> -3; `ROUND(1234.5678,3)` -> 1234.568; `ROUND(1234.5678,-2)` -> 1200.
 - `MIN(x1[,x2[,...]])`: returns the smallest value among one or more numeric arguments. Example: `MIN(3,1,2.5,-7)` -> -7.
 - `MAX(x1[,x2[,...]])`: returns the largest value among one or more numeric arguments. Example: `MAX(3,1,2.5,-7)` -> 3.
+- `INF`: positive-infinity constant. It is useful for open-ended limits such as `FOR X=0 TO INF`; operations that produce a non-finite real still report numeric overflow.
 - `INSTR([start,] string, substring)`:
   * Returns the position (1-based) of the first occurrence of `substring` in `string`, or 0 if not found.
   * With 2 arguments it searches from the first character.

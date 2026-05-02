@@ -1088,7 +1088,7 @@ Las de cero argumentos se usan sin paréntesis.
 Numéricas y conversiones
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP | 
-+ SIN | COS | TAN | ASN | ACS | ATN | COT | PI
++ SIN | COS | TAN | ASN | ACS | ATN | COT | PI | INF
 + RND 
 + TIME
 + MIN | MAX
@@ -1111,6 +1111,7 @@ Notas aclaratorias para algunas funciones
   • Ejemplos: `ROUND(2.5)` -> 3; `ROUND(-2.5)` -> -3; `ROUND(1234.5678,3)` -> 1234.568; `ROUND(1234.5678,-2)` -> 1200.
 - MIN(x1[,x2[,...]]): devuelve el menor valor de 1 o mas argumentos numericos. Ej.: `MIN(3,1,2.5,-7)` -> -7.
 - MAX(x1[,x2[,...]]): devuelve el mayor valor de 1 o mas argumentos numericos. Ej.: `MAX(3,1,2.5,-7)` -> 3.
+- INF: constante de infinito positivo. Es útil para límites abiertos como `FOR X=0 TO INF`; las operaciones que devuelvan un real no finito siguen dando desbordamiento numérico.
 - INSTR([inicio,] cadena, subcadena):
   • Devuelve la posicion (1-basada) de la primera aparicion de `subcadena` en `cadena`, o 0 si no se encuentra.
   • Con 2 argumentos busca desde el primer caracter.
