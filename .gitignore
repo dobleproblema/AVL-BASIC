@@ -7,3 +7,7 @@ __pycache__/
 .vscode/
 tools/bench_buffer_ops.py
 tools/bench_tk_render.py
+rust/target/
+rust/target_release_check/
+rust/oracle-out/
+rust/*.log

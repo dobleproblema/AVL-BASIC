@@ -4,73 +4,99 @@
   <img src="README.png" alt="AVL BASIC screenshot" width="900">
 </p>
 
-AVL BASIC is a classic-style BASIC interpreter written in pure Python.
+AVL BASIC is a classic-style BASIC system with line-numbered programs,
+immediate mode, structured control flow, matrix operations, sprites, mouse and
+keyboard input, and a complete built-in graphics environment.
 
-It is designed to be easy to copy, easy to run, and easy to learn:
+The project now ships two implementations of the same language:
 
-- Single-file interpreter: the core is just `basic.py`.
-- No package installation: you only need Python 3.8+ and Tkinter.
-- Classic feel: line numbers, immediate mode with syntax highlighting, `ON ERROR`, `MAT`, and more.
-- Built-in graphics: plotting, shapes, colors, sprites, screenshots, and mouse support.
-- Portable behavior: same interpreter on Windows, macOS, and Linux.
-- Plenty of interesting bundled examples in [`samples/`](samples/).
+| Implementation | Location | Role | Quick run |
+| --- | --- | --- | --- |
+| Rust | [`rust/`](rust/) | Recommended native runtime. It is much faster and suitable for daily use and distribution. | `cd rust && cargo run --release` |
+| Python | [`basic.py`](basic.py) | Reference implementation, compact educational interpreter, and compatibility oracle. | `python basic.py` |
 
-AVL BASIC aims to feel like a powerful but still reasonably standard old-school home-computer BASIC, implemented in a pragmatic modern way.
-
-
-## Why It Is Interesting
-
-AVL BASIC is not a package-heavy retro project. It is a self-contained interpreter that tries to preserve the immediacy of classic BASIC systems:
-
-- start it and type code straight away,
-- save programs as plain `.bas` files,
-- use graphics without external libraries beyond Tkinter,
-- distribute the interpreter as a single Python file.
-
-That makes it useful both as a nostalgic environment and as a compact educational interpreter.
+Both implementations share the same manual, samples, language version, and
+compatibility target. The Rust runtime is tested against the Python interpreter,
+including text regressions and framebuffer-level graphics parity cases.
 
 ## Quick Start
 
-Run the interpreter:
+Run the Rust interpreter:
+
+```bash
+cd rust
+cargo run --release
+```
+
+Run a bundled sample with Rust:
+
+```bash
+cd rust
+cargo run --release -- ../samples/g-cube2.bas
+```
+
+Run the Python reference implementation:
 
 ```bash
 python basic.py
-```
-
-Load and run a program directly:
-
-```bash
 python basic.py samples/g-cube2.bas
 ```
 
-Or browse the bundled samples from immediate mode:
+From immediate mode, the bundled examples can be browsed like this:
 
 ```basic
+CD "/"
 CD "samples"
 FILES "*.bas"
 RUN "g-cube2.bas"
 CD "/"
 ```
 
+## Why It Is Interesting
+
+AVL BASIC aims to preserve the immediacy of classic home-computer BASIC while
+adding a practical modern feature set:
+
+- plain `.bas` files and an interactive immediate mode,
+- syntax-preserving program editing and listing,
+- `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
+- graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
+- deterministic examples and regressions used to keep both runtimes aligned.
+
+The Python interpreter keeps the implementation easy to study. The Rust
+interpreter keeps the same behavior but runs native and is typically much
+faster, especially for graphics-heavy programs.
+
 ## Documentation
 
 - Full manual in English: [`MANUAL.txt`](MANUAL.txt)
 - Manual completo en español: [`MANUAL.es.txt`](MANUAL.es.txt)
+- Rust implementation notes: [`rust/README.md`](rust/README.md)
 - License: [`COPYING`](COPYING)
 
 ## Requirements
 
+Rust implementation:
+
+- Rust stable toolchain
+- Native desktop environment for the graphics window
+
+Python implementation:
+
 - Python 3.8 or later
 - Tkinter / Tk 8.6 or later
 
-Tkinter is included in the official Python distributions for Windows and macOS. On many Linux systems, you may need to install the `python3-tk` package separately.
+Tkinter is included in the official Python distributions for Windows and macOS.
+On many Linux systems, install the `python3-tk` package separately.
 
 ## Project Layout
 
-- [`basic.py`](basic.py): interpreter
-- [`basicfonts.py`](basicfonts.py): font-editing helper used to regenerate embedded bitmap fonts
-- [`samples/`](samples/): example BASIC programs
-- [`samples/assets/`](samples/assets/): image assets used by some samples
+- [`basic.py`](basic.py): Python reference interpreter
+- [`rust/`](rust/): Rust native interpreter and parity tools
+- [`samples/`](samples/): shared BASIC example programs
+- [`samples/assets/`](samples/assets/): shared image assets used by examples
+- [`tests/`](tests/): Python regression tests
+- [`MANUAL.txt`](MANUAL.txt), [`MANUAL.es.txt`](MANUAL.es.txt): shared language manuals
 
 ## License
 
