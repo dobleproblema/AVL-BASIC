@@ -22,6 +22,7 @@ from basic import (
     RESET,
     ReturnMain,
     _key_q,
+    _gui_key_q,
     _GUI_KEYSYM_TO_CODE,
     _tk_event_to_key_codes,
     big_bitmap_font,
@@ -9070,6 +9071,9 @@ def test_pump_graphics_window_raises_keyboard_interrupt_when_close_requested(mon
     interpreter = _make_mouse_test_interpreter()
     stub = SimpleNamespace(closed=False, close_requested=False, root=object())
     interpreter.graphics_window = stub
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = True
 
     def fake_scan(_root, *, sleep_when_idle=False, flags=None):
         stub.close_requested = True
@@ -9081,10 +9085,27 @@ def test_pump_graphics_window_raises_keyboard_interrupt_when_close_requested(mon
         interpreter._pump_graphics_window(None)
 
 
+def test_pump_graphics_window_closes_stale_unattached_window_without_interrupt():
+    interpreter = _make_mouse_test_interpreter()
+    stub = _PendingCloseWindowStub(close_requested=True)
+    stub.root = object()
+    interpreter.graphics_window = stub
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = False
+
+    assert interpreter._pump_graphics_window(None) is None
+    assert stub.force_close_calls == [True]
+    assert stub.closed is True
+
+
 def test_service_graphics_window_after_frame_raises_keyboard_interrupt_when_close_requested(monkeypatch):
     interpreter = _make_mouse_test_interpreter()
     stub = SimpleNamespace(closed=False, close_requested=False, root=object())
     interpreter.graphics_window = stub
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = True
 
     def fake_scan(_root, *, sleep_when_idle=False, flags=None):
         stub.close_requested = True
@@ -9145,10 +9166,29 @@ def test_keydown_reports_current_key_state(monkeypatch):
     interpreter = _make_mouse_test_interpreter()
     monkeypatch.setattr("basic._scan_gui_once", lambda *_args, **_kwargs: 0)
     interpreter.graphics_window = SimpleNamespace(closed=False, root=None)
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = True
     interpreter._set_keys_down({28})
 
     assert interpreter.evaluate_expression("KEYDOWN(28)") == -1
     assert interpreter.evaluate_expression("KEYDOWN(29)") == 0
+
+
+def test_keydown_ignores_stale_graphics_window_until_current_run_uses_it(monkeypatch):
+    interpreter = _make_mouse_test_interpreter()
+    monkeypatch.setattr("basic._scan_console_once", lambda: None)
+    interpreter.graphics_window = SimpleNamespace(closed=False, root=None)
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = False
+    interpreter._set_keys_down({28})
+    _key_q.clear()
+
+    try:
+        assert interpreter.evaluate_expression("KEYDOWN(28)") == 0
+    finally:
+        _key_q.clear()
 
 
 def test_keydown_rejects_invalid_code():
@@ -9162,16 +9202,19 @@ def test_keydown_rejects_invalid_code():
 def test_inkey_prefilled_queue_returns_character_instead_of_variable_name():
     interpreter = _make_mouse_test_interpreter()
     _key_q.clear()
+    _gui_key_q.clear()
     _key_q.append(ord("A"))
     try:
         assert interpreter.evaluate_expression("INKEY$") == "A"
     finally:
         _key_q.clear()
+        _gui_key_q.clear()
 
 
 def test_inkey_handles_quote_char_and_ctrl_c_from_prefilled_queue():
     interpreter = _make_mouse_test_interpreter()
     _key_q.clear()
+    _gui_key_q.clear()
     _key_q.append(34)  # '"'
     _key_q.append(3)   # Ctrl-C residual -> ignored as empty
     try:
@@ -9179,6 +9222,45 @@ def test_inkey_handles_quote_char_and_ctrl_c_from_prefilled_queue():
         assert interpreter.evaluate_expression("INKEY$") == ""
     finally:
         _key_q.clear()
+        _gui_key_q.clear()
+
+
+def test_inkey_uses_console_queue_until_current_run_uses_graphics_window():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.graphics_window = SimpleNamespace(closed=False, root=None)
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = False
+    _key_q.clear()
+    _gui_key_q.clear()
+    _gui_key_q.append(ord("G"))
+    _key_q.append(ord("C"))
+
+    try:
+        assert interpreter.evaluate_expression("INKEY$") == "C"
+        assert list(_gui_key_q) == [ord("G")]
+    finally:
+        _key_q.clear()
+        _gui_key_q.clear()
+
+
+def test_inkey_uses_graphics_queue_after_current_run_uses_graphics_window():
+    interpreter = _make_mouse_test_interpreter()
+    interpreter.graphics_window = SimpleNamespace(closed=False, root=None)
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = True
+    _key_q.clear()
+    _gui_key_q.clear()
+    _key_q.append(ord("C"))
+    _gui_key_q.append(ord("G"))
+
+    try:
+        assert interpreter.evaluate_expression("INKEY$") == "G"
+        assert list(_key_q) == [ord("C")]
+    finally:
+        _key_q.clear()
+        _gui_key_q.clear()
 
 
 def test_gui_special_keysym_mapping_for_inkey_contains_arrow_keys():

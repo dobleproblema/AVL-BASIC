@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.15"
+__version__ = "1.5.16"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -1206,6 +1206,7 @@ def _silence_kbint_on_shutdown(hook_args):
 sys.unraisablehook = _silence_kbint_on_shutdown
 
 _key_q = deque()
+_gui_key_q = deque()
 
 # Control codes for GUI INKEY$ (keys without event.char).
 # One-byte values are used so they can be read with ASC(INKEY$).
@@ -1276,6 +1277,7 @@ def _flush_console_input():
     """Deep-flush the console type-ahead buffer on Windows and POSIX."""
     # Internal INKEY$ queue
     _key_q.clear()
+    _gui_key_q.clear()
 
     # Low-level buffer
     if os.name == "nt":
@@ -2220,7 +2222,7 @@ class GraphicsWindow:
             else:
                 queued_code = _GUI_KEYSYM_TO_CODE.get(event.keysym)
             if queued_code is not None:
-                _key_q.append(queued_code)
+                _gui_key_q.append(queued_code)
 
         def on_key_release(event):
             codes = _tk_event_to_key_codes(event)
@@ -5004,16 +5006,46 @@ class BasicInterpreter:
         self._mouse_cursor_visible_requested = True
         self._last_frame_presented = 0.0
         self._last_frame_command_presented = 0.0
+        self._graphics_window_used_this_run = False
         self.graph_x_axis_range = None  # (xmin, xmax) of the last valid XAXIS
         self.graph_y_axis_range = None  # (ymin, ymax) of the last valid YAXIS
         self.graph_custom_range = None  # (xmin, xmax, ymin, ymax) from GRAPHRANGE
+
+    def _mark_graphics_window_used_by_current_run(self):
+        if self.running and self.current_line is not None:
+            self._graphics_window_used_this_run = True
+
+    def _prepare_graphics_window_use_by_current_run(self):
+        gw = self.graphics_window
+        if (
+            self.running
+            and self.current_line is not None
+            and not getattr(self, "_graphics_window_used_this_run", False)
+            and gw is not None
+            and not getattr(gw, "closed", False)
+            and getattr(gw, "close_requested", False)
+        ):
+            self._finalize_pending_graphics_close()
+        self._mark_graphics_window_used_by_current_run()
+
+    def _graphics_window_close_should_interrupt(self):
+        return bool(self.running and getattr(self, "_graphics_window_used_this_run", False))
+
+    def _current_run_uses_graphics_window(self):
+        return bool(self.running and self.current_line is not None and getattr(self, "_graphics_window_used_this_run", False))
+
+    def _handle_graphics_window_close_request(self):
+        if self._graphics_window_close_should_interrupt():
+            raise KeyboardInterrupt
+        self._finalize_pending_graphics_close()
 
     def _pump_graphics_window(self, next_poll_deadline: float | None):
         gw = self.graphics_window
         if gw is None or getattr(gw, "closed", False):
             return next_poll_deadline
         if getattr(gw, "close_requested", False):
-            raise KeyboardInterrupt
+            self._handle_graphics_window_close_request()
+            return next_poll_deadline
 
         now = time.monotonic()
         if not self._mouse_enabled:
@@ -5028,7 +5060,7 @@ class BasicInterpreter:
             except tk.TclError:
                 return now + _RUN_GUI_POLL_INTERVAL
             if getattr(gw, "close_requested", False):
-                raise KeyboardInterrupt
+                self._handle_graphics_window_close_request()
             return now + _RUN_GUI_POLL_INTERVAL
 
         return next_poll_deadline
@@ -5049,7 +5081,7 @@ class BasicInterpreter:
         except tk.TclError:
             return
         if getattr(gw, "close_requested", False):
-            raise KeyboardInterrupt
+            self._handle_graphics_window_close_request()
 
     def _record_frame_command_present(self, timestamp=None):
         self._last_frame_command_presented = time.monotonic() if timestamp is None else timestamp
@@ -5354,12 +5386,14 @@ class BasicInterpreter:
             self._keys_down.clear()
             self._mouse_enabled = False
             self._mouse_cursor_visible_requested = True
+        self._graphics_window_used_this_run = False
         self.for_stack.clear()
         self.while_stack.clear()
         self.gosub_stack.clear()
         self.immediate_for_stack.clear()
         self.immediate_while_stack.clear()
         self.if_block_stack = []
+        _gui_key_q.clear()
         self.last_gosub = True
         if graphics == True:
             if self.graphics_window is not None:
@@ -7250,6 +7284,7 @@ class BasicInterpreter:
 
         try:
             _key_q.clear()
+            _gui_key_q.clear()
             if os.name != "nt":          # Windows needs nothing extra
                 _enter_raw_runtime()
 
@@ -7408,6 +7443,7 @@ class BasicInterpreter:
             
         try:
             _key_q.clear()
+            _gui_key_q.clear()
             if os.name != "nt":          # Windows needs nothing extra
                 _enter_raw_runtime()
                 
@@ -8452,6 +8488,8 @@ class BasicInterpreter:
         self.mouse_handlers[event] = target_line
         self._mouse_event_queue = deque(evt for evt in self._mouse_event_queue if evt['event'] != event)
         self._mouse_enabled = True
+        if self.graphics_window is not None and not self.graphics_window.closed:
+            self._prepare_graphics_window_use_by_current_run()
 
     def execute_MOUSE(self, arg_string):
         if (frame := self._current_routine_frame()) is not None:
@@ -8490,6 +8528,7 @@ class BasicInterpreter:
 
         self._mouse_cursor_visible_requested = visible
         if self.graphics_window is not None and not self.graphics_window.closed:
+            self._prepare_graphics_window_use_by_current_run()
             self.graphics_window.set_mouse_cursor_visible(visible)
 
     @lru_cache(maxsize=65536)
@@ -9091,6 +9130,7 @@ class BasicInterpreter:
                 self._mouse_cursor_visible_requested = True
                 self._clear_keys_down()
                 _key_q.clear()
+                _gui_key_q.clear()
                 if self.graphics_window is not None and not self.graphics_window.closed:
                     self.graphics_window.set_mouse_cursor_visible(True)
                 self.reset_state(variables=False, graphics=False)
@@ -10068,6 +10108,7 @@ class BasicInterpreter:
             return
         if self.graphics_window.closed:
             self.graphics_window = None
+            self._graphics_window_used_this_run = False
             self._reset_graph_axis_ranges()
             return
 
@@ -10075,6 +10116,7 @@ class BasicInterpreter:
         # Close the little window just like with the X, leaving everything reset first.
         self.graphics_window.on_close()
         self.graphics_window = None
+        self._graphics_window_used_this_run = False
         self._reset_graph_axis_ranges()
 
     def execute_INK(self, color):
@@ -10230,6 +10272,7 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
             raise ReturnMain
 
+        self._prepare_graphics_window_use_by_current_run()
         # Create or reset the window
         if self.graphics_window is None or self.graphics_window.closed:
             # First time: build the window DIRECTLY with the requested mode
@@ -10242,6 +10285,7 @@ class BasicInterpreter:
         self._reset_graph_axis_ranges()
 
     def ensure_graphics_window(self): 
+        self._prepare_graphics_window_use_by_current_run()
         if self.graphics_window is None or self.graphics_window.closed:
             # Use the current global dimensions, set by the last MODE
             self.graphics_window = GraphicsWindow(
@@ -10267,6 +10311,8 @@ class BasicInterpreter:
             self._pause_deadline = (now + (timeout / 1000.0)) if timeout is not None else None
 
         try:
+            if self.graphics_window and not self.graphics_window.closed:
+                self._prepare_graphics_window_use_by_current_run()
             if self.graphics_window and not self.graphics_window.closed:
                 # Pass hook + absolute deadline
                 self.graphics_window.pause(
@@ -17543,20 +17589,25 @@ class BasicInterpreter:
                     return '""'
                 return f"__CHR({key_code})"
 
-            # 1. Is something already queued?
-            if _key_q:
-                return code_to_basic_expr(_key_q.popleft())
+            use_graphics_keyboard = (
+                self._current_run_uses_graphics_window()
+                and self.graphics_window
+                and not self.graphics_window.closed
+            )
+            queue = _gui_key_q if use_graphics_keyboard else _key_q
 
-            # 2. Empty queue -> quick scan
-            if self.graphics_window and not self.graphics_window.closed:
+            # 1. Is something already queued for the selected input source?
+            if queue:
+                return code_to_basic_expr(queue.popleft())
+
+            # 2. Empty queue -> quick scan of that same source only.
+            if use_graphics_keyboard:
                 _scan_gui_once(self.graphics_window.root)
-            elif hasattr(self, "root") and self.root.winfo_exists():
-                _scan_gui_once(self.root)
             else:
                 _scan_console_once()
 
             # 3. Again, is there a key?
-            return code_to_basic_expr(_key_q.popleft()) if _key_q else '""'
+            return code_to_basic_expr(queue.popleft()) if queue else '""'
         else:
             self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
             raise ReturnMain
@@ -17583,7 +17634,11 @@ class BasicInterpreter:
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
             raise ReturnMain
 
-        if self.graphics_window and not self.graphics_window.closed:
+        if (
+            self._current_run_uses_graphics_window()
+            and self.graphics_window
+            and not self.graphics_window.closed
+        ):
             _scan_gui_once(self.graphics_window.root, sleep_when_idle=False)
             return str(-1 if value in self._keys_down else 0)
 
