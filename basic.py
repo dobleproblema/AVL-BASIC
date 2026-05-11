@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.16"
+__version__ = "1.5.17"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -10311,9 +10311,11 @@ class BasicInterpreter:
             self._pause_deadline = (now + (timeout / 1000.0)) if timeout is not None else None
 
         try:
-            if self.graphics_window and not self.graphics_window.closed:
-                self._prepare_graphics_window_use_by_current_run()
-            if self.graphics_window and not self.graphics_window.closed:
+            if (
+                self._current_run_uses_graphics_window()
+                and self.graphics_window
+                and not self.graphics_window.closed
+            ):
                 # Pass hook + absolute deadline
                 self.graphics_window.pause(
                     timeout=None,  # ignorado; usamos absolute_deadline

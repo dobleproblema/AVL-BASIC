@@ -9099,6 +9099,41 @@ def test_pump_graphics_window_closes_stale_unattached_window_without_interrupt()
     assert stub.closed is True
 
 
+def test_pause_uses_console_when_graphics_window_is_stale():
+    interpreter = _make_mouse_test_interpreter()
+    calls = []
+    interpreter.graphics_window = SimpleNamespace(
+        closed=False,
+        pause=lambda **_kwargs: calls.append("graphics"),
+    )
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = False
+    interpreter.pause = lambda **_kwargs: calls.append("console")
+
+    interpreter.execute_PAUSE(None)
+
+    assert calls == ["console"]
+    assert interpreter._graphics_window_used_this_run is False
+
+
+def test_pause_uses_graphics_window_after_current_run_acquires_it():
+    interpreter = _make_mouse_test_interpreter()
+    calls = []
+    interpreter.graphics_window = SimpleNamespace(
+        closed=False,
+        pause=lambda **_kwargs: calls.append("graphics"),
+    )
+    interpreter.running = True
+    interpreter.current_line = 0
+    interpreter._graphics_window_used_this_run = True
+    interpreter.pause = lambda **_kwargs: calls.append("console")
+
+    interpreter.execute_PAUSE(None)
+
+    assert calls == ["graphics"]
+
+
 def test_service_graphics_window_after_frame_raises_keyboard_interrupt_when_close_requested(monkeypatch):
     interpreter = _make_mouse_test_interpreter()
     stub = SimpleNamespace(closed=False, close_requested=False, root=object())
