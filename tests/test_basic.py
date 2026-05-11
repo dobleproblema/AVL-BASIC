@@ -8597,6 +8597,32 @@ def test_axis_subticks_are_drawn_when_spacing_is_enough():
     assert gw.buffer[gw._index(x_sub, y_axis_px - 3)] != bg
 
 
+def test_axis_main_tics_are_visibly_longer_than_subticks():
+    gwx = ScaleCursorTestWindow(width=220, height=160)
+    gwx.set_scale(-5, 5, -5, 5, border=10)
+    bgx = gwx.background_color
+    x_main, y_axis_px = gwx._transform_graphic(0, 0)
+    x_sub, _ = gwx._transform_graphic(1, 0)
+
+    gwx.x_axis(0, 2, -5, 5, border=10, label_side='none', orientation='horizontal', tic_subdivisions=4)
+
+    assert gwx.buffer[gwx._index(x_main, y_axis_px - 8)] != bgx
+    assert gwx.buffer[gwx._index(x_sub, y_axis_px - 3)] != bgx
+    assert gwx.buffer[gwx._index(x_sub, y_axis_px - 4)] == bgx
+
+    gwy = ScaleCursorTestWindow(width=220, height=160)
+    gwy.set_scale(-5, 5, -5, 5, border=10)
+    bgy = gwy.background_color
+    x_axis_px, y_main = gwy._transform_graphic(0, 0)
+    _, y_sub = gwy._transform_graphic(0, 1)
+
+    gwy.y_axis(0, 2, -5, 5, border=10, label_side='none', tic_subdivisions=4)
+
+    assert gwy.buffer[gwy._index(x_axis_px + 7, y_main)] != bgy
+    assert gwy.buffer[gwy._index(x_axis_px + 2, y_sub)] != bgy
+    assert gwy.buffer[gwy._index(x_axis_px + 3, y_sub)] == bgy
+
+
 def test_axis_subticks_are_skipped_when_too_dense():
     gw_base = ScaleCursorTestWindow(width=220, height=160)
     gw_base.set_scale(-5, 5, -5, 5, border=10)
@@ -9070,6 +9096,40 @@ def test_service_graphics_window_after_frame_raises_keyboard_interrupt_when_clos
         interpreter._service_graphics_window_after_frame()
 
     assert interpreter._last_frame_presented > 0.0
+
+
+def test_frame_fps_presents_immediately_on_first_call(monkeypatch):
+    interpreter = _make_mouse_test_interpreter()
+    updates = []
+    sleeps = []
+    interpreter.graphics_window = SimpleNamespace(
+        closed=False,
+        close_requested=False,
+        root=object(),
+        update_canvas=lambda: updates.append("update"),
+    )
+    monkeypatch.setattr("basic._scan_gui_once", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("basic.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    interpreter.execute_command("FRAME 60")
+
+    assert updates == ["update"]
+    assert sleeps == []
+    assert interpreter._last_frame_command_presented > 0.0
+
+
+def test_frame_fps_waits_before_later_frames(monkeypatch):
+    interpreter = _make_mouse_test_interpreter()
+    sleeps = []
+    times = iter([100.0, 100.02])
+    interpreter._last_frame_command_presented = 100.0
+    monkeypatch.setattr("basic.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("basic.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    interpreter._wait_for_frame_rate(60)
+
+    assert len(sleeps) == 1
+    assert sleeps[0] == pytest.approx(0.002)
 
 
 def test_tk_event_to_key_codes_maps_special_and_alpha_keys():

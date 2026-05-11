@@ -383,7 +383,7 @@ Example
 + SCREEN                     Restores state (see below)
 + SCREEN CLOSE               Closes the graphics window and restores state
 + CLG                        Clears the graphics window with the current PAPER color
-+ FRAME                      Immediate refresh
++ FRAME [fps]                Immediate refresh; optional FPS limiter
 
 Quick notes
 - `SCREEN` with no arguments restores the default graphics state:
@@ -399,6 +399,11 @@ Quick notes
 - `border` (optional) sets a physical margin in pixels: `xmin/xmax/ymin/ymax` fall at that distance from the edges.
 - `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
   * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
+- `FRAME fps` keeps bare `FRAME` semantics but limits later explicit `FRAME`
+  calls to the requested maximum frame rate. The first `FRAME fps` presents
+  immediately; subsequent calls wait only if the program is running faster than
+  the target. `fps` must be a positive number. Example: use `FRAME 60` in
+  animation loops to cap rendering at about 60 FPS.
 
 Example (`SCALE` with border and axes in user units)
 10 SCREEN : CLG

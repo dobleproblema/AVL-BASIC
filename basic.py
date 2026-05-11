@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.13"
+__version__ = "1.5.14"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -1884,6 +1884,9 @@ class GraphicsWindow:
     _x11_blank_cursor_src = None
     _x11_blank_cursor_mask = None
 
+    AXIS_TIC_LENGTH = 8
+    AXIS_SUB_TIC_LENGTH = 3
+
     @classmethod
     def _root(cls):
         """Hidden singleton Tk root, valid for all static utilities."""
@@ -3312,7 +3315,7 @@ class GraphicsWindow:
             for x in range(x_axis_start, x_axis_end + 1):
                 draw_masked_pixel(x, y_pixel)
 
-        tic_length = 5
+        tic_length = self.AXIS_TIC_LENGTH
         margin_label = 4
         show_labels = label_side != 'none'
         # With labels, tics go on the opposite side. Without labels, use the default side.
@@ -3376,7 +3379,7 @@ class GraphicsWindow:
                 # Axis labels always use SMALLFONT.
                 self.bitmap_font = small_bitmap_font
 
-            sub_tic_length = 3
+            sub_tic_length = self.AXIS_SUB_TIC_LENGTH
             seen_sub_tick_pixels = set()
             for T in sub_ticks:
                 if use_physical_axis_span:
@@ -3572,7 +3575,7 @@ class GraphicsWindow:
                     continue
                 draw_masked_pixel(x_pixel, y)
 
-        tic_length = 5
+        tic_length = self.AXIS_TIC_LENGTH
         margin_label = 4
         show_labels = label_side != 'none'
         # With labels, tics go on the opposite side. Without labels, use the default side.
@@ -3622,7 +3625,7 @@ class GraphicsWindow:
                 # Axis labels always use SMALLFONT.
                 self.bitmap_font = small_bitmap_font
 
-            sub_tic_length = 3
+            sub_tic_length = self.AXIS_SUB_TIC_LENGTH
             seen_sub_tick_pixels = set()
             for T in sub_ticks:
                 if use_physical_axis_span:
@@ -5000,6 +5003,7 @@ class BasicInterpreter:
         self._mouse_enabled = False
         self._mouse_cursor_visible_requested = True
         self._last_frame_presented = 0.0
+        self._last_frame_command_presented = 0.0
         self.graph_x_axis_range = None  # (xmin, xmax) of the last valid XAXIS
         self.graph_y_axis_range = None  # (ymin, ymax) of the last valid YAXIS
         self.graph_custom_range = None  # (xmin, xmax, ymin, ymax) from GRAPHRANGE
@@ -5047,6 +5051,34 @@ class BasicInterpreter:
         if getattr(gw, "close_requested", False):
             raise KeyboardInterrupt
 
+    def _record_frame_command_present(self):
+        self._last_frame_command_presented = time.monotonic()
+
+    def _wait_for_frame_rate(self, fps):
+        if not isinstance(fps, (int, float)):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+        fps = float(fps)
+        if not math.isfinite(fps) or fps <= 0:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+        last_frame = getattr(self, "_last_frame_command_presented", 0.0)
+        if not last_frame:
+            return
+        seconds_per_frame = 1.0 / fps
+        if not math.isfinite(seconds_per_frame):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+        deadline = last_frame + seconds_per_frame
+        while True:
+            now = time.monotonic()
+            remaining = deadline - now
+            if remaining <= 0:
+                break
+            time.sleep(min(remaining, 0.002))
+            self._pump_graphics_window(None)
+            if self._poll_interrupts():
+                break
 
 
     # 1.- SECONDARY THREAD - Only reads keyboard input with input()
@@ -9360,14 +9392,16 @@ class BasicInterpreter:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
             elif first_word == "FRAME":
-                if len(args) == 0:
-                    self.ensure_graphics_window()
-                    # Force immediate screen update
-                    self.graphics_window.update_canvas()
-                    self._service_graphics_window_after_frame()
-                else:
+                if len(args) > 1:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
+                if len(args) == 1:
+                    self._wait_for_frame_rate(self.evaluate_expression(args[0]))
+                self.ensure_graphics_window()
+                # Force immediate screen update
+                self.graphics_window.update_canvas()
+                self._service_graphics_window_after_frame()
+                self._record_frame_command_present()
             elif first_word == "PLOT":
                 if len(args) in (2, 3):
                     x = float(self.evaluate_expression(args[0]))

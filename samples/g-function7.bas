@@ -6,8 +6,7 @@
 150 PENWIDTH 2 : INK 2
 160 GRAPH FNX(X)
 170 INK 1
-180 CROSSAT 0,0 : XAXIS 32
+180 CROSSAT 256,0 : XAXIS 32 'CROSSAT outside the drawing area so all the labels remain centered
 190 CROSSAT -128,0 : YAXIS 1.8E+27 'If ticks use exponential notation, labels do too
 200 CROSSAT 128,0 : YAXIS 1E+5 'If ticks are too dense, they are ignored
 210 END
-

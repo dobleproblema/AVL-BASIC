@@ -382,7 +382,7 @@ Ejemplo
 + SCREEN                     Restaura estado (ver abajo)
 + SCREEN CLOSE               Cierra la ventana gráfica y restaura estado
 + CLG                        Borra la ventana gráfica con el PAPER actual
-+ FRAME                      Refresco inmediato
++ FRAME [fps]                Refresco inmediato; limitador FPS opcional
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
@@ -398,6 +398,12 @@ Notas rápidas
 - `borde` (opcional) fija un margen físico en píxeles: `xmin/xmax/ymin/ymax` caen a esa distancia de los bordes.
 - FRAME refresca la pantalla inmediatamente. Por defecto solo se refresca al terminar el programa.
   • Es decir, deberemos usar FRAME cada vez que queramos que el resultado de una instrucción gráfica se muestre en pantalla inmediatamente.
+- `FRAME fps` conserva la semántica de `FRAME` sin argumentos, pero limita las
+  siguientes llamadas explícitas a `FRAME` al máximo de FPS indicado. El primer
+  `FRAME fps` se muestra inmediatamente; las llamadas posteriores solo esperan
+  si el programa va más rápido que el objetivo. `fps` debe ser un número
+  positivo. Ejemplo: usa `FRAME 60` en bucles de animación para limitar el
+  dibujado a unos 60 FPS.
 
 Ejemplo (SCALE con borde y ejes en unidades de usuario)
 10 SCREEN : CLG
