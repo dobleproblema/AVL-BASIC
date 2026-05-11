@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.14"
+__version__ = "1.5.15"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -5051,8 +5051,8 @@ class BasicInterpreter:
         if getattr(gw, "close_requested", False):
             raise KeyboardInterrupt
 
-    def _record_frame_command_present(self):
-        self._last_frame_command_presented = time.monotonic()
+    def _record_frame_command_present(self, timestamp=None):
+        self._last_frame_command_presented = time.monotonic() if timestamp is None else timestamp
 
     def _wait_for_frame_rate(self, fps):
         if not isinstance(fps, (int, float)):
@@ -5064,7 +5064,7 @@ class BasicInterpreter:
             raise ReturnMain
         last_frame = getattr(self, "_last_frame_command_presented", 0.0)
         if not last_frame:
-            return
+            return None
         seconds_per_frame = 1.0 / fps
         if not math.isfinite(seconds_per_frame):
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
@@ -5079,6 +5079,10 @@ class BasicInterpreter:
             self._pump_graphics_window(None)
             if self._poll_interrupts():
                 break
+        now = time.monotonic()
+        if now - deadline > seconds_per_frame:
+            return now
+        return deadline
 
 
     # 1.- SECONDARY THREAD - Only reads keyboard input with input()
@@ -9395,13 +9399,14 @@ class BasicInterpreter:
                 if len(args) > 1:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
+                frame_timestamp = None
                 if len(args) == 1:
-                    self._wait_for_frame_rate(self.evaluate_expression(args[0]))
+                    frame_timestamp = self._wait_for_frame_rate(self.evaluate_expression(args[0]))
                 self.ensure_graphics_window()
                 # Force immediate screen update
+                self._record_frame_command_present(frame_timestamp)
                 self.graphics_window.update_canvas()
                 self._service_graphics_window_after_frame()
-                self._record_frame_command_present()
             elif first_word == "PLOT":
                 if len(args) in (2, 3):
                     x = float(self.evaluate_expression(args[0]))

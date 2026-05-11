@@ -9121,15 +9121,16 @@ def test_frame_fps_presents_immediately_on_first_call(monkeypatch):
 def test_frame_fps_waits_before_later_frames(monkeypatch):
     interpreter = _make_mouse_test_interpreter()
     sleeps = []
-    times = iter([100.0, 100.02])
+    times = iter([100.0, 100.02, 100.02])
     interpreter._last_frame_command_presented = 100.0
     monkeypatch.setattr("basic.time.monotonic", lambda: next(times))
     monkeypatch.setattr("basic.time.sleep", lambda seconds: sleeps.append(seconds))
 
-    interpreter._wait_for_frame_rate(60)
+    timestamp = interpreter._wait_for_frame_rate(60)
 
     assert len(sleeps) == 1
     assert sleeps[0] == pytest.approx(0.002)
+    assert timestamp == pytest.approx(100.0 + 1.0 / 60.0)
 
 
 def test_tk_event_to_key_codes_maps_special_and_alpha_keys():
