@@ -3,6 +3,12 @@
 This directory contains the Rust implementation of AVL BASIC. It is intended to
 be functionally compatible with the Python reference interpreter in the parent
 directory, while providing much higher execution speed and a native executable.
+The runtime is cross-platform: it builds and runs on Windows and Linux today,
+and the code is intended to stay portable to macOS.
+
+End-user Windows builds are published as ZIP files in the project
+[GitHub Releases](https://github.com/dobleproblema/AVL-BASIC/releases/latest).
+The commands below are for development builds from source.
 
 ## Build
 

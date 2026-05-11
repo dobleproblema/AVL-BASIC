@@ -11,3 +11,5 @@ rust/target/
 rust/target_release_check/
 rust/oracle-out/
 rust/*.log
+release/
+dist/
