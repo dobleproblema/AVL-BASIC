@@ -1,7 +1,6 @@
 1000 REM Ray-Tracer
 1005 REM Refraction + reflectivity (Fresnel)
 1010 REM General parameters
-1015 PRINT "PLEASE WAIT. THIS MAY TAKE UP TO ~5 MIN. DEPENDING ON YOUR COMPUTER."
 1020 EPS=0.0001
 1025 MXD=4 'Maximum depth (lets you see the refracted checkerboard in 2nd-order reflections)
 1030 WTH=0.04 'Weight threshold for pruning branches

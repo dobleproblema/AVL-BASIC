@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.19";
+const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.20";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -4936,9 +4936,21 @@ impl Interpreter {
         {
             return Ok(());
         }
-        if self.last_graphics_window_pump.elapsed() < Duration::from_millis(2) {
+        if self.last_graphics_window_pump.elapsed() < self.graphics_window_pump_interval() {
             return Ok(());
         }
+        self.pump_graphics_window_now()
+    }
+
+    fn graphics_window_pump_interval(&self) -> Duration {
+        if self.current_line.is_some() && !self.graphics_window_used_this_run {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(2)
+        }
+    }
+
+    fn pump_graphics_window_now(&mut self) -> BasicResult<()> {
         self.last_graphics_window_pump = Instant::now();
         let mut user_closed = false;
         if let Some(window) = self.graphics_window.as_mut() {
@@ -4982,7 +4994,7 @@ impl Interpreter {
 
     fn prepare_graphics_window_use_by_current_run(&mut self) -> BasicResult<()> {
         if self.current_line.is_some() && !self.graphics_window_used_this_run {
-            self.pump_graphics_window_if_due()?;
+            self.pump_graphics_window_now()?;
         }
         self.mark_graphics_window_used_by_current_run();
         Ok(())
@@ -7543,6 +7555,29 @@ mod interpreter_tests {
 
         interp.current_line = None;
         assert!(!interp.current_run_uses_graphics_window());
+    }
+
+    #[test]
+    fn stale_graphics_window_uses_coarse_pump_interval_during_unattached_run() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(20);
+        interp.graphics_window_used_this_run = false;
+        assert_eq!(
+            interp.graphics_window_pump_interval(),
+            Duration::from_millis(100)
+        );
+
+        interp.graphics_window_used_this_run = true;
+        assert_eq!(
+            interp.graphics_window_pump_interval(),
+            Duration::from_millis(2)
+        );
+
+        interp.current_line = None;
+        assert_eq!(
+            interp.graphics_window_pump_interval(),
+            Duration::from_millis(2)
+        );
     }
 }
 

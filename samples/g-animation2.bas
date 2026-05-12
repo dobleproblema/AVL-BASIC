@@ -8,8 +8,9 @@
 45 t=TIME
 50 FOR c=1 TO 1000
 55 SCREEN gr$(i)
-60 i=(i+k) MOD (f+1)
-65 IF i=0 OR i=f THEN k=-k
-70 NEXT
-75 PRINT "Elapsed time:";TIME-t
+60 FRAME 60
+65 i=(i+k) MOD (f+1)
+70 IF i=0 OR i=f THEN k=-k
+75 NEXT
+80 PRINT "Elapsed time:";TIME-t
 

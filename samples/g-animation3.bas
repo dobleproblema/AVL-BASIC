@@ -8,7 +8,8 @@
 45 t=TIME
 50 FOR c=1 TO 1000
 55 SCREEN gr$(i)
-60 i=(i+1) MOD (f+1)
-65 NEXT
-70 PRINT "Elapsed time:";TIME-t
+60 FRAME 60
+65 i=(i+1) MOD (f+1)
+70 NEXT
+75 PRINT "Elapsed time:";TIME-t
 

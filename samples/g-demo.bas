@@ -48,7 +48,7 @@
 570 NEXT I
 580 MOVE A,B : GDISP T$,"yellow",-1
 590 A=A-V : B=B-V : IF A<=W THEN A=320:B=0
-600 FRAME
+600 FRAME 60
 610 GOTO 330
 620 DATA -1, 1, 1, -1, -1, 1, 1, -1
 630 DATA 1, 1, -1, -1, 1, 1, -1, -1

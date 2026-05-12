@@ -19,7 +19,7 @@
 280 FOR I=1 TO 6 : FOR J=1 TO 4 : READ F(J,I) : NEXT J : NEXT I
 290 T0=TIME : FPS=0
 300 REM ** Main loop **
-310   FRAME : CLG
+310   FRAME 60 : CLG
 320   'Advance angles
 330   RotY=RotY+VrotY
 340   RotX=RotX+VrotX
