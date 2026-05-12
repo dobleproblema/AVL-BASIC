@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.18";
+const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.19";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
