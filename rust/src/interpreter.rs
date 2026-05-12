@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.22";
+const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.23";
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -2136,9 +2136,18 @@ impl Interpreter {
         let value = self
             .string_variables
             .get(source)
-            .map(|text| basic_string_slice(text, start, Some(1)))
-            .unwrap_or_default();
-        self.string_variables.insert(target.to_string(), value);
+            .and_then(|text| string_char_at(text, start));
+        if let Some(existing) = self.string_variables.get_mut(target) {
+            existing.clear();
+            if let Some(ch) = value {
+                existing.push(ch);
+            }
+        } else {
+            self.string_variables.insert(
+                target.to_string(),
+                value.map(|ch| ch.to_string()).unwrap_or_default(),
+            );
+        }
         Ok(())
     }
 
@@ -3111,7 +3120,12 @@ impl Interpreter {
         let Some(frame) = self.for_stack.last().cloned() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = self.get_variable(&frame.var)?.as_number()? + frame.step;
+        let current = self
+            .numeric_variables
+            .get(&frame.var)
+            .copied()
+            .unwrap_or(0.0)
+            + frame.step;
         self.numeric_variables.insert(frame.var.clone(), current);
         let keep = if frame.step >= 0.0 {
             current <= frame.end
@@ -3148,7 +3162,12 @@ impl Interpreter {
         let Some(frame) = self.for_stack.last().cloned() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = self.get_variable(&frame.var)?.as_number()? + frame.step;
+        let current = self
+            .numeric_variables
+            .get(&frame.var)
+            .copied()
+            .unwrap_or(0.0)
+            + frame.step;
         self.numeric_variables.insert(frame.var.clone(), current);
         let keep = if frame.step >= 0.0 {
             current <= frame.end
@@ -6719,7 +6738,17 @@ impl EvalContext for Interpreter {
     }
 
     fn call_runtime_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value> {
-        match name.to_ascii_uppercase().as_str() {
+        let upper_name;
+        let name = if name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+            upper_name = name.to_ascii_uppercase();
+            upper_name.as_str()
+        } else {
+            name
+        };
+        match name {
+            "ABS" if args.len() == 1 => {
+                return Ok(Value::number(args[0].as_number()?.abs()));
+            }
             "SIN" if args.len() == 1 => {
                 let mut x = args[0].as_number()?;
                 if self.angle_degrees {
@@ -6804,7 +6833,7 @@ impl EvalContext for Interpreter {
         if let Some(value) = call_pure_function(name, args.clone())? {
             return Ok(value);
         }
-        match name.to_ascii_uppercase().as_str() {
+        match name {
             "RND" if args.is_empty() => Ok(Value::number(self.rng.next_f64())),
             "TIME" if args.is_empty() => Ok(Value::number(
                 SystemTime::now()
@@ -6837,10 +6866,7 @@ impl EvalContext for Interpreter {
                 if args.is_empty() =>
             {
                 Ok(Value::number(
-                    self.numeric_variables
-                        .get(&name.to_ascii_uppercase())
-                        .copied()
-                        .unwrap_or(0.0),
+                    self.numeric_variables.get(name).copied().unwrap_or(0.0),
                 ))
             }
             "WIDTH" if args.is_empty() => Ok(Value::number(self.graphics.width as f64)),
@@ -8043,6 +8069,13 @@ fn basic_string_slice(text: &str, start: usize, count: Option<usize>) -> String 
         .map_or(chars.len(), |count| start.saturating_add(count))
         .min(chars.len());
     chars[start..end].iter().collect()
+}
+
+fn string_char_at(text: &str, start: usize) -> Option<char> {
+    if text.is_ascii() {
+        return text.as_bytes().get(start).map(|byte| *byte as char);
+    }
+    text.chars().nth(start)
 }
 
 fn replace_mid_ascii(
