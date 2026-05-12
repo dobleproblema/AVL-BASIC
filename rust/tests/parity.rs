@@ -224,6 +224,44 @@ fn cd_reports_python_path_errors_and_keeps_virtual_root() {
 }
 
 #[test]
+#[cfg(windows)]
+fn cd_and_files_accept_directory_junctions_inside_virtual_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let shared = temp.path().join("shared");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::write(shared.join("demo.bas"), "10 PRINT \"DEMO\"\n").unwrap();
+
+    let junction = root.join("samples");
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mklink /J failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut interp = Interpreter::new();
+    interp.root_dir = root.clone();
+    interp.current_dir = root.clone();
+
+    interp.process_immediate("FILES").unwrap();
+    assert!(interp.take_output().contains("samples/"));
+
+    interp.process_immediate("CD \"samples\"").unwrap();
+    assert!(interp.current_dir.ends_with("samples"));
+
+    interp.process_immediate("FILES").unwrap();
+    assert!(interp.take_output().contains("demo.bas"));
+}
+
+#[test]
 fn immediate_file_command_errors_match_python() {
     let mut interp = Interpreter::new();
     assert_eq!(

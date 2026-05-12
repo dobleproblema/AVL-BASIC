@@ -4,6 +4,7 @@ import pytest
 import re
 import sys
 import math
+import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -6918,6 +6919,37 @@ def test_files_lists_subdirectories_with_trailing_slash(tmp_path, run_basic_inte
 
     lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
     assert any('ejemplos/' in line for line in lines)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
+def test_cd_and_files_accept_directory_junctions_inside_virtual_root(tmp_path, run_basic_interpreter):
+    root = tmp_path / "root"
+    shared = tmp_path / "shared"
+    root.mkdir()
+    shared.mkdir()
+    (shared / "demo.bas").write_text('10 PRINT "DEMO"\n', encoding='utf-8')
+    junction = root / "samples"
+    subprocess.run(
+        ["cmd", "/C", "mklink", "/J", str(junction), str(shared)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    output = run_basic_interpreter([
+        'FILES "*.bas"',
+        'CD "samples"',
+        'FILES "*.bas"',
+        'RUN "demo.bas"',
+        'EXIT',
+    ], cwd=root)
+
+    lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
+    joined = "\n".join(lines)
+    assert "samples/" in joined
+    assert "demo.bas" in joined
+    assert lines[-1] == "DEMO"
 
 
 def test_cd_parent_is_clamped_at_virtual_root(tmp_path, run_basic_interpreter):

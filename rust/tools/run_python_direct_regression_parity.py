@@ -308,6 +308,22 @@ def setup_tmp_path_case(case: DirectCase, cwd: Path) -> None:
     if name == "test_files_lists_subdirectories_with_trailing_slash":
         (cwd / "ejemplos").mkdir()
         return
+    if name == "test_cd_and_files_accept_directory_junctions_inside_virtual_root":
+        shared = cwd / "shared"
+        shared.mkdir()
+        (shared / "demo.bas").write_text('10 PRINT "DEMO"\n', encoding="utf-8")
+        samples = cwd / "samples"
+        if os.name == "nt":
+            subprocess.run(
+                ["cmd", "/C", "mklink", "/J", str(samples), str(shared)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+        else:
+            os.symlink(shared, samples, target_is_directory=True)
+        return
     if name == "test_cd_parent_is_clamped_at_virtual_root":
         (cwd / "raiz.bas").write_text('10 PRINT "RAIZ"\n', encoding="utf-8")
         return

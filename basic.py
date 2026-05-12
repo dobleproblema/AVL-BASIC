@@ -5741,7 +5741,7 @@ class BasicInterpreter:
         return self.current_dir
 
     def _set_program_dir_from_filepath(self, filepath: str) -> None:
-        self.program_dir = Path(filepath).resolve().parent
+        self.program_dir = Path(filepath).parent
 
     def _extract_path_text(self, value: str, *, quoted_required: bool = True) -> str:
         if not isinstance(value, str):
@@ -5788,11 +5788,15 @@ class BasicInterpreter:
             else:
                 parts.append(part)
 
-        candidate = self.root_dir.joinpath(*parts).resolve(strict=False)
+        candidate = self.root_dir.joinpath(*parts)
         if not self._is_within_virtual_root(candidate):
             self.handle_error(ErrorCode.INVALID_ARGUMENT)
             raise ReturnMain
 
+        if candidate.exists():
+            resolved = candidate.resolve()
+            if self._is_within_virtual_root(resolved):
+                return resolved
         return candidate
 
     def _match_existing_case(self, path: Path) -> Path:

@@ -42,6 +42,7 @@ impl GraphicsWindow {
             WindowOptions::default(),
         )
         .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
+        set_embedded_window_icon(&mut window);
         // BASIC drawing commands already decide when to present (`FRAME` or
         // immediate mode). A minifb-side FPS cap here would sleep on every
         // event/buffer update and make PLOT-heavy programs unusably slow.
@@ -140,6 +141,71 @@ impl GraphicsWindow {
         self.window.is_key_down(Key::LeftShift) || self.window.is_key_down(Key::RightShift)
     }
 }
+
+#[cfg(windows)]
+fn set_embedded_window_icon(window: &mut Window) {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleW(module_name: *const u16) -> *mut c_void;
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetSystemMetrics(index: i32) -> i32;
+        fn LoadImageW(
+            instance: *mut c_void,
+            name: *const u16,
+            image_type: u32,
+            width: i32,
+            height: i32,
+            flags: u32,
+        ) -> *mut c_void;
+        fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    const ICON_RESOURCE_ID: usize = 1;
+    const IMAGE_ICON: u32 = 1;
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+    const SM_CXICON: i32 = 11;
+    const SM_CYICON: i32 = 12;
+    const SM_CXSMICON: i32 = 49;
+    const SM_CYSMICON: i32 = 50;
+
+    unsafe {
+        let instance = GetModuleHandleW(std::ptr::null());
+        let hwnd = window.get_window_handle();
+        if instance.is_null() || hwnd.is_null() {
+            return;
+        }
+        let resource = ICON_RESOURCE_ID as *const u16;
+        let small = LoadImageW(
+            instance,
+            resource,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            0,
+        );
+        if !small.is_null() {
+            let _ = SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small as isize);
+        }
+        let big = LoadImageW(
+            instance,
+            resource,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON),
+            GetSystemMetrics(SM_CYICON),
+            0,
+        );
+        if !big.is_null() {
+            let _ = SendMessageW(hwnd, WM_SETICON, ICON_BIG, big as isize);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_embedded_window_icon(_window: &mut Window) {}
 
 fn key_to_code(key: Key, shifted: bool) -> Option<u8> {
     match key {

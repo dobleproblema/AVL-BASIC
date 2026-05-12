@@ -1018,7 +1018,7 @@ impl Interpreter {
             let kind = entry
                 .file_type()
                 .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-            if kind.is_dir() {
+            if kind.is_dir() || entry.path().is_dir() {
                 dirs.push(format!("{name}/"));
             } else if wildcard_matches(&pattern, &name) {
                 files.push(name);
@@ -1132,9 +1132,18 @@ impl Interpreter {
         let mut parts = if normalized.starts_with('/') {
             Vec::new()
         } else {
-            let base = base_dir
-                .canonicalize()
-                .unwrap_or_else(|_| base_dir.to_path_buf());
+            let base = if base_dir.is_absolute() {
+                base_dir.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(base_dir)
+            };
+            let base = if base.starts_with(&root) {
+                base
+            } else {
+                base.canonicalize().unwrap_or(base)
+            };
             base.strip_prefix(&root)
                 .map_err(|_| self.err(ErrorCode::InvalidArgument))?
                 .components()
@@ -1158,9 +1167,14 @@ impl Interpreter {
             candidate.push(part);
         }
         let resolved = if candidate.exists() {
-            candidate
+            let canonical = candidate
                 .canonicalize()
-                .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?
+                .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
+            if canonical.starts_with(&root) {
+                canonical
+            } else {
+                candidate
+            }
         } else {
             candidate
         };
