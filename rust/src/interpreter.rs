@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.20";
+const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.21";
+const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
+const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -499,6 +501,7 @@ pub struct Interpreter {
     graphics_window_suppressed: bool,
     graphics_window_dirty: bool,
     graphics_window_used_this_run: bool,
+    stale_graphics_window_poll_counter: u32,
     last_graphics_window_pump: Instant,
     last_graphics_window_present: Instant,
     last_frame_command_present: Option<Instant>,
@@ -583,6 +586,7 @@ impl Interpreter {
             graphics_window_suppressed: false,
             graphics_window_dirty: false,
             graphics_window_used_this_run: false,
+            stale_graphics_window_poll_counter: 0,
             last_graphics_window_pump: Instant::now(),
             last_graphics_window_present: Instant::now(),
             last_frame_command_present: None,
@@ -1235,6 +1239,8 @@ impl Interpreter {
         self.graphics_window_suppressed = false;
         self.last_frame_command_present = None;
         self.graphics_window_used_this_run = false;
+        self.stale_graphics_window_poll_counter = 0;
+        self.last_graphics_window_pump = Instant::now();
         self.error_handler_line = None;
         self.error_resume_next = false;
         self.handling_error = false;
@@ -4936,6 +4942,13 @@ impl Interpreter {
         {
             return Ok(());
         }
+        if self.current_line.is_some() && !self.graphics_window_used_this_run {
+            self.stale_graphics_window_poll_counter =
+                self.stale_graphics_window_poll_counter.wrapping_add(1);
+            if self.stale_graphics_window_poll_counter & 0x3fff != 0 {
+                return Ok(());
+            }
+        }
         if self.last_graphics_window_pump.elapsed() < self.graphics_window_pump_interval() {
             return Ok(());
         }
@@ -4944,9 +4957,9 @@ impl Interpreter {
 
     fn graphics_window_pump_interval(&self) -> Duration {
         if self.current_line.is_some() && !self.graphics_window_used_this_run {
-            Duration::from_millis(100)
+            STALE_GRAPHICS_WINDOW_PUMP_INTERVAL
         } else {
-            Duration::from_millis(2)
+            ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL
         }
     }
 
@@ -7564,19 +7577,19 @@ mod interpreter_tests {
         interp.graphics_window_used_this_run = false;
         assert_eq!(
             interp.graphics_window_pump_interval(),
-            Duration::from_millis(100)
+            STALE_GRAPHICS_WINDOW_PUMP_INTERVAL
         );
 
         interp.graphics_window_used_this_run = true;
         assert_eq!(
             interp.graphics_window_pump_interval(),
-            Duration::from_millis(2)
+            ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL
         );
 
         interp.current_line = None;
         assert_eq!(
             interp.graphics_window_pump_interval(),
-            Duration::from_millis(2)
+            ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL
         );
     }
 }

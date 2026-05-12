@@ -1028,7 +1028,7 @@ fn version_string_matches_python_language_version() {
         r#"10 PRINT VERSION$
 20 END"#,
     );
-    assert_eq!(output, "1.5.20\n");
+    assert_eq!(output, "1.5.21\n");
 }
 
 #[test]
