@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.21";
+const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.22";
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -5013,6 +5013,16 @@ impl Interpreter {
         Ok(())
     }
 
+    fn prepare_mouse_read(&mut self) -> BasicResult<()> {
+        if self.graphics_window_enabled
+            && !self.graphics_window_suppressed
+            && self.graphics_window.is_some()
+        {
+            self.prepare_graphics_window_use_by_current_run()?;
+        }
+        Ok(())
+    }
+
     fn mark_graphics_window_used_by_current_run(&mut self) {
         if self.current_line.is_some() {
             self.graphics_window_used_this_run = true;
@@ -6839,19 +6849,34 @@ impl EvalContext for Interpreter {
             "YPOS" if args.is_empty() => Ok(Value::number(self.graphics.ypos())),
             "HPOS" if args.is_empty() => Ok(Value::number(self.graphics.hpos() as f64)),
             "VPOS" if args.is_empty() => Ok(Value::number(self.graphics.vpos() as f64)),
-            "MOUSEX" if args.is_empty() => Ok(Value::number(self.mouse_state.x as f64)),
-            "MOUSEY" if args.is_empty() => Ok(Value::number(self.mouse_state.y as f64)),
-            "MOUSELEFT" if args.is_empty() => Ok(Value::number(if self.mouse_state.left {
-                -1.0
-            } else {
-                0.0
-            })),
-            "MOUSERIGHT" if args.is_empty() => Ok(Value::number(if self.mouse_state.right {
-                -1.0
-            } else {
-                0.0
-            })),
-            "MOUSEEVENT$" if args.is_empty() => Ok(Value::string(self.mouse_state.event.clone())),
+            "MOUSEX" if args.is_empty() => {
+                self.prepare_mouse_read()?;
+                Ok(Value::number(self.mouse_state.x as f64))
+            }
+            "MOUSEY" if args.is_empty() => {
+                self.prepare_mouse_read()?;
+                Ok(Value::number(self.mouse_state.y as f64))
+            }
+            "MOUSELEFT" if args.is_empty() => {
+                self.prepare_mouse_read()?;
+                Ok(Value::number(if self.mouse_state.left {
+                    -1.0
+                } else {
+                    0.0
+                }))
+            }
+            "MOUSERIGHT" if args.is_empty() => {
+                self.prepare_mouse_read()?;
+                Ok(Value::number(if self.mouse_state.right {
+                    -1.0
+                } else {
+                    0.0
+                }))
+            }
+            "MOUSEEVENT$" if args.is_empty() => {
+                self.prepare_mouse_read()?;
+                Ok(Value::string(self.mouse_state.event.clone()))
+            }
             "SCREEN$" if args.is_empty() => Ok(Value::string(self.graphics.capture_screen())),
             "SPRITE$" if args.len() == 4 => Ok(Value::string(self.graphics.capture_sprite(
                 args[0].as_number()?,
@@ -7591,6 +7616,17 @@ mod interpreter_tests {
             interp.graphics_window_pump_interval(),
             ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL
         );
+    }
+
+    #[test]
+    fn mouse_reads_without_window_do_not_claim_graphics_window() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(20);
+        interp.graphics_window_used_this_run = false;
+
+        interp.prepare_mouse_read().unwrap();
+
+        assert!(!interp.graphics_window_used_this_run);
     }
 }
 
