@@ -1,3 +1,4 @@
+use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::graphics::Graphics;
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
@@ -81,8 +82,31 @@ impl GraphicsWindow {
         self.update_mouse()
     }
 
+    pub fn pump_lifecycle(&mut self, graphics: &Graphics) -> BasicResult<bool> {
+        if self.window.is_open() {
+            self.window
+                .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
+                .map_err(|err| {
+                    BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
+                })?;
+            self.update_keyboard();
+            self.key_queue.clear();
+            self.update_mouse();
+            self.mouse.event.clear();
+        }
+        Ok(self.window.is_open())
+    }
+
     pub fn set_mouse_cursor_visible(&mut self, visible: bool) {
         self.window.set_cursor_visibility(visible);
+    }
+
+    pub fn focus(&mut self) {
+        focus_window_handle(self.window.get_window_handle());
+    }
+
+    pub fn clear_key_queue(&mut self) {
+        self.key_queue.clear();
     }
 
     pub fn take_key_code(&mut self) -> Option<u8> {
@@ -130,7 +154,12 @@ impl GraphicsWindow {
     }
 
     fn update_keyboard(&mut self) {
+        let ctrl_down = self.ctrl_down();
         for key in self.window.get_keys_pressed(KeyRepeat::No) {
+            if key == Key::C && ctrl_down {
+                console::request_interrupt();
+                continue;
+            }
             if let Some(code) = key_to_code(key, self.shift_down()) {
                 self.key_queue.push_back(code);
             }
@@ -139,6 +168,10 @@ impl GraphicsWindow {
 
     fn shift_down(&self) -> bool {
         self.window.is_key_down(Key::LeftShift) || self.window.is_key_down(Key::RightShift)
+    }
+
+    fn ctrl_down(&self) -> bool {
+        self.window.is_key_down(Key::LeftCtrl) || self.window.is_key_down(Key::RightCtrl)
     }
 }
 
@@ -332,11 +365,21 @@ fn code_to_key(code: u8) -> Option<Key> {
 }
 
 #[cfg(windows)]
-pub fn refocus_console_window() {
+pub fn focus_console_window() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleWindow() -> *mut c_void;
+    }
+    unsafe {
+        focus_window_handle(GetConsoleWindow());
+    }
+}
+
+#[cfg(windows)]
+fn focus_window_handle(hwnd: *mut c_void) {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentThreadId() -> u32;
-        fn GetConsoleWindow() -> *mut c_void;
     }
     #[link(name = "user32")]
     extern "system" {
@@ -349,34 +392,41 @@ pub fn refocus_console_window() {
         fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
         fn ShowWindow(hwnd: *mut c_void, cmd_show: i32) -> i32;
     }
+
     unsafe {
-        let hwnd = GetConsoleWindow();
-        if !hwnd.is_null() {
-            let current_thread = GetCurrentThreadId();
-            let foreground = GetForegroundWindow();
-            let foreground_thread = if foreground.is_null() {
-                0
-            } else {
-                GetWindowThreadProcessId(foreground, std::ptr::null_mut())
-            };
-            let attached = foreground_thread != 0
-                && foreground_thread != current_thread
-                && AttachThreadInput(current_thread, foreground_thread, 1) != 0;
-            const SW_SHOW: i32 = 5;
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = BringWindowToTop(hwnd);
-            let _ = SetForegroundWindow(hwnd);
-            let _ = SetActiveWindow(hwnd);
-            let _ = SetFocus(hwnd);
-            if attached {
-                let _ = AttachThreadInput(current_thread, foreground_thread, 0);
-            }
+        if hwnd.is_null() {
+            return;
+        }
+
+        let current_thread = GetCurrentThreadId();
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, std::ptr::null_mut())
+        };
+        let attached = foreground_thread != 0
+            && foreground_thread != current_thread
+            && AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+
+        const SW_SHOW: i32 = 5;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetActiveWindow(hwnd);
+        let _ = SetFocus(hwnd);
+
+        if attached {
+            let _ = AttachThreadInput(current_thread, foreground_thread, 0);
         }
     }
 }
 
 #[cfg(not(windows))]
-pub fn refocus_console_window() {}
+pub fn focus_console_window() {}
+
+#[cfg(not(windows))]
+fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 
 #[cfg(test)]
 mod tests {

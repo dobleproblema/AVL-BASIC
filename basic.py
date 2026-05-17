@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.23"
+__version__ = "1.5.24"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False

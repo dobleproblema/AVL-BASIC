@@ -55,7 +55,13 @@ pub enum BinaryOp {
 
 pub trait EvalContext {
     fn get_variable(&mut self, name: &str) -> BasicResult<Value>;
+    fn get_number_variable(&mut self, name: &str) -> BasicResult<f64> {
+        self.get_variable(name)?.as_number()
+    }
     fn get_array_value(&mut self, name: &str, indexes: &[i32]) -> BasicResult<Value>;
+    fn get_array_number(&mut self, name: &str, indexes: &[i32]) -> BasicResult<f64> {
+        self.get_array_value(name, indexes)?.as_number()
+    }
     fn array_reference(&mut self, name: &str) -> Option<Value>;
     fn call_runtime_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value>;
     fn with_string_variable<R, F: FnOnce(&str) -> R>(&mut self, _name: &str, _f: F) -> Option<R> {
@@ -107,7 +113,7 @@ impl Expr {
                 if is_zero_arg_function(name) || name.starts_with("FN") {
                     ctx.call_runtime_function(name, Vec::new())?.as_number()
                 } else {
-                    ctx.get_variable(name)?.as_number()
+                    ctx.get_number_variable(name)
                 }
             }
             Expr::ArrayOrCall { name, args } => {
@@ -117,11 +123,14 @@ impl Expr {
                         .call_runtime_function(name, values)
                         .and_then(|v| v.as_number());
                 }
+                if let Some(result) = eval_direct_numeric_function(ctx, name, args)? {
+                    return Ok(result);
+                }
                 if is_builtin_function(name) || name.starts_with("FN") {
                     let values = eval_call_args(ctx, name, args)?;
                     ctx.call_runtime_function(name, values)?.as_number()
                 } else {
-                    eval_array_value(ctx, name, args)?.as_number()
+                    eval_array_number(ctx, name, args)
                 }
             }
             Expr::StringIndex { .. } => self.eval(ctx)?.as_number(),
@@ -1015,6 +1024,105 @@ fn eval_array_value(ctx: &mut impl EvalContext, name: &str, args: &[Expr]) -> Ba
             ctx.get_array_value(name, &indexes)
         }
     }
+}
+
+fn eval_array_number(ctx: &mut impl EvalContext, name: &str, args: &[Expr]) -> BasicResult<f64> {
+    match args.len() {
+        1 => {
+            let index = eval_index(ctx, &args[0])?;
+            ctx.get_array_number(name, &[index])
+        }
+        2 => {
+            let indexes = [eval_index(ctx, &args[0])?, eval_index(ctx, &args[1])?];
+            ctx.get_array_number(name, &indexes)
+        }
+        _ => {
+            let indexes = args
+                .iter()
+                .map(|arg| eval_index(ctx, arg))
+                .collect::<BasicResult<Vec<_>>>()?;
+            ctx.get_array_number(name, &indexes)
+        }
+    }
+}
+
+fn eval_direct_numeric_function(
+    ctx: &mut impl EvalContext,
+    name: &str,
+    args: &[Expr],
+) -> BasicResult<Option<f64>> {
+    let upper_name;
+    let name = if name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        upper_name = name.to_ascii_uppercase();
+        upper_name.as_str()
+    } else {
+        name
+    };
+    let result = match name {
+        "ABS" if args.len() == 1 => args[0].eval_number(ctx)?.abs(),
+        "INT" if args.len() == 1 => args[0].eval_number(ctx)?.floor(),
+        "FIX" if args.len() == 1 => {
+            let x = args[0].eval_number(ctx)?;
+            if x >= 0.0 {
+                x.floor()
+            } else {
+                x.ceil()
+            }
+        }
+        "SGN" if args.len() == 1 => {
+            let x = args[0].eval_number(ctx)?;
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+        "FRAC" if args.len() == 1 => args[0].eval_number(ctx)?.fract(),
+        "SQR" if args.len() == 1 => {
+            let x = args[0].eval_number(ctx)?;
+            if x < 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            checked_number(x.sqrt())?
+        }
+        "LOG" if args.len() == 1 => {
+            let x = args[0].eval_number(ctx)?;
+            if x <= 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            x.ln()
+        }
+        "LOG10" if args.len() == 1 => {
+            let x = args[0].eval_number(ctx)?;
+            if x <= 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            x.log10()
+        }
+        "EXP" if args.len() == 1 => checked_number(args[0].eval_number(ctx)?.exp())?,
+        "ROUND" if args.len() == 1 => round_half_away(args[0].eval_number(ctx)?, 0),
+        "ROUND" if args.len() == 2 => {
+            round_half_away(args[0].eval_number(ctx)?, args[1].eval_number(ctx)? as i32)
+        }
+        "MIN" if !args.is_empty() => {
+            let mut min = args[0].eval_number(ctx)?;
+            for arg in &args[1..] {
+                min = min.min(arg.eval_number(ctx)?);
+            }
+            min
+        }
+        "MAX" if !args.is_empty() => {
+            let mut max = args[0].eval_number(ctx)?;
+            for arg in &args[1..] {
+                max = max.max(arg.eval_number(ctx)?);
+            }
+            max
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(result))
 }
 
 fn eval_index(ctx: &mut impl EvalContext, expr: &Expr) -> BasicResult<i32> {

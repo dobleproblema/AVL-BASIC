@@ -9,7 +9,7 @@ use crate::graphics::{rgb_number, Graphics};
 use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::value::{format_basic_number, round_half_away, Value};
-use crate::window::{refocus_console_window, GraphicsWindow, MouseSnapshot};
+use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -27,7 +27,7 @@ pub enum RunOutcome {
     Stop,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Cursor {
     line_idx: usize,
     cmd_idx: usize,
@@ -184,6 +184,27 @@ impl ArrayValue {
             ArrayData::Number(values) => Value::number(values[index as usize]),
             ArrayData::Str(values) => Value::string(values[index as usize].clone()),
         })
+    }
+
+    fn get_number(&self, indexes: &[i32]) -> BasicResult<f64> {
+        let idx = self.flat_index(indexes)?;
+        match &self.data {
+            ArrayData::Number(values) => Ok(values[idx]),
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn get_number_direct_1d(&self, index: i32) -> BasicResult<f64> {
+        if self.dims.len() != 1 {
+            return Err(BasicError::new(ErrorCode::InvalidIndex));
+        }
+        if index < 0 || index as usize > self.dims[0] {
+            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+        }
+        match &self.data {
+            ArrayData::Number(values) => Ok(values[index as usize]),
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
     }
 
     fn set(&mut self, indexes: &[i32], value: Value) -> BasicResult<()> {
@@ -501,6 +522,8 @@ pub struct Interpreter {
     graphics_window_suppressed: bool,
     graphics_window_dirty: bool,
     graphics_window_used_this_run: bool,
+    graphics_window_used_by_immediate: bool,
+    graphics_window_closed_by_current_run: bool,
     stale_graphics_window_poll_counter: u32,
     last_graphics_window_pump: Instant,
     last_graphics_window_present: Instant,
@@ -586,6 +609,8 @@ impl Interpreter {
             graphics_window_suppressed: false,
             graphics_window_dirty: false,
             graphics_window_used_this_run: false,
+            graphics_window_used_by_immediate: false,
+            graphics_window_closed_by_current_run: false,
             stale_graphics_window_poll_counter: 0,
             last_graphics_window_pump: Instant::now(),
             last_graphics_window_present: Instant::now(),
@@ -737,12 +762,27 @@ impl Interpreter {
     }
 
     pub fn process_immediate(&mut self, line: &str) -> BasicResult<()> {
+        self.graphics_window_used_by_immediate = false;
+        let result = self.process_immediate_inner(line);
+        if self.current_line.is_none() && self.graphics_window_used_by_immediate {
+            focus_console_window();
+        }
+        self.graphics_window_used_by_immediate = false;
+        result
+    }
+
+    fn process_immediate_inner(&mut self, line: &str) -> BasicResult<()> {
         let normalized = console::normalize_code(line);
         let trimmed = normalized.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
         self.current_line = None;
+        self.graphics_window_suppressed = false;
+        self.key_queue.clear();
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.clear_key_queue();
+        }
         if starts_with_line_number(trimmed) {
             self.program.add_source_line(trimmed)?;
             if numbered_line_code(trimmed).is_some_and(|code| code.trim().is_empty()) {
@@ -1234,6 +1274,10 @@ impl Interpreter {
         self.mouse_handlers.clear();
         self.mouse_state = MouseSnapshot::default();
         self.mouse_event_consumed = false;
+        self.key_queue.clear();
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.clear_key_queue();
+        }
         self.interrupts_enabled = true;
         self.handling_mouse_event = false;
         self.graphics_window_suppressed = false;
@@ -1253,6 +1297,7 @@ impl Interpreter {
         self.restart_run_loop = false;
         self.program_structure_changed = false;
         self.current_line = None;
+        self.graphics_window_closed_by_current_run = false;
         self.mat_base = 0;
         self.angle_degrees = false;
     }
@@ -1277,7 +1322,16 @@ impl Interpreter {
         self.run_depth += 1;
         let _runtime_raw = console::enter_runtime_raw_mode().ok();
         let result = self.run_from_inner(cursor);
+        let closed_graphics_window = self.graphics_window_closed_by_current_run;
         self.run_depth -= 1;
+        if self.run_depth == 0 {
+            if (self.graphics_window_used_this_run || self.graphics_window.is_some())
+                && !closed_graphics_window
+            {
+                focus_console_window();
+            }
+            self.graphics_window_closed_by_current_run = false;
+        }
         result
     }
 
@@ -3117,16 +3171,17 @@ impl Interpreter {
         if frame_index + 1 < self.for_stack.len() {
             self.for_stack.truncate(frame_index + 1);
         }
-        let Some(frame) = self.for_stack.last().cloned() else {
+        let Some(frame) = self.for_stack.last() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = self
-            .numeric_variables
-            .get(&frame.var)
-            .copied()
-            .unwrap_or(0.0)
-            + frame.step;
-        self.numeric_variables.insert(frame.var.clone(), current);
+        let current = if let Some(slot) = self.numeric_variables.get_mut(&frame.var) {
+            *slot += frame.step;
+            *slot
+        } else {
+            let current = frame.step;
+            self.numeric_variables.insert(frame.var.clone(), current);
+            current
+        };
         let keep = if frame.step >= 0.0 {
             current <= frame.end
         } else {
@@ -3159,16 +3214,17 @@ impl Interpreter {
         if frame_index + 1 < self.for_stack.len() {
             self.for_stack.truncate(frame_index + 1);
         }
-        let Some(frame) = self.for_stack.last().cloned() else {
+        let Some(frame) = self.for_stack.last() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = self
-            .numeric_variables
-            .get(&frame.var)
-            .copied()
-            .unwrap_or(0.0)
-            + frame.step;
-        self.numeric_variables.insert(frame.var.clone(), current);
+        let current = if let Some(slot) = self.numeric_variables.get_mut(&frame.var) {
+            *slot += frame.step;
+            *slot
+        } else {
+            let current = frame.step;
+            self.numeric_variables.insert(frame.var.clone(), current);
+            current
+        };
         let keep = if frame.step >= 0.0 {
             current <= frame.end
         } else {
@@ -4803,7 +4859,10 @@ impl Interpreter {
     }
 
     fn ensure_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled || self.graphics_window_suppressed {
+        if !self.graphics_window_enabled
+            || self.graphics_window_suppressed
+            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
+        {
             return Ok(());
         }
         self.prepare_graphics_window_use_by_current_run()?;
@@ -4813,18 +4872,24 @@ impl Interpreter {
             .as_ref()
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
-            self.graphics_window = Some(GraphicsWindow::new(&self.graphics)?);
+            let mut window = GraphicsWindow::new(&self.graphics)?;
+            if self.current_line.is_some() {
+                window.focus();
+            }
+            self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
-            refocus_console_window();
             self.process_mouse_event()?;
         }
         Ok(())
     }
 
     fn refresh_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled || self.graphics_window_suppressed {
+        if !self.graphics_window_enabled
+            || self.graphics_window_suppressed
+            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
+        {
             return Ok(());
         }
         self.graphics_window_dirty = true;
@@ -4837,7 +4902,10 @@ impl Interpreter {
     }
 
     fn present_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled || self.graphics_window_suppressed {
+        if !self.graphics_window_enabled
+            || self.graphics_window_suppressed
+            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
+        {
             return Ok(());
         }
         self.prepare_graphics_window_use_by_current_run()?;
@@ -4846,11 +4914,14 @@ impl Interpreter {
             .as_ref()
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
-            self.graphics_window = Some(GraphicsWindow::new(&self.graphics)?);
+            let mut window = GraphicsWindow::new(&self.graphics)?;
+            if self.current_line.is_some() {
+                window.focus();
+            }
+            self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
-            refocus_console_window();
             return Ok(());
         }
         let mut user_closed = false;
@@ -4870,9 +4941,6 @@ impl Interpreter {
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now();
             self.process_mouse_event()?;
-            if self.current_line.is_none() {
-                refocus_console_window();
-            }
         }
         Ok(())
     }
@@ -4984,6 +5052,17 @@ impl Interpreter {
 
     fn pump_graphics_window_now(&mut self) -> BasicResult<()> {
         self.last_graphics_window_pump = Instant::now();
+        if self.current_line.is_some() && !self.graphics_window_used_this_run {
+            let mut user_closed = false;
+            if let Some(window) = self.graphics_window.as_mut() {
+                user_closed = !window.pump_lifecycle(&self.graphics)?;
+            }
+            if user_closed {
+                self.mark_graphics_window_user_closed();
+            }
+            return Ok(());
+        }
+
         let mut user_closed = false;
         if let Some(window) = self.graphics_window.as_mut() {
             self.mouse_state = window.pump_events();
@@ -5004,6 +5083,7 @@ impl Interpreter {
         if self.mouse_state.event.is_empty()
             || !self.interrupts_enabled
             || self.run_depth == 0
+            || !self.current_run_uses_graphics_window()
             || self.mouse_event_consumed
             || self.handling_mouse_event
         {
@@ -5021,14 +5101,25 @@ impl Interpreter {
 
     fn pump_graphics_window_for_console(&mut self) -> io::Result<()> {
         self.pump_graphics_window_if_due()
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.display_for_basic()))
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.display_for_basic()))?;
+        if console::take_interrupt_requested() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "Ctrl-C"));
+        }
+        Ok(())
     }
 
     fn prepare_graphics_window_use_by_current_run(&mut self) -> BasicResult<()> {
-        if self.current_line.is_some() && !self.graphics_window_used_this_run {
+        let first_graphics_use_by_run =
+            self.current_line.is_some() && !self.graphics_window_used_this_run;
+        if first_graphics_use_by_run {
             self.pump_graphics_window_now()?;
         }
         self.mark_graphics_window_used_by_current_run();
+        if first_graphics_use_by_run {
+            if let Some(window) = self.graphics_window.as_mut() {
+                window.focus();
+            }
+        }
         Ok(())
     }
 
@@ -5045,6 +5136,8 @@ impl Interpreter {
     fn mark_graphics_window_used_by_current_run(&mut self) {
         if self.current_line.is_some() {
             self.graphics_window_used_this_run = true;
+        } else {
+            self.graphics_window_used_by_immediate = true;
         }
     }
 
@@ -5055,11 +5148,12 @@ impl Interpreter {
     fn mark_graphics_window_user_closed(&mut self) {
         let interrupt_current_run = self.current_run_uses_graphics_window();
         self.graphics_window = None;
-        self.graphics_window_suppressed = false;
+        self.graphics_window_suppressed = interrupt_current_run;
         self.graphics.reset_state();
         self.graphics_window_dirty = false;
         self.last_frame_command_present = None;
         if interrupt_current_run {
+            self.graphics_window_closed_by_current_run = true;
             self.test_interrupt_requested = true;
         }
     }
@@ -6628,8 +6722,15 @@ impl Interpreter {
 
     fn read_inkey(&mut self) -> String {
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
-        let _ = self.pump_graphics_window_if_due();
         if use_graphics_keyboard {
+            if let Some(window) = self.graphics_window.as_mut() {
+                if let Some(code) = window.take_key_code() {
+                    return char::from_u32(code as u32)
+                        .map(|ch| ch.to_string())
+                        .unwrap_or_default();
+                }
+            }
+            let _ = self.pump_graphics_window_now();
             if let Some(window) = self.graphics_window.as_mut() {
                 if let Some(code) = window.take_key_code() {
                     return char::from_u32(code as u32)
@@ -6650,8 +6751,8 @@ impl Interpreter {
 
     fn key_down(&mut self, code: u8) -> bool {
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
-        let _ = self.pump_graphics_window_if_due();
         if use_graphics_keyboard {
+            let _ = self.pump_graphics_window_now();
             return self
                 .graphics_window
                 .as_ref()
@@ -6711,6 +6812,22 @@ impl EvalContext for Interpreter {
         }
     }
 
+    fn get_number_variable(&mut self, name: &str) -> BasicResult<f64> {
+        if name.ends_with('$') {
+            return Err(BasicError::new(ErrorCode::TypeMismatch));
+        }
+        if name == "INF" {
+            return Ok(f64::INFINITY);
+        }
+        if !self.function_call_stack.is_empty()
+            && !self.numeric_variables.contains_key(name)
+            && self.arrays.contains_key(name)
+        {
+            return Err(BasicError::new(ErrorCode::TypeMismatch));
+        }
+        Ok(self.numeric_variables.get(name).copied().unwrap_or(0.0))
+    }
+
     fn get_array_value(&mut self, name: &str, indexes: &[i32]) -> BasicResult<Value> {
         if let Some(array) = self.arrays.get(name) {
             if array.dims.len() == indexes.len() {
@@ -6729,6 +6846,26 @@ impl EvalContext for Interpreter {
         }
         let array = self.arrays.get(name).unwrap();
         array.get(&indexes)
+    }
+
+    fn get_array_number(&mut self, name: &str, indexes: &[i32]) -> BasicResult<f64> {
+        if let Some(array) = self.arrays.get(name) {
+            if array.dims.len() == indexes.len() {
+                if indexes.len() == 1 {
+                    return array.get_number_direct_1d(indexes[0]);
+                }
+                return array.get_number(indexes);
+            }
+        }
+        let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+        if !self.arrays.contains_key(name) {
+            self.arrays.insert(
+                name.to_string(),
+                ArrayValue::new(name, vec![10; indexes.len()]),
+            );
+        }
+        let array = self.arrays.get(name).unwrap();
+        array.get_number(&indexes)
     }
 
     fn array_reference(&mut self, name: &str) -> Option<Value> {
@@ -7569,6 +7706,7 @@ mod interpreter_tests {
         };
         interp.current_line = Some(20);
         interp.run_depth = 1;
+        interp.graphics_window_used_this_run = true;
 
         interp.process_mouse_event().unwrap();
 
@@ -7594,6 +7732,7 @@ mod interpreter_tests {
         interp.mark_graphics_window_user_closed();
 
         assert!(!interp.test_interrupt_requested);
+        assert!(!interp.graphics_window_suppressed);
     }
 
     #[test]
@@ -7605,6 +7744,20 @@ mod interpreter_tests {
         interp.mark_graphics_window_user_closed();
 
         assert!(interp.test_interrupt_requested);
+        assert!(interp.graphics_window_suppressed);
+    }
+
+    #[test]
+    fn closing_graphics_window_suppresses_reopen_until_next_immediate_command() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(20);
+        interp.graphics_window_used_this_run = true;
+
+        interp.mark_graphics_window_user_closed();
+        assert!(interp.graphics_window_suppressed);
+
+        interp.process_immediate("A=1").unwrap();
+        assert!(!interp.graphics_window_suppressed);
     }
 
     #[test]
@@ -7619,6 +7772,39 @@ mod interpreter_tests {
 
         interp.current_line = None;
         assert!(!interp.current_run_uses_graphics_window());
+    }
+
+    #[test]
+    fn mouse_events_do_not_interrupt_until_current_run_claims_window() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"100 A=A+1
+110 RETURN"#,
+            )
+            .unwrap();
+        interp.rebuild_command_cache();
+        interp.mouse_handlers.insert("LEFTDOWN".to_string(), 100);
+        interp.mouse_state = MouseSnapshot {
+            x: 10,
+            y: 20,
+            left: true,
+            right: false,
+            event: "LEFTDOWN".to_string(),
+        };
+        interp.current_line = Some(20);
+        interp.run_depth = 1;
+        interp.graphics_window_used_this_run = false;
+
+        interp.process_mouse_event().unwrap();
+        assert_eq!(interp.numeric_variables.get("A").copied(), None);
+        assert!(!interp.mouse_event_consumed);
+
+        interp.graphics_window_used_this_run = true;
+        interp.process_mouse_event().unwrap();
+        assert_eq!(interp.numeric_variables.get("A").copied(), Some(1.0));
+        assert!(interp.mouse_event_consumed);
     }
 
     #[test]
