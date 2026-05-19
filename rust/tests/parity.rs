@@ -48,7 +48,10 @@ fn ctrl_c_during_run_interrupts_program_without_losing_cont() {
     let err = interp.process_immediate("RUN").unwrap_err();
 
     assert_eq!(err.code, ErrorCode::KeyboardInterrupt);
-    assert_eq!(err.display_for_basic(), "Execution interrupted by user.");
+    assert_eq!(
+        err.display_for_basic(),
+        "Line 10. Execution interrupted by user."
+    );
     assert_eq!(interp.take_output(), "");
 
     interp.process_immediate("CONT").unwrap();

@@ -781,7 +781,7 @@ impl Interpreter {
         self.graphics_window_suppressed = false;
         self.key_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
-            window.clear_key_queue();
+            window.clear_transient_input();
         }
         if starts_with_line_number(trimmed) {
             self.program.add_source_line(trimmed)?;
@@ -1276,7 +1276,7 @@ impl Interpreter {
         self.mouse_event_consumed = false;
         self.key_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
-            window.clear_key_queue();
+            window.clear_transient_input();
         }
         self.interrupts_enabled = true;
         self.handling_mouse_event = false;
@@ -1442,6 +1442,7 @@ impl Interpreter {
                 }
                 if self.repeat_current_command {
                     self.repeat_current_command = false;
+                    self.idle_wait_for_graphics_event_loop(&cursor)?;
                     continue;
                 }
                 if cursor != before {
@@ -1478,12 +1479,39 @@ impl Interpreter {
             return Ok(());
         }
         self.test_interrupt_requested = false;
+        console::flush_pending_input();
+        self.key_queue.clear();
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.clear_transient_input();
+        }
         self.finish_output_line();
         self.stopped_cursor = Some(cursor.clone());
         self.end_requested = false;
         self.function_return_requested = false;
         self.sub_return_requested = false;
-        Err(BasicError::new(ErrorCode::KeyboardInterrupt))
+        let mut err = BasicError::new(ErrorCode::KeyboardInterrupt);
+        if let Some(line) = self
+            .current_line
+            .or_else(|| self.program.line_numbers().get(cursor.line_idx).copied())
+        {
+            err = err.at_line(line);
+        }
+        Err(err)
+    }
+
+    fn idle_wait_for_graphics_event_loop(&mut self, cursor: &Cursor) -> BasicResult<()> {
+        if !self.current_run_uses_graphics_window()
+            || self.graphics_window.is_none()
+            || self.mouse_handlers.is_empty()
+        {
+            return Ok(());
+        }
+        let interval = self.graphics_window_pump_interval();
+        let elapsed = self.last_graphics_window_pump.elapsed();
+        if elapsed < interval {
+            std::thread::sleep((interval - elapsed).min(Duration::from_millis(2)));
+        }
+        self.check_user_interrupt(cursor)
     }
 
     fn execute_command(
@@ -4859,14 +4887,17 @@ impl Interpreter {
     }
 
     fn ensure_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled
-            || self.graphics_window_suppressed
-            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
-        {
+        if self.graphics_window_blocked() {
             return Ok(());
         }
         self.prepare_graphics_window_use_by_current_run()?;
+        if self.graphics_window_blocked() {
+            return Ok(());
+        }
         self.pump_graphics_window_if_due()?;
+        if self.graphics_window_blocked() {
+            return Ok(());
+        }
         let recreate = self
             .graphics_window
             .as_ref()
@@ -4876,6 +4907,7 @@ impl Interpreter {
             if self.current_line.is_some() {
                 window.focus();
             }
+            window.clear_transient_input();
             self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
             self.last_graphics_window_pump = Instant::now();
@@ -4886,10 +4918,7 @@ impl Interpreter {
     }
 
     fn refresh_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled
-            || self.graphics_window_suppressed
-            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
-        {
+        if self.graphics_window_blocked() {
             return Ok(());
         }
         self.graphics_window_dirty = true;
@@ -4902,13 +4931,13 @@ impl Interpreter {
     }
 
     fn present_graphics_window(&mut self) -> BasicResult<()> {
-        if !self.graphics_window_enabled
-            || self.graphics_window_suppressed
-            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
-        {
+        if self.graphics_window_blocked() {
             return Ok(());
         }
         self.prepare_graphics_window_use_by_current_run()?;
+        if self.graphics_window_blocked() {
+            return Ok(());
+        }
         let recreate = self
             .graphics_window
             .as_ref()
@@ -4918,6 +4947,7 @@ impl Interpreter {
             if self.current_line.is_some() {
                 window.focus();
             }
+            window.clear_transient_input();
             self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
             self.last_graphics_window_pump = Instant::now();
@@ -5143,6 +5173,12 @@ impl Interpreter {
 
     fn current_run_uses_graphics_window(&self) -> bool {
         self.current_line.is_some() && self.graphics_window_used_this_run
+    }
+
+    fn graphics_window_blocked(&self) -> bool {
+        !self.graphics_window_enabled
+            || self.graphics_window_suppressed
+            || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
     }
 
     fn mark_graphics_window_user_closed(&mut self) {

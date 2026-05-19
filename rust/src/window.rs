@@ -13,6 +13,7 @@ pub struct GraphicsWindow {
     height: usize,
     mouse: MouseSnapshot,
     key_queue: VecDeque<u8>,
+    ctrl_c_down: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,6 +23,12 @@ pub struct MouseSnapshot {
     pub left: bool,
     pub right: bool,
     pub event: String,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CtrlCState {
+    foreground: bool,
+    down: bool,
 }
 
 impl fmt::Debug for GraphicsWindow {
@@ -54,8 +61,13 @@ impl GraphicsWindow {
             height: graphics.height,
             mouse: MouseSnapshot::default(),
             key_queue: VecDeque::new(),
+            ctrl_c_down: false,
         };
-        graphics_window.present(graphics)?;
+        graphics_window
+            .window
+            .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
+            .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
+        graphics_window.clear_transient_input();
         Ok(graphics_window)
     }
 
@@ -82,16 +94,10 @@ impl GraphicsWindow {
         self.update_mouse()
     }
 
-    pub fn pump_lifecycle(&mut self, graphics: &Graphics) -> BasicResult<bool> {
+    pub fn pump_lifecycle(&mut self, _graphics: &Graphics) -> BasicResult<bool> {
         if self.window.is_open() {
-            self.window
-                .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
-                .map_err(|err| {
-                    BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
-                })?;
-            self.update_keyboard();
-            self.key_queue.clear();
-            self.update_mouse();
+            self.window.update();
+            self.clear_transient_input();
             self.mouse.event.clear();
         }
         Ok(self.window.is_open())
@@ -107,6 +113,15 @@ impl GraphicsWindow {
 
     pub fn clear_key_queue(&mut self) {
         self.key_queue.clear();
+    }
+
+    pub fn clear_transient_input(&mut self) {
+        self.key_queue.clear();
+        if self.window.is_open() {
+            self.window.update();
+            let _ = self.window.get_keys_pressed(KeyRepeat::No);
+            self.ctrl_c_down = self.ctrl_c_state().down;
+        }
     }
 
     pub fn take_key_code(&mut self) -> Option<u8> {
@@ -154,6 +169,10 @@ impl GraphicsWindow {
     }
 
     fn update_keyboard(&mut self) {
+        if self.update_ctrl_c_state() {
+            self.key_queue.clear();
+            return;
+        }
         let ctrl_down = self.ctrl_down();
         for key in self.window.get_keys_pressed(KeyRepeat::No) {
             if key == Key::C && ctrl_down {
@@ -163,6 +182,54 @@ impl GraphicsWindow {
             if let Some(code) = key_to_code(key, self.shift_down()) {
                 self.key_queue.push_back(code);
             }
+        }
+    }
+
+    fn update_ctrl_c_state(&mut self) -> bool {
+        let state = self.ctrl_c_state();
+        if !state.foreground {
+            self.ctrl_c_down = state.down;
+            return false;
+        }
+        let pressed = state.down && !self.ctrl_c_down;
+        self.ctrl_c_down = state.down;
+        if pressed {
+            console::request_interrupt();
+        }
+        pressed
+    }
+
+    #[cfg(windows)]
+    fn ctrl_c_state(&self) -> CtrlCState {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetAsyncKeyState(v_key: i32) -> i16;
+            fn GetForegroundWindow() -> *mut c_void;
+        }
+
+        const VK_CONTROL: i32 = 0x11;
+        const VK_LCONTROL: i32 = 0xA2;
+        const VK_RCONTROL: i32 = 0xA3;
+        const VK_C: i32 = 0x43;
+
+        unsafe {
+            let c = GetAsyncKeyState(VK_C) as u16;
+            let ctrl = GetAsyncKeyState(VK_CONTROL) as u16;
+            let left_ctrl = GetAsyncKeyState(VK_LCONTROL) as u16;
+            let right_ctrl = GetAsyncKeyState(VK_RCONTROL) as u16;
+
+            CtrlCState {
+                foreground: GetForegroundWindow() == self.window.get_window_handle(),
+                down: c & 0x8000 != 0 && (ctrl | left_ctrl | right_ctrl) & 0x8000 != 0,
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn ctrl_c_state(&self) -> CtrlCState {
+        CtrlCState {
+            foreground: true,
+            down: self.ctrl_down() && self.window.is_key_down(Key::C),
         }
     }
 

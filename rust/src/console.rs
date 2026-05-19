@@ -3,6 +3,8 @@ use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::ffi::c_void;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -307,9 +309,35 @@ pub fn clear_interrupt_requested() {
     INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
 }
 
+pub fn flush_pending_input() {
+    clear_interrupt_requested();
+    flush_platform_input();
+}
+
 pub fn request_interrupt() {
     INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
 }
+
+#[cfg(windows)]
+fn flush_platform_input() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(n_std_handle: i32) -> *mut c_void;
+        fn FlushConsoleInputBuffer(h_console_input: *mut c_void) -> i32;
+    }
+
+    const STD_INPUT_HANDLE: i32 = -10;
+    unsafe {
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        if handle.is_null() || handle == (-1isize as *mut c_void) {
+            return;
+        }
+        let _ = FlushConsoleInputBuffer(handle);
+    }
+}
+
+#[cfg(not(windows))]
+fn flush_platform_input() {}
 
 pub fn request_interrupt_for_test() {
     request_interrupt();
