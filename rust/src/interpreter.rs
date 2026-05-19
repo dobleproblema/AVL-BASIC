@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const AVL_BASIC_LANGUAGE_VERSION: &str = "1.5.23";
+const AVL_BASIC_LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 

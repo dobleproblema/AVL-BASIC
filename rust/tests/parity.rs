@@ -1031,7 +1031,7 @@ fn version_string_matches_python_language_version() {
         r#"10 PRINT VERSION$
 20 END"#,
     );
-    assert_eq!(output, "1.5.23\n");
+    assert_eq!(output, format!("{}\n", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
