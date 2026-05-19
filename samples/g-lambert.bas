@@ -52,7 +52,7 @@
 355   K=TIDX(I) 'Get the index of the triangle to draw
 360   INK TC(K)
 365   FTRIANGLE TX0(K),TY0(K),TX1(K),TY1(K),TX2(K),TY2(K)
-370   FRAME
+370   'FRAME
 375 NEXT I
 380 PRINT "Elapsed time:";TIME-T1
 385 END

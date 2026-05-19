@@ -1,11 +1,9 @@
-100 DEF FNX(X)=1/X 'The one-variable function we want to plot
-110 MODE 800
-120 B=40 'Border discarded at each end so the labels fit
-130 SCREEN : CLG
-140 SCALE -10,0,-2,0,B
-150 XAXIS 1,,,1
-160 YAXIS 0.5,,,1
-170 PENWIDTH 2 : INK 2
-180 GRAPH FNX(X)
-190 END
-
+100 MODE 800
+110 B=40 'Border discarded at each end so the labels fit
+120 SCREEN : CLG
+130 SCALE -10,0,-2,0,B
+140 XAXIS 1,,,1
+150 YAXIS 0.5,,,1
+160 PENWIDTH 2 : INK 2
+170 GRAPH 1/X
+180 END
