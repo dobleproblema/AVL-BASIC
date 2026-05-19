@@ -500,6 +500,7 @@ pub struct Interpreter {
     timers: Vec<BasicTimer>,
     mouse_handlers: HashMap<String, i32>,
     mouse_state: MouseSnapshot,
+    mouse_event_queue: VecDeque<String>,
     mouse_event_consumed: bool,
     interrupts_enabled: bool,
     handling_mouse_event: bool,
@@ -587,6 +588,7 @@ impl Interpreter {
             timers: Vec::new(),
             mouse_handlers: HashMap::new(),
             mouse_state: MouseSnapshot::default(),
+            mouse_event_queue: VecDeque::new(),
             mouse_event_consumed: false,
             interrupts_enabled: true,
             handling_mouse_event: false,
@@ -1273,6 +1275,7 @@ impl Interpreter {
         self.timers.clear();
         self.mouse_handlers.clear();
         self.mouse_state = MouseSnapshot::default();
+        self.mouse_event_queue.clear();
         self.mouse_event_consumed = false;
         self.key_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
@@ -1481,6 +1484,7 @@ impl Interpreter {
         self.test_interrupt_requested = false;
         console::flush_pending_input();
         self.key_queue.clear();
+        self.mouse_event_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
             window.clear_transient_input();
         }
@@ -2995,12 +2999,22 @@ impl Interpreter {
         let target_line = self.eval_number(target_expr)? as i32;
         if target_line == 0 {
             self.mouse_handlers.remove(event);
+            self.mouse_event_queue
+                .retain(|queued_event| queued_event != event);
+            if self.mouse_state.event == event {
+                self.mouse_event_consumed = true;
+            }
             return Ok(());
         }
         if self.line_index(target_line).is_none() {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         }
         self.mouse_handlers.insert(event.to_string(), target_line);
+        self.mouse_event_queue
+            .retain(|queued_event| queued_event != event);
+        if self.mouse_state.event == event {
+            self.mouse_event_consumed = true;
+        }
         if self.graphics_window.is_some() && self.graphics_window_enabled {
             self.prepare_graphics_window_use_by_current_run()?;
         }
@@ -4959,9 +4973,9 @@ impl Interpreter {
             if !window.is_open() {
                 user_closed = true;
             } else {
-                self.mouse_state = window.present(&self.graphics)?;
-                self.mouse_event_consumed = false;
+                let mouse_state = window.present(&self.graphics)?;
                 user_closed = !window.is_open();
+                self.update_mouse_state(mouse_state);
             }
         }
         if user_closed {
@@ -5094,12 +5108,15 @@ impl Interpreter {
         }
 
         let mut user_closed = false;
+        let mut mouse_state = None;
         if let Some(window) = self.graphics_window.as_mut() {
-            self.mouse_state = window.pump_events();
-            self.mouse_event_consumed = false;
+            mouse_state = Some(window.pump_events());
             if !window.is_open() {
                 user_closed = true;
             }
+        }
+        if let Some(mouse_state) = mouse_state {
+            self.update_mouse_state(mouse_state);
         }
         if user_closed {
             self.mark_graphics_window_user_closed();
@@ -5110,16 +5127,21 @@ impl Interpreter {
     }
 
     fn process_mouse_event(&mut self) -> BasicResult<()> {
-        if self.mouse_state.event.is_empty()
-            || !self.interrupts_enabled
+        if !self.interrupts_enabled
             || self.run_depth == 0
             || !self.current_run_uses_graphics_window()
-            || self.mouse_event_consumed
             || self.handling_mouse_event
         {
             return Ok(());
         }
-        let Some(target) = self.mouse_handlers.get(&self.mouse_state.event).copied() else {
+        let event = if let Some(event) = self.mouse_event_queue.pop_front() {
+            event
+        } else if !self.mouse_state.event.is_empty() && !self.mouse_event_consumed {
+            self.mouse_state.event.clone()
+        } else {
+            return Ok(());
+        };
+        let Some(target) = self.mouse_handlers.get(&event).copied() else {
             return Ok(());
         };
         self.handling_mouse_event = true;
@@ -5127,6 +5149,21 @@ impl Interpreter {
         self.handling_mouse_event = false;
         self.mouse_event_consumed = true;
         result
+    }
+
+    fn update_mouse_state(&mut self, mouse_state: MouseSnapshot) {
+        let event = mouse_state.event.clone();
+        self.mouse_state = mouse_state;
+        if event.is_empty() {
+            return;
+        }
+        self.mouse_event_consumed = false;
+        if self.run_depth > 0
+            && self.current_run_uses_graphics_window()
+            && self.mouse_handlers.contains_key(&event)
+        {
+            self.mouse_event_queue.push_back(event);
+        }
     }
 
     fn pump_graphics_window_for_console(&mut self) -> io::Result<()> {
@@ -7757,6 +7794,46 @@ mod interpreter_tests {
         interp.mouse_event_consumed = false;
         interp.process_mouse_event().unwrap();
         assert_eq!(interp.numeric_variables.get("A").copied(), Some(1.0));
+    }
+
+    #[test]
+    fn queued_mouse_events_are_delivered_after_handler_frame_polling() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"100 A=A+1
+110 RETURN"#,
+            )
+            .unwrap();
+        interp.rebuild_command_cache();
+        interp.mouse_handlers.insert("LEFTDRAG".to_string(), 100);
+        interp.current_line = Some(20);
+        interp.run_depth = 1;
+        interp.graphics_window_used_this_run = true;
+
+        interp.update_mouse_state(MouseSnapshot {
+            x: 10,
+            y: 20,
+            left: true,
+            right: false,
+            event: "LEFTDRAG".to_string(),
+        });
+        interp.update_mouse_state(MouseSnapshot {
+            x: 15,
+            y: 25,
+            left: true,
+            right: false,
+            event: "LEFTDRAG".to_string(),
+        });
+
+        interp.process_mouse_event().unwrap();
+        interp.process_mouse_event().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("A").copied(), Some(2.0));
+        assert_eq!(interp.mouse_state.x, 15);
+        assert_eq!(interp.mouse_state.y, 25);
+        assert!(interp.mouse_event_queue.is_empty());
     }
 
     #[test]
