@@ -10,6 +10,7 @@ pub enum Expr {
     ArrayOrCall {
         name: String,
         args: Vec<Expr>,
+        kind: ArrayOrCallKind,
     },
     StringIndex {
         target: Box<Expr>,
@@ -24,6 +25,14 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayOrCallKind {
+    Array,
+    ArrayNameFunction,
+    BuiltinFunction,
+    UserFunction,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,22 +125,21 @@ impl Expr {
                     ctx.get_number_variable(name)
                 }
             }
-            Expr::ArrayOrCall { name, args } => {
-                if is_array_name_function(name) {
+            Expr::ArrayOrCall { name, args, kind } => {
+                if *kind == ArrayOrCallKind::ArrayNameFunction {
                     let values = eval_array_name_args(ctx, name, args)?;
                     return ctx
                         .call_runtime_function(name, values)
                         .and_then(|v| v.as_number());
                 }
+                if *kind == ArrayOrCallKind::Array {
+                    return eval_array_number(ctx, name, args);
+                }
                 if let Some(result) = eval_direct_numeric_function(ctx, name, args)? {
                     return Ok(result);
                 }
-                if is_builtin_function(name) || name.starts_with("FN") {
-                    let values = eval_call_args(ctx, name, args)?;
-                    ctx.call_runtime_function(name, values)?.as_number()
-                } else {
-                    eval_array_number(ctx, name, args)
-                }
+                let values = eval_call_args(ctx, name, args)?;
+                ctx.call_runtime_function(name, values)?.as_number()
             }
             Expr::StringIndex { .. } => self.eval(ctx)?.as_number(),
             Expr::Unary { op, expr } => {
@@ -234,7 +242,7 @@ impl Expr {
             Expr::Number(_) => true,
             Expr::Str(_) | Expr::StringIndex { .. } => false,
             Expr::Var(name) => !name.ends_with('$'),
-            Expr::ArrayOrCall { name, args } => {
+            Expr::ArrayOrCall { name, args, .. } => {
                 !name.ends_with('$') && args.iter().all(Expr::is_statically_numeric)
             }
             Expr::Unary { expr, .. } => expr.is_statically_numeric(),
@@ -285,10 +293,13 @@ impl Expr {
                     ctx.get_variable(name)
                 }
             }
-            Expr::ArrayOrCall { name, args } => {
-                if is_array_name_function(name) {
+            Expr::ArrayOrCall { name, args, kind } => {
+                if *kind == ArrayOrCallKind::ArrayNameFunction {
                     let values = eval_array_name_args(ctx, name, args)?;
                     return ctx.call_runtime_function(name, values);
+                }
+                if *kind == ArrayOrCallKind::Array {
+                    return eval_array_value(ctx, name, args);
                 }
                 match name.to_ascii_uppercase().as_str() {
                     "LEN" => return eval_len_function(ctx, args),
@@ -300,11 +311,7 @@ impl Expr {
                     _ => {}
                 }
                 let values = eval_call_args(ctx, name, args)?;
-                if is_builtin_function(name) || name.starts_with("FN") {
-                    ctx.call_runtime_function(name, values)
-                } else {
-                    eval_array_value(ctx, name, args)
-                }
+                ctx.call_runtime_function(name, values)
             }
             Expr::StringIndex { target, index } => {
                 let n = index.eval_number(ctx)?;
@@ -696,7 +703,8 @@ impl Parser {
                 }
             }
             self.expect_rparen()?;
-            Expr::ArrayOrCall { name, args }
+            let kind = classify_array_or_call(&name);
+            Expr::ArrayOrCall { name, args, kind }
         } else {
             Expr::Var(name)
         };
@@ -1700,6 +1708,18 @@ fn is_builtin_function(name: &str) -> bool {
             | "SPC"
             | "TAB"
     )
+}
+
+fn classify_array_or_call(name: &str) -> ArrayOrCallKind {
+    if is_array_name_function(name) {
+        ArrayOrCallKind::ArrayNameFunction
+    } else if is_builtin_function(name) {
+        ArrayOrCallKind::BuiltinFunction
+    } else if name.starts_with("FN") {
+        ArrayOrCallKind::UserFunction
+    } else {
+        ArrayOrCallKind::Array
+    }
 }
 
 fn is_array_name_function(name: &str) -> bool {

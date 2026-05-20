@@ -12,10 +12,40 @@ use crate::value::{format_basic_number, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+type FastHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FastHasher>>;
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+#[derive(Debug, Clone)]
+struct FastHasher(u64);
+
+impl Default for FastHasher {
+    fn default() -> Self {
+        Self(FNV_OFFSET_BASIS)
+    }
+}
+
+impl Hasher for FastHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = self.0;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        self.0 = hash;
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
 
 const AVL_BASIC_LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
@@ -475,10 +505,10 @@ pub struct Interpreter {
     pub root_dir: PathBuf,
     pub current_dir: PathBuf,
     pub program_dir: Option<PathBuf>,
-    numeric_variables: HashMap<String, f64>,
-    string_variables: HashMap<String, String>,
+    numeric_variables: FastHashMap<String, f64>,
+    string_variables: FastHashMap<String, String>,
     identifier_case: HashMap<String, String>,
-    arrays: HashMap<String, ArrayValue>,
+    arrays: FastHashMap<String, ArrayValue>,
     data: Vec<Value>,
     data_line_starts: HashMap<i32, usize>,
     data_pointer: usize,
@@ -563,10 +593,10 @@ impl Interpreter {
             root_dir: root_dir.clone(),
             current_dir: root_dir,
             program_dir: None,
-            numeric_variables: HashMap::new(),
-            string_variables: HashMap::new(),
+            numeric_variables: FastHashMap::default(),
+            string_variables: FastHashMap::default(),
             identifier_case: HashMap::new(),
-            arrays: HashMap::new(),
+            arrays: FastHashMap::default(),
             data: Vec::new(),
             data_line_starts: HashMap::new(),
             data_pointer: 0,
@@ -7405,9 +7435,19 @@ impl Interpreter {
                 if args.iter().any(|arg| matches!(arg, Value::ArrayRef(_))) {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
-                let saved_numeric = self.numeric_variables.clone();
-                let saved_string = self.string_variables.clone();
-                let saved_arrays = self.arrays.clone();
+                let mut saved_numeric = HashMap::new();
+                let mut saved_string = HashMap::new();
+                for param in &params {
+                    if param.ends_with('$') {
+                        saved_string
+                            .entry(param.clone())
+                            .or_insert_with(|| self.string_variables.get(param).cloned());
+                    } else {
+                        saved_numeric
+                            .entry(param.clone())
+                            .or_insert_with(|| self.numeric_variables.get(param).copied());
+                    }
+                }
                 self.function_call_stack.push(name.clone());
                 let bind_result = self.bind_function_args(&params, args);
                 let result = if bind_result.is_ok() {
@@ -7415,15 +7455,10 @@ impl Interpreter {
                 } else {
                     Err(bind_result.err().unwrap())
                 };
-                let return_array = match &result {
-                    Ok(Value::ArrayRef(source)) => self.arrays.get(source).cloned(),
-                    _ => None,
-                };
                 self.function_call_stack.pop();
-                self.numeric_variables = saved_numeric;
-                self.string_variables = saved_string;
-                self.arrays = saved_arrays;
-                if return_array.is_some() {
+                restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
+                restore_string_bindings(&mut self.string_variables, saved_string);
+                if matches!(result, Ok(Value::ArrayRef(_))) {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
                 result
@@ -8762,7 +8797,7 @@ fn cursor_in_exited_block(cursor: &Cursor, start: &Cursor, target: &Cursor) -> b
 }
 
 fn restore_numeric_bindings(
-    variables: &mut HashMap<String, f64>,
+    variables: &mut FastHashMap<String, f64>,
     saved: HashMap<String, Option<f64>>,
 ) {
     for (name, value) in saved {
@@ -8775,7 +8810,7 @@ fn restore_numeric_bindings(
 }
 
 fn restore_string_bindings(
-    variables: &mut HashMap<String, String>,
+    variables: &mut FastHashMap<String, String>,
     saved: HashMap<String, Option<String>>,
 ) {
     for (name, value) in saved {
@@ -8788,7 +8823,7 @@ fn restore_string_bindings(
 }
 
 fn restore_array_bindings(
-    arrays: &mut HashMap<String, ArrayValue>,
+    arrays: &mut FastHashMap<String, ArrayValue>,
     saved: HashMap<String, Option<ArrayValue>>,
 ) {
     for (name, value) in saved {
@@ -9165,7 +9200,7 @@ fn looks_like_non_fn_function_call(source: &str) -> bool {
         && !name.to_ascii_uppercase().starts_with("FN")
 }
 
-fn mat_expr_mentions_array(source: &str, arrays: &HashMap<String, ArrayValue>) -> bool {
+fn mat_expr_mentions_array(source: &str, arrays: &FastHashMap<String, ArrayValue>) -> bool {
     let mut token = String::new();
     let mut in_string = false;
     for ch in source.chars().chain(std::iter::once(' ')) {
@@ -9189,7 +9224,10 @@ fn mat_expr_mentions_array(source: &str, arrays: &HashMap<String, ArrayValue>) -
     false
 }
 
-fn mat_expr_has_array_before_function(source: &str, arrays: &HashMap<String, ArrayValue>) -> bool {
+fn mat_expr_has_array_before_function(
+    source: &str,
+    arrays: &FastHashMap<String, ArrayValue>,
+) -> bool {
     let mut seen_array = false;
     let mut token = String::new();
     let mut in_string = false;
@@ -9228,7 +9266,7 @@ fn mat_expr_has_array_before_function(source: &str, arrays: &HashMap<String, Arr
     false
 }
 
-fn scalar_times_matrix_div_scalar(source: &str, arrays: &HashMap<String, ArrayValue>) -> bool {
+fn scalar_times_matrix_div_scalar(source: &str, arrays: &FastHashMap<String, ArrayValue>) -> bool {
     let Some((mul_pos, '*')) = find_top_level_mat_operator(source, &['*']) else {
         return false;
     };
@@ -9521,7 +9559,7 @@ fn compiled_string_char_assignment(
     else {
         return None;
     };
-    let Expr::ArrayOrCall { name, args } = &compiled.rhs else {
+    let Expr::ArrayOrCall { name, args, .. } = &compiled.rhs else {
         return None;
     };
     if !name.eq_ignore_ascii_case("MID$") || args.len() != 3 {
