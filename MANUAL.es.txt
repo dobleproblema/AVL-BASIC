@@ -1016,15 +1016,17 @@ Formato de rangos
 
 9.2 Edición del programa (EDIT · RENUM · DELETE)
 
++ EDIT                            En la versión Rust, abre un editor a pantalla completa para el programa en memoria
 + EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
 + RENUM [inicio[, paso[, desde]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`.
 
 Notas sobre EDIT
-- Permite modificar tanto el código como el número de línea.
-- Enter aplica los cambios. Si dejas solo el número sin código, la línea se borra. Esc cancela y deja la línea como estaba.
-- Requiere soporte de entrada con prellenado; en entornos sin este soporte, EDIT no está disponible.
+- `EDIT` sin número permite recorrer y modificar el programa completo. F2 aplica los cambios en memoria; Esc o Ctrl-C los descarta. Para guardar en disco hay que usar `SAVE`.
+- En el editor a pantalla completa, las flechas, Inicio/Fin y RePag/AvPag navegan por el texto; Ctrl+Inicio/Ctrl+Fin saltan al principio/final del programa.
+- `EDIT n` permite modificar tanto el código como el número de línea. Enter aplica los cambios. Si dejas solo el número sin código, la línea se borra. Esc cancela y deja la línea como estaba.
+- Requiere soporte de terminal interactivo; en entornos sin este soporte, EDIT no está disponible.
 - Tras aplicar los cambios, el intérprete normaliza la línea y actualiza el estilo de las variables en todo el programa.
 
 Notas sobre DELETE

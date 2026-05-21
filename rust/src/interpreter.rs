@@ -908,7 +908,7 @@ impl Interpreter {
             return Ok(());
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "EDIT") {
-            self.execute_edit_line(arg)?;
+            self.execute_edit(arg)?;
             return Ok(());
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "DEBUG") {
@@ -1139,9 +1139,44 @@ impl Interpreter {
         Ok(())
     }
 
+    fn execute_edit(&mut self, args: &str) -> BasicResult<()> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            return self.execute_fullscreen_edit();
+        }
+        self.execute_edit_line(trimmed)
+    }
+
+    fn execute_fullscreen_edit(&mut self) -> BasicResult<()> {
+        if !console::interactive_terminal() {
+            return Err(self.err(ErrorCode::Unsupported));
+        }
+        let lines = self.program_listing_lines();
+        match console::edit_fullscreen(
+            &lines,
+            self.ansi_output,
+            Some(&self.identifier_case),
+            |lines| {
+                Self::program_from_editor_lines(lines)
+                    .map(|_| ())
+                    .map_err(|err| err.display_for_basic())
+            },
+        )
+        .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?
+        {
+            console::FullscreenEditOutcome::Apply(lines) => {
+                self.program = Self::program_from_editor_lines(&lines)?;
+                self.clear_command_caches();
+                self.refresh_identifier_case_from_program();
+            }
+            console::FullscreenEditOutcome::Cancel => {}
+        }
+        Ok(())
+    }
+
     fn execute_edit_line(&mut self, args: &str) -> BasicResult<()> {
-        let line = parse_line_number_literal(args.trim())
-            .ok_or_else(|| self.err(ErrorCode::InvalidArgument))?;
+        let line =
+            parse_line_number_literal(args).ok_or_else(|| self.err(ErrorCode::InvalidArgument))?;
         let Some(code) = self.program.get(line) else {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         };
@@ -1162,6 +1197,33 @@ impl Interpreter {
             self.clear_command_caches();
         }
         Ok(())
+    }
+
+    fn program_listing_lines(&self) -> Vec<String> {
+        self.program
+            .line_numbers()
+            .into_iter()
+            .map(|line| {
+                let code = self.program.get(line).unwrap_or("");
+                let code = apply_identifier_case(code, &self.identifier_case);
+                format!("{line}{code}")
+            })
+            .collect()
+    }
+
+    fn program_from_editor_lines(lines: &[String]) -> BasicResult<Program> {
+        let mut program = Program::default();
+        for (idx, line) in lines.iter().enumerate() {
+            let normalized = console::normalize_code(line);
+            if normalized.trim().is_empty() {
+                continue;
+            }
+            program.add_source_line(&normalized).map_err(|err| {
+                let message = err.display_for_basic();
+                err.with_detail(format!("Editor line {}. {message}", idx + 1))
+            })?;
+        }
+        Ok(program)
     }
 
     fn execute_debug(&mut self, args: &str) -> BasicResult<()> {

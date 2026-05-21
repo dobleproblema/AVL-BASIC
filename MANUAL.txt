@@ -1015,15 +1015,17 @@ Range formats
 
 9.2 Program editing (`EDIT` - `RENUM` - `DELETE`)
 
++ EDIT                            In the Rust runtime, opens a full-screen editor for the program in memory
 + EDIT n                          Opens a line editor with the contents of line `n` prefilled
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
 + RENUM [start[, step[, from]]]   Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`.
 
 Notes on `EDIT`
-- It allows modifying both the code and the line number.
-- Enter applies the changes. If you leave only the number with no code, the line is deleted. Esc cancels and leaves the line unchanged.
-- It requires input support with prefill; in environments without this support, `EDIT` is not available.
+- `EDIT` with no line number lets you browse and modify the whole program. F2 applies changes in memory; Esc or Ctrl-C discards them. Use `SAVE` to write the program to disk.
+- In the full-screen editor, the arrow keys, Home/End and PageUp/PageDown navigate the text; Ctrl+Home/Ctrl+End jump to the start/end of the program.
+- `EDIT n` allows modifying both the code and the line number. Enter applies the changes. If you leave only the number with no code, the line is deleted. Esc cancels and leaves the line unchanged.
+- It requires interactive terminal support; in environments without this support, `EDIT` is not available.
 - After applying the changes, the interpreter normalizes the line and updates variable styling throughout the program.
 
 Notes on `DELETE`
