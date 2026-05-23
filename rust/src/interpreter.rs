@@ -986,10 +986,9 @@ impl Interpreter {
                 .map(|part| part.trim().to_string())
                 .collect()
         };
-        if parts.len() > 3 {
+        if parts.len() > 4 {
             return Err(self.err(ErrorCode::Syntax));
         }
-        let first_line = self.program.line_numbers().into_iter().next().unwrap_or(10);
         let new_start = if let Some(part) = parts.get(0).filter(|part| !part.trim().is_empty()) {
             parse_line_number_literal(part).ok_or_else(|| self.err(ErrorCode::Syntax))?
         } else {
@@ -1003,12 +1002,21 @@ impl Interpreter {
         let old_start = if let Some(part) = parts.get(2).filter(|part| !part.trim().is_empty()) {
             parse_line_number_literal(part).ok_or_else(|| self.err(ErrorCode::Syntax))?
         } else {
-            first_line
+            0
+        };
+        let old_end = if let Some(part) = parts.get(3).filter(|part| !part.trim().is_empty()) {
+            Some(parse_line_number_literal(part).ok_or_else(|| self.err(ErrorCode::Syntax))?)
+        } else {
+            None
         };
         if parts.iter().any(|part| part.trim().is_empty()) && !parts.is_empty() {
             return Err(self.err(ErrorCode::Syntax));
         }
-        if new_start <= 0 || step <= 0 || old_start <= 0 {
+        if new_start <= 0
+            || step <= 0
+            || old_start < 0
+            || old_end.is_some_and(|end| end < old_start)
+        {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
 
@@ -1016,20 +1024,10 @@ impl Interpreter {
         let renumbered: Vec<i32> = old_lines
             .iter()
             .copied()
-            .filter(|line| *line >= old_start)
+            .filter(|line| *line >= old_start && old_end.is_none_or(|end| *line <= end))
             .collect();
         if renumbered.is_empty() {
-            return Ok(());
-        }
-        if let Some(max_before) = old_lines
-            .iter()
-            .copied()
-            .filter(|line| *line < old_start)
-            .max()
-        {
-            if new_start <= max_before {
-                return Err(self.err(ErrorCode::InvalidArgument));
-            }
+            return Err(self.err(ErrorCode::InvalidArgument));
         }
 
         let mut mapping = HashMap::new();
@@ -1041,12 +1039,25 @@ impl Interpreter {
                 .ok_or_else(|| self.err(ErrorCode::InvalidArgument))?;
         }
 
-        let mut used = std::collections::HashSet::new();
-        for old in &old_lines {
-            let new_no = mapping.get(old).copied().unwrap_or(*old);
-            if new_no <= 0 || !used.insert(new_no) {
-                return Err(self.err(ErrorCode::InvalidArgument));
-            }
+        let first_new = renumbered
+            .first()
+            .and_then(|old| mapping.get(old))
+            .copied()
+            .unwrap_or(new_start);
+        let last_new = renumbered
+            .last()
+            .and_then(|old| mapping.get(old))
+            .copied()
+            .unwrap_or(first_new);
+        let mut seen_new = std::collections::HashSet::new();
+        if mapping.values().any(|line| *line <= 0)
+            || !mapping.values().all(|line| seen_new.insert(*line))
+            || old_lines
+                .iter()
+                .filter(|line| !mapping.contains_key(line))
+                .any(|line| first_new <= *line && *line <= last_new)
+        {
+            return Err(self.err(ErrorCode::InvalidArgument));
         }
 
         let mut text = String::new();
@@ -1059,6 +1070,8 @@ impl Interpreter {
         self.program.load_text(&text)?;
         self.clear_command_caches();
         self.refresh_identifier_case_from_program();
+        self.rebuild_data();
+        self.data_pointer = 0;
         self.rebuild_command_cache();
         Ok(())
     }

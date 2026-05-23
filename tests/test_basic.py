@@ -7192,6 +7192,122 @@ def test_renum_with_third_parameter_rejects_incompatible_numbering(run_basic_int
     ]
 
 
+def test_renum_with_fourth_parameter_renumbers_arbitrary_block(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 GOTO 30',
+        '20 PRINT "A"',
+        '30 GOSUB 60',
+        '40 PRINT "B"',
+        '50 END',
+        '60 RETURN',
+        'RENUM 21,7,20,40',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        '10 GOTO 28',
+        '21 PRINT "A"',
+        '28 GOSUB 60',
+        '35 PRINT "B"',
+        '50 END',
+        '60 RETURN',
+    ]
+
+
+def test_renum_with_fourth_parameter_can_move_block_to_later_gap(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '100 PRINT "START"',
+        '180 PRINT "BEFORE"',
+        '190 GOTO 215',
+        '200 PRINT "MOVED"',
+        '210 GOSUB 330',
+        '215 PRINT "ENDMOVE"',
+        '220 PRINT "AFTER OLD"',
+        '290 PRINT "TARGET BEFORE"',
+        '300 END',
+        '330 RETURN',
+        'RENUM 295,1,190,215',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        '100 PRINT "START"',
+        '180 PRINT "BEFORE"',
+        '220 PRINT "AFTER OLD"',
+        '290 PRINT "TARGET BEFORE"',
+        '295 GOTO 298',
+        '296 PRINT "MOVED"',
+        '297 GOSUB 330',
+        '298 PRINT "ENDMOVE"',
+        '300 END',
+        '330 RETURN',
+    ]
+
+
+def test_renum_with_fourth_parameter_reorders_data_after_move(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 DATA "A"',
+        '20 DATA "B"',
+        '30 READ A$',
+        '40 READ B$',
+        '50 PRINT A$;B$',
+        'RENUM 5,1,20,20',
+        'RUN',
+        'EXIT',
+    ])
+
+    assert '\nBA\n' in output
+
+
+def test_renum_with_fourth_parameter_rejects_overlap_with_following_lines(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 PRINT "A"',
+        '20 PRINT "B"',
+        '30 PRINT "C"',
+        '40 PRINT "D"',
+        '50 PRINT "E"',
+        'RENUM 45,10,20,40',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert "Invalid argument." in output
+    lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
+    assert lines[0] == 'Invalid argument.'
+    assert lines[1:] == [
+        '10 PRINT "A"',
+        '20 PRINT "B"',
+        '30 PRINT "C"',
+        '40 PRINT "D"',
+        '50 PRINT "E"',
+    ]
+
+
+def test_renum_with_fourth_parameter_rejects_inverted_range(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 PRINT "A"',
+        '20 PRINT "B"',
+        'RENUM 100,10,20,10',
+        'LIST',
+        'EXIT',
+    ])
+
+    assert "Invalid argument." in output
+    lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
+    assert lines[0] == 'Invalid argument.'
+    assert lines[1:] == [
+        '10 PRINT "A"',
+        '20 PRINT "B"',
+    ]
+
+
 def test_line_input_allows_commas_without_quotes(run_basic_interpreter):
     commands = [
         'NEW',

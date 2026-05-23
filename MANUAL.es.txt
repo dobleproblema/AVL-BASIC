@@ -1020,14 +1020,16 @@ Formato de rangos
 + EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
-+ RENUM [inicio[, paso[, desde]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`.
++ RENUM [inicio[, paso[, desde[, hasta]]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
 
 Notas sobre EDIT
-- `EDIT` sin número permite recorrer y modificar el programa completo. F2 aplica los cambios en memoria; Esc o Ctrl-C los descarta. Para guardar en disco hay que usar `SAVE`.
-- En el editor a pantalla completa, las flechas, Inicio/Fin y RePag/AvPag navegan por el texto; Ctrl+Inicio/Ctrl+Fin saltan al principio/final del programa.
+- `EDIT` sin número permite recorrer y modificar el programa completo. F12 aplica los cambios en memoria; Esc los descarta. Para guardar en disco hay que usar `SAVE`.
+- En el editor a pantalla completa, las flechas, Inicio/Fin y RePag/AvPag navegan por el texto; Ctrl+Inicio/Ctrl+Fin saltan al principio/final del programa. Shift+flechas selecciona texto; F3 deshace, F4 rehace, F5 copia, F6 pega, F7/F8 busca/reemplaza y F9 renumera el buffer visible.
 - `EDIT n` permite modificar tanto el código como el número de línea. Enter aplica los cambios. Si dejas solo el número sin código, la línea se borra. Esc cancela y deja la línea como estaba.
 - Requiere soporte de terminal interactivo; en entornos sin este soporte, EDIT no está disponible.
 - Tras aplicar los cambios, el intérprete normaliza la línea y actualiza el estilo de las variables en todo el programa.
+- F7/F8 en el editor hacen búsqueda/reemplazo literal sin distinguir mayúsculas/minúsculas, sin expresiones regulares ni comodines. F8 empieza desde el principio del programa. En el submenú de reemplazo, Enter reemplaza la coincidencia seleccionada y busca la siguiente, F7 la salta, F8 reemplaza todas las coincidencias restantes desde la selección actual y Esc termina.
+- F9 en el editor renumera todas las líneas no vacías según el orden visible: empieza por el número más bajo presente y usa el incremento positivo más frecuente. Si hay líneas sin número válido o números duplicados, no modifica el buffer.
 
 Notas sobre DELETE
 - Sin argumentos: borra todo el programa en memoria.
@@ -1038,7 +1040,8 @@ Notas sobre DELETE
 Notas sobre RENUM
 - Actualiza las referencias a líneas en `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF … THEN n`, `ELSE n`, `RESUME n` y `RESTORE n`.
 - Con el tercer parámetro opcional, solo se renumeran las líneas cuyo número actual sea `>= desde`.
-- La renumeración parcial solo se acepta si la secuencia final de números de línea sigue siendo estrictamente creciente; en caso contrario da `INVALID_ARGUMENT`.
+- Con el cuarto parámetro opcional, la renumeración se limita a las líneas cuyo número actual esté entre `desde` y `hasta`, ambos incluidos.
+- La renumeración parcial solo se acepta si los nuevos números del bloque caben en un hueco libre, sin sobrescribir ni intercalarse con líneas no renumeradas; en caso contrario da `INVALID_ARGUMENT`.
 - Si alguna referencia apunta a una línea inexistente, se avisa y ese número se deja sin cambiar.
 - No borra variables ni funciones; limpia las pilas de control y ajusta los objetivos de temporizadores activos para que apunten a las nuevas líneas.
 
@@ -1047,6 +1050,8 @@ EDIT 150         'Edita la línea 150 (se puede cambiar el número para converti
 DELETE 200-400   'Borra el bloque de líneas 200 a 400.
 RENUM 100,5      'Renumera empezando en 100 con incrementos de 5.
 RENUM 1000,10,500 'Renumera solo el bloque a partir de la línea 500.
+RENUM 21,7,20,40 'Renumera solo el bloque entre las líneas 20 y 40.
+RENUM 295,1,190,215 'Mueve el bloque 190-215 al hueco 295-298.
 
 9.3 Otras utilidades inmediatas
 

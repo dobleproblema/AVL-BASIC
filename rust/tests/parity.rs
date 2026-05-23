@@ -184,6 +184,105 @@ fn immediate_cat_save_load_delete_and_list_ranges() {
 }
 
 #[test]
+fn renum_fourth_parameter_renumbers_arbitrary_block() {
+    let mut interp = Interpreter::new();
+    for line in [
+        "10 GOTO 30",
+        "20 PRINT \"A\"",
+        "30 GOSUB 60",
+        "40 PRINT \"B\"",
+        "50 END",
+        "60 RETURN",
+    ] {
+        interp.process_immediate(line).unwrap();
+    }
+
+    interp.process_immediate("RENUM 21,7,20,40").unwrap();
+    interp.process_immediate("LIST").unwrap();
+    assert_eq!(
+        interp.take_output(),
+        "10 GOTO 28\n21 PRINT \"A\"\n28 GOSUB 60\n35 PRINT \"B\"\n50 END\n60 RETURN\n"
+    );
+}
+
+#[test]
+fn renum_fourth_parameter_can_move_block_to_later_gap() {
+    let mut interp = Interpreter::new();
+    for line in [
+        "100 PRINT \"START\"",
+        "180 PRINT \"BEFORE\"",
+        "190 GOTO 215",
+        "200 PRINT \"MOVED\"",
+        "210 GOSUB 330",
+        "215 PRINT \"ENDMOVE\"",
+        "220 PRINT \"AFTER OLD\"",
+        "290 PRINT \"TARGET BEFORE\"",
+        "300 END",
+        "330 RETURN",
+    ] {
+        interp.process_immediate(line).unwrap();
+    }
+
+    interp.process_immediate("RENUM 295,1,190,215").unwrap();
+    interp.process_immediate("LIST").unwrap();
+    assert_eq!(
+        interp.take_output(),
+        "100 PRINT \"START\"\n180 PRINT \"BEFORE\"\n220 PRINT \"AFTER OLD\"\n290 PRINT \"TARGET BEFORE\"\n295 GOTO 298\n296 PRINT \"MOVED\"\n297 GOSUB 330\n298 PRINT \"ENDMOVE\"\n300 END\n330 RETURN\n"
+    );
+}
+
+#[test]
+fn renum_fourth_parameter_reorders_data_after_move() {
+    let mut interp = Interpreter::new();
+    for line in [
+        "10 DATA \"A\"",
+        "20 DATA \"B\"",
+        "30 READ A$",
+        "40 READ B$",
+        "50 PRINT A$;B$",
+    ] {
+        interp.process_immediate(line).unwrap();
+    }
+
+    interp.process_immediate("RENUM 5,1,20,20").unwrap();
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), "BA\n");
+}
+
+#[test]
+fn renum_fourth_parameter_rejects_incompatible_projection() {
+    let mut interp = Interpreter::new();
+    for line in [
+        "10 PRINT \"A\"",
+        "20 PRINT \"B\"",
+        "30 PRINT \"C\"",
+        "40 PRINT \"D\"",
+        "50 PRINT \"E\"",
+    ] {
+        interp.process_immediate(line).unwrap();
+    }
+
+    let err = interp.process_immediate("RENUM 45,10,20,40").unwrap_err();
+    assert_eq!(err.display_for_basic(), "Invalid argument.");
+    interp.process_immediate("LIST").unwrap();
+    assert_eq!(
+        interp.take_output(),
+        "10 PRINT \"A\"\n20 PRINT \"B\"\n30 PRINT \"C\"\n40 PRINT \"D\"\n50 PRINT \"E\"\n"
+    );
+}
+
+#[test]
+fn renum_accepts_zero_as_explicit_from_line() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 GOTO 20").unwrap();
+    interp.process_immediate("20 END").unwrap();
+
+    interp.process_immediate("RENUM 100,10,0").unwrap();
+    interp.process_immediate("LIST").unwrap();
+    assert_eq!(interp.take_output(), "100 GOTO 110\n110 END\n");
+}
+
+#[test]
 fn missing_load_file_reports_basic_file_not_found() {
     let mut interp = Interpreter::new();
     let err = interp

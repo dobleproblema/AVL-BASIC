@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.29"
+__version__ = "1.5.30"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -6209,7 +6209,7 @@ class BasicInterpreter:
         from_default = 0
 
         if not args:
-            start, step, from_line = start_default, step_default, from_default
+            start, step, from_line, to_line = start_default, step_default, from_default, None
         else:
             parts = [part.strip() for part in args.split(',')]
 
@@ -6220,26 +6220,37 @@ class BasicInterpreter:
                 start = int(parts[0])
                 step = step_default
                 from_line = from_default
+                to_line = None
             elif len(parts) == 2:
                 if not (parts[0].isdigit() and parts[1].isdigit()):
                     self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                     return
                 start, step = int(parts[0]), int(parts[1])
                 from_line = from_default
+                to_line = None
             elif len(parts) == 3:
                 if not (parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit()):
                     self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                     return
                 start, step, from_line = int(parts[0]), int(parts[1]), int(parts[2])
+                to_line = None
+            elif len(parts) == 4:
+                if not all(part.isdigit() for part in parts):
+                    self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
+                    return
+                start, step, from_line, to_line = map(int, parts)
             else:
                 self.handle_error(ErrorCode.SYNTAX_ERROR, only_message=True)
                 return
 
-        if start <= 0 or step <= 0 or from_line < 0:
+        if start <= 0 or step <= 0 or from_line < 0 or (to_line is not None and to_line < from_line):
             self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
             return
 
-        renum_lines = [line for line in self.line_numbers if line >= from_line]
+        renum_lines = [
+            line for line in self.line_numbers
+            if line >= from_line and (to_line is None or line <= to_line)
+        ]
         if not renum_lines:
             self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
             return
@@ -6250,8 +6261,15 @@ class BasicInterpreter:
             old_to_new[old_line] = next_line
             next_line += step
 
-        projected_line_numbers = [old_to_new.get(old_line, old_line) for old_line in self.line_numbers]
-        if any(a >= b for a, b in zip(projected_line_numbers, projected_line_numbers[1:])):
+        new_numbers = list(old_to_new.values())
+        first_new = new_numbers[0]
+        last_new = new_numbers[-1]
+        outside_lines = [line for line in self.line_numbers if line not in old_to_new]
+        if (
+            any(new_line <= 0 for new_line in new_numbers)
+            or len(set(new_numbers)) != len(new_numbers)
+            or any(first_new <= line <= last_new for line in outside_lines)
+        ):
             self.handle_error(ErrorCode.INVALID_ARGUMENT, only_message=True)
             return
 
@@ -6327,15 +6345,11 @@ class BasicInterpreter:
             new_line_numbers.append(new_line)
 
         self.program = new_program
-        self.line_numbers = new_line_numbers
+        self.line_numbers = sorted(new_line_numbers)
         self._line_to_index = {ln: i for i, ln in enumerate(self.line_numbers)}
         self._if_block_info_dirty = True
 
-        if self.data_line_map:
-            self.data_line_map = {
-                old_to_new.get(old_ln, old_ln): entry
-                for old_ln, entry in self.data_line_map.items()
-            }
+        self._rebuild_data_from_program()
 
         for t in self.timers:
             if t.get('active') and t.get('target_line') is not None:
@@ -6349,6 +6363,24 @@ class BasicInterpreter:
 
         self.reset_state(variables=False, graphics=False)
     
+    def _rebuild_data_from_program(self):
+        self.data.clear()
+        self.data_line_map.clear()
+        for line_num in sorted(self.line_numbers):
+            code = self.program[line_num]['code']
+            stripped_line, _ = BasicInterpreter.split_on_single_quote(code)
+            all_data_items = []
+            for cmd in BasicInterpreter.split_commands(stripped_line):
+                cmd = cmd.strip()
+                if cmd.upper().startswith('DATA'):
+                    data_items = BasicInterpreter.parse_data_items(cmd[4:].strip())
+                    all_data_items.extend(data_items)
+
+            if all_data_items:
+                self.data_line_map[line_num] = (len(self.data), len(all_data_items))
+                self.data.extend(all_data_items)
+        self.data_pointer = 0
+
     @lru_cache(maxsize=65536)
     @staticmethod
     def parse_data_items(data_str: str):

@@ -5,7 +5,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
     LeaveAlternateScreen,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::io::{self, IsTerminal, Write};
@@ -646,7 +646,7 @@ where
 
     let _guard = FullscreenEditorGuard::enter()?;
     let mut editor = BasicEditor::new(initial_lines);
-    let mut status = String::from("F2 Apply  Esc Cancel");
+    let mut status = BasicEditor::default_help();
     render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
 
     loop {
@@ -656,7 +656,7 @@ where
                     continue;
                 }
                 match event.code {
-                    KeyCode::F(2) => {
+                    KeyCode::F(12) => {
                         let lines = editor.lines_as_strings();
                         match validate(&lines) {
                             Ok(()) => return Ok(FullscreenEditOutcome::Apply(lines)),
@@ -665,10 +665,66 @@ where
                             }
                         }
                     }
-                    KeyCode::Esc => return Ok(FullscreenEditOutcome::Cancel),
-                    KeyCode::Char('c' | 'C') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(FullscreenEditOutcome::Cancel);
+                    KeyCode::F(3) => {
+                        status = if editor.undo() {
+                            String::from("Undone")
+                        } else {
+                            String::from("Nothing to undo")
+                        };
                     }
+                    KeyCode::F(4) => {
+                        status = if editor.redo() {
+                            String::from("Redone")
+                        } else {
+                            String::from("Nothing to redo")
+                        };
+                    }
+                    KeyCode::F(5) => {
+                        status = if editor.copy_selection() {
+                            String::from("Copied")
+                        } else {
+                            String::from("No selection")
+                        };
+                    }
+                    KeyCode::F(6) => {
+                        status = if editor.paste_clipboard() {
+                            String::from("Pasted")
+                        } else {
+                            String::from("Clipboard empty")
+                        };
+                    }
+                    KeyCode::F(8) => {
+                        status = run_editor_replace(&mut editor, ansi, cases)?;
+                    }
+                    KeyCode::F(7) => {
+                        let initial = editor.last_find.clone();
+                        let Some(query) =
+                            read_editor_prompt(&mut editor, ansi, cases, "Find: ", &initial)?
+                        else {
+                            status = editor.default_status();
+                            render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
+                            continue;
+                        };
+                        if query.is_empty() {
+                            status = String::from("Find text empty");
+                            render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
+                            continue;
+                        }
+
+                        editor.last_find = query.clone();
+                        status = match editor.find_next(&query) {
+                            Some(EditorFindResult::Found) => String::from("Found"),
+                            Some(EditorFindResult::Wrapped) => String::from("Found (wrapped)"),
+                            None => String::from("Not found"),
+                        };
+                    }
+                    KeyCode::F(9) => {
+                        status = match editor.renumber_visible_lines() {
+                            Ok(()) => String::from("Renumbered"),
+                            Err(message) => format!("Renum failed: {message}"),
+                        };
+                    }
+                    KeyCode::Esc => return Ok(FullscreenEditOutcome::Cancel),
                     KeyCode::Char(ch) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
                         editor.insert_char(ch);
                         status = editor.default_status();
@@ -678,8 +734,7 @@ where
                         status = editor.default_status();
                     }
                     KeyCode::Tab => {
-                        editor.insert_char(' ');
-                        editor.insert_char(' ');
+                        editor.insert_text("  ");
                         status = editor.default_status();
                     }
                     KeyCode::Backspace => {
@@ -690,20 +745,62 @@ where
                         editor.delete();
                         status = editor.default_status();
                     }
-                    KeyCode::Left => editor.move_left(),
-                    KeyCode::Right => editor.move_right(),
-                    KeyCode::Up => editor.move_up(),
-                    KeyCode::Down => editor.move_down(),
+                    KeyCode::Left if event.modifiers.contains(KeyModifiers::SHIFT) => {
+                        editor.select_left();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Right if event.modifiers.contains(KeyModifiers::SHIFT) => {
+                        editor.select_right();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Up if event.modifiers.contains(KeyModifiers::SHIFT) => {
+                        editor.select_up();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Down if event.modifiers.contains(KeyModifiers::SHIFT) => {
+                        editor.select_down();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Left => {
+                        editor.move_left();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Right => {
+                        editor.move_right();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Up => {
+                        editor.move_up();
+                        status = editor.default_status();
+                    }
+                    KeyCode::Down => {
+                        editor.move_down();
+                        status = editor.default_status();
+                    }
                     KeyCode::Home if event.modifiers.contains(KeyModifiers::CONTROL) => {
                         editor.move_document_start();
+                        status = editor.default_status();
                     }
                     KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
                         editor.move_document_end();
+                        status = editor.default_status();
                     }
-                    KeyCode::Home => editor.move_home(),
-                    KeyCode::End => editor.move_end(),
-                    KeyCode::PageUp => editor.page_up(),
-                    KeyCode::PageDown => editor.page_down(),
+                    KeyCode::Home => {
+                        editor.move_home();
+                        status = editor.default_status();
+                    }
+                    KeyCode::End => {
+                        editor.move_end();
+                        status = editor.default_status();
+                    }
+                    KeyCode::PageUp => {
+                        editor.page_up();
+                        status = editor.default_status();
+                    }
+                    KeyCode::PageDown => {
+                        editor.page_down();
+                        status = editor.default_status();
+                    }
                     _ => {}
                 }
             }
@@ -736,6 +833,33 @@ impl Drop for FullscreenEditorGuard {
     }
 }
 
+const MAX_UNDO_STEPS: usize = 200;
+const SELECTION_STYLE: &str = "\x1b[7m";
+const SELECTION_END_STYLE: &str = "\x1b[27m";
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct EditorPosition {
+    line: usize,
+    col: usize,
+}
+
+#[derive(Clone)]
+struct EditorSnapshot {
+    lines: Vec<Vec<char>>,
+    cursor_line: usize,
+    cursor_col: usize,
+    top_line: usize,
+    left_col: usize,
+    dirty: bool,
+    selection_anchor: Option<EditorPosition>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EditorFindResult {
+    Found,
+    Wrapped,
+}
+
 struct BasicEditor {
     lines: Vec<Vec<char>>,
     cursor_line: usize,
@@ -744,6 +868,12 @@ struct BasicEditor {
     left_col: usize,
     page_rows: usize,
     dirty: bool,
+    selection_anchor: Option<EditorPosition>,
+    clipboard: String,
+    last_find: String,
+    last_replace: String,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
 }
 
 impl BasicEditor {
@@ -763,6 +893,12 @@ impl BasicEditor {
             left_col: 0,
             page_rows: 1,
             dirty: false,
+            selection_anchor: None,
+            clipboard: String::new(),
+            last_find: String::new(),
+            last_replace: String::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -773,8 +909,14 @@ impl BasicEditor {
             .collect()
     }
 
+    fn default_help() -> String {
+        String::from(
+            "F12 Apply Esc Cancel F3/F4 Undo/Redo F5/F6 Copy/Paste F7/F8 Find/Replace F9 Renum",
+        )
+    }
+
     fn default_status(&self) -> String {
-        String::from("F2 Apply  Esc Cancel")
+        Self::default_help()
     }
 
     fn current_line_len(&self) -> usize {
@@ -787,29 +929,372 @@ impl BasicEditor {
         &mut self.lines[self.cursor_line]
     }
 
-    fn insert_char(&mut self, ch: char) {
+    fn position(&self) -> EditorPosition {
+        EditorPosition {
+            line: self.cursor_line,
+            col: self.cursor_col,
+        }
+    }
+
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            lines: self.lines.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+            top_line: self.top_line,
+            left_col: self.left_col,
+            dirty: self.dirty,
+            selection_anchor: self.selection_anchor,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.lines = snapshot.lines;
+        self.cursor_line = snapshot.cursor_line.min(self.lines.len().saturating_sub(1));
+        self.cursor_col = snapshot.cursor_col.min(self.current_line_len());
+        self.top_line = snapshot.top_line.min(self.lines.len().saturating_sub(1));
+        self.left_col = snapshot.left_col;
+        self.dirty = snapshot.dirty;
+        self.selection_anchor = snapshot.selection_anchor;
+    }
+
+    fn push_undo_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.undo_stack.push(snapshot);
+        if self.undo_stack.len() > MAX_UNDO_STEPS {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn record_undo(&mut self) {
+        self.push_undo_snapshot(self.snapshot());
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    fn selection_range(&self) -> Option<(EditorPosition, EditorPosition)> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.position();
+        if anchor == cursor {
+            None
+        } else if anchor < cursor {
+            Some((anchor, cursor))
+        } else {
+            Some((cursor, anchor))
+        }
+    }
+
+    fn selection_columns_for_line(&self, line_index: usize) -> Option<(usize, usize)> {
+        let (start, end) = self.selection_range()?;
+        if line_index < start.line || line_index > end.line {
+            return None;
+        }
+
+        let line_len = self.lines.get(line_index).map_or(0, Vec::len);
+        let selection_start = if line_index == start.line {
+            start.col.min(line_len)
+        } else {
+            0
+        };
+        let selection_end = if line_index == end.line {
+            end.col.min(line_len)
+        } else {
+            line_len
+        };
+
+        (selection_start < selection_end).then_some((selection_start, selection_end))
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        if start.line == end.line {
+            return Some(
+                self.lines[start.line][start.col..end.col]
+                    .iter()
+                    .copied()
+                    .collect(),
+            );
+        }
+
+        let mut text = String::new();
+        text.extend(self.lines[start.line][start.col..].iter().copied());
+        text.push('\n');
+        for line in (start.line + 1)..end.line {
+            text.extend(self.lines[line].iter().copied());
+            text.push('\n');
+        }
+        text.extend(self.lines[end.line][..end.col].iter().copied());
+        Some(text)
+    }
+
+    fn selected_text_matches(&self, query: &[char]) -> bool {
+        let Some(text) = self.selected_text() else {
+            return false;
+        };
+        let text: Vec<char> = text.chars().collect();
+        text.len() == query.len()
+            && text
+                .iter()
+                .zip(query.iter())
+                .all(|(left, right)| chars_equal_ignore_ascii_case(*left, *right))
+    }
+
+    fn set_selection_range(&mut self, start: EditorPosition, end: EditorPosition) {
+        if start == end {
+            self.cursor_line = end.line.min(self.lines.len().saturating_sub(1));
+            self.cursor_col = end.col.min(self.current_line_len());
+            self.clear_selection();
+            return;
+        }
+
+        self.selection_anchor = Some(start);
+        self.cursor_line = end.line.min(self.lines.len().saturating_sub(1));
+        self.cursor_col = end.col.min(self.current_line_len());
+    }
+
+    fn find_next(&mut self, query: &str) -> Option<EditorFindResult> {
+        let query: Vec<char> = query.chars().collect();
+        if query.is_empty() {
+            return None;
+        }
+
+        let start = self
+            .selection_range()
+            .map(|(_, end)| end)
+            .unwrap_or_else(|| self.position());
+        if let Some(match_start) = self.find_match_from(&query, start) {
+            self.select_match(match_start, query.len());
+            return Some(EditorFindResult::Found);
+        }
+
+        if start.line != 0 || start.col != 0 {
+            let document_start = EditorPosition { line: 0, col: 0 };
+            if let Some(match_start) = self.find_match_from(&query, document_start) {
+                self.select_match(match_start, query.len());
+                return Some(EditorFindResult::Wrapped);
+            }
+        }
+
+        None
+    }
+
+    fn find_next_without_wrap(&mut self, query: &str) -> bool {
+        let query: Vec<char> = query.chars().collect();
+        if query.is_empty() {
+            return false;
+        }
+
+        let start = self
+            .selection_range()
+            .map(|(_, end)| end)
+            .unwrap_or_else(|| self.position());
+        let Some(match_start) = self.find_match_from(&query, start) else {
+            return false;
+        };
+        self.select_match(match_start, query.len());
+        true
+    }
+
+    fn find_first(&mut self, query: &str) -> bool {
+        let query: Vec<char> = query.chars().collect();
+        if query.is_empty() {
+            return false;
+        }
+
+        let Some(match_start) = self.find_match_from(&query, EditorPosition { line: 0, col: 0 })
+        else {
+            return false;
+        };
+        self.select_match(match_start, query.len());
+        true
+    }
+
+    fn find_match_from(&self, query: &[char], start: EditorPosition) -> Option<EditorPosition> {
+        for line_index in start.line..self.lines.len() {
+            let line = &self.lines[line_index];
+            if query.len() > line.len() {
+                continue;
+            }
+
+            let start_col = if line_index == start.line {
+                start.col.min(line.len())
+            } else {
+                0
+            };
+            if start_col + query.len() > line.len() {
+                continue;
+            }
+
+            for col in start_col..=(line.len() - query.len()) {
+                if line_matches_at_ignore_ascii_case(line, col, query) {
+                    return Some(EditorPosition {
+                        line: line_index,
+                        col,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    fn select_match(&mut self, start: EditorPosition, len: usize) {
+        let end = EditorPosition {
+            line: start.line,
+            col: start.col + len,
+        };
+        self.set_selection_range(start, end);
+    }
+
+    fn replace_selected_match(&mut self, query: &str, replacement: &str) -> bool {
+        let query_chars: Vec<char> = query.chars().collect();
+        if query_chars.is_empty() || !self.selected_text_matches(&query_chars) {
+            return false;
+        }
+
+        self.record_undo();
+        self.replace_selected_without_history(replacement)
+    }
+
+    fn replace_all_from_selection_to_end(&mut self, query: &str, replacement: &str) -> usize {
+        let query_chars: Vec<char> = query.chars().collect();
+        if query_chars.is_empty() {
+            return 0;
+        }
+
+        if !self.selected_text_matches(&query_chars) {
+            let start = self.position();
+            let Some(match_start) = self.find_match_from(&query_chars, start) else {
+                return 0;
+            };
+            self.select_match(match_start, query_chars.len());
+        }
+
+        let snapshot = self.snapshot();
+        let mut count = 0usize;
+        loop {
+            if !self.selected_text_matches(&query_chars) {
+                break;
+            }
+            self.replace_selected_without_history(replacement);
+            count += 1;
+
+            let next_start = self.position();
+            let Some(match_start) = self.find_match_from(&query_chars, next_start) else {
+                break;
+            };
+            self.select_match(match_start, query_chars.len());
+        }
+
+        if count > 0 {
+            self.push_undo_snapshot(snapshot);
+        }
+        count
+    }
+
+    fn delete_selection_without_history(&mut self) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+
+        if start.line == end.line {
+            self.lines[start.line].drain(start.col..end.col);
+        } else {
+            let tail: Vec<char> = self.lines[end.line][end.col..].to_vec();
+            self.lines[start.line].truncate(start.col);
+            self.lines[start.line].extend(tail);
+            self.lines.drain((start.line + 1)..=end.line);
+        }
+
+        self.cursor_line = start.line;
+        self.cursor_col = start.col;
+        self.clear_selection();
+        self.dirty = true;
+        true
+    }
+
+    fn replace_selected_without_history(&mut self, replacement: &str) -> bool {
+        if !self.delete_selection_without_history() {
+            return false;
+        }
+        self.insert_text_without_history(replacement);
+        self.clear_selection();
+        self.dirty = true;
+        true
+    }
+
+    fn insert_text_without_history(&mut self, text: &str) {
+        let parts: Vec<&str> = text.split('\n').collect();
         let col = self.cursor_col.min(self.current_line_len());
-        self.current_line_mut().insert(col, ch);
-        self.cursor_col = col + 1;
+        if parts.len() == 1 {
+            let chars: Vec<char> = parts[0].chars().collect();
+            let inserted = chars.len();
+            self.current_line_mut().splice(col..col, chars);
+            self.cursor_col = col + inserted;
+            return;
+        }
+
+        let tail = self.current_line_mut().split_off(col);
+        self.current_line_mut().extend(parts[0].chars());
+
+        let mut insert_at = self.cursor_line + 1;
+        for part in &parts[1..parts.len() - 1] {
+            self.lines.insert(insert_at, part.chars().collect());
+            insert_at += 1;
+        }
+
+        let mut last_line: Vec<char> = parts.last().unwrap_or(&"").chars().collect();
+        let cursor_col = last_line.len();
+        last_line.extend(tail);
+        self.lines.insert(insert_at, last_line);
+        self.cursor_line = insert_at;
+        self.cursor_col = cursor_col;
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.record_undo();
+        self.delete_selection_without_history();
+        self.insert_text_without_history(text);
+        self.clear_selection();
         self.dirty = true;
     }
 
+    fn insert_char(&mut self, ch: char) {
+        let mut text = String::new();
+        text.push(ch);
+        self.insert_text(&text);
+    }
+
     fn insert_newline(&mut self) {
+        self.record_undo();
+        self.delete_selection_without_history();
         let col = self.cursor_col.min(self.current_line_len());
         let tail = self.current_line_mut().split_off(col);
         self.cursor_line += 1;
         self.cursor_col = 0;
         self.lines.insert(self.cursor_line, tail);
+        self.clear_selection();
         self.dirty = true;
     }
 
     fn backspace(&mut self) {
+        if self.selection_range().is_some() {
+            self.record_undo();
+            self.delete_selection_without_history();
+            return;
+        }
         if self.cursor_col > 0 {
+            self.record_undo();
             self.cursor_col -= 1;
             let col = self.cursor_col;
             self.current_line_mut().remove(col);
             self.dirty = true;
         } else if self.cursor_line > 0 {
+            self.record_undo();
             let removed = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
             self.cursor_col = self.lines[self.cursor_line].len();
@@ -819,19 +1304,130 @@ impl BasicEditor {
     }
 
     fn delete(&mut self) {
+        if self.selection_range().is_some() {
+            self.record_undo();
+            self.delete_selection_without_history();
+            return;
+        }
         let len = self.current_line_len();
         if self.cursor_col < len {
+            self.record_undo();
             let col = self.cursor_col;
             self.current_line_mut().remove(col);
             self.dirty = true;
         } else if self.cursor_line + 1 < self.lines.len() {
+            self.record_undo();
             let next = self.lines.remove(self.cursor_line + 1);
             self.current_line_mut().extend(next);
             self.dirty = true;
         }
     }
 
-    fn move_left(&mut self) {
+    fn copy_selection(&mut self) -> bool {
+        let Some(text) = self.selected_text() else {
+            return false;
+        };
+        self.clipboard = text;
+        true
+    }
+
+    fn paste_clipboard(&mut self) -> bool {
+        if self.clipboard.is_empty() {
+            return false;
+        }
+        let text = self.clipboard.clone();
+        self.insert_text(&text);
+        true
+    }
+
+    fn renumber_visible_lines(&mut self) -> Result<(), &'static str> {
+        let numbered = collect_editor_line_numbers(&self.lines)?;
+        if numbered.is_empty() {
+            return Err("no program lines");
+        }
+
+        let mut seen = HashSet::new();
+        for line in &numbered {
+            if !seen.insert(line.old_number) {
+                return Err("duplicate line number");
+            }
+        }
+
+        let start = numbered
+            .iter()
+            .map(|line| line.old_number)
+            .min()
+            .ok_or("no program lines")?;
+        let step = infer_editor_renum_step(numbered.iter().map(|line| line.old_number));
+
+        let mut mapping = HashMap::new();
+        let mut next = start;
+        for line in &numbered {
+            mapping.insert(line.old_number, next);
+            next = next.checked_add(step).ok_or("line number overflow")?;
+        }
+
+        self.record_undo();
+        for line in numbered {
+            let new_number = mapping
+                .get(&line.old_number)
+                .copied()
+                .ok_or("internal renum error")?;
+            let chars = &self.lines[line.index];
+            let prefix: String = chars[..line.number_start].iter().collect();
+            let code: String = chars[line.number_end..].iter().collect();
+            let code = renumber_editor_line_references(&code, &mapping);
+            self.lines[line.index] = format!("{prefix}{new_number}{code}").chars().collect();
+        }
+        self.cursor_col = self.cursor_col.min(self.current_line_len());
+        self.clear_selection();
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(self.snapshot());
+        self.restore_snapshot(snapshot);
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(self.snapshot());
+        self.restore_snapshot(snapshot);
+        true
+    }
+
+    fn move_with_selection<F>(&mut self, extend_selection: bool, move_cursor: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let before = self.position();
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(before);
+        }
+        move_cursor(self);
+        if extend_selection {
+            if self.selection_anchor == Some(self.position()) {
+                self.clear_selection();
+            }
+        } else {
+            self.clear_selection();
+        }
+    }
+
+    fn move_left_with_selection(&mut self, extend_selection: bool) {
+        self.move_with_selection(extend_selection, |editor| {
+            editor.move_left_raw();
+        });
+    }
+
+    fn move_left_raw(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         } else if self.cursor_line > 0 {
@@ -840,7 +1436,13 @@ impl BasicEditor {
         }
     }
 
-    fn move_right(&mut self) {
+    fn move_right_with_selection(&mut self, extend_selection: bool) {
+        self.move_with_selection(extend_selection, |editor| {
+            editor.move_right_raw();
+        });
+    }
+
+    fn move_right_raw(&mut self) {
         if self.cursor_col < self.current_line_len() {
             self.cursor_col += 1;
         } else if self.cursor_line + 1 < self.lines.len() {
@@ -849,48 +1451,98 @@ impl BasicEditor {
         }
     }
 
-    fn move_up(&mut self) {
+    fn move_up_with_selection(&mut self, extend_selection: bool) {
+        self.move_with_selection(extend_selection, |editor| {
+            editor.move_up_raw();
+        });
+    }
+
+    fn move_up_raw(&mut self) {
         if self.cursor_line > 0 {
             self.cursor_line -= 1;
             self.cursor_col = self.cursor_col.min(self.current_line_len());
         }
     }
 
-    fn move_down(&mut self) {
+    fn move_down_with_selection(&mut self, extend_selection: bool) {
+        self.move_with_selection(extend_selection, |editor| {
+            editor.move_down_raw();
+        });
+    }
+
+    fn move_down_raw(&mut self) {
         if self.cursor_line + 1 < self.lines.len() {
             self.cursor_line += 1;
             self.cursor_col = self.cursor_col.min(self.current_line_len());
         }
     }
 
+    fn move_left(&mut self) {
+        self.move_left_with_selection(false);
+    }
+
+    fn move_right(&mut self) {
+        self.move_right_with_selection(false);
+    }
+
+    fn move_up(&mut self) {
+        self.move_up_with_selection(false);
+    }
+
+    fn move_down(&mut self) {
+        self.move_down_with_selection(false);
+    }
+
+    fn select_left(&mut self) {
+        self.move_left_with_selection(true);
+    }
+
+    fn select_right(&mut self) {
+        self.move_right_with_selection(true);
+    }
+
+    fn select_up(&mut self) {
+        self.move_up_with_selection(true);
+    }
+
+    fn select_down(&mut self) {
+        self.move_down_with_selection(true);
+    }
+
     fn move_home(&mut self) {
         self.cursor_col = 0;
+        self.clear_selection();
     }
 
     fn move_end(&mut self) {
         self.cursor_col = self.current_line_len();
+        self.clear_selection();
     }
 
     fn move_document_start(&mut self) {
         self.cursor_line = 0;
         self.cursor_col = 0;
+        self.clear_selection();
     }
 
     fn move_document_end(&mut self) {
         self.cursor_line = self.lines.len().saturating_sub(1);
         self.cursor_col = self.current_line_len();
+        self.clear_selection();
     }
 
     fn page_up(&mut self) {
         let rows = self.page_rows.max(1);
         self.cursor_line = self.cursor_line.saturating_sub(rows);
         self.cursor_col = self.cursor_col.min(self.current_line_len());
+        self.clear_selection();
     }
 
     fn page_down(&mut self) {
         let rows = self.page_rows.max(1);
         self.cursor_line = (self.cursor_line + rows).min(self.lines.len().saturating_sub(1));
         self.cursor_col = self.cursor_col.min(self.current_line_len());
+        self.clear_selection();
     }
 
     fn ensure_cursor_visible(&mut self, cols: usize, rows: usize) {
@@ -907,6 +1559,361 @@ impl BasicEditor {
             self.left_col = self.cursor_col + 1 - cols;
         }
     }
+}
+
+fn chars_equal_ignore_ascii_case(left: char, right: char) -> bool {
+    left.eq_ignore_ascii_case(&right)
+}
+
+fn line_matches_at_ignore_ascii_case(line: &[char], start: usize, query: &[char]) -> bool {
+    query
+        .iter()
+        .enumerate()
+        .all(|(offset, query_ch)| chars_equal_ignore_ascii_case(line[start + offset], *query_ch))
+}
+
+struct EditorNumberedLine {
+    index: usize,
+    old_number: i32,
+    number_start: usize,
+    number_end: usize,
+}
+
+fn collect_editor_line_numbers(
+    lines: &[Vec<char>],
+) -> Result<Vec<EditorNumberedLine>, &'static str> {
+    let mut numbered = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.iter().all(|ch| ch.is_whitespace()) {
+            continue;
+        }
+
+        let mut number_start = 0usize;
+        while number_start < line.len() && line[number_start].is_whitespace() {
+            number_start += 1;
+        }
+
+        let mut number_end = number_start;
+        while number_end < line.len() && line[number_end].is_ascii_digit() {
+            number_end += 1;
+        }
+        if number_end == number_start {
+            return Err("invalid line");
+        }
+        if number_end < line.len() && !line[number_end].is_whitespace() {
+            return Err("invalid line");
+        }
+
+        let raw: String = line[number_start..number_end].iter().collect();
+        let old_number = raw.parse::<i32>().map_err(|_| "invalid line number")?;
+        if old_number <= 0 {
+            return Err("invalid line number");
+        }
+
+        numbered.push(EditorNumberedLine {
+            index,
+            old_number,
+            number_start,
+            number_end,
+        });
+    }
+    Ok(numbered)
+}
+
+fn infer_editor_renum_step(numbers: impl Iterator<Item = i32>) -> i32 {
+    let mut numbers: Vec<i32> = numbers.collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for pair in numbers.windows(2) {
+        let step = pair[1] - pair[0];
+        if step > 0 {
+            *counts.entry(step).or_insert(0) += 1;
+        }
+    }
+
+    counts
+        .into_iter()
+        .max_by(|(step_a, count_a), (step_b, count_b)| {
+            count_a.cmp(count_b).then_with(|| step_b.cmp(step_a))
+        })
+        .map(|(step, _)| step)
+        .unwrap_or(10)
+}
+
+fn renumber_editor_line_references(code: &str, mapping: &HashMap<i32, i32>) -> String {
+    let chars: Vec<char> = code.chars().collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    let mut in_string = false;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '"' {
+            in_string = !in_string;
+            out.push(ch);
+            i += 1;
+            continue;
+        }
+        if !in_string && ch == '\'' {
+            out.extend(chars[i..].iter());
+            break;
+        }
+        if !in_string && is_ident_start(ch) {
+            let start = i;
+            i += 1;
+            while i < chars.len() && is_ident_char(chars[i]) {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let upper = ident.to_ascii_uppercase();
+            out.push_str(&ident);
+            if matches!(
+                upper.as_str(),
+                "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESTORE" | "RESUME"
+            ) {
+                i = copy_renumbered_editor_line_list(&chars, i, &mut out, mapping);
+            }
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+
+    out
+}
+
+fn copy_renumbered_editor_line_list(
+    chars: &[char],
+    mut i: usize,
+    out: &mut String,
+    mapping: &HashMap<i32, i32>,
+) -> usize {
+    loop {
+        while i < chars.len() && chars[i].is_whitespace() {
+            out.push(chars[i]);
+            i += 1;
+        }
+
+        let number_start = i;
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        if number_start == i {
+            return i;
+        }
+
+        let raw: String = chars[number_start..i].iter().collect();
+        if let Ok(old) = raw.parse::<i32>() {
+            if let Some(new_number) = mapping.get(&old) {
+                out.push_str(&new_number.to_string());
+            } else {
+                out.push_str(&raw);
+            }
+        } else {
+            out.push_str(&raw);
+        }
+
+        let mut probe = i;
+        while probe < chars.len() && chars[probe].is_whitespace() {
+            probe += 1;
+        }
+        if probe < chars.len() && chars[probe] == ',' {
+            out.extend(chars[i..=probe].iter());
+            i = probe + 1;
+            continue;
+        }
+        return i;
+    }
+}
+
+fn run_editor_replace(
+    editor: &mut BasicEditor,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> io::Result<String> {
+    let find_initial = editor.last_find.clone();
+    let Some(query) = read_editor_prompt(editor, ansi, cases, "Find: ", &find_initial)? else {
+        return Ok(editor.default_status());
+    };
+    if query.is_empty() {
+        return Ok(String::from("Find text empty"));
+    }
+
+    let replace_initial = editor.last_replace.clone();
+    let Some(replacement) = read_editor_prompt(editor, ansi, cases, "Replace: ", &replace_initial)?
+    else {
+        return Ok(editor.default_status());
+    };
+
+    editor.last_find = query.clone();
+    editor.last_replace = replacement.clone();
+    if !editor.find_first(&query) {
+        return Ok(String::from("Not found"));
+    }
+
+    let mut status = editor_replace_status();
+    render_fullscreen_editor(editor, ansi, cases, &status)?;
+
+    loop {
+        match read()? {
+            Event::Key(event) => {
+                if event.kind == KeyEventKind::Release {
+                    continue;
+                }
+                match event.code {
+                    KeyCode::Enter => {
+                        if editor.replace_selected_match(&query, &replacement) {
+                            if editor.find_next_without_wrap(&query) {
+                                status = editor_replace_status();
+                            } else {
+                                return Ok(String::from("Replaced; no more matches"));
+                            }
+                        } else if editor.find_next_without_wrap(&query) {
+                            status = editor_replace_status();
+                        } else {
+                            return Ok(String::from("No more matches"));
+                        }
+                    }
+                    KeyCode::F(7) => {
+                        if editor.find_next_without_wrap(&query) {
+                            status = editor_replace_status();
+                        } else {
+                            return Ok(String::from("No more matches"));
+                        }
+                    }
+                    KeyCode::F(8) => {
+                        let count = editor.replace_all_from_selection_to_end(&query, &replacement);
+                        return Ok(editor_replace_count_status(count));
+                    }
+                    KeyCode::Esc => return Ok(String::from("Replace stopped")),
+                    _ => {}
+                }
+            }
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+        render_fullscreen_editor(editor, ansi, cases, &status)?;
+    }
+}
+
+fn editor_replace_status() -> String {
+    String::from("Replace: Enter Replace  F7 Skip  F8 All  Esc Done")
+}
+
+fn editor_replace_count_status(count: usize) -> String {
+    if count == 1 {
+        String::from("Replaced 1 occurrence")
+    } else {
+        format!("Replaced {count} occurrences")
+    }
+}
+
+fn read_editor_prompt(
+    editor: &mut BasicEditor,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    prompt: &str,
+    initial: &str,
+) -> io::Result<Option<String>> {
+    let mut input: Vec<char> = initial.chars().collect();
+    let mut cursor = input.len();
+    render_fullscreen_editor_prompt(editor, ansi, cases, prompt, &input, cursor)?;
+
+    loop {
+        match read()? {
+            Event::Key(event) => {
+                if event.kind == KeyEventKind::Release {
+                    continue;
+                }
+                match event.code {
+                    KeyCode::Enter => return Ok(Some(input.iter().collect())),
+                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Char(ch) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+                        input.insert(cursor, ch);
+                        cursor += 1;
+                    }
+                    KeyCode::Backspace => {
+                        if cursor > 0 {
+                            cursor -= 1;
+                            input.remove(cursor);
+                        }
+                    }
+                    KeyCode::Delete => {
+                        if cursor < input.len() {
+                            input.remove(cursor);
+                        }
+                    }
+                    KeyCode::Left => {
+                        cursor = cursor.saturating_sub(1);
+                    }
+                    KeyCode::Right => {
+                        cursor = (cursor + 1).min(input.len());
+                    }
+                    KeyCode::Home => {
+                        cursor = 0;
+                    }
+                    KeyCode::End => {
+                        cursor = input.len();
+                    }
+                    _ => {}
+                }
+            }
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+        render_fullscreen_editor_prompt(editor, ansi, cases, prompt, &input, cursor)?;
+    }
+}
+
+fn render_fullscreen_editor_prompt(
+    editor: &mut BasicEditor,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    prompt: &str,
+    input: &[char],
+    cursor: usize,
+) -> io::Result<()> {
+    render_fullscreen_editor(editor, ansi, cases, "")?;
+
+    let (cols, rows) = size().unwrap_or((80, 24));
+    let cols = cols.max(1) as usize;
+    let rows = rows.max(1) as usize;
+    let status_row = rows.saturating_sub(1).min(u16::MAX as usize) as u16;
+    let prompt_width = prompt.chars().count().min(cols);
+    let input_width = cols.saturating_sub(prompt_width);
+    let input_left = if input_width == 0 || cursor < input_width {
+        0
+    } else {
+        cursor + 1 - input_width
+    };
+    let visible_input: String = input
+        .iter()
+        .skip(input_left)
+        .take(input_width)
+        .copied()
+        .collect();
+    let mut status_text = String::new();
+    status_text.push_str(prompt);
+    status_text.push_str(&visible_input);
+    status_text = fit_plain_text(&status_text, cols);
+
+    let cursor_x = if input_width == 0 {
+        cols - 1
+    } else {
+        prompt_width + cursor.saturating_sub(input_left).min(input_width - 1)
+    };
+
+    let mut stdout = io::stdout();
+    execute!(stdout, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
+    if ansi {
+        write!(stdout, "\x1b[7m{status_text}\x1b[0m")?;
+    } else {
+        write!(stdout, "{status_text}")?;
+    }
+    execute!(stdout, MoveTo(cursor_x as u16, status_row), Show)?;
+    stdout.flush()
 }
 
 fn render_fullscreen_editor(
@@ -930,8 +1937,24 @@ fn render_fullscreen_editor(
             Clear(ClearType::CurrentLine)
         )?;
         if let Some(line) = editor.lines.get(editor.top_line + screen_row) {
+            let line_index = editor.top_line + screen_row;
             let visible: String = line.iter().skip(editor.left_col).take(cols).collect();
+            let visible_len = visible.chars().count();
+            let selection =
+                editor
+                    .selection_columns_for_line(line_index)
+                    .and_then(|(start, end)| {
+                        let visible_start = editor.left_col;
+                        let visible_end = editor.left_col.saturating_add(cols);
+                        if end <= visible_start || start >= visible_end {
+                            return None;
+                        }
+                        let start = start.saturating_sub(visible_start).min(visible_len);
+                        let end = end.saturating_sub(visible_start).min(visible_len);
+                        (start < end).then_some((start, end))
+                    });
             let rendered = syntax_highlight_raw_with_cases(&visible, ansi, cases);
+            let rendered = apply_selection_to_rendered(&rendered, ansi, selection);
             write!(stdout, "{rendered}")?;
         }
     }
@@ -961,6 +1984,57 @@ fn render_fullscreen_editor(
         .min(edit_rows - 1) as u16;
     execute!(stdout, MoveTo(cursor_x, cursor_y), Show)?;
     stdout.flush()
+}
+
+fn apply_selection_to_rendered(
+    rendered: &str,
+    ansi: bool,
+    selection: Option<(usize, usize)>,
+) -> String {
+    let Some((selection_start, selection_end)) = selection else {
+        return rendered.to_string();
+    };
+    if !ansi || selection_start >= selection_end {
+        return rendered.to_string();
+    }
+
+    let mut out = String::new();
+    let mut chars = rendered.chars().peekable();
+    let mut plain_index = 0usize;
+    let mut selecting = false;
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            let mut sequence = String::from(ch);
+            while let Some(next) = chars.next() {
+                sequence.push(next);
+                if next == 'm' {
+                    break;
+                }
+            }
+            out.push_str(&sequence);
+            if selecting && sequence == RESET {
+                out.push_str(SELECTION_STYLE);
+            }
+            continue;
+        }
+
+        if plain_index == selection_start {
+            out.push_str(SELECTION_STYLE);
+            selecting = true;
+        }
+        if plain_index == selection_end {
+            out.push_str(SELECTION_END_STYLE);
+            selecting = false;
+        }
+        out.push(ch);
+        plain_index += 1;
+    }
+
+    if selecting {
+        out.push_str(SELECTION_END_STYLE);
+    }
+    out
 }
 
 fn fit_plain_text(text: &str, width: usize) -> String {
@@ -1935,6 +3009,217 @@ mod tests {
     }
 
     #[test]
+    fn fullscreen_editor_copies_deletes_and_pastes_selection() {
+        let lines = vec!["10 PRINT 1".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_col = 3;
+        editor.select_right();
+        editor.select_right();
+        editor.select_right();
+        editor.select_right();
+        editor.select_right();
+
+        assert!(editor.copy_selection());
+        assert_eq!(editor.clipboard, "PRINT");
+
+        editor.delete();
+        assert_eq!(editor.lines_as_strings(), vec!["10  1".to_string()]);
+        assert_eq!(editor.cursor_col, 3);
+
+        assert!(editor.paste_clipboard());
+        assert_eq!(editor.lines_as_strings(), lines);
+    }
+
+    #[test]
+    fn fullscreen_editor_renumbers_visible_order_and_references() {
+        let lines = vec![
+            "100 GOTO 295".to_string(),
+            "110 PRINT \"A\"".to_string(),
+            "295 PRINT \"MOVED\"".to_string(),
+            "296 GOSUB 330".to_string(),
+            "120 END".to_string(),
+            "330 RETURN".to_string(),
+        ];
+        let mut editor = BasicEditor::new(&lines);
+
+        editor.renumber_visible_lines().unwrap();
+
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec![
+                "100 GOTO 120".to_string(),
+                "110 PRINT \"A\"".to_string(),
+                "120 PRINT \"MOVED\"".to_string(),
+                "130 GOSUB 150".to_string(),
+                "140 END".to_string(),
+                "150 RETURN".to_string(),
+            ]
+        );
+        assert!(editor.dirty);
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines_as_strings(), lines);
+    }
+
+    #[test]
+    fn fullscreen_editor_renum_rejects_duplicate_line_numbers() {
+        let lines = vec!["10 PRINT 1".to_string(), "10 PRINT 2".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+
+        assert_eq!(
+            editor.renumber_visible_lines().unwrap_err(),
+            "duplicate line number"
+        );
+        assert_eq!(editor.lines_as_strings(), lines);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn fullscreen_editor_find_selects_case_insensitive_match() {
+        let lines = vec!["10 print 1".to_string(), "20 GOTO 10".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+
+        assert_eq!(editor.find_next("PRINT"), Some(EditorFindResult::Found));
+        assert_eq!(
+            editor.selection_anchor,
+            Some(EditorPosition { line: 0, col: 3 })
+        );
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 8);
+
+        assert_eq!(editor.find_next("goto"), Some(EditorFindResult::Found));
+        assert_eq!(
+            editor.selection_anchor,
+            Some(EditorPosition { line: 1, col: 3 })
+        );
+        assert_eq!(editor.cursor_line, 1);
+        assert_eq!(editor.cursor_col, 7);
+    }
+
+    #[test]
+    fn fullscreen_editor_find_wraps_to_top() {
+        let lines = vec!["10 PRINT 1".to_string(), "20 END".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_line = 1;
+        editor.cursor_col = 6;
+
+        assert_eq!(editor.find_next("print"), Some(EditorFindResult::Wrapped));
+        assert_eq!(
+            editor.selection_anchor,
+            Some(EditorPosition { line: 0, col: 3 })
+        );
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 8);
+    }
+
+    #[test]
+    fn fullscreen_editor_replace_search_starts_at_document_top() {
+        let lines = vec!["10 PRINT 1".to_string(), "20 PRINT 2".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_line = 1;
+        editor.cursor_col = "20 PRINT 2".chars().count();
+
+        assert!(editor.find_first("print"));
+        assert_eq!(
+            editor.selection_anchor,
+            Some(EditorPosition { line: 0, col: 3 })
+        );
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 8);
+    }
+
+    #[test]
+    fn fullscreen_editor_replace_selected_match_is_undoable() {
+        let lines = vec!["10 PRINT 1".to_string(), "20 PRINT 2".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+
+        assert_eq!(editor.find_next("print"), Some(EditorFindResult::Found));
+        assert!(editor.replace_selected_match("print", "INPUT"));
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec!["10 INPUT 1".to_string(), "20 PRINT 2".to_string()]
+        );
+        assert!(editor.dirty);
+        assert_eq!(editor.selection_anchor, None);
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 8);
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines_as_strings(), lines);
+        assert_eq!(
+            editor.selection_anchor,
+            Some(EditorPosition { line: 0, col: 3 })
+        );
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 8);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn fullscreen_editor_replace_all_from_selection_stops_at_document_end() {
+        let lines = vec![
+            "10 PRINT 1".to_string(),
+            "20 PRINT 2".to_string(),
+            "30 PRINT 3".to_string(),
+        ];
+        let mut editor = BasicEditor::new(&lines);
+
+        assert_eq!(editor.find_next("print"), Some(EditorFindResult::Found));
+        assert!(editor.find_next_without_wrap("print"));
+        assert_eq!(
+            editor.replace_all_from_selection_to_end("print", "INPUT"),
+            2
+        );
+
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec![
+                "10 PRINT 1".to_string(),
+                "20 INPUT 2".to_string(),
+                "30 INPUT 3".to_string(),
+            ]
+        );
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines_as_strings(), lines);
+    }
+
+    #[test]
+    fn fullscreen_editor_undo_redo_restores_text_and_dirty_state() {
+        let lines = vec!["10 PRINT 1".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_col = 2;
+
+        editor.insert_text(" REM");
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec!["10 REM PRINT 1".to_string()]
+        );
+        assert!(editor.dirty);
+
+        assert!(editor.undo());
+        assert_eq!(editor.lines_as_strings(), lines);
+        assert!(!editor.dirty);
+
+        assert!(editor.redo());
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec!["10 REM PRINT 1".to_string()]
+        );
+        assert!(editor.dirty);
+    }
+
+    #[test]
+    fn fullscreen_editor_selection_rendering_preserves_reset_styles() {
+        let rendered = format!("a{RESET}bc");
+        let selected = apply_selection_to_rendered(&rendered, true, Some((0, 3)));
+
+        assert!(selected.starts_with(SELECTION_STYLE));
+        assert!(selected.contains(&format!("{RESET}{SELECTION_STYLE}")));
+        assert!(selected.ends_with(SELECTION_END_STYLE));
+    }
+
+    #[test]
     fn fullscreen_editor_scrolls_to_keep_cursor_visible() {
         let lines = (0..10).map(|i| format!("{i}")).collect::<Vec<_>>();
         let mut editor = BasicEditor::new(&lines);
@@ -1969,11 +3254,11 @@ mod tests {
 
     #[test]
     fn editor_status_places_position_at_right_edge() {
-        let line = editor_status_line("F2 Apply", true, 12, 34, 24);
+        let line = editor_status_line("F12 Apply", true, 12, 34, 24);
         assert_eq!(line.chars().count(), 24);
         assert!(line.ends_with("Ln 12 Col 34"));
 
-        let narrow = editor_status_line("F2 Apply", false, 123, 456, 8);
+        let narrow = editor_status_line("F12 Apply", false, 123, 456, 8);
         assert_eq!(narrow, "Ln 123 C");
     }
 }
