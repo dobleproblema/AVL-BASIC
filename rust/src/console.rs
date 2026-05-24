@@ -429,6 +429,11 @@ pub fn normalize_code(code: &str) -> String {
     result = add_bas_extension_to_leading_file_command(&result);
     result = format_colon_separators(&result);
     if let Some((spaces, comment)) = comment {
+        let spaces = if result.trim().is_empty() {
+            spaces
+        } else {
+            spaces.max(1)
+        };
         result.push_str(&" ".repeat(spaces));
         result.push('\'');
         result.push_str(comment);
@@ -582,6 +587,7 @@ where
                 KeyCode::Char(ch) => {
                     buffer.insert(cursor, ch);
                     cursor += 1;
+                    format_editing_separators_with_cursor(&mut buffer, &mut cursor);
                     history.reset();
                 }
                 KeyCode::Backspace => {
@@ -1276,6 +1282,19 @@ impl BasicEditor {
         self.cursor_col = cursor_col;
     }
 
+    fn format_current_line_separators_without_history(&mut self) {
+        if self.cursor_line >= self.lines.len() {
+            return;
+        }
+        let mut line = self.lines[self.cursor_line].clone();
+        let mut cursor = self.cursor_col.min(line.len());
+        if format_editing_separators_with_cursor(&mut line, &mut cursor) {
+            self.lines[self.cursor_line] = line;
+            self.cursor_col = cursor.min(self.current_line_len());
+            self.dirty = true;
+        }
+    }
+
     fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1291,6 +1310,7 @@ impl BasicEditor {
         let mut text = String::new();
         text.push(ch);
         self.insert_text(&text);
+        self.format_current_line_separators_without_history();
     }
 
     fn insert_newline(&mut self) {
@@ -1594,6 +1614,60 @@ fn line_matches_at_ignore_ascii_case(line: &[char], start: usize, query: &[char]
         .iter()
         .enumerate()
         .all(|(offset, query_ch)| chars_equal_ignore_ascii_case(line[start + offset], *query_ch))
+}
+
+fn format_editing_separators_with_cursor(buffer: &mut Vec<char>, cursor: &mut usize) -> bool {
+    let mut marked = String::new();
+    let mut cursor_inserted = false;
+    for (idx, ch) in buffer.iter().enumerate() {
+        if idx == *cursor {
+            marked.push(CURSOR_MARKER);
+            cursor_inserted = true;
+        }
+        marked.push(*ch);
+    }
+    if !cursor_inserted {
+        marked.push(CURSOR_MARKER);
+    }
+
+    let formatted = format_editing_separators(&marked);
+    if formatted == marked {
+        return false;
+    }
+
+    let mut new_buffer = Vec::new();
+    let mut new_cursor = None;
+    for ch in formatted.chars() {
+        if ch == CURSOR_MARKER {
+            new_cursor = Some(new_buffer.len());
+        } else {
+            new_buffer.push(ch);
+        }
+    }
+    let Some(new_cursor) = new_cursor else {
+        return false;
+    };
+
+    let changed = *buffer != new_buffer || *cursor != new_cursor;
+    *buffer = new_buffer;
+    *cursor = new_cursor.min(buffer.len());
+    changed
+}
+
+fn format_editing_separators(source: &str) -> String {
+    let (main, comment) = split_single_quote_comment(source);
+    let mut result = format_colon_separators(main);
+    if let Some((spaces, comment)) = comment {
+        let spaces = if result.trim().is_empty() {
+            spaces
+        } else {
+            spaces.max(1)
+        };
+        result.push_str(&" ".repeat(spaces));
+        result.push('\'');
+        result.push_str(comment);
+    }
+    result
 }
 
 fn editor_identifier_cases(
@@ -2598,24 +2672,37 @@ fn normalize_main_code(code: &str) -> String {
 fn format_colon_separators(source: &str) -> String {
     let (prefix, body) = split_line_number(source).unwrap_or(("", source));
     let statements = split_listing_statements(body);
-    if statements.len() <= 1 {
+    if !statements.changed {
         return source.to_string();
     }
-    format!("{prefix}{}", statements.join(" : "))
+    let mut formatted = format!("{prefix}{}", statements.items.join(" : "));
+    if statements.trailing_separator && !statements.items.is_empty() {
+        formatted.push_str(" :");
+    }
+    formatted
 }
 
-fn split_listing_statements(code: &str) -> Vec<String> {
+struct ListingStatements {
+    items: Vec<String>,
+    trailing_separator: bool,
+    changed: bool,
+}
+
+fn split_listing_statements(code: &str) -> ListingStatements {
     let chars: Vec<char> = code.chars().collect();
     let mut statements = Vec::new();
     let mut buffer = String::new();
     let mut i = 0usize;
     let mut in_string = false;
+    let mut trailing_separator = false;
+    let mut changed = false;
 
     while i < chars.len() {
         let ch = chars[i];
         if ch == '"' {
             in_string = !in_string;
             buffer.push(ch);
+            trailing_separator = false;
             i += 1;
             continue;
         }
@@ -2625,7 +2712,11 @@ fn split_listing_statements(code: &str) -> Vec<String> {
             buffer.clear();
             let rem: String = chars[i..].iter().collect();
             push_statement(&mut statements, &rem);
-            return statements;
+            return ListingStatements {
+                items: statements,
+                trailing_separator: false,
+                changed,
+            };
         }
 
         if !in_string && starts_with_chars(&chars, i, "IF ") {
@@ -2648,24 +2739,39 @@ fn split_listing_statements(code: &str) -> Vec<String> {
             if !after_else && (i == 0 || !chars[i - 1].is_ascii_alphanumeric()) {
                 push_statement(&mut statements, &buffer);
                 let if_block: String = chars[i..].iter().collect();
+                let if_block = compact_inline_colon_separators(&if_block);
+                changed |= if_block != chars[i..].iter().collect::<String>();
                 push_statement(&mut statements, &if_block);
-                return statements;
+                return ListingStatements {
+                    items: statements,
+                    trailing_separator: false,
+                    changed,
+                };
             }
         }
 
         if ch == ':' && !in_string {
             push_statement(&mut statements, &buffer);
             buffer.clear();
+            trailing_separator = true;
+            changed = true;
             i += 1;
             continue;
         }
 
         buffer.push(ch);
+        if !ch.is_whitespace() {
+            trailing_separator = false;
+        }
         i += 1;
     }
 
     push_statement(&mut statements, &buffer);
-    statements
+    ListingStatements {
+        items: statements,
+        trailing_separator,
+        changed,
+    }
 }
 
 fn push_statement(statements: &mut Vec<String>, statement: &str) {
@@ -2679,7 +2785,44 @@ fn starts_with_chars(chars: &[char], start: usize, needle: &str) -> bool {
     let needle_chars: Vec<char> = needle.chars().collect();
     chars
         .get(start..start + needle_chars.len())
-        .is_some_and(|slice| slice == needle_chars.as_slice())
+        .is_some_and(|slice| {
+            slice
+                .iter()
+                .zip(needle_chars.iter())
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
+        })
+}
+
+fn compact_inline_colon_separators(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    let mut in_string = false;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '"' {
+            in_string = !in_string;
+            out.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == ':' && !in_string {
+            while out.ends_with(char::is_whitespace) {
+                out.pop();
+            }
+            out.push(':');
+            i += 1;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+
+    out
 }
 
 fn canonicalize_number(raw: &str) -> String {
@@ -3043,10 +3186,10 @@ mod tests {
     }
 
     #[test]
-    fn cursor_after_trailing_colon_does_not_create_phantom_spacing() {
+    fn cursor_after_trailing_colon_tracks_live_separator_space() {
         let line = "10 print 1:";
         let normalized = normalize_code(line);
-        assert_eq!(normalized, "10 PRINT 1:");
+        assert_eq!(normalized, "10 PRINT 1 :");
         assert_eq!(
             normalized_cursor_position(line, line.chars().count()),
             normalized.chars().count()
@@ -3087,8 +3230,59 @@ mod tests {
         assert_eq!(syntax_highlight_raw_with_cases(source, false, None), source);
         assert_eq!(
             syntax_highlight_with_cases(source, false, None),
-            "10 PRINT 1:"
+            "10 PRINT 1 :"
         );
+    }
+
+    #[test]
+    fn live_separator_formatting_updates_buffer_and_cursor() {
+        let mut top_level: Vec<char> = "10 print 1:print 2".chars().collect();
+        let mut cursor = top_level.len();
+        assert!(format_editing_separators_with_cursor(
+            &mut top_level,
+            &mut cursor
+        ));
+        assert_eq!(top_level.iter().collect::<String>(), "10 print 1 : print 2");
+        assert_eq!(cursor, top_level.len());
+
+        let mut trailing: Vec<char> = "10 print 1:".chars().collect();
+        let mut cursor = trailing.len();
+        assert!(format_editing_separators_with_cursor(
+            &mut trailing,
+            &mut cursor
+        ));
+        assert_eq!(trailing.iter().collect::<String>(), "10 print 1 : ");
+        assert_eq!(cursor, trailing.len());
+
+        let mut if_body: Vec<char> = "10 if a then print 1:print 2 else print 3:print 4"
+            .chars()
+            .collect();
+        let mut cursor = if_body.len();
+        assert!(!format_editing_separators_with_cursor(
+            &mut if_body,
+            &mut cursor
+        ));
+
+        let mut spaced_if_body: Vec<char> = "10 if a then print 1 : print 2".chars().collect();
+        let mut cursor = spaced_if_body.len();
+        assert!(format_editing_separators_with_cursor(
+            &mut spaced_if_body,
+            &mut cursor
+        ));
+        assert_eq!(
+            spaced_if_body.iter().collect::<String>(),
+            "10 if a then print 1:print 2"
+        );
+        assert_eq!(cursor, spaced_if_body.len());
+
+        let mut comment: Vec<char> = "10 print 1'comment".chars().collect();
+        let mut cursor = comment.len();
+        assert!(format_editing_separators_with_cursor(
+            &mut comment,
+            &mut cursor
+        ));
+        assert_eq!(comment.iter().collect::<String>(), "10 print 1 'comment");
+        assert_eq!(cursor, comment.len());
     }
 
     #[test]

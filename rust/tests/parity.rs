@@ -726,6 +726,11 @@ fn console_normalization_completes_file_quotes_and_bas_extension() {
         "10 PRINT 1E+3 'comment"
     );
     assert_eq!(
+        console::normalize_code("10 print 1'comment"),
+        "10 PRINT 1 'comment"
+    );
+    assert_eq!(console::normalize_code("'comment"), "'comment");
+    assert_eq!(
         console::normalize_code("10 rem print if and mod"),
         "10 REM print if and mod"
     );
@@ -738,9 +743,14 @@ fn console_normalization_completes_file_quotes_and_bas_extension() {
         "10 PRINT 0 : IF a THEN PRINT 1:PRINT 2 ELSE PRINT 3:PRINT 4"
     );
     assert_eq!(
+        console::normalize_code("10 if a then print 1 : print 2 else print 3 : print 4"),
+        "10 IF a THEN PRINT 1:PRINT 2 ELSE PRINT 3:PRINT 4"
+    );
+    assert_eq!(
         console::normalize_code("10 print \"a:b\":print 2"),
         "10 PRINT \"a:b\" : PRINT 2"
     );
+    assert_eq!(console::normalize_code("10 print 1:"), "10 PRINT 1 :");
 }
 
 #[test]
