@@ -762,7 +762,11 @@ impl Interpreter {
     }
 
     fn refresh_identifier_case_from_program(&mut self) {
-        self.identifier_case.clear();
+        self.identifier_case = self.program_identifier_case();
+    }
+
+    fn program_identifier_case(&self) -> HashMap<String, String> {
+        let mut cases = HashMap::new();
         let codes: Vec<String> = self
             .program
             .line_numbers()
@@ -770,8 +774,9 @@ impl Interpreter {
             .filter_map(|line| self.program.get(line).map(str::to_string))
             .collect();
         for code in codes {
-            record_identifier_case_forms(&code, &mut self.identifier_case, false);
+            record_identifier_case_forms(&code, &mut cases, false);
         }
+        cases
     }
 
     fn record_identifier_case_from_numbered_line(&mut self, source: &str, overwrite: bool) {
@@ -1175,16 +1180,18 @@ impl Interpreter {
         if !console::interactive_terminal() {
             return Err(self.err(ErrorCode::Unsupported));
         }
-        let lines = self.program_listing_lines();
-        match console::edit_fullscreen(
+        let program_cases = self.program_identifier_case();
+        let lines = self.program_listing_lines(&program_cases);
+        match console::edit_fullscreen_with_idle(
             &lines,
             self.ansi_output,
-            Some(&self.identifier_case),
+            Some(&program_cases),
             |lines| {
                 Self::program_from_editor_lines(lines)
                     .map(|_| ())
                     .map_err(|err| err.display_for_basic())
             },
+            || self.pump_graphics_window_for_editor(),
         )
         .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?
         {
@@ -1223,13 +1230,13 @@ impl Interpreter {
         Ok(())
     }
 
-    fn program_listing_lines(&self) -> Vec<String> {
+    fn program_listing_lines(&self, cases: &HashMap<String, String>) -> Vec<String> {
         self.program
             .line_numbers()
             .into_iter()
             .map(|line| {
                 let code = self.program.get(line).unwrap_or("");
-                let code = apply_identifier_case(code, &self.identifier_case);
+                let code = apply_identifier_case(code, cases);
                 format!("{line}{code}")
             })
             .collect()
@@ -5353,6 +5360,30 @@ impl Interpreter {
         Ok(())
     }
 
+    fn pump_graphics_window_for_editor(&mut self) -> io::Result<()> {
+        if !self.graphics_window_enabled
+            || self.graphics_window_suppressed
+            || self.graphics_window.is_none()
+        {
+            return Ok(());
+        }
+        if self.last_graphics_window_pump.elapsed() < ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL {
+            return Ok(());
+        }
+        self.last_graphics_window_pump = Instant::now();
+
+        let mut user_closed = false;
+        if let Some(window) = self.graphics_window.as_mut() {
+            user_closed = !window
+                .pump_lifecycle(&self.graphics)
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err.display_for_basic()))?;
+        }
+        if user_closed {
+            self.mark_graphics_window_user_closed();
+        }
+        Ok(())
+    }
+
     fn prepare_graphics_window_use_by_current_run(&mut self) -> BasicResult<()> {
         let first_graphics_use_by_run =
             self.current_line.is_some() && !self.graphics_window_used_this_run;
@@ -8117,6 +8148,22 @@ mod interpreter_tests {
 
         assert!(!interp.test_interrupt_requested);
         assert!(!interp.graphics_window_suppressed);
+    }
+
+    #[test]
+    fn editor_identifier_cases_ignore_immediate_only_variables() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("x=1").unwrap();
+        assert_eq!(interp.identifier_case.get("X"), Some(&"x".to_string()));
+        assert!(!interp.program_identifier_case().contains_key("X"));
+
+        interp.process_immediate("10 Foo=1").unwrap();
+        interp.process_immediate("foo=2").unwrap();
+        assert_eq!(interp.identifier_case.get("FOO"), Some(&"Foo".to_string()));
+        assert_eq!(
+            interp.program_identifier_case().get("FOO"),
+            Some(&"Foo".to_string())
+        );
     }
 
     #[test]

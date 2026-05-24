@@ -637,6 +637,20 @@ pub fn edit_fullscreen<F>(
 where
     F: FnMut(&[String]) -> Result<(), String>,
 {
+    edit_fullscreen_with_idle(initial_lines, ansi, cases, &mut validate, || Ok(()))
+}
+
+pub fn edit_fullscreen_with_idle<F, I>(
+    initial_lines: &[String],
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    mut validate: F,
+    mut idle: I,
+) -> io::Result<FullscreenEditOutcome>
+where
+    F: FnMut(&[String]) -> Result<(), String>,
+    I: FnMut() -> io::Result<()>,
+{
     if !interactive_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -650,6 +664,10 @@ where
     render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
 
     loop {
+        if !poll(Duration::from_millis(30))? {
+            idle()?;
+            continue;
+        }
         match read()? {
             Event::Key(event) => {
                 if event.kind == KeyEventKind::Release {
@@ -694,12 +712,18 @@ where
                         };
                     }
                     KeyCode::F(8) => {
-                        status = run_editor_replace(&mut editor, ansi, cases)?;
+                        status = run_editor_replace(&mut editor, ansi, cases, &mut idle)?;
                     }
                     KeyCode::F(7) => {
                         let initial = editor.last_find.clone();
-                        let Some(query) =
-                            read_editor_prompt(&mut editor, ansi, cases, "Find: ", &initial)?
+                        let Some(query) = read_editor_prompt(
+                            &mut editor,
+                            ansi,
+                            cases,
+                            "Find: ",
+                            &initial,
+                            &mut idle,
+                        )?
                         else {
                             status = editor.default_status();
                             render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
@@ -1572,6 +1596,62 @@ fn line_matches_at_ignore_ascii_case(line: &[char], start: usize, query: &[char]
         .all(|(offset, query_ch)| chars_equal_ignore_ascii_case(line[start + offset], *query_ch))
 }
 
+fn editor_identifier_cases(
+    lines: &[Vec<char>],
+    fallback: Option<&HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut cases = HashMap::new();
+    for line in lines {
+        let text: String = line.iter().collect();
+        let code = split_line_number(&text).map_or(text.as_str(), |(_, after)| after);
+        record_editor_identifier_cases(code, &mut cases);
+    }
+    if let Some(fallback) = fallback {
+        for (canonical, display) in fallback {
+            cases
+                .entry(canonical.clone())
+                .or_insert_with(|| display.clone());
+        }
+    }
+    cases
+}
+
+fn record_editor_identifier_cases(source: &str, cases: &mut HashMap<String, String>) {
+    let (main, _) = split_single_quote_comment(source);
+    let chars: Vec<char> = main.chars().collect();
+    let mut i = 0usize;
+    let mut in_string = false;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            i += 1;
+            continue;
+        }
+        if is_ident_start(ch) {
+            let start = i;
+            i += 1;
+            while i < chars.len() && is_ident_char(chars[i]) {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let upper = ident.to_ascii_uppercase();
+            if upper == "REM" && token_boundary(&chars, start, i) {
+                break;
+            }
+            if !upper.starts_with("FN") && !is_known_word(&upper) {
+                cases.entry(upper).or_insert(ident);
+            }
+            continue;
+        }
+        i += 1;
+    }
+}
+
 struct EditorNumberedLine {
     index: usize,
     old_number: i32,
@@ -1728,13 +1808,18 @@ fn copy_renumbered_editor_line_list(
     }
 }
 
-fn run_editor_replace(
+fn run_editor_replace<I>(
     editor: &mut BasicEditor,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
-) -> io::Result<String> {
+    idle: &mut I,
+) -> io::Result<String>
+where
+    I: FnMut() -> io::Result<()>,
+{
     let find_initial = editor.last_find.clone();
-    let Some(query) = read_editor_prompt(editor, ansi, cases, "Find: ", &find_initial)? else {
+    let Some(query) = read_editor_prompt(editor, ansi, cases, "Find: ", &find_initial, idle)?
+    else {
         return Ok(editor.default_status());
     };
     if query.is_empty() {
@@ -1742,7 +1827,8 @@ fn run_editor_replace(
     }
 
     let replace_initial = editor.last_replace.clone();
-    let Some(replacement) = read_editor_prompt(editor, ansi, cases, "Replace: ", &replace_initial)?
+    let Some(replacement) =
+        read_editor_prompt(editor, ansi, cases, "Replace: ", &replace_initial, idle)?
     else {
         return Ok(editor.default_status());
     };
@@ -1757,6 +1843,10 @@ fn run_editor_replace(
     render_fullscreen_editor(editor, ansi, cases, &status)?;
 
     loop {
+        if !poll(Duration::from_millis(30))? {
+            idle()?;
+            continue;
+        }
         match read()? {
             Event::Key(event) => {
                 if event.kind == KeyEventKind::Release {
@@ -1810,18 +1900,26 @@ fn editor_replace_count_status(count: usize) -> String {
     }
 }
 
-fn read_editor_prompt(
+fn read_editor_prompt<I>(
     editor: &mut BasicEditor,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
     prompt: &str,
     initial: &str,
-) -> io::Result<Option<String>> {
+    idle: &mut I,
+) -> io::Result<Option<String>>
+where
+    I: FnMut() -> io::Result<()>,
+{
     let mut input: Vec<char> = initial.chars().collect();
     let mut cursor = input.len();
     render_fullscreen_editor_prompt(editor, ansi, cases, prompt, &input, cursor)?;
 
     loop {
+        if !poll(Duration::from_millis(30))? {
+            idle()?;
+            continue;
+        }
         match read()? {
             Event::Key(event) => {
                 if event.kind == KeyEventKind::Release {
@@ -1927,6 +2025,7 @@ fn render_fullscreen_editor(
     let rows = rows.max(1) as usize;
     let edit_rows = rows.saturating_sub(1).max(1);
     editor.ensure_cursor_visible(cols, edit_rows);
+    let render_cases = editor_identifier_cases(&editor.lines, cases);
 
     let mut stdout = io::stdout();
     execute!(stdout, Hide)?;
@@ -1953,7 +2052,7 @@ fn render_fullscreen_editor(
                         let end = end.saturating_sub(visible_start).min(visible_len);
                         (start < end).then_some((start, end))
                     });
-            let rendered = syntax_highlight_raw_with_cases(&visible, ansi, cases);
+            let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
             let rendered = apply_selection_to_rendered(&rendered, ansi, selection);
             write!(stdout, "{rendered}")?;
         }
@@ -3072,6 +3171,17 @@ mod tests {
         );
         assert_eq!(editor.lines_as_strings(), lines);
         assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn fullscreen_editor_identifier_cases_come_from_current_buffer_first() {
+        let lines = vec!["10 NewVar=1".to_string(), "20 newvar=2".to_string()];
+        let editor = BasicEditor::new(&lines);
+        let fallback = HashMap::from([("NEWVAR".to_string(), "newvar".to_string())]);
+
+        let cases = editor_identifier_cases(&editor.lines, Some(&fallback));
+
+        assert_eq!(cases.get("NEWVAR"), Some(&"NewVar".to_string()));
     }
 
     #[test]
