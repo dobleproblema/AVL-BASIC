@@ -3,28 +3,31 @@
 120 DEF FNG$(N)=STR$(GM0+(GM1-GM0)*MIN(N,NM/2)/(NM/2)+(GV0-GM1)*MAX(0,N-NM/2)/(NM/2))
 130 DEF FNB$(N)=STR$(BM0+(BM1-BM0)*MIN(N,NM/2)/(NM/2)+(BV0-BM1)*MAX(0,N-NM/2)/(NM/2))
 140 DEG : SCREEN : MOVE WIDTH\2,HEIGHT\10
-150 NM=12 : N=T=0 : F=1/SQR(2) 'NM=9 for Python version
-160 RM0=139 : GM0=69 : BM0=19 'Brown
-170 RM1=255 : GM1=215 : BM1=0 'Intermediate golden yellow
-180 RV0=34 : GV0=255 : BV0=34 'Green
-190 DIM A(NM),L(NM),X(NM),Y(NM)
-200 A(N)=0 : L(N)=HEIGHT\4 : X(N)=XPOS : Y(N)=YPOS
-210 CLG : MOVE X(0),Y(0)
-220 N=0 : A(N)=3*SIN(T*10)
-230 GOSUB 270
-240 T=T+1 : FRAME
-250 GOTO 210
-260 END
-270 REM Subroutine that simulates recursion
-280 INK FNR$(N)+","+FNG$(N)+","+FNB$(N)
-290 PENWIDTH FNLW(N)
-300 DRAW X(N)+L(N)*SIN(A(N)),Y(N)+L(N)*COS(A(N))
-310 N=N+1 : IF N<NM THEN X(N)=XPOS:Y(N)=YPOS ELSE 380
-320 '25° on the right branch for a more "organic" look
-330 A(N)=A(N-1)+25 : L(N)=L(N-1)*F
-340 GOSUB 270
+150 EVERY 500,0 GOSUB 400
+160 NM=12 : N=T=FC=0 : F=1/SQR(2) 'NM=9 for Python version
+170 RM0=139 : GM0=69 : BM0=19 'Brown
+180 RM1=255 : GM1=215 : BM1=0 'Intermediate golden yellow
+190 RV0=34 : GV0=255 : BV0=34 'Green
+200 DIM A(NM),L(NM),X(NM),Y(NM)
+210 A(N)=0 : L(N)=HEIGHT\4 : X(N)=XPOS : Y(N)=YPOS
+220 CLG : MOVE X(0),Y(0)
+230 N=0 : A(N)=3*SIN(T*10)
+240 GOSUB 280
+250 T=T+1 : FC=FC+1 : FRAME
+260 GOTO 220
+270 END
+280 REM Subroutine that simulates recursion
+290 INK FNR$(N)+","+FNG$(N)+","+FNB$(N)
+300 PENWIDTH FNLW(N)
+310 DRAW X(N)+L(N)*SIN(A(N)),Y(N)+L(N)*COS(A(N))
+320 N=N+1 : IF N<NM THEN X(N)=XPOS:Y(N)=YPOS ELSE 380
+330 A(N)=A(N-1)+25 : L(N)=L(N-1)*F '25° on the right branch for a more "organic" look
+340 GOSUB 280
 350 A(N)=A(N-1)-45
 360 MOVE X(N),Y(N)
-370 GOSUB 270
+370 GOSUB 280
 380 N=N-1 : MOVE X(N),Y(N)
 390 RETURN
+400 PRINT "FPS:";FC/10
+410 FC=0
+420 RETURN
