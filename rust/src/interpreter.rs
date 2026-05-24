@@ -321,12 +321,14 @@ impl ArrayValue {
 #[derive(Debug, Clone)]
 enum UserFunction {
     Single {
-        params: Vec<String>,
+        name: Rc<str>,
+        params: Rc<[String]>,
         expr: String,
     },
     Multi {
-        params: Vec<String>,
-        local_specs: Vec<LocalSpec>,
+        name: Rc<str>,
+        params: Rc<[String]>,
+        local_specs: Rc<[LocalSpec]>,
         start: Cursor,
         end: Cursor,
     },
@@ -334,7 +336,7 @@ enum UserFunction {
 
 #[derive(Debug, Clone)]
 struct ActiveFunctionFrame {
-    name: String,
+    name: Rc<str>,
     return_value: Option<Value>,
 }
 
@@ -475,6 +477,11 @@ enum CachedCommand {
         target: Option<Cursor>,
     },
     Return,
+    FnEnd,
+    FnExit,
+    SubEnd,
+    SubExit,
+    Local,
     Next(Option<String>),
     While(Rc<Expr>),
     Wend,
@@ -499,7 +506,9 @@ pub struct Interpreter {
     pub program: Program,
     command_cache: HashMap<i32, Vec<Rc<str>>>,
     compiled_command_cache: HashMap<i32, Vec<Rc<CachedCommand>>>,
+    compiled_line_cache: Rc<[Rc<[Rc<CachedCommand>]>]>,
     line_index_cache: HashMap<i32, usize>,
+    line_numbers_cache: Rc<[i32]>,
     next_after_for_cache: HashMap<Cursor, Cursor>,
     wend_after_while_cache: HashMap<Cursor, Cursor>,
     pub root_dir: PathBuf,
@@ -514,7 +523,7 @@ pub struct Interpreter {
     data_pointer: usize,
     functions: HashMap<String, UserFunction>,
     subs: HashMap<String, UserSub>,
-    function_call_stack: Vec<String>,
+    function_call_stack: Vec<Rc<str>>,
     sub_call_stack: Vec<String>,
     active_functions: Vec<ActiveFunctionFrame>,
     active_subs: Vec<ActiveSubFrame>,
@@ -587,7 +596,9 @@ impl Interpreter {
             program: Program::default(),
             command_cache: HashMap::new(),
             compiled_command_cache: HashMap::new(),
+            compiled_line_cache: Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice()),
             line_index_cache: HashMap::new(),
+            line_numbers_cache: Rc::from(Vec::<i32>::new().into_boxed_slice()),
             next_after_for_cache: HashMap::new(),
             wend_after_while_cache: HashMap::new(),
             root_dir: root_dir.clone(),
@@ -1427,8 +1438,13 @@ impl Interpreter {
     }
 
     fn run_from(&mut self, cursor: Cursor) -> BasicResult<RunOutcome> {
+        let was_top_level = self.run_depth == 0;
         self.run_depth += 1;
-        let _runtime_raw = console::enter_runtime_raw_mode().ok();
+        let _runtime_raw = if was_top_level {
+            console::enter_runtime_raw_mode().ok()
+        } else {
+            None
+        };
         let result = self.run_from_inner(cursor);
         let closed_graphics_window = self.graphics_window_closed_by_current_run;
         self.run_depth -= 1;
@@ -1448,16 +1464,15 @@ impl Interpreter {
     }
 
     fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
-        let mut lines = self.program.line_numbers();
+        let mut lines = self.line_numbers_cache.clone();
+        let mut compiled_lines = self.compiled_line_cache.clone();
         'run_loop: loop {
             if cursor.line_idx >= lines.len() {
                 break;
             }
             let line_no = lines[cursor.line_idx];
-            let commands_len = self
-                .compiled_command_cache
-                .get(&line_no)
-                .map_or(0usize, |commands| commands.len());
+            let commands = compiled_lines.get(cursor.line_idx).cloned();
+            let commands_len = commands.as_ref().map_or(0usize, |commands| commands.len());
             if cursor.cmd_idx >= commands_len {
                 cursor.line_idx += 1;
                 cursor.cmd_idx = 0;
@@ -1484,9 +1499,8 @@ impl Interpreter {
             }
             while cursor.cmd_idx < commands_len {
                 self.check_user_interrupt(&cursor)?;
-                let command = self
-                    .compiled_command_cache
-                    .get(&line_no)
+                let command = commands
+                    .as_ref()
                     .and_then(|commands| commands.get(cursor.cmd_idx))
                     .cloned()
                     .unwrap_or_else(|| Rc::new(CachedCommand::Noop));
@@ -1541,12 +1555,14 @@ impl Interpreter {
                 }
                 if self.restart_run_loop {
                     self.restart_run_loop = false;
-                    lines = self.program.line_numbers();
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
                     continue 'run_loop;
                 }
                 if self.program_structure_changed {
                     self.program_structure_changed = false;
-                    lines = self.program.line_numbers();
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
                 }
                 if self.repeat_current_command {
                     self.repeat_current_command = false;
@@ -1568,7 +1584,7 @@ impl Interpreter {
             let line = lines
                 .get(frame.line_idx)
                 .copied()
-                .or_else(|| self.program.line_numbers().get(frame.line_idx).copied())
+                .or_else(|| self.line_numbers_cache.get(frame.line_idx).copied())
                 .unwrap_or_default();
             return Err(BasicError::new(ErrorCode::IfWithoutEndIf).at_line(line));
         }
@@ -1601,7 +1617,7 @@ impl Interpreter {
         let mut err = BasicError::new(ErrorCode::KeyboardInterrupt);
         if let Some(line) = self
             .current_line
-            .or_else(|| self.program.line_numbers().get(cursor.line_idx).copied())
+            .or_else(|| self.line_numbers_cache.get(cursor.line_idx).copied())
         {
             err = err.at_line(line);
         }
@@ -2008,6 +2024,11 @@ impl Interpreter {
                 *cursor = ret;
                 Ok(())
             }
+            CachedCommand::FnEnd => self.execute_fnend(),
+            CachedCommand::FnExit => self.execute_fnexit(),
+            CachedCommand::SubEnd => self.execute_subend(),
+            CachedCommand::SubExit => self.execute_subexit(),
+            CachedCommand::Local => self.execute_local(),
             CachedCommand::Next(var) => self.execute_next_cached(var.as_deref(), cursor),
             CachedCommand::While(condition) => {
                 self.execute_compiled_while(condition.clone(), cursor)
@@ -2235,13 +2256,21 @@ impl Interpreter {
             e
         })?;
         for target in &compiled.targets {
-            if matches!(value, Value::ArrayRef(_))
-                && self
-                    .active_function_name()
-                    .is_some_and(|name| target.name().eq_ignore_ascii_case(name))
+            if self
+                .active_function_name()
+                .is_some_and(|name| target.name().eq_ignore_ascii_case(name))
             {
-                self.return_value_for_active_function(target.name(), &value);
-                continue;
+                if matches!(value, Value::ArrayRef(_)) {
+                    self.return_value_for_active_function(target.name(), &value);
+                    continue;
+                }
+                if let CompiledLValue::Scalar { is_string, .. } = target {
+                    if *is_string != matches!(value, Value::Str(_)) {
+                        return Err(self.err(ErrorCode::TypeMismatch));
+                    }
+                    self.return_value_for_active_function(target.name(), &value);
+                    continue;
+                }
             }
             self.assign_compiled_lvalue(target, value.clone())?;
             self.return_value_for_active_function(target.name(), &value);
@@ -2357,13 +2386,22 @@ impl Interpreter {
                 Value::number(self.eval_number(rhs)?)
             };
             for lhs in &targets {
-                if matches!(value, Value::ArrayRef(_))
-                    && self
-                        .active_function_name()
-                        .is_some_and(|name| lhs.trim().eq_ignore_ascii_case(name))
+                let lhs_trimmed = lhs.trim();
+                if self
+                    .active_function_name()
+                    .is_some_and(|name| lhs_trimmed.eq_ignore_ascii_case(name))
                 {
-                    self.return_value_for_active_function(lhs, &value);
-                    continue;
+                    if matches!(value, Value::ArrayRef(_)) {
+                        self.return_value_for_active_function(lhs, &value);
+                        continue;
+                    }
+                    if is_basic_identifier(lhs_trimmed) {
+                        if lhs_trimmed.ends_with('$') != matches!(value, Value::Str(_)) {
+                            return Err(self.err(ErrorCode::TypeMismatch));
+                        }
+                        self.return_value_for_active_function(lhs, &value);
+                        continue;
+                    }
                 }
                 self.assign(lhs, value.clone())?;
                 self.return_value_for_active_function(lhs, &value);
@@ -2383,6 +2421,20 @@ impl Interpreter {
         } else {
             Value::number(self.eval_number(rhs)?)
         };
+        if self
+            .active_function_name()
+            .is_some_and(|name| lhs.eq_ignore_ascii_case(name))
+        {
+            if matches!(value, Value::ArrayRef(_)) || is_basic_identifier(lhs) {
+                if !matches!(value, Value::ArrayRef(_))
+                    && lhs.ends_with('$') != matches!(value, Value::Str(_))
+                {
+                    return Err(self.err(ErrorCode::TypeMismatch));
+                }
+                self.return_value_for_active_function(lhs, &value);
+                return Ok(());
+            }
+        }
         self.assign(lhs, value.clone())?;
         self.return_value_for_active_function(lhs, &value);
         Ok(())
@@ -4703,8 +4755,15 @@ impl Interpreter {
         let (name, params) = parse_function_header(header)?;
         if let Some(expr) = expr {
             self.detach_multiline_function(&name);
-            self.functions
-                .insert(name, UserFunction::Single { params, expr });
+            let fn_name = Rc::<str>::from(name.as_str());
+            self.functions.insert(
+                name,
+                UserFunction::Single {
+                    name: fn_name,
+                    params: Rc::from(params.into_boxed_slice()),
+                    expr,
+                },
+            );
             return Ok(());
         }
         let end = self.find_matching_routine_end(cursor, "FNEND", ErrorCode::FnEndWithoutDef)?;
@@ -4721,11 +4780,13 @@ impl Interpreter {
                 self.fn_line_owner.insert(line, name.clone());
             }
         }
+        let fn_name = Rc::<str>::from(name.as_str());
         self.functions.insert(
             name,
             UserFunction::Multi {
-                params,
-                local_specs,
+                name: fn_name,
+                params: Rc::from(params.into_boxed_slice()),
+                local_specs: Rc::from(local_specs.into_boxed_slice()),
                 start,
                 end: end.clone(),
             },
@@ -4956,7 +5017,7 @@ impl Interpreter {
     fn active_function_name(&self) -> Option<&str> {
         self.active_functions
             .last()
-            .map(|frame| frame.name.as_str())
+            .map(|frame| frame.name.as_ref())
     }
 
     fn active_sub_name(&self) -> Option<&str> {
@@ -4975,7 +5036,7 @@ impl Interpreter {
         let Some(frame) = self.active_functions.last_mut() else {
             return;
         };
-        if lhs.trim().eq_ignore_ascii_case(&frame.name) {
+        if lhs.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
             frame.return_value = Some(value.clone());
         }
     }
@@ -4984,15 +5045,18 @@ impl Interpreter {
         let Some(frame) = self.active_functions.last_mut() else {
             return;
         };
-        if name.trim().eq_ignore_ascii_case(&frame.name) {
+        if name.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
             frame.return_value = Some(Value::ArrayRef(name.to_ascii_uppercase()));
         }
     }
 
     fn active_function_variable(&self, name: &str) -> Option<Value> {
         let frame = self.active_functions.last()?;
-        if !frame.name.eq_ignore_ascii_case(name) {
+        if !frame.name.as_ref().eq_ignore_ascii_case(name) {
             return None;
+        }
+        if let Some(value) = &frame.return_value {
+            return Some(value.clone());
         }
         if name.ends_with('$') {
             Some(Value::string(
@@ -5002,6 +5066,15 @@ impl Interpreter {
             Some(Value::number(
                 self.numeric_variables.get(name).copied().unwrap_or(0.0),
             ))
+        }
+    }
+
+    fn active_function_return_value(&self, name: &str) -> Option<Value> {
+        let frame = self.active_functions.last()?;
+        if frame.name.as_ref().eq_ignore_ascii_case(name) {
+            frame.return_value.clone()
+        } else {
+            None
         }
     }
 
@@ -6415,34 +6488,42 @@ impl Interpreter {
     fn clear_command_caches(&mut self) {
         self.command_cache.clear();
         self.compiled_command_cache.clear();
+        self.compiled_line_cache =
+            Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice());
         self.line_index_cache.clear();
+        self.line_numbers_cache = Rc::from(Vec::<i32>::new().into_boxed_slice());
         self.next_after_for_cache.clear();
         self.wend_after_while_cache.clear();
     }
 
     fn rebuild_command_cache(&mut self) {
         self.clear_command_caches();
-        for (idx, line) in self.program.line_numbers().into_iter().enumerate() {
+        let lines = self.program.line_numbers();
+        self.line_numbers_cache = Rc::from(lines.clone().into_boxed_slice());
+        let mut compiled_lines = Vec::with_capacity(lines.len());
+        for (idx, line) in lines.into_iter().enumerate() {
             let commands: Vec<Rc<str>> = split_commands(self.program.get(line).unwrap_or(""))
                 .into_iter()
                 .map(Rc::<str>::from)
                 .collect();
-            let compiled = commands
+            let compiled: Vec<Rc<CachedCommand>> = commands
                 .iter()
                 .map(|command| Rc::new(self.compile_cached_command(command.as_ref())))
                 .collect();
             self.command_cache.insert(line, commands);
-            self.compiled_command_cache.insert(line, compiled);
+            self.compiled_command_cache.insert(line, compiled.clone());
+            compiled_lines.push(Rc::from(compiled.into_boxed_slice()));
             self.line_index_cache.insert(line, idx);
         }
+        self.compiled_line_cache = Rc::from(compiled_lines.into_boxed_slice());
         self.rebuild_block_target_caches();
     }
 
     fn rebuild_block_target_caches(&mut self) {
-        let lines = self.program.line_numbers();
+        let lines = self.line_numbers_cache.clone();
         let mut for_stack = Vec::new();
         let mut while_stack = Vec::new();
-        for (line_idx, line_no) in lines.into_iter().enumerate() {
+        for (line_idx, line_no) in lines.iter().copied().enumerate() {
             let Some(commands) = self.command_cache.get(&line_no) else {
                 continue;
             };
@@ -6499,6 +6580,13 @@ impl Interpreter {
         match first {
             "REM" | "DATA" => CachedCommand::Noop,
             "RETURN" if upper == "RETURN" => CachedCommand::Return,
+            "FNEND" if upper == "FNEND" => CachedCommand::FnEnd,
+            "FNEXIT" if upper == "FNEXIT" => CachedCommand::FnExit,
+            "SUBEND" if upper == "SUBEND" => CachedCommand::SubEnd,
+            "SUBEXIT" if upper == "SUBEXIT" => CachedCommand::SubExit,
+            "EXIT" if upper == "EXIT FN" => CachedCommand::FnExit,
+            "EXIT" if upper == "EXIT SUB" => CachedCommand::SubExit,
+            "LOCAL" => CachedCommand::Local,
             "IF" => self
                 .compile_cached_if(trimmed)
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
@@ -6970,6 +7058,9 @@ impl Interpreter {
 
 impl EvalContext for Interpreter {
     fn get_variable(&mut self, name: &str) -> BasicResult<Value> {
+        if let Some(value) = self.active_function_return_value(name) {
+            return Ok(value);
+        }
         if name.ends_with('$') {
             Ok(Value::string(
                 self.string_variables.get(name).cloned().unwrap_or_default(),
@@ -6996,6 +7087,9 @@ impl EvalContext for Interpreter {
         }
         if name == "INF" {
             return Ok(f64::INFINITY);
+        }
+        if let Some(value) = self.active_function_return_value(name) {
+            return value.as_number();
         }
         if !self.function_call_stack.is_empty()
             && !self.numeric_variables.contains_key(name)
@@ -7489,21 +7583,23 @@ impl Interpreter {
         let Some(fun) = self.functions.get(name).cloned() else {
             return Err(self.err(ErrorCode::Undefined));
         };
-        let name = name.to_ascii_uppercase();
+        let call_name = match &fun {
+            UserFunction::Single { name, .. } | UserFunction::Multi { name, .. } => name.clone(),
+        };
         if args.is_empty() {
-            if let Some(value) = self.active_function_variable(&name) {
+            if let Some(value) = self.active_function_variable(call_name.as_ref()) {
                 return Ok(value);
             }
         }
         if self
             .function_call_stack
             .iter()
-            .any(|active| active == &name)
+            .any(|active| active.as_ref() == call_name.as_ref())
         {
             return Err(self.err(ErrorCode::FunctionForbidden));
         }
         match fun {
-            UserFunction::Single { params, expr } => {
+            UserFunction::Single { params, expr, .. } => {
                 if params.len() != args.len() {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
@@ -7512,7 +7608,7 @@ impl Interpreter {
                 }
                 let mut saved_numeric = HashMap::new();
                 let mut saved_string = HashMap::new();
-                for param in &params {
+                for param in params.iter() {
                     if param.ends_with('$') {
                         saved_string
                             .entry(param.clone())
@@ -7523,7 +7619,7 @@ impl Interpreter {
                             .or_insert_with(|| self.numeric_variables.get(param).copied());
                     }
                 }
-                self.function_call_stack.push(name.clone());
+                self.function_call_stack.push(call_name.clone());
                 let bind_result = self.bind_function_args(&params, args);
                 let result = if bind_result.is_ok() {
                     self.eval_value(&expr)
@@ -7547,7 +7643,7 @@ impl Interpreter {
                 if params.len() != args.len() {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
-                self.call_multiline_function(name, params, local_specs, args, start)
+                self.call_multiline_function(call_name, &params, &local_specs, args, start)
             }
         }
     }
@@ -7559,13 +7655,13 @@ impl Interpreter {
                     if param.ends_with('$') {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    self.numeric_variables.insert(param.clone(), n);
+                    set_numeric_binding_ref(&mut self.numeric_variables, param, n);
                 }
                 Value::Str(s) => {
                     if !param.ends_with('$') {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    self.string_variables.insert(param.clone(), s);
+                    set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
                     let Some(array) = self.arrays.get(&source).cloned() else {
@@ -7574,7 +7670,7 @@ impl Interpreter {
                     if param.ends_with('$') != array.is_string() {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    self.arrays.insert(param.clone(), array);
+                    set_array_binding_ref(&mut self.arrays, param, array);
                 }
             }
         }
@@ -7595,12 +7691,12 @@ impl Interpreter {
                         saved_string
                             .entry(name.clone())
                             .or_insert_with(|| self.string_variables.get(name).cloned());
-                        self.string_variables.insert(name.clone(), String::new());
+                        set_string_binding_ref(&mut self.string_variables, name, String::new());
                     } else {
                         saved_numeric
                             .entry(name.clone())
                             .or_insert_with(|| self.numeric_variables.get(name).copied());
-                        self.numeric_variables.insert(name.clone(), 0.0);
+                        set_numeric_binding_ref(&mut self.numeric_variables, name, 0.0);
                     }
                 }
                 LocalSpec::Array { name, dims } => {
@@ -7615,8 +7711,71 @@ impl Interpreter {
                     saved_arrays
                         .entry(name.clone())
                         .or_insert_with(|| self.arrays.get(name).cloned());
-                    self.arrays
-                        .insert(name.clone(), ArrayValue::new(name, evaluated));
+                    set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_function_args_vec(&mut self, params: &[String], args: Vec<Value>) -> BasicResult<()> {
+        for (param, value) in params.iter().zip(args.into_iter()) {
+            match value {
+                Value::Number(n) => {
+                    if param.ends_with('$') {
+                        return Err(self.err(ErrorCode::TypeMismatch));
+                    }
+                    set_numeric_binding_ref(&mut self.numeric_variables, param, n);
+                }
+                Value::Str(s) => {
+                    if !param.ends_with('$') {
+                        return Err(self.err(ErrorCode::TypeMismatch));
+                    }
+                    set_string_binding_ref(&mut self.string_variables, param, s);
+                }
+                Value::ArrayRef(source) => {
+                    let Some(array) = self.arrays.get(&source).cloned() else {
+                        return Err(self.err(ErrorCode::Undefined));
+                    };
+                    if param.ends_with('$') != array.is_string() {
+                        return Err(self.err(ErrorCode::TypeMismatch));
+                    }
+                    set_array_binding_ref(&mut self.arrays, param, array);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_local_specs_vec<'a>(
+        &mut self,
+        local_specs: &'a [LocalSpec],
+        saved_numeric: &mut Vec<(&'a str, Option<f64>)>,
+        saved_string: &mut Vec<(&'a str, Option<String>)>,
+        saved_arrays: &mut Vec<(&'a str, Option<ArrayValue>)>,
+    ) -> BasicResult<()> {
+        for spec in local_specs {
+            match spec {
+                LocalSpec::Scalar(name) => {
+                    if name.ends_with('$') {
+                        save_string_binding_ref(&self.string_variables, saved_string, name);
+                        set_string_binding_ref(&mut self.string_variables, name, String::new());
+                    } else {
+                        save_numeric_binding_ref(&self.numeric_variables, saved_numeric, name);
+                        set_numeric_binding_ref(&mut self.numeric_variables, name, 0.0);
+                    }
+                }
+                LocalSpec::Array { name, dims } => {
+                    let mut evaluated = Vec::with_capacity(dims.len());
+                    for dim in dims {
+                        let value = self.eval_number(dim)?;
+                        if value < 0.0 {
+                            return Err(self.err(ErrorCode::InvalidValue));
+                        }
+                        evaluated.push(value as usize);
+                    }
+                    save_array_binding_ref(&self.arrays, saved_arrays, name);
+                    set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
                 }
             }
         }
@@ -7776,48 +7935,49 @@ impl Interpreter {
 
     fn call_multiline_function(
         &mut self,
-        name: String,
-        params: Vec<String>,
-        local_specs: Vec<LocalSpec>,
+        name: Rc<str>,
+        params: &[String],
+        local_specs: &[LocalSpec],
         args: Vec<Value>,
         start: Cursor,
     ) -> BasicResult<Value> {
-        let mut saved_numeric = HashMap::new();
-        let mut saved_string = HashMap::new();
-        let mut saved_arrays = HashMap::new();
-        for param in &params {
+        let mut saved_numeric: Vec<(&str, Option<f64>)> = Vec::with_capacity(params.len() + 1);
+        let mut saved_string: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len() + 1);
+        let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
+            Vec::with_capacity(params.len() + 1);
+        for param in params {
             if param.ends_with('$') {
-                saved_string.insert(param.clone(), self.string_variables.get(param).cloned());
+                save_string_binding_ref(&self.string_variables, &mut saved_string, param);
             } else {
-                saved_numeric.insert(param.clone(), self.numeric_variables.get(param).copied());
+                save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
             }
-            saved_arrays.insert(param.clone(), self.arrays.get(param).cloned());
+            save_array_binding_ref(&self.arrays, &mut saved_arrays, param);
         }
         if name.ends_with('$') {
-            saved_string.insert(name.clone(), self.string_variables.get(&name).cloned());
+            save_string_binding_ref(&self.string_variables, &mut saved_string, name.as_ref());
         } else {
-            saved_numeric.insert(name.clone(), self.numeric_variables.get(&name).copied());
+            save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, name.as_ref());
         }
-        saved_arrays.insert(name.clone(), self.arrays.get(&name).cloned());
+        save_array_binding_ref(&self.arrays, &mut saved_arrays, name.as_ref());
 
         self.function_call_stack.push(name.clone());
-        if let Err(err) = self.bind_function_args(&params, args) {
+        if let Err(err) = self.bind_function_args_vec(&params, args) {
             self.function_call_stack.pop();
-            restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-            restore_string_bindings(&mut self.string_variables, saved_string);
-            restore_array_bindings(&mut self.arrays, saved_arrays);
+            restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+            restore_string_bindings_ref(&mut self.string_variables, saved_string);
+            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
             return Err(err);
         }
-        if let Err(err) = self.bind_local_specs(
+        if let Err(err) = self.bind_local_specs_vec(
             &local_specs,
             &mut saved_numeric,
             &mut saved_string,
             &mut saved_arrays,
         ) {
             self.function_call_stack.pop();
-            restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-            restore_string_bindings(&mut self.string_variables, saved_string);
-            restore_array_bindings(&mut self.arrays, saved_arrays);
+            restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+            restore_string_bindings_ref(&mut self.string_variables, saved_string);
+            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
             return Err(err);
         }
 
@@ -7851,16 +8011,17 @@ impl Interpreter {
         self.current_line = saved_current_line;
         self.function_return_requested = previous_function_return;
 
-        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-        restore_string_bindings(&mut self.string_variables, saved_string);
-        restore_array_bindings(&mut self.arrays, saved_arrays);
+        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
         if let Some(array) = return_array {
-            self.arrays.insert(name.clone(), array);
-            return_value = Some(Value::ArrayRef(name.clone()));
+            let array_name = name.to_string();
+            self.arrays.insert(array_name.clone(), array);
+            return_value = Some(Value::ArrayRef(array_name));
         }
 
         run_result?;
-        Ok(return_value.unwrap_or_else(|| Value::default_for_name(&name)))
+        Ok(return_value.unwrap_or_else(|| Value::default_for_name(name.as_ref())))
     }
 }
 
@@ -8906,6 +9067,106 @@ fn restore_array_bindings(
             arrays.insert(name, value);
         } else {
             arrays.remove(&name);
+        }
+    }
+}
+
+fn set_numeric_binding_ref(variables: &mut FastHashMap<String, f64>, name: &str, value: f64) {
+    if let Some(slot) = variables.get_mut(name) {
+        *slot = value;
+    } else {
+        variables.insert(name.to_string(), value);
+    }
+}
+
+fn set_string_binding_ref(variables: &mut FastHashMap<String, String>, name: &str, value: String) {
+    if let Some(slot) = variables.get_mut(name) {
+        *slot = value;
+    } else {
+        variables.insert(name.to_string(), value);
+    }
+}
+
+fn set_array_binding_ref(
+    arrays: &mut FastHashMap<String, ArrayValue>,
+    name: &str,
+    value: ArrayValue,
+) {
+    if let Some(slot) = arrays.get_mut(name) {
+        *slot = value;
+    } else {
+        arrays.insert(name.to_string(), value);
+    }
+}
+
+fn save_numeric_binding_ref<'a>(
+    variables: &FastHashMap<String, f64>,
+    saved: &mut Vec<(&'a str, Option<f64>)>,
+    name: &'a str,
+) {
+    if saved.iter().any(|(existing, _)| *existing == name) {
+        return;
+    }
+    saved.push((name, variables.get(name).copied()));
+}
+
+fn save_string_binding_ref<'a>(
+    variables: &FastHashMap<String, String>,
+    saved: &mut Vec<(&'a str, Option<String>)>,
+    name: &'a str,
+) {
+    if saved.iter().any(|(existing, _)| *existing == name) {
+        return;
+    }
+    saved.push((name, variables.get(name).cloned()));
+}
+
+fn save_array_binding_ref<'a>(
+    arrays: &FastHashMap<String, ArrayValue>,
+    saved: &mut Vec<(&'a str, Option<ArrayValue>)>,
+    name: &'a str,
+) {
+    if saved.iter().any(|(existing, _)| *existing == name) {
+        return;
+    }
+    saved.push((name, arrays.get(name).cloned()));
+}
+
+fn restore_numeric_bindings_ref(
+    variables: &mut FastHashMap<String, f64>,
+    saved: Vec<(&str, Option<f64>)>,
+) {
+    for (name, value) in saved {
+        if let Some(value) = value {
+            set_numeric_binding_ref(variables, name, value);
+        } else {
+            variables.remove(name);
+        }
+    }
+}
+
+fn restore_string_bindings_ref(
+    variables: &mut FastHashMap<String, String>,
+    saved: Vec<(&str, Option<String>)>,
+) {
+    for (name, value) in saved {
+        if let Some(value) = value {
+            set_string_binding_ref(variables, name, value);
+        } else {
+            variables.remove(name);
+        }
+    }
+}
+
+fn restore_array_bindings_ref(
+    arrays: &mut FastHashMap<String, ArrayValue>,
+    saved: Vec<(&str, Option<ArrayValue>)>,
+) {
+    for (name, value) in saved {
+        if let Some(value) = value {
+            set_array_binding_ref(arrays, name, value);
+        } else {
+            arrays.remove(name);
         }
     }
 }

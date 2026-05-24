@@ -973,6 +973,18 @@ fn multiline_fn_can_return_matrix_from_mat_assignment() {
 }
 
 #[test]
+fn multiline_fn_return_name_is_readable_after_assignment() {
+    let output = run_rust(
+        r#"10 DEF FNT(X)
+20 FNT=X
+30 FNT=FNT+1
+40 FNEND
+50 PRINT FNT(4)"#,
+    );
+    assert_eq!(output, " 5\n");
+}
+
+#[test]
 fn multiline_subroutine_locals_and_array_references() {
     let output = run_rust(
         r#"10 A=1
