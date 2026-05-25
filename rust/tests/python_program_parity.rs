@@ -83,3 +83,25 @@ fn all_python_text_program_cases_match() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn print_using_formats_match_python_reference() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let script = manifest_dir
+        .join("tools")
+        .join("run_python_print_using_parity.py");
+    let output = Command::new(python_command())
+        .arg(&script)
+        .arg("--rust-bin")
+        .arg(rust_binary())
+        .current_dir(&manifest_dir)
+        .output()
+        .expect("failed to run PRINT USING Python parity cases");
+
+    assert!(
+        output.status.success(),
+        "PRINT USING Python parity cases failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

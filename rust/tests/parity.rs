@@ -1077,6 +1077,17 @@ fn print_using_leading_comma_uses_european_separators() {
 }
 
 #[test]
+fn print_using_scientific_formats_general_masks() {
+    let output = run_rust(
+        r###"10 PRINT USING "#.##^^^^"; 123245435234
+20 PRINT USING "##.##^^^^"; 12345
+30 PRINT USING "#.##^^^^"; 999.9
+40 PRINT USING "0.00^^^^^"; 1E308"###,
+    );
+    assert_eq!(output, "1.23E+11\n12.35E+03\n1.00E+03\n1.00E+308\n");
+}
+
+#[test]
 fn tab_positions_to_columns_across_print_statements() {
     let output = run_rust(
         r###"10 PRINT "Month"; TAB(17); "Payment"; TAB(33); "Interest"; TAB(49); "Principal"; TAB(68); "Balance"

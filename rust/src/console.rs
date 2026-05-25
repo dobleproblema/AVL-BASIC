@@ -450,7 +450,23 @@ pub fn syntax_highlight_with_cases(
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
 ) -> String {
-    let mut line = normalize_code(line);
+    highlight_normalized_code(normalize_code(line), ansi, cases)
+}
+
+fn syntax_highlight_editing_with_cases(
+    line: &str,
+    cursor: usize,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> String {
+    highlight_normalized_code(normalize_code_for_editing(line, cursor), ansi, cases)
+}
+
+fn highlight_normalized_code(
+    mut line: String,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> String {
     if let Some(cases) = cases {
         line = apply_identifier_case_for_display(&line, cases);
     }
@@ -475,6 +491,31 @@ pub fn syntax_highlight_with_cases(
         out.push_str(RESET);
     }
     out
+}
+
+fn normalize_code_for_editing(code: &str, cursor: usize) -> String {
+    normalize_code_for_editing_marked(&mark_cursor(code, cursor))
+        .chars()
+        .filter(|ch| *ch != CURSOR_MARKER)
+        .collect()
+}
+
+fn normalize_code_for_editing_marked(code: &str) -> String {
+    let (main, comment) = split_single_quote_comment(code);
+    let mut result = normalize_main_code_for_editing_marked(main.trim_end());
+    result = add_bas_extension_to_leading_file_command(&result);
+    result = format_colon_separators(&result);
+    if let Some((spaces, comment)) = comment {
+        let spaces = if result.trim().is_empty() {
+            spaces
+        } else {
+            spaces.max(1)
+        };
+        result.push_str(&" ".repeat(spaces));
+        result.push('\'');
+        result.push_str(comment);
+    }
+    result
 }
 
 pub fn syntax_highlight_raw_with_cases(
@@ -584,9 +625,8 @@ where
                     println!();
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "Ctrl-C"));
                 }
-                KeyCode::Char(ch) => {
-                    buffer.insert(cursor, ch);
-                    cursor += 1;
+                KeyCode::Char(ch) if should_insert_key_char(ch, event.modifiers) => {
+                    insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
                     format_editing_separators_with_cursor(&mut buffer, &mut cursor);
                     history.reset();
                 }
@@ -604,7 +644,14 @@ where
                     }
                 }
                 KeyCode::Left => cursor = cursor.saturating_sub(1),
-                KeyCode::Right => cursor = (cursor + 1).min(buffer.len()),
+                KeyCode::Right => {
+                    if accept_editing_buffer_virtual_quote(&mut buffer, &mut cursor) {
+                        format_editing_separators_with_cursor(&mut buffer, &mut cursor);
+                        history.reset();
+                    } else {
+                        cursor = (cursor + 1).min(buffer.len());
+                    }
+                }
                 KeyCode::Home => cursor = 0,
                 KeyCode::End => cursor = buffer.len(),
                 KeyCode::Up if use_history => {
@@ -755,7 +802,7 @@ where
                         };
                     }
                     KeyCode::Esc => return Ok(FullscreenEditOutcome::Cancel),
-                    KeyCode::Char(ch) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    KeyCode::Char(ch) if should_insert_key_char(ch, event.modifiers) => {
                         editor.insert_char(ch);
                         status = editor.default_status();
                     }
@@ -2002,7 +2049,7 @@ where
                 match event.code {
                     KeyCode::Enter => return Ok(Some(input.iter().collect())),
                     KeyCode::Esc => return Ok(None),
-                    KeyCode::Char(ch) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    KeyCode::Char(ch) if should_insert_key_char(ch, event.modifiers) => {
                         input.insert(cursor, ch);
                         cursor += 1;
                     }
@@ -2314,7 +2361,7 @@ fn redraw_input_line(
     cases: Option<&HashMap<String, String>>,
 ) -> io::Result<()> {
     let text: String = buffer.iter().collect();
-    let rendered = syntax_highlight_with_cases(&text, ansi, cases);
+    let rendered = syntax_highlight_editing_with_cases(&text, cursor, ansi, cases);
     let prompt_width = visible_width(prompt);
     let cursor_col = prompt_width + normalized_cursor_position(&text, cursor);
     let mut stdout = io::stdout();
@@ -2332,6 +2379,14 @@ fn normalized_cursor_position(text: &str, cursor: usize) -> usize {
         return normalize_code(text).chars().count();
     }
 
+    let normalized = normalize_code_for_editing_marked(&mark_cursor(text, cursor));
+    normalized
+        .chars()
+        .position(|ch| ch == CURSOR_MARKER)
+        .unwrap_or(cursor)
+}
+
+fn mark_cursor(text: &str, cursor: usize) -> String {
     let mut marked = String::new();
     let mut inserted = false;
     for (idx, ch) in text.chars().enumerate() {
@@ -2344,11 +2399,7 @@ fn normalized_cursor_position(text: &str, cursor: usize) -> usize {
     if !inserted {
         marked.push(CURSOR_MARKER);
     }
-    let normalized = normalize_code(&marked);
-    normalized
-        .chars()
-        .position(|ch| ch == CURSOR_MARKER)
-        .unwrap_or(cursor)
+    marked
 }
 
 fn cursor_after_unfinished_colon_separator(text: &str, cursor: usize) -> bool {
@@ -2374,6 +2425,45 @@ fn cursor_after_unfinished_colon_separator(text: &str, cursor: usize) -> bool {
 
 fn is_ctrl_c_key(ch: char, modifiers: KeyModifiers) -> bool {
     matches!(ch, 'c' | 'C') && modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn should_insert_key_char(ch: char, modifiers: KeyModifiers) -> bool {
+    if ch.is_control() {
+        return false;
+    }
+    if !modifiers.contains(KeyModifiers::CONTROL) {
+        return true;
+    }
+    modifiers.contains(KeyModifiers::ALT) && !ch.is_ascii_alphanumeric()
+}
+
+fn insert_editing_buffer_char(buffer: &mut Vec<char>, cursor: &mut usize, ch: char) {
+    if ch == '"' && quote_at_cursor_is_closing(buffer, *cursor) {
+        *cursor += 1;
+        return;
+    }
+    buffer.insert(*cursor, ch);
+    *cursor += 1;
+}
+
+fn accept_editing_buffer_virtual_quote(buffer: &mut Vec<char>, cursor: &mut usize) -> bool {
+    if !cursor_on_virtual_closing_quote(buffer, *cursor) {
+        return false;
+    }
+    buffer.insert(*cursor, '"');
+    *cursor += 1;
+    true
+}
+
+fn cursor_on_virtual_closing_quote(line: &[char], cursor: usize) -> bool {
+    cursor == line.len() && line.iter().filter(|ch| **ch == '"').count() % 2 == 1
+}
+
+fn quote_at_cursor_is_closing(line: &[char], cursor: usize) -> bool {
+    if cursor >= line.len() || line[cursor] != '"' {
+        return false;
+    }
+    line[..cursor].iter().filter(|ch| **ch == '"').count() % 2 == 1
 }
 
 fn visible_width(text: &str) -> usize {
@@ -2586,6 +2676,14 @@ mod runtime_raw {
 }
 
 fn normalize_main_code(code: &str) -> String {
+    normalize_main_code_inner(code, false)
+}
+
+fn normalize_main_code_for_editing_marked(code: &str) -> String {
+    normalize_main_code_inner(code, true)
+}
+
+fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
     let mut i = 0usize;
@@ -2607,26 +2705,16 @@ fn normalize_main_code(code: &str) -> String {
             }
             continue;
         }
-        if ch.is_ascii_digit()
-            || (ch == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
-        {
+        if is_number_start_at(&chars, i, preserve_marked_number) {
             let start = i;
-            i += 1;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                i += 1;
+            let (end, contains_marker) = scan_number_token(&chars, i, preserve_marked_number);
+            i = end;
+            let raw = chars[start..i].iter().collect::<String>();
+            if preserve_marked_number && contains_marker {
+                out.push_str(&raw);
+            } else {
+                out.push_str(&canonicalize_number(&raw));
             }
-            if i < chars.len() && matches!(chars[i], 'e' | 'E') {
-                i += 1;
-                if i < chars.len() && matches!(chars[i], '+' | '-') {
-                    i += 1;
-                }
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-            }
-            out.push_str(&canonicalize_number(
-                &chars[start..i].iter().collect::<String>(),
-            ));
             continue;
         }
         if is_ident_start(ch) {
@@ -2667,6 +2755,72 @@ fn normalize_main_code(code: &str) -> String {
         i += 1;
     }
     out
+}
+
+fn is_number_start_at(chars: &[char], index: usize, allow_cursor_marker: bool) -> bool {
+    let mut probe = index;
+    if allow_cursor_marker && chars.get(probe) == Some(&CURSOR_MARKER) {
+        probe += 1;
+    }
+    let Some(ch) = chars.get(probe).copied() else {
+        return false;
+    };
+    ch.is_ascii_digit()
+        || (ch == '.'
+            && next_non_marker(chars, probe + 1, allow_cursor_marker)
+                .is_some_and(|next| next.is_ascii_digit()))
+}
+
+fn scan_number_token(chars: &[char], start: usize, allow_cursor_marker: bool) -> (usize, bool) {
+    let mut index = start;
+    let mut contains_marker = false;
+    while index < chars.len() {
+        let ch = chars[index];
+        if allow_cursor_marker && ch == CURSOR_MARKER {
+            contains_marker = true;
+            index += 1;
+        } else if ch.is_ascii_digit() || ch == '.' {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+
+    if index < chars.len() && matches!(chars[index], 'e' | 'E') {
+        index += 1;
+        while index < chars.len() && allow_cursor_marker && chars[index] == CURSOR_MARKER {
+            contains_marker = true;
+            index += 1;
+        }
+        if index < chars.len() && matches!(chars[index], '+' | '-') {
+            index += 1;
+        }
+        while index < chars.len() {
+            let ch = chars[index];
+            if allow_cursor_marker && ch == CURSOR_MARKER {
+                contains_marker = true;
+                index += 1;
+            } else if ch.is_ascii_digit() {
+                index += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    (index, contains_marker)
+}
+
+fn next_non_marker(chars: &[char], mut index: usize, allow_cursor_marker: bool) -> Option<char> {
+    while index < chars.len() {
+        let ch = chars[index];
+        if allow_cursor_marker && ch == CURSOR_MARKER {
+            index += 1;
+            continue;
+        }
+        return Some(ch);
+    }
+    None
 }
 
 fn format_colon_separators(source: &str) -> String {
@@ -3197,10 +3351,85 @@ mod tests {
     }
 
     #[test]
+    fn live_input_preserves_number_under_cursor_until_cursor_leaves_it() {
+        let decimal = "10 PRINT 1.";
+        assert_eq!(
+            normalize_code_for_editing(decimal, decimal.chars().count()),
+            "10 PRINT 1."
+        );
+        assert_eq!(normalize_code(decimal), "10 PRINT 1");
+        assert_eq!(
+            normalized_cursor_position(decimal, decimal.chars().count()),
+            "10 PRINT 1.".chars().count()
+        );
+
+        let completed_decimal = "10 PRINT 1. + 2";
+        let cursor_after_space = "10 PRINT 1. ".chars().count();
+        assert_eq!(
+            normalize_code_for_editing(completed_decimal, cursor_after_space),
+            "10 PRINT 1 + 2"
+        );
+
+        let exponent = "10 PRINT 1E+";
+        assert_eq!(
+            normalize_code_for_editing(exponent, exponent.chars().count()),
+            "10 PRINT 1E+"
+        );
+
+        let big = "10 PRINT 123456789012345678901234567890";
+        assert_eq!(normalize_code_for_editing(big, big.chars().count()), big);
+
+        let leading_decimal = "10 PRINT .5";
+        assert_eq!(
+            normalize_code_for_editing(leading_decimal, "10 PRINT .".chars().count()),
+            "10 PRINT .5"
+        );
+        assert_eq!(
+            syntax_highlight_editing_with_cases(decimal, decimal.chars().count(), false, None),
+            "10 PRINT 1."
+        );
+    }
+
+    #[test]
     fn ctrl_c_accepts_shifted_c_from_caps_lock() {
         assert!(is_ctrl_c_key('c', KeyModifiers::CONTROL));
         assert!(is_ctrl_c_key('C', KeyModifiers::CONTROL));
         assert!(!is_ctrl_c_key('c', KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn alt_gr_printable_characters_are_text_input() {
+        let alt_gr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+
+        assert!(should_insert_key_char('#', alt_gr));
+        assert!(should_insert_key_char('@', alt_gr));
+        assert!(should_insert_key_char('|', alt_gr));
+        assert!(!should_insert_key_char('c', KeyModifiers::CONTROL));
+        assert!(!should_insert_key_char('c', alt_gr));
+    }
+
+    #[test]
+    fn editing_buffer_skips_real_and_virtual_closing_quotes() {
+        let mut closed: Vec<char> = r#"10 PRINT "A""#.chars().collect();
+        let mut cursor = closed.len() - 1;
+        insert_editing_buffer_char(&mut closed, &mut cursor, '"');
+        assert_eq!(closed.iter().collect::<String>(), r#"10 PRINT "A""#);
+        assert_eq!(cursor, closed.len());
+
+        let mut before_opening: Vec<char> = r#"10 PRINT "A""#.chars().collect();
+        let mut cursor = "10 PRINT ".chars().count();
+        insert_editing_buffer_char(&mut before_opening, &mut cursor, '"');
+        assert_eq!(
+            before_opening.iter().collect::<String>(),
+            r#"10 PRINT ""A""#
+        );
+        assert_eq!(cursor, "10 PRINT \"".chars().count());
+
+        let mut open: Vec<char> = r#"10 PRINT "A"#.chars().collect();
+        let mut cursor = open.len();
+        assert!(accept_editing_buffer_virtual_quote(&mut open, &mut cursor));
+        assert_eq!(open.iter().collect::<String>(), r#"10 PRINT "A""#);
+        assert_eq!(cursor, open.len());
     }
 
     #[test]
@@ -3299,6 +3528,43 @@ mod tests {
 
         editor.backspace();
         assert_eq!(editor.lines_as_strings(), lines);
+    }
+
+    #[test]
+    fn fullscreen_editor_keeps_quotes_literal_for_multiline_editing() {
+        let lines = vec![r#"10 PRINT "A""#.to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_col = lines[0].chars().count() - 1;
+
+        editor.insert_char('"');
+
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec![r#"10 PRINT "A"""#.to_string()]
+        );
+        assert_eq!(editor.cursor_col, lines[0].chars().count());
+        assert!(editor.dirty);
+
+        let open = vec![r#"10 PRINT "A"#.to_string()];
+        let mut editor = BasicEditor::new(&open);
+        editor.cursor_col = open[0].chars().count();
+
+        editor.move_right();
+
+        assert_eq!(editor.lines_as_strings(), open);
+        assert_eq!(editor.cursor_col, open[0].chars().count());
+        assert!(!editor.dirty);
+
+        let mut editor = BasicEditor::new(&lines);
+        editor.cursor_col = "10 PRINT ".chars().count();
+
+        editor.insert_char('"');
+
+        assert_eq!(
+            editor.lines_as_strings(),
+            vec![r#"10 PRINT ""A""#.to_string()]
+        );
+        assert_eq!(editor.cursor_col, "10 PRINT \"".chars().count());
     }
 
     #[test]
