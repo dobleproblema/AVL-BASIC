@@ -1,8 +1,8 @@
 use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::expr::{
-    call_pure_function, compile_expression, eval_compiled, eval_compiled_number, split_arguments,
-    EvalContext, Expr,
+    call_pure_function, checked_number, compile_expression, eval_compiled, eval_compiled_number,
+    is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp, EvalContext, Expr,
 };
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics};
@@ -196,6 +196,9 @@ impl ArrayValue {
     }
 
     fn get(&self, indexes: &[i32]) -> BasicResult<Value> {
+        if indexes.len() == 2 && self.dims.len() == 2 {
+            return self.get_direct_2d(indexes[0], indexes[1]);
+        }
         let idx = self.flat_index(indexes)?;
         Ok(match &self.data {
             ArrayData::Number(values) => Value::number(values[idx]),
@@ -216,7 +219,18 @@ impl ArrayValue {
         })
     }
 
+    fn get_direct_2d(&self, index0: i32, index1: i32) -> BasicResult<Value> {
+        let idx = self.flat_index_direct_2d(index0, index1)?;
+        Ok(match &self.data {
+            ArrayData::Number(values) => Value::number(values[idx]),
+            ArrayData::Str(values) => Value::string(values[idx].clone()),
+        })
+    }
+
     fn get_number(&self, indexes: &[i32]) -> BasicResult<f64> {
+        if indexes.len() == 2 && self.dims.len() == 2 {
+            return self.get_number_direct_2d(indexes[0], indexes[1]);
+        }
         let idx = self.flat_index(indexes)?;
         match &self.data {
             ArrayData::Number(values) => Ok(values[idx]),
@@ -237,7 +251,32 @@ impl ArrayValue {
         }
     }
 
+    fn get_number_direct_2d(&self, index0: i32, index1: i32) -> BasicResult<f64> {
+        let idx = self.flat_index_direct_2d(index0, index1)?;
+        match &self.data {
+            ArrayData::Number(values) => Ok(values[idx]),
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn flat_index_direct_2d(&self, index0: i32, index1: i32) -> BasicResult<usize> {
+        if self.dims.len() != 2 {
+            return Err(BasicError::new(ErrorCode::InvalidIndex));
+        }
+        if index0 < 0
+            || index1 < 0
+            || index0 as usize > self.dims[0]
+            || index1 as usize > self.dims[1]
+        {
+            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+        }
+        Ok(index0 as usize * (self.dims[1] + 1) + index1 as usize)
+    }
+
     fn set(&mut self, indexes: &[i32], value: Value) -> BasicResult<()> {
+        if indexes.len() == 2 && self.dims.len() == 2 {
+            return self.set_direct_2d(indexes[0], indexes[1], value);
+        }
         let idx = self.flat_index(indexes)?;
         match (&mut self.data, value) {
             (ArrayData::Number(values), Value::Number(n)) => {
@@ -266,6 +305,21 @@ impl ArrayValue {
             }
             (ArrayData::Str(values), Value::Str(s)) => {
                 values[index as usize] = s;
+                Ok(())
+            }
+            _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn set_direct_2d(&mut self, index0: i32, index1: i32, value: Value) -> BasicResult<()> {
+        let idx = self.flat_index_direct_2d(index0, index1)?;
+        match (&mut self.data, value) {
+            (ArrayData::Number(values), Value::Number(n)) => {
+                values[idx] = n;
+                Ok(())
+            }
+            (ArrayData::Str(values), Value::Str(s)) => {
+                values[idx] = s;
                 Ok(())
             }
             _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
@@ -416,6 +470,7 @@ struct CompiledAssignment {
     targets: Vec<CompiledLValue>,
     rhs: Expr,
     rhs_is_string: bool,
+    fast_numeric_rhs: Option<FastNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -428,6 +483,59 @@ struct CompiledMidAssignment {
 
 #[derive(Debug, Clone)]
 struct CompiledRect {
+    x1: Expr,
+    y1: Expr,
+    x2: Expr,
+    y2: Expr,
+    color: Option<Expr>,
+    fast: Option<CompiledFastRect>,
+    filled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledFastRect {
+    x1: FastNumberExpr,
+    y1: FastNumberExpr,
+    x2: FastNumberExpr,
+    y2: FastNumberExpr,
+    color: Option<FastNumberExpr>,
+}
+
+#[derive(Debug, Clone)]
+enum FastNumberExpr {
+    Number(f64),
+    Var(String),
+    Array1 {
+        name: String,
+        index: Box<FastNumberExpr>,
+    },
+    Array2 {
+        name: String,
+        index0: Box<FastNumberExpr>,
+        index1: Box<FastNumberExpr>,
+    },
+    Function1 {
+        function: FastNumberFunction,
+        arg: Box<FastNumberExpr>,
+    },
+    Binary {
+        op: BinaryOp,
+        left: Box<FastNumberExpr>,
+        right: Box<FastNumberExpr>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FastNumberFunction {
+    Int,
+    Sin,
+    Cos,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledTriangle {
+    x0: Expr,
+    y0: Expr,
     x1: Expr,
     y1: Expr,
     x2: Expr,
@@ -465,6 +573,7 @@ enum CachedCommand {
         y: Rc<Expr>,
     },
     Rect(Rc<CompiledRect>),
+    Triangle(Rc<CompiledTriangle>),
     If {
         condition: Rc<Expr>,
         then_branch: CachedIfBranch,
@@ -510,6 +619,88 @@ impl CompiledLValue {
             CompiledLValue::Scalar { name, .. } | CompiledLValue::Array { name, .. } => name,
         }
     }
+}
+
+impl FastNumberExpr {
+    fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
+        match self {
+            FastNumberExpr::Number(value) => Ok(*value),
+            FastNumberExpr::Var(name) => interpreter.get_fast_number_variable(name),
+            FastNumberExpr::Array1 { name, index } => {
+                let index = eval_fast_index(interpreter, index)?;
+                interpreter.get_array_number(name, &[index])
+            }
+            FastNumberExpr::Array2 {
+                name,
+                index0,
+                index1,
+            } => {
+                let indexes = [
+                    eval_fast_index(interpreter, index0)?,
+                    eval_fast_index(interpreter, index1)?,
+                ];
+                interpreter.get_array_number(name, &indexes)
+            }
+            FastNumberExpr::Function1 { function, arg } => {
+                let mut arg = arg.eval(interpreter)?;
+                Ok(match function {
+                    FastNumberFunction::Int => arg.floor(),
+                    FastNumberFunction::Sin => {
+                        if interpreter.angle_degrees {
+                            arg = arg.to_radians();
+                        }
+                        arg.sin()
+                    }
+                    FastNumberFunction::Cos => {
+                        if interpreter.angle_degrees {
+                            arg = arg.to_radians();
+                        }
+                        arg.cos()
+                    }
+                })
+            }
+            FastNumberExpr::Binary { op, left, right } => {
+                let left = left.eval(interpreter)?;
+                let right = right.eval(interpreter)?;
+                match op {
+                    BinaryOp::Add => checked_number(left + right),
+                    BinaryOp::Sub => checked_number(left - right),
+                    BinaryOp::Mul => checked_number(left * right),
+                    BinaryOp::Div => {
+                        if right == 0.0 {
+                            Err(BasicError::new(ErrorCode::DivisionByZero))
+                        } else {
+                            checked_number(left / right)
+                        }
+                    }
+                    BinaryOp::IntDiv => {
+                        if right == 0.0 {
+                            Err(BasicError::new(ErrorCode::DivisionByZero))
+                        } else {
+                            checked_number((left / right).floor())
+                        }
+                    }
+                    BinaryOp::Mod => {
+                        if right == 0.0 {
+                            Err(BasicError::new(ErrorCode::DivisionByZero))
+                        } else {
+                            checked_number(left % right)
+                        }
+                    }
+                    BinaryOp::Pow => checked_number(left.powf(right)),
+                    _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
+                }
+            }
+        }
+    }
+}
+
+fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastNumberExpr) -> BasicResult<i32> {
+    let value = expr.eval(interpreter)?;
+    if value.fract() != 0.0 {
+        return Err(BasicError::new(ErrorCode::InvalidIndex));
+    }
+    Ok(value as i32)
 }
 
 #[derive(Debug)]
@@ -2005,6 +2196,7 @@ impl Interpreter {
                 self.execute_compiled_draw_relative2(x.as_ref(), y.as_ref())
             }
             CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
+            CachedCommand::Triangle(compiled) => self.execute_compiled_triangle(compiled.as_ref()),
             CachedCommand::If {
                 condition,
                 then_branch,
@@ -2263,6 +2455,27 @@ impl Interpreter {
     }
 
     fn execute_compiled_assignment(&mut self, compiled: &CompiledAssignment) -> BasicResult<()> {
+        if !compiled.rhs_is_string && compiled.targets.len() == 1 {
+            if let CompiledLValue::Scalar {
+                name,
+                is_string: false,
+            } = &compiled.targets[0]
+            {
+                if let Some(fast_rhs) = &compiled.fast_numeric_rhs {
+                    let value = fast_rhs.eval(self).map_err(|e| self.with_current_line(e))?;
+                    self.assign_numeric_scalar_target(name, value);
+                    return Ok(());
+                }
+                let value = eval_compiled_number(self, &compiled.rhs).map_err(|mut e| {
+                    if e.line.is_none() {
+                        e.line = self.current_line;
+                    }
+                    e
+                })?;
+                self.assign_numeric_scalar_target(name, value);
+                return Ok(());
+            }
+        }
         let value = (if compiled.rhs_is_string {
             eval_compiled(self, &compiled.rhs)
         } else {
@@ -2295,6 +2508,42 @@ impl Interpreter {
             self.return_value_for_active_function(target.name(), &value);
         }
         Ok(())
+    }
+
+    fn assign_numeric_scalar_target(&mut self, name: &str, value: f64) {
+        if self.active_functions.is_empty() {
+            self.set_numeric_variable(name, value);
+            return;
+        }
+        if self
+            .active_function_name()
+            .is_some_and(|function| name.eq_ignore_ascii_case(function))
+        {
+            self.return_value_for_active_function(name, &Value::number(value));
+        } else {
+            self.set_numeric_variable(name, value);
+        }
+    }
+
+    fn get_fast_number_variable(&mut self, name: &str) -> BasicResult<f64> {
+        if self.active_functions.is_empty() && self.function_call_stack.is_empty() {
+            if name.ends_with('$') {
+                return Err(BasicError::new(ErrorCode::TypeMismatch));
+            }
+            if name == "INF" {
+                return Ok(f64::INFINITY);
+            }
+            return Ok(self.numeric_variables.get(name).copied().unwrap_or(0.0));
+        }
+        self.get_number_variable(name)
+    }
+
+    fn set_numeric_variable(&mut self, name: &str, value: f64) {
+        if let Some(slot) = self.numeric_variables.get_mut(name) {
+            *slot = value;
+        } else {
+            self.numeric_variables.insert(name.to_string(), value);
+        }
     }
 
     fn execute_compiled_mid_assignment(
@@ -2355,11 +2604,17 @@ impl Interpreter {
         })?;
         self.graphics
             .draw_to(self.graphics.xpos() + x, self.graphics.ypos() + y, None);
-        self.refresh_graphics_window()
+        self.refresh_graphics_window_after_ensure()
     }
 
     fn execute_compiled_rect(&mut self, compiled: &CompiledRect) -> BasicResult<()> {
-        self.ensure_graphics_window()?;
+        if let Some(fast) = &compiled.fast {
+            return self.execute_compiled_fast_rect(fast, compiled.filled);
+        }
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
         let x1 = eval_compiled_number(self, &compiled.x1).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
@@ -2387,20 +2642,132 @@ impl Interpreter {
         let color = compiled
             .color
             .as_ref()
-            .map(|expr| {
-                eval_compiled(self, expr)
-                    .and_then(color_number_from_value)
-                    .map_err(|mut e| {
-                        if e.line.is_none() {
-                            e.line = self.current_line;
-                        }
-                        e
-                    })
-            })
+            .map(|expr| self.eval_compiled_color(expr))
             .transpose()?;
         self.graphics
             .rectangle(x1, y1, x2, y2, color, compiled.filled);
-        self.refresh_graphics_window()
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_fast_rect(
+        &mut self,
+        compiled: &CompiledFastRect,
+        filled: bool,
+    ) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
+        let x1 = compiled
+            .x1
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y1 = compiled
+            .y1
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let x2 = compiled
+            .x2
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y2 = compiled
+            .y2
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let color = compiled
+            .color
+            .as_ref()
+            .map(|expr| {
+                expr.eval(self)
+                    .and_then(color_number_from_number)
+                    .map_err(|e| self.with_current_line(e))
+            })
+            .transpose()?;
+        if !filled
+            || !self
+                .graphics
+                .filled_rectangle_unscaled(x1, y1, x2, y2, color)
+        {
+            self.graphics.rectangle(x1, y1, x2, y2, color, filled);
+        }
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_triangle(&mut self, compiled: &CompiledTriangle) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
+        let x0 = eval_compiled_number(self, &compiled.x0).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let y0 = eval_compiled_number(self, &compiled.y0).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let x1 = eval_compiled_number(self, &compiled.x1).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let y1 = eval_compiled_number(self, &compiled.y1).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let x2 = eval_compiled_number(self, &compiled.x2).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let y2 = eval_compiled_number(self, &compiled.y2).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let color = compiled
+            .color
+            .as_ref()
+            .map(|expr| self.eval_compiled_color(expr))
+            .transpose()?;
+        self.graphics
+            .triangle(x0, y0, x1, y1, x2, y2, color, compiled.filled);
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn eval_compiled_color(&mut self, expr: &Expr) -> BasicResult<i32> {
+        let result = if expr.is_statically_numeric() {
+            eval_compiled_number(self, expr).and_then(color_number_from_number)
+        } else {
+            eval_compiled(self, expr).and_then(color_number_from_value)
+        };
+        result.map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })
     }
 
     fn execute_string_char_assignment(
@@ -5186,6 +5553,18 @@ impl Interpreter {
         }
     }
 
+    fn refresh_graphics_window_after_ensure(&mut self) -> BasicResult<()> {
+        if self.graphics_window_blocked() {
+            return Ok(());
+        }
+        self.graphics_window_dirty = true;
+        if self.current_line.is_none() {
+            self.present_graphics_window()
+        } else {
+            self.pump_graphics_window_if_due()
+        }
+    }
+
     fn present_graphics_window(&mut self) -> BasicResult<()> {
         if self.graphics_window_blocked() {
             return Ok(());
@@ -6721,6 +7100,12 @@ impl Interpreter {
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "FRECTANGLE" => compile_rect_statement(trimmed[10..].trim(), true)
                 .map(|compiled| CachedCommand::Rect(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "TRIANGLE" => compile_triangle_statement(trimmed[8..].trim(), false)
+                .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "FTRIANGLE" => compile_triangle_statement(trimmed[9..].trim(), true)
+                .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "LET" => self
                 .compile_cached_assignment(trimmed[3..].trim())
@@ -9050,6 +9435,9 @@ fn assignment_identifier_case(lhs: &str) -> Option<(String, String)> {
 }
 
 fn is_basic_identifier(name: &str) -> bool {
+    if is_reserved_identifier_name(name) {
+        return false;
+    }
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -9058,6 +9446,10 @@ fn is_basic_identifier(name: &str) -> bool {
         return false;
     }
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+}
+
+fn is_reserved_identifier_name(name: &str) -> bool {
+    matches!(name.to_ascii_uppercase().as_str(), "ROW" | "COL")
 }
 
 fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> String {
@@ -9413,16 +9805,18 @@ fn error_message_without_dot(err: &BasicError) -> String {
 
 fn color_number_from_value(value: Value) -> BasicResult<i32> {
     match value {
-        Value::Number(n) => {
-            let color = n as i32;
-            if color < 0 || color > 0x00ff_ffff {
-                return Err(BasicError::new(ErrorCode::InvalidArgument));
-            }
-            Ok(color)
-        }
+        Value::Number(n) => color_number_from_number(n),
         Value::Str(text) => color_number_from_string(&text),
         Value::ArrayRef(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
     }
+}
+
+fn color_number_from_number(n: f64) -> BasicResult<i32> {
+    let color = n as i32;
+    if color < 0 || color > 0x00ff_ffff {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(color)
 }
 
 fn color_number_from_string(text: &str) -> BasicResult<i32> {
@@ -9997,13 +10391,117 @@ fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRec
     if !(4..=5).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
+    let x1 = compile_expression(args[0].trim())?;
+    let y1 = compile_expression(args[1].trim())?;
+    let x2 = compile_expression(args[2].trim())?;
+    let y2 = compile_expression(args[3].trim())?;
+    let color = args
+        .get(4)
+        .map(|arg| compile_expression(arg.trim()))
+        .transpose()?;
+    let fast = compile_fast_rect(&x1, &y1, &x2, &y2, color.as_ref());
     Ok(CompiledRect {
-        x1: compile_expression(args[0].trim())?,
-        y1: compile_expression(args[1].trim())?,
-        x2: compile_expression(args[2].trim())?,
-        y2: compile_expression(args[3].trim())?,
+        x1,
+        y1,
+        x2,
+        y2,
+        color,
+        fast,
+        filled,
+    })
+}
+
+fn compile_fast_rect(
+    x1: &Expr,
+    y1: &Expr,
+    x2: &Expr,
+    y2: &Expr,
+    color: Option<&Expr>,
+) -> Option<CompiledFastRect> {
+    Some(CompiledFastRect {
+        x1: compile_fast_number_expr(x1, true)?,
+        y1: compile_fast_number_expr(y1, true)?,
+        x2: compile_fast_number_expr(x2, true)?,
+        y2: compile_fast_number_expr(y2, true)?,
+        color: match color {
+            Some(expr) => Some(compile_fast_number_expr(expr, true)?),
+            None => None,
+        },
+    })
+}
+
+fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
+    match expr {
+        Expr::Number(value) => Some(FastNumberExpr::Number(*value)),
+        Expr::Var(name)
+            if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name) =>
+        {
+            Some(FastNumberExpr::Var(name.clone()))
+        }
+        Expr::ArrayOrCall { name, args, kind }
+            if allow_arrays && *kind == ArrayOrCallKind::Array =>
+        {
+            match args.as_slice() {
+                [index] => Some(FastNumberExpr::Array1 {
+                    name: name.clone(),
+                    index: Box::new(compile_fast_number_expr(index, allow_arrays)?),
+                }),
+                [index0, index1] => Some(FastNumberExpr::Array2 {
+                    name: name.clone(),
+                    index0: Box::new(compile_fast_number_expr(index0, allow_arrays)?),
+                    index1: Box::new(compile_fast_number_expr(index1, allow_arrays)?),
+                }),
+                _ => None,
+            }
+        }
+        Expr::ArrayOrCall { name, args, .. } if args.len() == 1 => {
+            let function = match name.as_str() {
+                "INT" => FastNumberFunction::Int,
+                "SIN" => FastNumberFunction::Sin,
+                "COS" => FastNumberFunction::Cos,
+                _ => return None,
+            };
+            Some(FastNumberExpr::Function1 {
+                function,
+                arg: Box::new(compile_fast_number_expr(&args[0], allow_arrays)?),
+            })
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::IntDiv
+                    | BinaryOp::Mod
+                    | BinaryOp::Pow
+            ) =>
+        {
+            Some(FastNumberExpr::Binary {
+                op: *op,
+                left: Box::new(compile_fast_number_expr(left, allow_arrays)?),
+                right: Box::new(compile_fast_number_expr(right, allow_arrays)?),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<CompiledTriangle> {
+    let args = split_arguments(source);
+    if !(6..=7).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    Ok(CompiledTriangle {
+        x0: compile_expression(args[0].trim())?,
+        y0: compile_expression(args[1].trim())?,
+        x1: compile_expression(args[2].trim())?,
+        y1: compile_expression(args[3].trim())?,
+        x2: compile_expression(args[4].trim())?,
+        y2: compile_expression(args[5].trim())?,
         color: args
-            .get(4)
+            .get(6)
             .map(|arg| compile_expression(arg.trim()))
             .transpose()?,
         filled,
@@ -10067,11 +10565,31 @@ fn compile_assignment_statement(source: &str) -> BasicResult<CompiledAssignment>
         .into_iter()
         .map(compile_assignment_lvalue)
         .collect::<BasicResult<Vec<_>>>()?;
+    let rhs = compile_expression(rhs)?;
+    let fast_numeric_rhs = compile_fast_assignment_rhs(&compiled_targets, rhs_is_string, &rhs);
     Ok(CompiledAssignment {
         targets: compiled_targets,
-        rhs: compile_expression(rhs)?,
+        rhs,
         rhs_is_string,
+        fast_numeric_rhs,
     })
+}
+
+fn compile_fast_assignment_rhs(
+    targets: &[CompiledLValue],
+    rhs_is_string: bool,
+    rhs: &Expr,
+) -> Option<FastNumberExpr> {
+    if rhs_is_string || targets.len() != 1 {
+        return None;
+    }
+    let CompiledLValue::Scalar {
+        is_string: false, ..
+    } = &targets[0]
+    else {
+        return None;
+    };
+    compile_fast_number_expr(rhs, false)
 }
 
 fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
@@ -10087,6 +10605,9 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
             return Err(BasicError::new(ErrorCode::Syntax));
         }
         let name = lhs[..open].trim().to_string();
+        if is_reserved_identifier_name(&name) {
+            return Err(BasicError::new(ErrorCode::Undefined));
+        }
         if !is_basic_identifier(&name) {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
@@ -10099,6 +10620,9 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
             name,
             indexes,
         });
+    }
+    if is_reserved_identifier_name(&lhs) {
+        return Err(BasicError::new(ErrorCode::Undefined));
     }
     if !is_basic_identifier(&lhs) {
         return Err(BasicError::new(ErrorCode::InvalidArgument));

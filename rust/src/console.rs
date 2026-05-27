@@ -3225,27 +3225,46 @@ fn add_bas_extension_to_leading_file_command(code: &str) -> String {
     let leading_ws = code.len() - trimmed_start.len();
     let commands = ["CHAIN MERGE", "CHAIN", "MERGE", "LOAD", "SAVE", "RUN"];
     for command in commands {
-        let Some(rest) = trimmed_start.strip_prefix(command) else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        if !rest.starts_with('"') {
+        if !trimmed_start.starts_with(command) {
             continue;
         }
-        let Some(end) = rest[1..].find('"') else {
+        let mut rest_start = leading_ws + command.len();
+        let mut cursor_markers = String::new();
+        while rest_start < code.len() {
+            let Some(ch) = code[rest_start..].chars().next() else {
+                break;
+            };
+            if ch == CURSOR_MARKER {
+                cursor_markers.push(ch);
+                rest_start += ch.len_utf8();
+            } else if ch.is_whitespace() {
+                rest_start += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if !code[rest_start..].starts_with('"') {
+            continue;
+        }
+        let path_start = rest_start + 1;
+        let Some(relative_end) = code[path_start..].find('"') else {
             continue;
         };
-        let path = &rest[1..end + 1];
-        if Path::new(path).extension().is_some() {
+        let path_end = path_start + relative_end;
+        let path = &code[path_start..path_end];
+        let path_for_extension = path.replace(CURSOR_MARKER, "");
+        if Path::new(&path_for_extension).extension().is_some() {
             return code.to_string();
         }
         let mut out = String::new();
         out.push_str(&code[..leading_ws]);
         out.push_str(command);
-        out.push_str(" \"");
+        out.push(' ');
+        out.push_str(&cursor_markers);
+        out.push('"');
         out.push_str(path);
         out.push_str(".bas\"");
-        out.push_str(&rest[end + 2..]);
+        out.push_str(&code[path_end + 1..]);
         return out;
     }
     code.to_string()
@@ -3421,6 +3440,31 @@ mod tests {
         let load = "load\"a\"";
         assert_eq!(normalize_code(load), "LOAD \"a.bas\"");
         assert_eq!(normalized_cursor_position(load, load.chars().count()), 12);
+    }
+
+    #[test]
+    fn file_command_bas_completion_survives_cursor_before_quote() {
+        let load = "load\"demo\"";
+        let cursor = "load".chars().count();
+        assert_eq!(
+            normalize_code_for_editing(load, cursor),
+            "LOAD \"demo.bas\""
+        );
+        assert_eq!(
+            normalized_cursor_position(load, cursor),
+            "LOAD ".chars().count()
+        );
+
+        let open_load = "load\"demo";
+        let cursor = "load".chars().count();
+        assert_eq!(
+            normalize_code_for_editing(open_load, cursor),
+            "LOAD \"demo.bas\""
+        );
+        assert_eq!(
+            normalized_cursor_position(open_load, cursor),
+            "LOAD ".chars().count()
+        );
     }
 
     #[test]

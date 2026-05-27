@@ -563,15 +563,35 @@ impl Graphics {
         let min_y = ay.min(by);
         let max_y = ay.max(by);
         if filled {
-            for y in min_y..=max_y {
-                self.fill_scanline(y, min_x as i64, max_x as i64, color);
-            }
+            self.fill_canvas_rect(min_x, min_y, max_x, max_y, color);
         } else {
             self.line_canvas(min_x, min_y, max_x, min_y, color);
             self.line_canvas(max_x, min_y, max_x, max_y, color);
             self.line_canvas(max_x, max_y, min_x, max_y, color);
             self.line_canvas(min_x, max_y, min_x, min_y, color);
         }
+    }
+
+    pub fn filled_rectangle_unscaled(
+        &mut self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        color: Option<i32>,
+    ) -> bool {
+        if self.scale.is_some() {
+            return false;
+        }
+        let color = color
+            .map(resolve_color_number)
+            .unwrap_or(self.current_color);
+        let ax = x1.round() as i32 + self.origin_x;
+        let ay = self.height as i32 - 1 - (y1.round() as i32 + self.origin_y);
+        let bx = x2.round() as i32 + self.origin_x;
+        let by = self.height as i32 - 1 - (y2.round() as i32 + self.origin_y);
+        self.fill_canvas_rect(ax, ay, bx, by, color);
+        true
     }
 
     pub fn triangle(
@@ -1534,6 +1554,22 @@ impl Graphics {
         let start = row + left as usize;
         let end = row + right as usize + 1;
         self.buffer[start..end].fill(color);
+    }
+
+    fn fill_canvas_rect(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
+        let left = x1.min(x2).max(0).max(self.w_left);
+        let right = x1.max(x2).min(self.width as i32 - 1).min(self.w_right);
+        let top = y1.min(y2).max(0).max(self.w_top);
+        let bottom = y1.max(y2).min(self.height as i32 - 1).min(self.w_bottom);
+        if left > right || top > bottom {
+            return;
+        }
+        let left = left as usize;
+        let right = right as usize + 1;
+        for y in top as usize..=bottom as usize {
+            let row = y * self.width;
+            self.buffer[row + left..row + right].fill(color);
+        }
     }
 
     fn enqueue_fill_runs(

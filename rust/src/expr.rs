@@ -237,7 +237,7 @@ impl Expr {
         }
     }
 
-    fn is_statically_numeric(&self) -> bool {
+    pub(crate) fn is_statically_numeric(&self) -> bool {
         match self {
             Expr::Number(_) => true,
             Expr::Str(_) | Expr::StringIndex { .. } => false,
@@ -691,6 +691,9 @@ impl Parser {
     }
 
     fn parse_ident_value(&mut self, name: String) -> BasicResult<Expr> {
+        if is_reserved_bare_value_word(&name) {
+            return Err(BasicError::new(ErrorCode::Undefined));
+        }
         let mut expr = if self.consume_lparen() {
             let mut args = Vec::new();
             if !matches!(self.peek(), Token::RParen) {
@@ -792,7 +795,7 @@ fn string_concat_capacity(ctx: &mut impl EvalContext, expr: &Expr) -> Option<usi
     }
 }
 
-fn checked_number(value: f64) -> BasicResult<f64> {
+pub(crate) fn checked_number(value: f64) -> BasicResult<f64> {
     if value.is_nan() {
         return Err(BasicError::new(ErrorCode::InvalidValue));
     }
@@ -1710,6 +1713,10 @@ fn is_builtin_function(name: &str) -> bool {
     )
 }
 
+fn is_reserved_bare_value_word(name: &str) -> bool {
+    matches!(name, "ROW" | "COL")
+}
+
 fn classify_array_or_call(name: &str) -> ArrayOrCallKind {
     if is_array_name_function(name) {
         ArrayOrCallKind::ArrayNameFunction
@@ -1742,7 +1749,7 @@ fn is_array_name_function(name: &str) -> bool {
     )
 }
 
-fn is_zero_arg_function(name: &str) -> bool {
+pub(crate) fn is_zero_arg_function(name: &str) -> bool {
     matches!(
         name,
         "RND"

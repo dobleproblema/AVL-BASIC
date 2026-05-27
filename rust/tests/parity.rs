@@ -984,6 +984,31 @@ fn mat_base_controls_lbound_and_ubound_reports_dimensions() {
 }
 
 #[test]
+fn row_and_col_are_reserved_like_python() {
+    for name in ["ROW", "COL"] {
+        let mut interp = Interpreter::new();
+        interp
+            .process_immediate(&format!("10 LET {name}=1"))
+            .unwrap();
+        let err = interp.process_immediate("RUN").unwrap_err();
+        assert_eq!(
+            err.display_for_basic(),
+            "Line 10. Undefined variable or function."
+        );
+
+        let mut interp = Interpreter::new();
+        interp
+            .process_immediate(&format!("10 PRINT {name}"))
+            .unwrap();
+        let err = interp.process_immediate("RUN").unwrap_err();
+        assert_eq!(
+            err.display_for_basic(),
+            "Line 10. Undefined variable or function."
+        );
+    }
+}
+
+#[test]
 fn multiline_fn_can_return_matrix_from_mat_assignment() {
     let output = run_rust(
         r#"10 DEF FNM(X,Y)
@@ -1133,12 +1158,13 @@ fn tab_positions_to_columns_across_print_statements() {
 fn degree_mode_affects_trig_functions() {
     let output = run_rust(
         r#"10 DEG
-20 PRINT SIN(30);COS(60)
-30 RAD
-40 PRINT ROUND(SIN(PI/6),6)
-50 END"#,
+20 A=SIN(30):B=COS(60):PRINT A;B
+30 PRINT SIN(30);COS(60)
+40 RAD
+50 PRINT ROUND(SIN(PI/6),6)
+60 END"#,
     );
-    assert_eq!(output, " 0.5  0.5\n 0.5\n");
+    assert_eq!(output, " 0.5  0.5\n 0.5  0.5\n 0.5\n");
 }
 
 #[test]
