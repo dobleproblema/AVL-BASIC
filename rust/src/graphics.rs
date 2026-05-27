@@ -564,9 +564,7 @@ impl Graphics {
         let max_y = ay.max(by);
         if filled {
             for y in min_y..=max_y {
-                for x in min_x..=max_x {
-                    self.set_canvas_pixel(x, y, color);
-                }
+                self.fill_scanline(y, min_x as i64, max_x as i64, color);
             }
         } else {
             self.line_canvas(min_x, min_y, max_x, min_y, color);
@@ -661,9 +659,7 @@ impl Graphics {
                 let x_left = (cx as f64 - span).trunc() as i32;
                 let x_right = (cx as f64 + span).trunc() as i32;
                 if full_circle {
-                    for x in x_left..=x_right {
-                        self.set_canvas_pixel(x, y, color);
-                    }
+                    self.fill_scanline(y, x_left as i64, x_right as i64, color);
                     continue;
                 }
                 let ndy = dy * inv_ry;
@@ -715,15 +711,21 @@ impl Graphics {
         }
         let mut queue = VecDeque::new();
         queue.push_back((sx, sy));
-        while let Some((x, y)) = queue.pop_front() {
-            if !self.in_drawable_bounds(x, y) || self.get_canvas_pixel(x, y) != Some(target) {
+        while let Some((seed_x, y)) = queue.pop_front() {
+            if !self.fill_target_matches(seed_x, y, target) {
                 continue;
             }
-            self.set_canvas_pixel(x, y, color);
-            queue.push_back((x + 1, y));
-            queue.push_back((x - 1, y));
-            queue.push_back((x, y + 1));
-            queue.push_back((x, y - 1));
+            let mut left = seed_x;
+            while self.fill_target_matches(left - 1, y, target) {
+                left -= 1;
+            }
+            let mut right = seed_x;
+            while self.fill_target_matches(right + 1, y, target) {
+                right += 1;
+            }
+            self.fill_scanline(y, left as i64, right as i64, color);
+            self.enqueue_fill_runs(left, right, y - 1, target, &mut queue);
+            self.enqueue_fill_runs(left, right, y + 1, target, &mut queue);
         }
     }
 
@@ -1534,6 +1536,33 @@ impl Graphics {
         self.buffer[start..end].fill(color);
     }
 
+    fn enqueue_fill_runs(
+        &self,
+        left: i32,
+        right: i32,
+        y: i32,
+        target: u32,
+        queue: &mut VecDeque<(i32, i32)>,
+    ) {
+        let mut x = left;
+        while x <= right {
+            while x <= right && !self.fill_target_matches(x, y, target) {
+                x += 1;
+            }
+            if x > right {
+                break;
+            }
+            queue.push_back((x, y));
+            while x <= right && self.fill_target_matches(x, y, target) {
+                x += 1;
+            }
+        }
+    }
+
+    fn fill_target_matches(&self, x: i32, y: i32, target: u32) -> bool {
+        self.in_drawable_bounds(x, y) && self.get_canvas_pixel(x, y) == Some(target)
+    }
+
     fn line_canvas(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
         self.line_canvas_phase(x0, y0, x1, y1, color, 0, false);
     }
@@ -1847,4 +1876,26 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
         pixels.push(rgb);
     }
     Ok((w, h, pixels))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_color_number, Graphics};
+
+    #[test]
+    fn fill_colors_enclosed_area_without_crossing_border() {
+        let mut graphics = Graphics::new(640);
+        graphics.rectangle(10.0, 10.0, 20.0, 20.0, Some(2), false);
+        graphics.fill(15.0, 15.0, Some(3));
+
+        assert_eq!(
+            graphics.get_canvas_pixel(15, 464),
+            Some(resolve_color_number(3))
+        );
+        assert_eq!(
+            graphics.get_canvas_pixel(10, 464),
+            Some(resolve_color_number(2))
+        );
+        assert_eq!(graphics.get_canvas_pixel(9, 464), Some(0));
+    }
 }

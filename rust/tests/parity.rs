@@ -729,6 +729,14 @@ fn console_normalization_completes_file_quotes_and_bas_extension() {
         console::normalize_code("10 print 1'comment"),
         "10 PRINT 1 'comment"
     );
+    assert_eq!(
+        console::normalize_code("10 LET You=124.4321"),
+        "10 LET You=124.4321"
+    );
+    assert_eq!(
+        console::normalize_code("10 PRINT 1.230000000000000"),
+        "10 PRINT 1.23"
+    );
     assert_eq!(console::normalize_code("'comment"), "'comment");
     assert_eq!(
         console::normalize_code("10 rem print if and mod"),
@@ -806,6 +814,14 @@ fn list_preserves_indentation_and_variable_canonical_case() {
         interp.take_output(),
         "20 perIta=1\n30 PRINT perIta\n40 REM PERITA\n"
     );
+}
+
+#[test]
+fn list_preserves_decimal_literal_without_binary_tail() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 LET You=124.4321").unwrap();
+    interp.process_immediate("LIST").unwrap();
+    assert_eq!(interp.take_output(), "10 LET You=124.4321\n");
 }
 
 #[test]

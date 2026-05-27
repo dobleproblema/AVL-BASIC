@@ -427,6 +427,16 @@ struct CompiledMidAssignment {
 }
 
 #[derive(Debug, Clone)]
+struct CompiledRect {
+    x1: Expr,
+    y1: Expr,
+    x2: Expr,
+    y2: Expr,
+    color: Option<Expr>,
+    filled: bool,
+}
+
+#[derive(Debug, Clone)]
 enum CompiledLValue {
     Scalar {
         name: String,
@@ -454,6 +464,7 @@ enum CachedCommand {
         x: Rc<Expr>,
         y: Rc<Expr>,
     },
+    Rect(Rc<CompiledRect>),
     If {
         condition: Rc<Expr>,
         then_branch: CachedIfBranch,
@@ -1993,6 +2004,7 @@ impl Interpreter {
             CachedCommand::DrawRelative2 { x, y } => {
                 self.execute_compiled_draw_relative2(x.as_ref(), y.as_ref())
             }
+            CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
             CachedCommand::If {
                 condition,
                 then_branch,
@@ -2343,6 +2355,51 @@ impl Interpreter {
         })?;
         self.graphics
             .draw_to(self.graphics.xpos() + x, self.graphics.ypos() + y, None);
+        self.refresh_graphics_window()
+    }
+
+    fn execute_compiled_rect(&mut self, compiled: &CompiledRect) -> BasicResult<()> {
+        self.ensure_graphics_window()?;
+        let x1 = eval_compiled_number(self, &compiled.x1).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let y1 = eval_compiled_number(self, &compiled.y1).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let x2 = eval_compiled_number(self, &compiled.x2).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let y2 = eval_compiled_number(self, &compiled.y2).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })?;
+        let color = compiled
+            .color
+            .as_ref()
+            .map(|expr| {
+                eval_compiled(self, expr)
+                    .and_then(color_number_from_value)
+                    .map_err(|mut e| {
+                        if e.line.is_none() {
+                            e.line = self.current_line;
+                        }
+                        e
+                    })
+            })
+            .transpose()?;
+        self.graphics
+            .rectangle(x1, y1, x2, y2, color, compiled.filled);
         self.refresh_graphics_window()
     }
 
@@ -6659,6 +6716,12 @@ impl Interpreter {
                     y: Rc::new(y),
                 })
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "RECTANGLE" => compile_rect_statement(trimmed[9..].trim(), false)
+                .map(|compiled| CachedCommand::Rect(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "FRECTANGLE" => compile_rect_statement(trimmed[10..].trim(), true)
+                .map(|compiled| CachedCommand::Rect(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "LET" => self
                 .compile_cached_assignment(trimmed[3..].trim())
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
@@ -9927,6 +9990,24 @@ fn compile_draw_relative2(source: &str) -> BasicResult<(Expr, Expr)> {
         compile_expression(args[0].trim())?,
         compile_expression(args[1].trim())?,
     ))
+}
+
+fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRect> {
+    let args = split_arguments(source);
+    if !(4..=5).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    Ok(CompiledRect {
+        x1: compile_expression(args[0].trim())?,
+        y1: compile_expression(args[1].trim())?,
+        x2: compile_expression(args[2].trim())?,
+        y2: compile_expression(args[3].trim())?,
+        color: args
+            .get(4)
+            .map(|arg| compile_expression(arg.trim()))
+            .transpose()?,
+        filled,
+    })
 }
 
 fn compiled_string_char_assignment(

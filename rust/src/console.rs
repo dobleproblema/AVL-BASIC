@@ -2980,13 +2980,13 @@ fn compact_inline_colon_separators(source: &str) -> String {
 }
 
 fn canonicalize_number(raw: &str) -> String {
-    let Ok(value) = raw.parse::<f64>() else {
-        return raw.to_string();
-    };
-    if !value.is_finite() {
-        return raw.trim_start_matches('+').to_string();
-    }
     if raw.contains('e') || raw.contains('E') {
+        let Ok(value) = raw.parse::<f64>() else {
+            return raw.to_string();
+        };
+        if !value.is_finite() {
+            return raw.trim_start_matches('+').to_string();
+        }
         if value == 0.0 {
             return "0".to_string();
         }
@@ -2998,18 +2998,102 @@ fn canonicalize_number(raw: &str) -> String {
         let exponent = exponent.parse::<i32>().unwrap_or(0);
         return format!("{mantissa}E{exponent:+}");
     }
-    let mut text = format!("{value:.14}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
+    canonicalize_decimal_number(raw)
+}
+
+fn canonicalize_decimal_number(raw: &str) -> String {
+    let text = raw.trim_start_matches('+');
+    let (negative, unsigned) = text
+        .strip_prefix('-')
+        .map_or((false, text), |rest| (true, rest));
+    let mut parts = unsigned.split('.');
+    let int_raw = parts.next().unwrap_or_default();
+    let frac_raw = parts.next();
+    if parts.next().is_some()
+        || (!int_raw.chars().all(|ch| ch.is_ascii_digit()))
+        || frac_raw.is_some_and(|frac| !frac.chars().all(|ch| ch.is_ascii_digit()))
+        || (int_raw.is_empty() && frac_raw.is_none_or(str::is_empty))
+    {
+        return text.to_string();
     }
-    if text.ends_with('.') {
-        text.pop();
+
+    let mut int_part = trim_leading_decimal_zeros(int_raw).to_string();
+    let mut frac_part = frac_raw.unwrap_or_default().to_string();
+    if frac_part.len() > 14 {
+        let kept = frac_part[..14].to_string();
+        let dropped = &frac_part[14..];
+        let round_up = decimal_rounds_up_half_even(&kept, dropped);
+        frac_part = kept;
+        if round_up {
+            (int_part, frac_part) = increment_fixed_decimal(&int_part, &frac_part, 14);
+        }
     }
-    if text == "-0" || text == "+0" || text.is_empty() {
+
+    while frac_part.ends_with('0') {
+        frac_part.pop();
+    }
+    if int_part == "0" && frac_part.is_empty() {
         "0".to_string()
+    } else if frac_part.is_empty() {
+        format!("{}{}", if negative { "-" } else { "" }, int_part)
     } else {
-        text.trim_start_matches('+').to_string()
+        format!(
+            "{}{}.{}",
+            if negative { "-" } else { "" },
+            int_part,
+            frac_part
+        )
     }
+}
+
+fn trim_leading_decimal_zeros(text: &str) -> &str {
+    let trimmed = text.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0"
+    } else {
+        trimmed
+    }
+}
+
+fn decimal_rounds_up_half_even(kept: &str, dropped: &str) -> bool {
+    let mut chars = dropped.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if first > '5' {
+        return true;
+    }
+    if first < '5' {
+        return false;
+    }
+    if chars.any(|ch| ch != '0') {
+        return true;
+    }
+    kept.as_bytes()
+        .last()
+        .is_some_and(|digit| (digit - b'0') % 2 == 1)
+}
+
+fn increment_fixed_decimal(int_part: &str, frac_part: &str, frac_width: usize) -> (String, String) {
+    let mut digits = format!("{int_part}{frac_part}").into_bytes();
+    let mut index = digits.len();
+    let mut carry = true;
+    while carry && index > 0 {
+        index -= 1;
+        if digits[index] == b'9' {
+            digits[index] = b'0';
+        } else {
+            digits[index] += 1;
+            carry = false;
+        }
+    }
+    if carry {
+        digits.insert(0, b'1');
+    }
+    let split = digits.len().saturating_sub(frac_width);
+    let int_part = String::from_utf8(digits[..split].to_vec()).unwrap_or_else(|_| "0".to_string());
+    let frac_part = String::from_utf8(digits[split..].to_vec()).unwrap_or_default();
+    (trim_leading_decimal_zeros(&int_part).to_string(), frac_part)
 }
 
 fn highlight_main(text: &str) -> String {
