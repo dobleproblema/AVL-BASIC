@@ -50,6 +50,7 @@ impl Hasher for FastHasher {
 const AVL_BASIC_LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
+const FRAME_DRIVEN_PUMP_CHECK_SKIP: u8 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -767,6 +768,7 @@ pub struct Interpreter {
     graphics_window_used_by_immediate: bool,
     graphics_window_closed_by_current_run: bool,
     stale_graphics_window_poll_counter: u32,
+    graphics_window_pump_check_skip: u8,
     last_graphics_window_pump: Instant,
     last_graphics_window_present: Instant,
     last_frame_command_present: Option<Instant>,
@@ -857,6 +859,7 @@ impl Interpreter {
             graphics_window_used_by_immediate: false,
             graphics_window_closed_by_current_run: false,
             stale_graphics_window_poll_counter: 0,
+            graphics_window_pump_check_skip: 0,
             last_graphics_window_pump: Instant::now(),
             last_graphics_window_present: Instant::now(),
             last_frame_command_present: None,
@@ -2659,7 +2662,7 @@ impl Interpreter {
         filled: bool,
     ) -> BasicResult<()> {
         let window_blocked = self.graphics_window_blocked();
-        if !window_blocked {
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
             self.ensure_graphics_window()?;
         }
         let x1 = compiled
@@ -5533,6 +5536,7 @@ impl Interpreter {
             window.clear_transient_input();
             self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
+            self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
             self.process_mouse_event()?;
@@ -5585,6 +5589,7 @@ impl Interpreter {
             window.clear_transient_input();
             self.graphics_window = Some(window);
             self.graphics_window_dirty = false;
+            self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
             return Ok(());
@@ -5603,6 +5608,7 @@ impl Interpreter {
             self.mark_graphics_window_user_closed();
         } else if self.graphics_window.is_some() {
             self.graphics_window_dirty = false;
+            self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
             self.last_graphics_window_present = Instant::now();
             self.process_mouse_event()?;
@@ -5700,6 +5706,16 @@ impl Interpreter {
             if self.stale_graphics_window_poll_counter & 0x3fff != 0 {
                 return Ok(());
             }
+        }
+        if self.current_line.is_some()
+            && self.graphics_window_used_this_run
+            && self.last_frame_command_present.is_some()
+        {
+            if self.graphics_window_pump_check_skip > 0 {
+                self.graphics_window_pump_check_skip -= 1;
+                return Ok(());
+            }
+            self.graphics_window_pump_check_skip = FRAME_DRIVEN_PUMP_CHECK_SKIP;
         }
         if self.last_graphics_window_pump.elapsed() < self.graphics_window_pump_interval() {
             return Ok(());
@@ -5863,12 +5879,22 @@ impl Interpreter {
             || (self.current_line.is_some() && self.graphics_window_closed_by_current_run)
     }
 
+    fn graphics_window_ready_for_program_drawing(&self) -> bool {
+        self.current_line.is_some()
+            && self.graphics_window_used_this_run
+            && self
+                .graphics_window
+                .as_ref()
+                .is_some_and(|window| window.matches_size(&self.graphics))
+    }
+
     fn mark_graphics_window_user_closed(&mut self) {
         let interrupt_current_run = self.current_run_uses_graphics_window();
         self.graphics_window = None;
         self.graphics_window_suppressed = interrupt_current_run;
         self.graphics.reset_state();
         self.graphics_window_dirty = false;
+        self.graphics_window_pump_check_skip = 0;
         self.last_frame_command_present = None;
         if interrupt_current_run {
             self.graphics_window_closed_by_current_run = true;
@@ -5880,6 +5906,7 @@ impl Interpreter {
         self.graphics_window = None;
         self.graphics_window_suppressed = false;
         self.graphics_window_dirty = false;
+        self.graphics_window_pump_check_skip = 0;
         self.last_frame_command_present = None;
         self.graphics_window_used_this_run = false;
     }

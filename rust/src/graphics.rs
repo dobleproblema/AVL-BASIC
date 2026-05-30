@@ -1557,16 +1557,71 @@ impl Graphics {
     }
 
     fn fill_canvas_rect(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
-        let left = x1.min(x2).max(0).max(self.w_left);
-        let right = x1.max(x2).min(self.width as i32 - 1).min(self.w_right);
-        let top = y1.min(y2).max(0).max(self.w_top);
-        let bottom = y1.max(y2).min(self.height as i32 - 1).min(self.w_bottom);
+        let left = x1.min(x2);
+        let right = x1.max(x2);
+        let top = y1.min(y2);
+        let bottom = y1.max(y2);
         if left > right || top > bottom {
             return;
         }
-        let left = left as usize;
-        let right = right as usize + 1;
-        for y in top as usize..=bottom as usize {
+        if left >= 0
+            && top >= 0
+            && right < self.width as i32
+            && bottom < self.height as i32
+            && left >= self.w_left
+            && right <= self.w_right
+            && top >= self.w_top
+            && bottom <= self.w_bottom
+        {
+            self.fill_canvas_rect_unclipped(
+                left as usize,
+                top as usize,
+                right as usize + 1,
+                bottom as usize,
+                color,
+            );
+            return;
+        }
+
+        let left = left.max(0).max(self.w_left);
+        let right = right.min(self.width as i32 - 1).min(self.w_right);
+        let top = top.max(0).max(self.w_top);
+        let bottom = bottom.min(self.height as i32 - 1).min(self.w_bottom);
+        if left > right || top > bottom {
+            return;
+        }
+        self.fill_canvas_rect_unclipped(
+            left as usize,
+            top as usize,
+            right as usize + 1,
+            bottom as usize,
+            color,
+        );
+    }
+
+    fn fill_canvas_rect_unclipped(
+        &mut self,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+        color: u32,
+    ) {
+        let width = right - left;
+        let height = bottom + 1 - top;
+        if width <= 4 && height <= 4 {
+            for y in top..=bottom {
+                let mut offset = y * self.width + left;
+                let end = offset + width;
+                while offset < end {
+                    self.buffer[offset] = color;
+                    offset += 1;
+                }
+            }
+            return;
+        }
+
+        for y in top..=bottom {
             let row = y * self.width;
             self.buffer[row + left..row + right].fill(color);
         }
