@@ -7078,6 +7078,19 @@ def test_string_square_bracket_access_supports_string_array_elements(run_basic_i
     assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == ['L']
 
 
+def test_dim_accepts_function_calls_in_dimension_expressions(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 P$="123" : DIM C$(LEN(P$))',
+        '20 C$(LEN(P$))="OK" : PRINT C$(3)',
+        '30 DIM A(MAX(1,2))',
+        '40 A(INT(2.9))=7 : PRINT A(2)',
+        'RUN',
+        'EXIT',
+    ])
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == ['OK', ' 7']
+
+
 @pytest.mark.parametrize(
     ("statement", "message"),
     [

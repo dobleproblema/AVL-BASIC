@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.38"
+__version__ = "1.5.39"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -669,7 +669,6 @@ FORBIDDEN_OPS = re.compile(r'\*\*|//|\||&|~|%|<<|>>')
 
 # Regexes using f-strings that incorporate VARIABLE_PATTERN
 VARIABLE_AND_ARRAY_REGEX = re.compile(fr'^({VARIABLE_PATTERN})(?:\(.*\))?$', re.IGNORECASE)
-DIM_REGEX = re.compile(fr'^({VARIABLE_PATTERN})\s*\(\s*([^\)]+)\s*\)$', re.IGNORECASE)
 LINE_NUMBER_REGEX = re.compile(r'^\s*\d+\s*(?:\s+.*)?$')
 PARSE_DATA_REGEX = re.compile(
     r'(?:^|,)\s*"([^"]*)"\s*(?=,|$)|'  # Quoted fields
@@ -11979,12 +11978,12 @@ class BasicInterpreter:
                 local_specs.append(('scalar', item.upper()))
                 continue
 
-            match = DIM_REGEX.match(item)
-            if not match:
-                self.handle_error(ErrorCode.SYNTAX_ERROR)
+            parsed_array = self._parse_array_definition_text(item)
+            if parsed_array is None:
                 return None
 
-            local_specs.append(('array', match.group(1).upper(), match.group(2).strip()))
+            array_name, dims_str = parsed_array
+            local_specs.append(('array', array_name, dims_str))
 
         if not local_specs:
             self.handle_error(ErrorCode.SYNTAX_ERROR)
@@ -13131,8 +13130,47 @@ class BasicInterpreter:
             definitions.append(current.strip())
         return definitions
 
+    @lru_cache(maxsize=65536)
+    @staticmethod
+    def split_dimension_expressions(dims_str):
+        """
+        Split a DIM dimension list, preserving empty slots for error reporting.
+        """
+        expressions = []
+        current = []
+        paren_level = 0
+        in_quotes = False
+
+        for char in dims_str:
+            if char == '"':
+                in_quotes = not in_quotes
+                current.append(char)
+            elif char == '(' and not in_quotes:
+                paren_level += 1
+                current.append(char)
+            elif char == ')' and not in_quotes:
+                paren_level -= 1
+                if paren_level < 0:
+                    return None
+                current.append(char)
+            elif char == ',' and not in_quotes and paren_level == 0:
+                expressions.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(char)
+
+        if paren_level != 0 or in_quotes:
+            return None
+
+        expressions.append(''.join(current).strip())
+        return expressions
+
     def _evaluate_dimension_list(self, dims_str):
-        dim_expressions = [dim.strip() for dim in dims_str.split(',')]
+        dim_expressions = BasicInterpreter.split_dimension_expressions(dims_str)
+        if dim_expressions is None:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
         dims = []
 
         for dim_expr in dim_expressions:
@@ -13164,15 +13202,48 @@ class BasicInterpreter:
 
         return tuple(dims)
 
-    def _parse_dim_definition(self, array_def):
-        match = DIM_REGEX.match(array_def)
-        if not match:
+    def _parse_array_definition_text(self, array_def):
+        array_def = array_def.strip()
+        open_pos = array_def.find('(')
+        if open_pos <= 0 or not array_def.endswith(')'):
             self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
+        array_name = array_def[:open_pos].strip()
+        if not is_valid_varname(array_name):
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
+        paren_level = 0
+        in_quotes = False
+        for pos, char in enumerate(array_def[open_pos:], start=open_pos):
+            if char == '"':
+                in_quotes = not in_quotes
+            elif char == '(' and not in_quotes:
+                paren_level += 1
+            elif char == ')' and not in_quotes:
+                paren_level -= 1
+                if paren_level == 0 and pos != len(array_def) - 1:
+                    self.handle_error(ErrorCode.SYNTAX_ERROR)
+                    return None
+                if paren_level < 0:
+                    self.handle_error(ErrorCode.SYNTAX_ERROR)
+                    return None
+
+        if paren_level != 0 or in_quotes:
+            self.handle_error(ErrorCode.SYNTAX_ERROR)
+            return None
+
+        array_name = array_name.upper()
+        dims_str = array_def[open_pos + 1:-1].strip()
+        return array_name, dims_str
+
+    def _parse_dim_definition(self, array_def):
+        parsed_array = self._parse_array_definition_text(array_def)
+        if parsed_array is None:
             return None, None
 
-        array_name = match.group(1).upper()
-        dims_str = match.group(2)
-
+        array_name, dims_str = parsed_array
         dims = self._evaluate_dimension_list(dims_str)
         if dims is None:
             return None, None

@@ -984,11 +984,12 @@ fn mat_base_controls_lbound_and_ubound_reports_dimensions() {
 }
 
 #[test]
-fn row_and_col_are_reserved_like_python() {
-    for name in ["ROW", "COL"] {
+fn row_col_and_base_are_reserved_like_python() {
+    for name in ["ROW", "COL", "BASE", "ROW$", "COL$", "BASE$"] {
+        let value = if name.ends_with('$') { r#""x""# } else { "1" };
         let mut interp = Interpreter::new();
         interp
-            .process_immediate(&format!("10 LET {name}=1"))
+            .process_immediate(&format!("10 LET {name}={value}"))
             .unwrap();
         let err = interp.process_immediate("RUN").unwrap_err();
         assert_eq!(
@@ -1126,6 +1127,27 @@ fn print_using_scientific_formats_general_masks() {
 40 PRINT USING "0.00^^^^^"; 1E308"###,
     );
     assert_eq!(output, "1.23E+11\n12.35E+03\n1.00E+03\n1.00E+308\n");
+}
+
+#[test]
+fn dec_uses_the_same_formatter_as_print_using() {
+    let output = run_rust(
+        r####"10 PRINT USING "###.#";68.123
+20 PRINT USING "0##.#";68.123
+30 PRINT USING "#0#.#";68.123
+40 PRINT USING "##0.#";68.123
+50 PRINT DEC$(68.123,"###.0")
+60 PRINT DEC$(68.123,"0##.0")
+70 PRINT DEC$(68.123,"#0#.0")
+80 PRINT DEC$(68.123,"##0.0")
+90 PRINT DEC$(-1.23,"+#.##")
+100 PRINT DEC$(1234567.23,",#,###,###.##")
+110 PRINT DEC$(12345,"0.00^^^^")"####,
+    );
+    assert_eq!(
+        output,
+        " 68.1\n068.1\n068.1\n068.1\n 68.1\n068.1\n068.1\n068.1\n-1.23\n1.234.567,23\n1.23E+04\n"
+    );
 }
 
 #[test]

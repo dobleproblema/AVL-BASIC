@@ -1,5 +1,6 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::lexer::{Lexer, Token};
+use crate::using_format::format_using;
 use crate::value::{logical_round, round_half_away, Value};
 
 #[derive(Debug, Clone)]
@@ -949,33 +950,6 @@ fn format_radix_string(value: i64, width: Option<usize>, radix: u32) -> String {
     text
 }
 
-fn format_dec_string(value: f64, fmt: &str) -> String {
-    if let Some(dot) = fmt.find('.') {
-        let frac_digits = fmt[dot + 1..]
-            .chars()
-            .filter(|ch| matches!(ch, '0' | '#'))
-            .count();
-        return format!("{:.*}", frac_digits, value);
-    }
-    let value = value as i64;
-    let width = fmt.chars().filter(|ch| matches!(ch, '0' | '#')).count();
-    let suffix: String = fmt.chars().filter(|ch| !matches!(ch, '0' | '#')).collect();
-    let negative = value < 0;
-    let sign = if negative { "-" } else { "" };
-    let digits = value.abs().to_string();
-    let width = if negative {
-        width.saturating_sub(1)
-    } else {
-        width
-    };
-    let padded = if digits.len() < width {
-        format!("{}{}", "0".repeat(width - digits.len()), digits)
-    } else {
-        digits
-    };
-    format!("{sign}{padded}{suffix}")
-}
-
 fn eval_array_name_args(
     ctx: &mut impl EvalContext,
     function: &str,
@@ -1535,7 +1509,7 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
         "DEC$" if args.len() == 2 => {
             let value = n(&args[0])?;
             let fmt = args[1].clone().into_string()?;
-            Value::string(format_dec_string(value, &fmt))
+            Value::string(format_using(value, &fmt))
         }
         "CHR$" if args.len() == 1 => {
             let code = n(&args[0])? as u32;
@@ -1714,7 +1688,8 @@ fn is_builtin_function(name: &str) -> bool {
 }
 
 fn is_reserved_bare_value_word(name: &str) -> bool {
-    matches!(name, "ROW" | "COL")
+    let base_name = name.strip_suffix('$').unwrap_or(name);
+    matches!(base_name, "ROW" | "COL" | "BASE")
 }
 
 fn classify_array_or_call(name: &str) -> ArrayOrCallKind {
