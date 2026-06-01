@@ -9815,6 +9815,24 @@ def test_multiline_subroutine_local_declarations_coexist_with_reference_paramete
     assert '\n 7\n 9\n 1\n 4\n 5\n' in output
 
 
+def test_multiline_subroutine_local_array_is_not_visible_after_return(run_basic_interpreter):
+    commands = [
+        'NEW',
+        '10 DEF SUB PERA(X)',
+        '20 LOCAL T(20)',
+        '30 T(20)=7',
+        '40 PRINT T(20)+X',
+        '50 SUBEND',
+        '60 CALL PERA(3)',
+        '70 PRINT T(20)',
+        'RUN',
+        'EXIT',
+    ]
+
+    output = run_basic_interpreter(commands)
+    assert '\n 10\nLine 70. Index out of range.\n' in output
+
+
 def test_local_must_appear_in_initial_block_of_multiline_function(run_basic_interpreter):
     commands = [
         'NEW',
