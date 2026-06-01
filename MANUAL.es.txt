@@ -382,6 +382,7 @@ Ejemplo
 + SCREEN                     Restaura estado (ver abajo)
 + SCREEN CLOSE               Cierra la ventana gráfica y restaura estado
 + CLG                        Borra la ventana gráfica con el PAPER actual
++ CLG OFFSCREEN              Borra el buffer gráfico con el PAPER actual; se muestra en el próximo FRAME
 + FRAME [fps]                Refresco inmediato; limitador FPS opcional
 
 Notas rápidas

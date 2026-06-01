@@ -21,6 +21,7 @@ from basic import (
     NUMBER_STYLE,
     VARIABLE_STYLE,
     RESET,
+    IR_FRECTANGLE_FAST,
     ReturnMain,
     _key_q,
     _gui_key_q,
@@ -8351,6 +8352,86 @@ def test_filled_shapes_commands():
     assert gw.buffer[gw._index(sx, sy)] != gw.background_color
 
 
+def test_explicit_zero_color_draws_black_in_graphics_commands():
+    interpreter = BasicInterpreter()
+    gw = ScaleCursorTestWindow(width=80, height=80, fill="#777777")
+    interpreter.graphics_window = gw
+    interpreter.ensure_graphics_window = lambda: None
+    black = GraphicsWindow._resolve_color(0)
+
+    interpreter.execute_command("INK 1")
+
+    interpreter.execute_command("FRECTANGLE 10,10,20,20,0")
+    sx, sy = gw._transform_graphic(15, 15)
+    assert gw.buffer[gw._index(sx, sy)] == black
+
+    interpreter.execute_command("PLOT 30,30,0")
+    sx, sy = gw._transform_graphic(30, 30)
+    assert gw.buffer[gw._index(sx, sy)] == black
+
+    interpreter.execute_command("MOVE 35,35")
+    interpreter.execute_command("DRAW 45,45,0")
+    sx, sy = gw._transform_graphic(40, 40)
+    assert gw.buffer[gw._index(sx, sy)] == black
+
+    interpreter.execute_command("FTRIANGLE 50,10,70,10,60,30,0")
+    sx, sy = gw._transform_graphic(60, 18)
+    assert gw.buffer[gw._index(sx, sy)] == black
+
+    interpreter.execute_command("FCIRCLE 20,55,8,0")
+    sx, sy = gw._transform_graphic(20, 55)
+    assert gw.buffer[gw._index(sx, sy)] == black
+
+
+def test_clg_offscreen_clears_dirty_buffer_without_immediate_present():
+    interpreter = BasicInterpreter()
+    gw = ScaleCursorTestWindow(width=80, height=80, fill="#777777")
+    interpreter.graphics_window = gw
+    interpreter.ensure_graphics_window = lambda: None
+
+    interpreter.execute_command("PAPER 0")
+    interpreter.execute_command("CLG OFFSCREEN")
+
+    black = GraphicsWindow._resolve_color(0)
+    assert all(pixel == black for pixel in gw.buffer)
+    assert gw.dirty_grid.get_dirty_regions() == [(0, 0, 80, 80)]
+
+
+def test_dirty_grid_coalesces_full_screen_dirty_region():
+    grid = DirtyGrid(640, 400, 20)
+
+    grid.mark_dirty_range(0, 0, 639, 399)
+    grid.mark_dirty_range(10, 10, 12, 12)
+
+    assert grid.get_dirty_regions() == [(0, 0, 640, 400)]
+    assert (0, 0) in grid.dirty_blocks
+
+    grid.clear()
+    assert grid.get_dirty_regions() == []
+
+    grid.mark_dirty_range(10, 10, 12, 12)
+    assert grid.get_dirty_regions() == [(0, 0, 20, 20)]
+
+
+def test_frectangle_fast_ir_draws_numeric_arguments():
+    interpreter = BasicInterpreter()
+    gw = ScaleCursorTestWindow(width=16, height=16, fill="#ffffff")
+    interpreter.graphics_window = gw
+    interpreter.ensure_graphics_window = lambda: None
+    interpreter.variables.update({"X": 2, "Y": 2, "D": 2, "I": 0})
+    interpreter.arrays["C"] = {"dims": [0], "data": {(0,): 0}}
+
+    ir_node = interpreter._compile_cmd_to_ir("FRECTANGLE X,Y,X+D,Y+D,C(I)")
+
+    assert ir_node is not None
+    assert ir_node[0] == IR_FRECTANGLE_FAST
+
+    interpreter._execute_ir(ir_node)
+
+    sx, sy = gw._transform_graphic(3, 3)
+    assert gw.buffer[gw._index(sx, sy)] == GraphicsWindow._resolve_color(0)
+
+
 def test_triangle_draw_outline_only():
     interpreter = BasicInterpreter()
     gw = ScaleCursorTestWindow(width=80, height=80)
@@ -10335,6 +10416,16 @@ def test_syntax_highlight_treats_mouse_off_as_reserved_word():
     assert keyword_mouse in highlighted
     assert keyword_off in highlighted
     assert variable_off not in highlighted
+
+
+def test_syntax_highlight_treats_offscreen_as_reserved_word():
+    highlighted = syntax_highlight('10 CLG OFFSCREEN : PRINT OFFSCREEN')
+
+    keyword_offscreen = f'{KEYWORD_STYLE}OFFSCREEN{RESET}'
+    variable_offscreen = f'{VARIABLE_STYLE}OFFSCREEN{RESET}'
+
+    assert highlighted.count(keyword_offscreen) == 2
+    assert variable_offscreen not in highlighted
 
 
 def test_mat_print_rejects_transpose_expression(run_basic_interpreter):

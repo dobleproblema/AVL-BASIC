@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.40"
+__version__ = "1.5.41"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -564,6 +564,7 @@ IR_WHILE_CALL = 13
 IR_WEND_CALL = 14
 IR_FN_ASSIGN = 15
 IR_FN_ASSIGN_FAST = 16
+IR_FRECTANGLE_FAST = 17
 
 # Target kinds for compiled assignments (IR)
 ASSIGN_TARGET_SCALAR_NUM = 1
@@ -582,7 +583,7 @@ RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', '
                   'EXIT', 'QUIT', 'SYSTEM', 'SWAP', 'BEEP', 'DEBUG', 'MOVE', 'MOVER',
                   'PLOT', 'PLOTR', 'DRAW', 'DRAWR', 'CIRCLE', 'CIRCLER', 'RECTANGLE',
                   'TRIANGLE', 'INK', 'FILL',
-                  'PAPER', 'SCREEN', 'CLG', 'LDIR', 'MASK', 'DEG', 'RAD', 'FRAME',
+                  'PAPER', 'SCREEN', 'CLG', 'OFFSCREEN', 'LDIR', 'MASK', 'DEG', 'RAD', 'FRAME',
                   'ORIGIN', 'SCALE', 'PENWIDTH', 'BIGFONT', 'SMALLFONT', 'LOCATE', 'DISP',
                   'GDISP', 'XAXIS', 'YAXIS', 'CROSSAT', 'GRAPH', 'GRAPHRANGE', 'PAUSE', 'FCIRCLE', 'FCIRCLER',
                   'FRECTANGLE', 'FTRIANGLE',
@@ -2982,7 +2983,7 @@ class GraphicsWindow:
         if pos[0] is not None:
             self._set_cursor_from_canvas(pos[0], pos[1])
 
-    def clg(self):
+    def clg(self, present=True):
         self._sync_buffer_from_pending_screen()
         self.reset_collision_state(clear_owner=True)
         self._x_axis_label_bboxes = []
@@ -3001,12 +3002,17 @@ class GraphicsWindow:
                 i0 = y * self.width + self.w_left
                 self._set_buffer_fill(i0, i0 + width_win, self.background_color, bg_rgb)
 
-        # 2. Put the pixels into the image
-        self.tk_image.put(
-            self.background_color,
-            to=(self.w_left, self.w_top,
-                self.w_right + 1, self.w_bottom + 1)
-        )
+        # 2. Present immediately, or defer the visible update until FRAME.
+        if present:
+            self.tk_image.put(
+                self.background_color,
+                to=(self.w_left, self.w_top,
+                    self.w_right + 1, self.w_bottom + 1)
+            )
+        else:
+            self.dirty_grid.mark_dirty_range(
+                self.w_left, self.w_top, self.w_right, self.w_bottom
+            )
 
         # 3. Logical cursor
         self.move_cursor(0, 0)
@@ -3816,7 +3822,7 @@ class GraphicsWindow:
         
     def plot(self, x, y, color=None):
         self._sync_buffer_from_pending_screen()
-        c = self._get_rgb_color(color) if color else self.current_color
+        c = self._get_rgb_color(color) if color is not None else self.current_color
         tx, ty = self._transform_graphic(x, y)
         self._draw_pixel(tx, ty, c)
         self.dirty_grid.mark_dirty(tx, ty, self.pen_width)
@@ -3824,7 +3830,7 @@ class GraphicsWindow:
         
     def line(self, x1, y1, x2=None, y2=None, color=None, mask_phase=0, return_mask_phase=False, skip_first_pixel=False):
         self._sync_buffer_from_pending_screen()
-        c = self._get_rgb_color(color) if color else self.current_color
+        c = self._get_rgb_color(color) if color is not None else self.current_color
         mask = self.mask
         mask_bits = [(mask >> i) & 1 for i in range(8)]
         padding = self.pen_width
@@ -4112,7 +4118,7 @@ class GraphicsWindow:
         self._sync_buffer_from_pending_screen()
 
         # Setup
-        col = self._get_rgb_color(color) if color else self.current_color
+        col = self._get_rgb_color(color) if color is not None else self.current_color
         buf, W, H = self.buffer, self.width, self.height
         mark_scan = self.dirty_grid.mark_dirty_scanline
 
@@ -4196,9 +4202,52 @@ class GraphicsWindow:
 
     def filled_rectangle(self, x1, y1, x2, y2, color=None):
         self._sync_buffer_from_pending_screen()
-        c = self._get_rgb_color(color) if color else self.current_color
+        c = self._get_rgb_color(color) if color is not None else self.current_color
         buf, W, H = self.buffer, self.width, self.height
         mark_range = self.dirty_grid.mark_dirty_range
+        c_rgb = self._get_rgb_bytes(c)
+
+        if (
+            self.origin_x == 0
+            and self.origin_y == 0
+            and self.w_left == 0
+            and self.w_top == 0
+            and self.w_right == W - 1
+            and self.w_bottom == H - 1
+            and abs(self.scale_x_min) < 1e-9
+            and abs(self.scale_y_min) < 1e-9
+            and abs(self.scale_x_max - float(W - 1)) < 1e-9
+            and abs(self.scale_y_max - float(H - 1)) < 1e-9
+            and self.scale_border == 0
+        ):
+            tx1 = int(round(float(x1)))
+            ty1 = int(round(H - float(y1) - 1))
+            tx2 = int(round(float(x2)))
+            ty2 = int(round(H - float(y2) - 1))
+            x_start, x_end = sorted((tx1, tx2))
+            y_start, y_end = sorted((ty1, ty2))
+
+            if x_start < 0:
+                x_start = 0
+            if x_end >= W:
+                x_end = W - 1
+            if y_start < 0:
+                y_start = 0
+            if y_end >= H:
+                y_end = H - 1
+            if x_start > x_end or y_start > y_end:
+                return
+
+            set_fill = self._set_buffer_fill
+            for y in range(y_start, y_end + 1):
+                row = y * W
+                set_fill(row + x_start, row + x_end + 1, c, c_rgb)
+
+            mark_range(x_start, y_start, x_end, y_end)
+            self.cursor_user_x = self._normalize_user_coord(float(x2))
+            self.cursor_user_y = self._normalize_user_coord(float(y2))
+            self.cursor_x, self.cursor_y = tx2, ty2
+            return
 
         # Screen coordinates
         tx1, ty1 = self._transform_graphic(x1, y1)
@@ -4217,7 +4266,7 @@ class GraphicsWindow:
         # Bulk copy row by row
         for y in range(y_start, y_end + 1):
             row = y * W
-            self._set_buffer_fill(row + x_start, row + x_end + 1, c)
+            self._set_buffer_fill(row + x_start, row + x_end + 1, c, c_rgb)
 
         # Global mark (optional)
         mark_range(x_start, y_start, x_end, y_end)
@@ -4276,7 +4325,7 @@ class GraphicsWindow:
 
         full_circle, start_angle, end_angle = self._resolve_arc_span(inicio, final)
 
-        c  = self._get_rgb_color(color) if color else self.current_color
+        c  = self._get_rgb_color(color) if color is not None else self.current_color
         c_rgb = self._get_rgb_bytes(c)
         c_r, c_g, c_b = c_rgb
         buf, rgb_buf, W, H = self.buffer, self._buffer_rgb, self.width, self.height
@@ -4787,10 +4836,17 @@ class DirtyGrid:
         self._row_masks = [0] * self.grid_rows
         self._row_dirty_flags = [False] * self.grid_rows
         self._dirty_rows = []
+        self._all_dirty = False
 
     @property
     def dirty_blocks(self):
         # Compatibility with older tests/debugging.
+        if self._all_dirty:
+            return {
+                (col, row)
+                for row in range(self.grid_rows)
+                for col in range(self.grid_cols)
+            }
         blocks = set()
         for row in self._dirty_rows:
             mask = self._row_masks[row]
@@ -4813,6 +4869,8 @@ class DirtyGrid:
                 self._dirty_rows.append(row)
    
     def mark_dirty_range(self, x1, y1, x2, y2):
+        if self._all_dirty:
+            return
         if x2 < x1 or y2 < y1:
             return
 
@@ -4820,6 +4878,10 @@ class DirtyGrid:
         x2 = max(0, min(x2, self.width - 1))
         y1 = max(0, min(y1, self.height - 1))
         y2 = max(0, min(y2, self.height - 1))
+
+        if x1 == 0 and y1 == 0 and x2 == self.width - 1 and y2 == self.height - 1:
+            self._all_dirty = True
+            return
 
         col_start = x1 // self.block_size
         col_end = x2 // self.block_size
@@ -4832,6 +4894,8 @@ class DirtyGrid:
             self._mark_row_mask(row, mask)
 
     def mark_dirty_scanline(self, x1, x2, y):
+        if self._all_dirty:
+            return
         if x2 < x1 or y < 0 or y >= self.height:
             return
 
@@ -4849,6 +4913,8 @@ class DirtyGrid:
         self._mark_row_mask(row, mask)
 
     def mark_dirty(self, x, y , padding=1):
+        if self._all_dirty:
+            return
         padding = padding // 2
         if padding  == 0:
             bx = x // self.block_size
@@ -4863,6 +4929,8 @@ class DirtyGrid:
             self.mark_dirty_range(x1, y1, x2, y2) 
 
     def get_dirty_regions(self):
+        if self._all_dirty:
+            return [(0, 0, self.width, self.height)]
         if not self._dirty_rows:
             return []
 
@@ -4905,6 +4973,7 @@ class DirtyGrid:
             self._row_masks[row] = 0
             self._row_dirty_flags[row] = False
         self._dirty_rows.clear()
+        self._all_dirty = False
 
 class BasicInterpreter:
     def __init__(self):
@@ -8076,9 +8145,79 @@ class BasicInterpreter:
             if cmd == 'WEND':
                 return (IR_WEND_CALL,)
 
+            if first == 'FRECTANGLE':
+                args = BasicInterpreter.split_arguments(rest)
+                if len(args) in (4, 5):
+                    prepared = self._prepare_graphics_args_fast(args)
+                    if prepared is not None:
+                        return (IR_FRECTANGLE_FAST, prepared)
+
             return None
         except Exception:
             return None
+
+    def _prepare_graphics_args_fast(self, args):
+        py_exprs = []
+        var_order = []
+        seen_vars = set()
+        for arg in args:
+            expr = arg.strip()
+            if not expr or '"' in expr or '$' in expr:
+                return None
+
+            has_alpha = BasicInterpreter._fastpath_has_alpha(expr)
+            if has_alpha and _FASTPATH_FN_RE.search(expr):
+                return None
+
+            expr_up = BasicInterpreter.uppercase_variable_references(expr)
+            expr_up = self._rewrite_functions_for_fastpath(expr_up)
+            if expr_up is None:
+                return None
+
+            py_expr, var_list = BasicInterpreter._prepare_expr_for_fastpath(expr_up)
+            py_exprs.append(py_expr)
+            for var in var_list:
+                if var not in seen_vars:
+                    seen_vars.add(var)
+                    var_order.append(var)
+
+        args_list = [BasicInterpreter._py_ident(v) for v in var_order]
+        values_expr = ", ".join(py_exprs)
+        if len(py_exprs) == 1:
+            values_expr += ","
+        lambda_src = f"lambda {', '.join(args_list)}: ({values_expr})" if args_list else f"lambda: ({values_expr})"
+        fn = eval(compile(lambda_src, "<GRAPHICS-fast>", "eval"), self._eval_base)
+        return fn, tuple(var_order)
+
+    def _evaluate_fast_numeric_args(self, prepared_args):
+        fn, var_list = prepared_args
+        try:
+            args = [self.get_simple_variable(n) for n in var_list]
+            results = fn(*args)
+            values = []
+            for result in results:
+                if result is False:
+                    result = 0
+                elif result is True:
+                    result = -1
+                values.append(self.validate_number_basic(result))
+            return values
+        except ReturnMain:
+            raise
+        except ZeroDivisionError:
+            self.handle_error(ErrorCode.DIVISION_BY_0); raise ReturnMain
+        except OverflowError:
+            self.handle_error(ErrorCode.OVERFLOW); raise ReturnMain
+        except NameError:
+            self.handle_error(ErrorCode.UNDEFINED); raise ReturnMain
+        except TypeError:
+            self.handle_error(ErrorCode.TYPE_MISMATCH); raise ReturnMain
+        except ValueError:
+            self.handle_error(ErrorCode.INVALID_VALUE); raise ReturnMain
+        except AttributeError:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT); raise ReturnMain
+        except Exception:
+            self.handle_error(ErrorCode.EVAL_ERROR); raise ReturnMain
 
     def _execute_ir(self, ir_node):
         kind = ir_node[0]
@@ -8250,6 +8389,16 @@ class BasicInterpreter:
             return
         if kind == IR_WEND_CALL:
             self.execute_wend()
+            return
+        if kind == IR_FRECTANGLE_FAST:
+            _, prepared = ir_node
+            values = self._evaluate_fast_numeric_args(prepared)
+            color = values[4] if len(values) == 5 else None
+            self.execute_FRECTANGLE(
+                float(values[0]), float(values[1]),
+                float(values[2]), float(values[3]),
+                color,
+            )
             return
 
     def handle_mouse_event(self, event_name, logical_x, logical_y, left_override=None, right_override=None):
@@ -9332,6 +9481,8 @@ class BasicInterpreter:
             elif first_word == "CLG":
                 if len(args) == 0:
                     self.execute_CLG()
+                elif len(args) == 1 and args[0].strip().upper() == "OFFSCREEN":
+                    self.execute_CLG(present=False)
                 else:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
@@ -10681,9 +10832,9 @@ class BasicInterpreter:
             fill_color = int(fill_color)
         self.graphics_window.fill(x, y, fill_color)
 
-    def execute_CLG(self):
+    def execute_CLG(self, present=True):
         self.ensure_graphics_window()
-        self.graphics_window.clg()
+        self.graphics_window.clg(present=present)
         self._reset_graph_axis_ranges()
             
     @lru_cache(maxsize=65536)

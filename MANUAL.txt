@@ -383,6 +383,7 @@ Example
 + SCREEN                     Restores state (see below)
 + SCREEN CLOSE               Closes the graphics window and restores state
 + CLG                        Clears the graphics window with the current PAPER color
++ CLG OFFSCREEN              Clears the graphics buffer with the current PAPER color; shown on the next FRAME
 + FRAME [fps]                Immediate refresh; optional FPS limiter
 
 Quick notes

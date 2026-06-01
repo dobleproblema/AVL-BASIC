@@ -758,6 +758,10 @@ fn console_normalization_completes_file_quotes_and_bas_extension() {
         console::normalize_code("10 print \"a:b\":print 2"),
         "10 PRINT \"a:b\" : PRINT 2"
     );
+    assert_eq!(
+        console::normalize_code("10 clg offscreen"),
+        "10 CLG OFFSCREEN"
+    );
     assert_eq!(console::normalize_code("10 print 1:"), "10 PRINT 1 :");
 }
 
@@ -777,12 +781,31 @@ fn console_highlight_matches_python_keyword_boundaries() {
     assert!(highlighted.contains("\x1b[38;5;214m-5\x1b[0m"));
     assert!(highlighted.contains("\x1b[38;5;214m+0.25\x1b[0m"));
 
+    let highlighted = console::syntax_highlight("40 CLG OFFSCREEN : PRINT OFFSCREEN", true);
+    assert_eq!(
+        highlighted
+            .matches("\x1b[1m\x1b[3m\x1b[97mOFFSCREEN\x1b[0m")
+            .count(),
+        2
+    );
+    assert!(!highlighted.contains("\x1b[1m\x1b[38;5;39mOFFSCREEN\x1b[0m"));
+
     let mut cases = HashMap::new();
     cases.insert("PERITA".to_string(), "perIta".to_string());
     assert_eq!(
         console::syntax_highlight_with_cases("40 REM PERITA", false, Some(&cases)),
         "40 REM PERITA"
     );
+}
+
+#[test]
+fn offscreen_is_reserved_identifier_in_rust() {
+    let mut interp = Interpreter::new();
+    let err = interp.process_immediate("OFFSCREEN=1").unwrap_err();
+    assert_eq!(err.code, ErrorCode::Undefined);
+
+    let err = interp.process_immediate("PRINT OFFSCREEN").unwrap_err();
+    assert_eq!(err.code, ErrorCode::Undefined);
 }
 
 #[test]
@@ -1202,6 +1225,17 @@ fn graphics_screen_string_baseline() {
 80 END"##,
     );
     assert_eq!(output, "640x48\n 16711680\n");
+}
+
+#[test]
+fn clg_offscreen_clears_graphics_buffer_without_explicit_frame() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640 : PAPER 7 : CLG
+20 PAPER 0 : CLG OFFSCREEN
+30 PRINT TEST(0,0)
+40 END"#,
+    );
+    assert_eq!(output, " 0\n");
 }
 
 #[test]

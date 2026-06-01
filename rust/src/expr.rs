@@ -1689,7 +1689,7 @@ fn is_builtin_function(name: &str) -> bool {
 
 fn is_reserved_bare_value_word(name: &str) -> bool {
     let base_name = name.strip_suffix('$').unwrap_or(name);
-    matches!(base_name, "ROW" | "COL" | "BASE")
+    matches!(base_name, "ROW" | "COL" | "BASE" | "OFFSCREEN")
 }
 
 fn classify_array_or_call(name: &str) -> ArrayOrCallKind {

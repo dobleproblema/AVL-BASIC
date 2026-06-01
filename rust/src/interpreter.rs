@@ -2040,6 +2040,10 @@ impl Interpreter {
             }
             "CLG" => {
                 self.ensure_graphics_window()?;
+                let mode = command[3..].trim();
+                if !mode.is_empty() && !mode.eq_ignore_ascii_case("OFFSCREEN") {
+                    return Err(self.err(ErrorCode::ArgumentMismatch));
+                }
                 self.graphics.clg();
                 self.refresh_graphics_window()
             }
@@ -9479,7 +9483,7 @@ fn is_basic_identifier(name: &str) -> bool {
 fn is_reserved_identifier_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     let base_name = upper.strip_suffix('$').unwrap_or(&upper);
-    matches!(base_name, "ROW" | "COL" | "BASE")
+    matches!(base_name, "ROW" | "COL" | "BASE" | "OFFSCREEN")
 }
 
 fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> String {
