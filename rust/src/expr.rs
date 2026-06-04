@@ -1,5 +1,6 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::lexer::{Lexer, Token};
+use crate::reserved::is_reserved_identifier_name;
 use crate::using_format::format_using;
 use crate::value::{logical_round, round_half_away, Value};
 
@@ -692,9 +693,6 @@ impl Parser {
     }
 
     fn parse_ident_value(&mut self, name: String) -> BasicResult<Expr> {
-        if is_reserved_bare_value_word(&name) {
-            return Err(BasicError::new(ErrorCode::Undefined));
-        }
         let mut expr = if self.consume_lparen() {
             let mut args = Vec::new();
             if !matches!(self.peek(), Token::RParen) {
@@ -708,8 +706,18 @@ impl Parser {
             }
             self.expect_rparen()?;
             let kind = classify_array_or_call(&name);
+            if kind == ArrayOrCallKind::Array && is_reserved_identifier_name(&name) {
+                return Err(BasicError::new(ErrorCode::Undefined));
+            }
             Expr::ArrayOrCall { name, args, kind }
         } else {
+            if is_reserved_identifier_name(&name)
+                && !is_zero_arg_function(&name)
+                && !is_numeric_constant(&name)
+                && !name.starts_with("FN")
+            {
+                return Err(BasicError::new(ErrorCode::Undefined));
+            }
             Expr::Var(name)
         };
         while self.consume_lbracket() {
@@ -722,6 +730,10 @@ impl Parser {
         }
         Ok(expr)
     }
+}
+
+fn is_numeric_constant(name: &str) -> bool {
+    name == "INF"
 }
 
 fn add_values(left: Value, right: Value) -> BasicResult<Value> {
@@ -1685,11 +1697,6 @@ fn is_builtin_function(name: &str) -> bool {
             | "SPC"
             | "TAB"
     )
-}
-
-fn is_reserved_bare_value_word(name: &str) -> bool {
-    let base_name = name.strip_suffix('$').unwrap_or(name);
-    matches!(base_name, "ROW" | "COL" | "BASE" | "OFFSCREEN")
 }
 
 fn classify_array_or_call(name: &str) -> ArrayOrCallKind {

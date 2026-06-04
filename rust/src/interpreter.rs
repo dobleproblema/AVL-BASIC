@@ -8,6 +8,7 @@ use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
+use crate::reserved::is_reserved_identifier_name;
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
@@ -4255,11 +4256,12 @@ impl Interpreter {
             let open = spec.find('(').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let close = spec.rfind(')').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let raw_name = spec[..open].trim();
-            if is_basic_identifier(raw_name) {
-                self.identifier_case
-                    .entry(raw_name.to_ascii_uppercase())
-                    .or_insert_with(|| raw_name.to_string());
+            if !is_basic_identifier(raw_name) {
+                return Err(self.err(ErrorCode::InvalidArgument));
             }
+            self.identifier_case
+                .entry(raw_name.to_ascii_uppercase())
+                .or_insert_with(|| raw_name.to_string());
             let name = raw_name.to_ascii_uppercase();
             let dims = split_arguments(&spec[open + 1..close])
                 .into_iter()
@@ -4288,11 +4290,12 @@ impl Interpreter {
             let open = spec.find('(').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let close = spec.rfind(')').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let raw_name = spec[..open].trim();
-            if is_basic_identifier(raw_name) {
-                self.identifier_case
-                    .entry(raw_name.to_ascii_uppercase())
-                    .or_insert_with(|| raw_name.to_string());
+            if !is_basic_identifier(raw_name) {
+                return Err(self.err(ErrorCode::InvalidArgument));
             }
+            self.identifier_case
+                .entry(raw_name.to_ascii_uppercase())
+                .or_insert_with(|| raw_name.to_string());
             let name = raw_name.to_ascii_uppercase();
             if !self.arrays.contains_key(&name) {
                 return Err(self.err(ErrorCode::Undefined));
@@ -8930,6 +8933,34 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn python_reserved_words_are_rejected_as_assignment_names() {
+        for source in [
+            "SUB=6",
+            "LET SUB=6",
+            "DIM SUB(2)",
+            "SIN=1",
+            "TIME=1",
+            r#"LEFT$="x""#,
+            "BASE=1",
+            "ROW=1",
+            "COL=1",
+            "OFFSCREEN=1",
+            "TQUAD=1",
+            "AND=1",
+            "INF=1",
+        ] {
+            let mut interp = Interpreter::new();
+            assert!(interp.process_immediate(source).is_err(), "{source}");
+        }
+
+        let mut interp = Interpreter::new();
+        interp.process_immediate("A=1").unwrap();
+        interp.process_immediate("A1=2").unwrap();
+        interp.process_immediate("PRINT TIME").unwrap();
+        interp.process_immediate("PRINT SIN(0)").unwrap();
+    }
+
+    #[test]
     fn closing_graphics_window_interrupts_run_after_graphics_use() {
         let mut interp = Interpreter::new();
         interp.current_line = Some(20);
@@ -9753,6 +9784,10 @@ fn is_basic_identifier(name: &str) -> bool {
     if is_reserved_identifier_name(name) {
         return false;
     }
+    is_basic_identifier_shape(name)
+}
+
+fn is_basic_identifier_shape(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -9761,12 +9796,6 @@ fn is_basic_identifier(name: &str) -> bool {
         return false;
     }
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
-}
-
-fn is_reserved_identifier_name(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    let base_name = upper.strip_suffix('$').unwrap_or(&upper);
-    matches!(base_name, "ROW" | "COL" | "BASE" | "OFFSCREEN")
 }
 
 fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> String {
@@ -10351,7 +10380,7 @@ fn looks_like_non_fn_function_call(source: &str) -> bool {
         return false;
     }
     let name = trimmed[..open].trim();
-    is_basic_identifier(name)
+    is_basic_identifier_shape(name)
         && !name.eq_ignore_ascii_case("TRN")
         && !name.eq_ignore_ascii_case("INV")
         && !name.to_ascii_uppercase().starts_with("FN")
