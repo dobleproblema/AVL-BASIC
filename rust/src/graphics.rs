@@ -62,6 +62,42 @@ struct SpriteMemory {
     pixels: Vec<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Texture {
+    width: usize,
+    height: usize,
+    pixels: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TexturedVertex {
+    x: i32,
+    y: i32,
+    u: f64,
+    v: f64,
+}
+
+impl Texture {
+    pub fn from_gscr(screen: &str) -> BasicResult<Self> {
+        let (width, height, pixels) = parse_gscr(screen)?;
+        if width == 0 || height == 0 {
+            return Err(BasicError::new(ErrorCode::InvalidValue));
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    fn sample_wrapped(&self, u: f64, v: f64) -> u32 {
+        let col = u.floor().rem_euclid(self.width as f64) as usize;
+        let logical_row = v.floor().rem_euclid(self.height as f64) as usize;
+        let row = self.height - 1 - logical_row;
+        self.pixels[row * self.width + col]
+    }
+}
+
 impl Default for Graphics {
     fn default() -> Self {
         Self::new(640)
@@ -622,6 +658,104 @@ impl Graphics {
         self.cursor_y = self.canvas_y_to_logical(p2.1);
         self.cursor_user_x = x2;
         self.cursor_user_y = y2;
+    }
+
+    pub fn textured_rect(
+        &mut self,
+        texture: &Texture,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        uv: Option<(f64, f64, f64, f64)>,
+    ) -> BasicResult<()> {
+        let (u0, v0, u1, v1) =
+            uv.unwrap_or((0.0, 0.0, texture.width as f64, texture.height as f64));
+        self.textured_quad(
+            texture, x0, y0, u0, v0, x1, y0, u1, v0, x1, y1, u1, v1, x0, y1, u0, v1,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn textured_quad(
+        &mut self,
+        texture: &Texture,
+        x0: f64,
+        y0: f64,
+        u0: f64,
+        v0: f64,
+        x1: f64,
+        y1: f64,
+        u1: f64,
+        v1: f64,
+        x2: f64,
+        y2: f64,
+        u2: f64,
+        v2: f64,
+        x3: f64,
+        y3: f64,
+        u3: f64,
+        v3: f64,
+    ) -> BasicResult<()> {
+        self.textured_triangle(texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2)?;
+        self.textured_triangle(texture, x0, y0, u0, v0, x2, y2, u2, v2, x3, y3, u3, v3)?;
+        self.cursor_user_x = x3;
+        self.cursor_user_y = y3;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn textured_triangle(
+        &mut self,
+        texture: &Texture,
+        x0: f64,
+        y0: f64,
+        u0: f64,
+        v0: f64,
+        x1: f64,
+        y1: f64,
+        u1: f64,
+        v1: f64,
+        x2: f64,
+        y2: f64,
+        u2: f64,
+        v2: f64,
+    ) -> BasicResult<()> {
+        if [x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2]
+            .iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        let p0 = self.user_to_canvas(x0, y0);
+        let p1 = self.user_to_canvas(x1, y1);
+        let p2 = self.user_to_canvas(x2, y2);
+        let vertices = [
+            TexturedVertex {
+                x: p0.0,
+                y: p0.1,
+                u: u0,
+                v: v0,
+            },
+            TexturedVertex {
+                x: p1.0,
+                y: p1.1,
+                u: u1,
+                v: v1,
+            },
+            TexturedVertex {
+                x: p2.0,
+                y: p2.1,
+                u: u2,
+                v: v2,
+            },
+        ];
+        self.textured_triangle_canvas(texture, vertices);
+        self.cursor_x = p2.0;
+        self.cursor_y = self.canvas_y_to_logical(p2.1);
+        self.cursor_user_x = x2;
+        self.cursor_user_y = y2;
+        Ok(())
     }
 
     pub fn circle(
@@ -1556,6 +1690,69 @@ impl Graphics {
         self.buffer[start..end].fill(color);
     }
 
+    fn textured_triangle_canvas(&mut self, texture: &Texture, v: [TexturedVertex; 3]) {
+        let area = edge_function(v[0], v[1], v[2].x as f64, v[2].y as f64);
+        if area.abs() < f64::EPSILON {
+            return;
+        }
+        let left = v
+            .iter()
+            .map(|vertex| vertex.x)
+            .min()
+            .unwrap()
+            .max(0)
+            .max(self.w_left);
+        let right = v
+            .iter()
+            .map(|vertex| vertex.x)
+            .max()
+            .unwrap()
+            .min(self.width as i32 - 1)
+            .min(self.w_right);
+        let top = v
+            .iter()
+            .map(|vertex| vertex.y)
+            .min()
+            .unwrap()
+            .max(0)
+            .max(self.w_top);
+        let bottom = v
+            .iter()
+            .map(|vertex| vertex.y)
+            .max()
+            .unwrap()
+            .min(self.height as i32 - 1)
+            .min(self.w_bottom);
+        if left > right || top > bottom {
+            return;
+        }
+        let positive = area > 0.0;
+        for y in top..=bottom {
+            let py = y as f64 + 0.5;
+            let row = y as usize * self.width;
+            for x in left..=right {
+                let px = x as f64 + 0.5;
+                let w0 = edge_function(v[1], v[2], px, py);
+                let w1 = edge_function(v[2], v[0], px, py);
+                let w2 = edge_function(v[0], v[1], px, py);
+                let inside = if positive {
+                    w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+                } else {
+                    w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
+                };
+                if !inside {
+                    continue;
+                }
+                let l0 = w0 / area;
+                let l1 = w1 / area;
+                let l2 = w2 / area;
+                let u = v[0].u * l0 + v[1].u * l1 + v[2].u * l2;
+                let tv = v[0].v * l0 + v[1].v * l1 + v[2].v * l2;
+                self.buffer[row + x as usize] = texture.sample_wrapped(u, tv);
+            }
+        }
+    }
+
     fn fill_canvas_rect(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
         let left = x1.min(x2);
         let right = x1.max(x2);
@@ -1820,6 +2017,10 @@ fn floor_div_i64(numerator: i64, denominator: i64) -> i64 {
     numerator.div_euclid(denominator)
 }
 
+fn edge_function(a: TexturedVertex, b: TexturedVertex, x: f64, y: f64) -> f64 {
+    (x - a.x as f64) * (b.y - a.y) as f64 - (y - a.y as f64) * (b.x - a.x) as f64
+}
+
 pub fn resolve_color_number(color: i32) -> u32 {
     const COLORS: [u32; 32] = [
         0x000000, 0xffffff, 0xff0000, 0x008000, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xff8c00,
@@ -1971,7 +2172,7 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_color_number, Graphics};
+    use super::{resolve_color_number, Graphics, Texture};
 
     #[test]
     fn fill_colors_enclosed_area_without_crossing_border() {
@@ -1988,5 +2189,20 @@ mod tests {
             Some(resolve_color_number(2))
         );
         assert_eq!(graphics.get_canvas_pixel(9, 464), Some(0));
+    }
+
+    #[test]
+    fn textured_rect_maps_full_texture_with_bottom_origin() {
+        let texture = Texture::from_gscr("2x2:ff000000ff000000ffffffff").unwrap();
+        let mut graphics = Graphics::new(640);
+
+        graphics
+            .textured_rect(&texture, 10.0, 10.0, 30.0, 30.0, None)
+            .unwrap();
+
+        assert_eq!(graphics.test(15.0, 15.0), 0x0000ff);
+        assert_eq!(graphics.test(25.0, 15.0), 0xffffff);
+        assert_eq!(graphics.test(15.0, 25.0), 0xff0000);
+        assert_eq!(graphics.test(25.0, 25.0), 0x00ff00);
     }
 }

@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.41"
+__version__ = "1.5.42"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -586,7 +586,7 @@ RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', '
                   'PAPER', 'SCREEN', 'CLG', 'OFFSCREEN', 'LDIR', 'MASK', 'DEG', 'RAD', 'FRAME',
                   'ORIGIN', 'SCALE', 'PENWIDTH', 'BIGFONT', 'SMALLFONT', 'LOCATE', 'DISP',
                   'GDISP', 'XAXIS', 'YAXIS', 'CROSSAT', 'GRAPH', 'GRAPHRANGE', 'PAUSE', 'FCIRCLE', 'FCIRCLER',
-                  'FRECTANGLE', 'FTRIANGLE',
+                  'FRECTANGLE', 'FTRIANGLE', 'TRECTANGLE', 'TTRIANGLE', 'TQUAD',
                   'BSAVE', 'BLOAD', 'MODE', 'CHAIN', 'MERGE',
                   'AFTER', 'EVERY', 'DI', 'EI', 'CANCEL', 'SPRITE', 'COLMODE', 'COLCOLOR', 'COLRESET', 'MOUSE', 'MOVE',
                   'LEFTDOWN', 'LEFTUP', 'LEFTDRAG', 'RIGHTDOWN', 'RIGHTUP', 'RIGHTDRAG', 'HITTEST',
@@ -4199,6 +4199,103 @@ class GraphicsWindow:
             fill_flat_top   (x1, y1, x3, y1, x2, y2)
 
         self.move_cursor(x2, y2)
+
+    @staticmethod
+    def _texture_sample(rows, width, height, u, v):
+        col = int(math.floor(u)) % width
+        logical_row = int(math.floor(v)) % height
+        row = height - 1 - logical_row
+        return rows[row][col]
+
+    @staticmethod
+    def _tex_edge(a, b, x, y):
+        return (x - a[0]) * (b[1] - a[1]) - (y - a[1]) * (b[0] - a[0])
+
+    def textured_triangle(self, texture_str, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2):
+        self._sync_buffer_from_pending_screen()
+        width, height, rows = self._decode_sprite(texture_str)
+        if width <= 0 or height <= 0:
+            raise ValueError
+
+        values = (x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2)
+        if any(not math.isfinite(float(value)) for value in values):
+            raise ValueError
+
+        tx0, ty0 = self._transform_graphic(x0, y0)
+        tx1, ty1 = self._transform_graphic(x1, y1)
+        tx2, ty2 = self._transform_graphic(x2, y2)
+        verts = (
+            (tx0, ty0, float(u0), float(v0)),
+            (tx1, ty1, float(u1), float(v1)),
+            (tx2, ty2, float(u2), float(v2)),
+        )
+        area = self._tex_edge(verts[0], verts[1], verts[2][0], verts[2][1])
+        if abs(area) < 1e-12:
+            self.move_cursor(x2, y2)
+            return
+
+        x_start = max(max(0, self.w_left), min(tx0, tx1, tx2))
+        x_end = min(min(self.width - 1, self.w_right), max(tx0, tx1, tx2))
+        y_start = max(max(0, self.w_top), min(ty0, ty1, ty2))
+        y_end = min(min(self.height - 1, self.w_bottom), max(ty0, ty1, ty2))
+        if x_start > x_end or y_start > y_end:
+            self.move_cursor(x2, y2)
+            return
+
+        positive = area > 0
+        W = self.width
+        set_pixel = self._set_buffer_pixel
+        sample = self._texture_sample
+        mark_scan = self.dirty_grid.mark_dirty_scanline
+        for y in range(y_start, y_end + 1):
+            py = y + 0.5
+            row = y * W
+            dirty_left = None
+            dirty_right = None
+            for x in range(x_start, x_end + 1):
+                px = x + 0.5
+                w0 = self._tex_edge(verts[1], verts[2], px, py)
+                w1 = self._tex_edge(verts[2], verts[0], px, py)
+                w2 = self._tex_edge(verts[0], verts[1], px, py)
+                inside = (w0 >= 0 and w1 >= 0 and w2 >= 0) if positive else (w0 <= 0 and w1 <= 0 and w2 <= 0)
+                if not inside:
+                    continue
+                l0 = w0 / area
+                l1 = w1 / area
+                l2 = w2 / area
+                u = verts[0][2] * l0 + verts[1][2] * l1 + verts[2][2] * l2
+                tv = verts[0][3] * l0 + verts[1][3] * l1 + verts[2][3] * l2
+                color = sample(rows, width, height, u, tv)
+                set_pixel(row + x, color)
+                if dirty_left is None:
+                    dirty_left = dirty_right = x
+                else:
+                    dirty_right = x
+            if dirty_left is not None:
+                mark_scan(dirty_left, dirty_right, y)
+
+        self.move_cursor(x2, y2)
+
+    def textured_quad(self, texture_str, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, x3, y3, u3, v3):
+        self.textured_triangle(texture_str, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2)
+        self.textured_triangle(texture_str, x0, y0, u0, v0, x2, y2, u2, v2, x3, y3, u3, v3)
+        self.move_cursor(x3, y3)
+
+    def textured_rectangle(self, texture_str, x0, y0, x1, y1, uv=None):
+        width, height, _ = self._decode_sprite(texture_str)
+        if width <= 0 or height <= 0:
+            raise ValueError
+        if uv is None:
+            u0, v0, u1, v1 = 0, 0, width, height
+        else:
+            u0, v0, u1, v1 = uv
+        self.textured_quad(
+            texture_str,
+            x0, y0, u0, v0,
+            x1, y0, u1, v0,
+            x1, y1, u1, v1,
+            x0, y1, u0, v1,
+        )
 
     def filled_rectangle(self, x1, y1, x2, y2, color=None):
         self._sync_buffer_from_pending_screen()
@@ -9733,6 +9830,25 @@ class BasicInterpreter:
                 else:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
+            elif first_word == "TRECTANGLE":
+                if len(args) in (5, 9):
+                    texture = self.evaluate_expression(args[0])
+                    x0 = float(self.evaluate_expression(args[1]))
+                    y0 = float(self.evaluate_expression(args[2]))
+                    x1 = float(self.evaluate_expression(args[3]))
+                    y1 = float(self.evaluate_expression(args[4]))
+                    uv = None
+                    if len(args) == 9:
+                        uv = (
+                            float(self.evaluate_expression(args[5])),
+                            float(self.evaluate_expression(args[6])),
+                            float(self.evaluate_expression(args[7])),
+                            float(self.evaluate_expression(args[8])),
+                        )
+                    self.execute_TRECTANGLE(texture, x0, y0, x1, y1, uv)
+                else:
+                    self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+                    raise ReturnMain
             elif first_word == "RECTANGLE":
                 if len(args) in (4, 5):
                     x0 = float(self.evaluate_expression(args[0]))
@@ -9767,6 +9883,22 @@ class BasicInterpreter:
                     y2 = float(self.evaluate_expression(args[5]))
                     color = self.evaluate_expression(args[6]) if len(args) == 7 else None
                     self.execute_TRIANGLE(x0, y0, x1, y1, x2, y2, color)
+                else:
+                    self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+                    raise ReturnMain
+            elif first_word == "TTRIANGLE":
+                if len(args) == 13:
+                    texture = self.evaluate_expression(args[0])
+                    values = [float(self.evaluate_expression(arg)) for arg in args[1:]]
+                    self.execute_TTRIANGLE(texture, *values)
+                else:
+                    self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+                    raise ReturnMain
+            elif first_word == "TQUAD":
+                if len(args) == 17:
+                    texture = self.evaluate_expression(args[0])
+                    values = [float(self.evaluate_expression(arg)) for arg in args[1:]]
+                    self.execute_TQUAD(texture, *values)
                 else:
                     self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
                     raise ReturnMain
@@ -10797,6 +10929,45 @@ class BasicInterpreter:
         if color is not None and isinstance(color, (int, float)):
             color = int(color)
         self.graphics_window.triangle(x0, y0, x1, y1, x2, y2, color)
+
+    def execute_TRECTANGLE(self, texture, x0, y0, x1, y1, uv=None):
+        self.ensure_graphics_window()
+        try:
+            self.graphics_window.textured_rectangle(texture, x0, y0, x1, y1, uv)
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+
+    def execute_TTRIANGLE(self, texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2):
+        self.ensure_graphics_window()
+        try:
+            self.graphics_window.textured_triangle(
+                texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2
+            )
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+
+    def execute_TQUAD(
+        self,
+        texture,
+        x0, y0, u0, v0,
+        x1, y1, u1, v1,
+        x2, y2, u2, v2,
+        x3, y3, u3, v3,
+    ):
+        self.ensure_graphics_window()
+        try:
+            self.graphics_window.textured_quad(
+                texture,
+                x0, y0, u0, v0,
+                x1, y1, u1, v1,
+                x2, y2, u2, v2,
+                x3, y3, u3, v3,
+            )
+        except (TypeError, ValueError):
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
 
     def execute_FCIRCLE(self, x, y, r, color=None, i=None, f=None, aspct=1.0):
         self.ensure_graphics_window()

@@ -8352,6 +8352,41 @@ def test_filled_shapes_commands():
     assert gw.buffer[gw._index(sx, sy)] != gw.background_color
 
 
+def test_textured_rectangle_maps_full_sprite_with_bottom_origin():
+    interpreter = BasicInterpreter()
+    gw = ScaleCursorTestWindow(width=80, height=80)
+    interpreter.graphics_window = gw
+    interpreter.ensure_graphics_window = lambda: None
+    interpreter.variables["T$"] = "2x2:ff000000ff000000ffffffff"
+
+    interpreter.execute_command("TRECTANGLE T$,10,10,30,30")
+
+    samples = {
+        (15, 15): "#0000ff",
+        (25, 15): "#ffffff",
+        (15, 25): "#ff0000",
+        (25, 25): "#00ff00",
+    }
+    for (x, y), expected in samples.items():
+        sx, sy = gw._transform_graphic(x, y)
+        assert gw.buffer[gw._index(sx, sy)] == GraphicsWindow._resolve_color(expected)
+
+
+def test_textured_quad_wraps_texture_coordinates():
+    interpreter = BasicInterpreter()
+    gw = ScaleCursorTestWindow(width=80, height=80)
+    interpreter.graphics_window = gw
+    interpreter.ensure_graphics_window = lambda: None
+    interpreter.variables["T$"] = "2x2:ff000000ff000000ffffffff"
+
+    interpreter.execute_command(
+        "TQUAD T$,10,10,2,2,30,10,4,2,30,30,4,4,10,30,2,4"
+    )
+
+    sx, sy = gw._transform_graphic(15, 15)
+    assert gw.buffer[gw._index(sx, sy)] == GraphicsWindow._resolve_color("#0000ff")
+
+
 def test_explicit_zero_color_draws_black_in_graphics_commands():
     interpreter = BasicInterpreter()
     gw = ScaleCursorTestWindow(width=80, height=80, fill="#777777")

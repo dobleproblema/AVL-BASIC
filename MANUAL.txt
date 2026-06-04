@@ -465,6 +465,12 @@ Quick notes (plotting)
 + FRECTANGLE x0,y0,x1,y1[,c]        Filled rectangle
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triangle (outline)
 + FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Filled triangle
++ TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
+                                      Textured filled rectangle
++ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
+                                      Textured filled triangle
++ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3
+                                      Textured filled quadrilateral
 + FILL [x,y[,c]]                    Flood-fill; without coordinates it fills from the current position
 
 Quick notes (figures)
@@ -473,6 +479,10 @@ Quick notes (figures)
 - `asp` controls the aspect ratio of the circle (Y/X).
 - Radius `r` is in user units (if `SCALE` is active, it adapts automatically).
 - `RECTANGLE/TRIANGLE` and their relative versions respect `MASK` and `PENWIDTH` just like `DRAW`.
+- `TRECTANGLE/TTRIANGLE/TQUAD` use a `gscr$` texture, typically loaded with `BLOAD "img.png",T$` or captured with `SPRITE$`.
+- Texture coordinates wrap automatically. `u=0,v=0` is the lower-left texel; `u=width,v=height` reaches one complete tile.
+- If `TRECTANGLE` omits UV coordinates, it maps exactly one full texture tile over the rectangle.
+- `TTRIANGLE/TQUAD` use affine texture mapping. They are ideal for fast 2D effects and mesh-based approximations, not perspective-correct 3D.
 
 6.4 Colors
 

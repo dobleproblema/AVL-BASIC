@@ -5,7 +5,7 @@ use crate::expr::{
     is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp, EvalContext, Expr,
 };
 use crate::fonts::FontKind;
-use crate::graphics::{rgb_number, Graphics};
+use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::using_format::{format_using, valid_using_format};
@@ -504,6 +504,11 @@ struct CompiledFastRect {
 }
 
 #[derive(Debug, Clone)]
+struct CachedTexture {
+    texture: Rc<Texture>,
+}
+
+#[derive(Debug, Clone)]
 enum FastNumberExpr {
     Number(f64),
     Var(String),
@@ -547,6 +552,60 @@ struct CompiledTriangle {
 }
 
 #[derive(Debug, Clone)]
+struct CompiledTextureSource {
+    expr: Expr,
+    var_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledTexturedRect {
+    texture: CompiledTextureSource,
+    x0: Expr,
+    y0: Expr,
+    x1: Expr,
+    y1: Expr,
+    uv: Option<(Expr, Expr, Expr, Expr)>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledTexturedTriangle {
+    texture: CompiledTextureSource,
+    x0: Expr,
+    y0: Expr,
+    u0: Expr,
+    v0: Expr,
+    x1: Expr,
+    y1: Expr,
+    u1: Expr,
+    v1: Expr,
+    x2: Expr,
+    y2: Expr,
+    u2: Expr,
+    v2: Expr,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledTexturedQuad {
+    texture: CompiledTextureSource,
+    x0: Expr,
+    y0: Expr,
+    u0: Expr,
+    v0: Expr,
+    x1: Expr,
+    y1: Expr,
+    u1: Expr,
+    v1: Expr,
+    x2: Expr,
+    y2: Expr,
+    u2: Expr,
+    v2: Expr,
+    x3: Expr,
+    y3: Expr,
+    u3: Expr,
+    v3: Expr,
+}
+
+#[derive(Debug, Clone)]
 enum CompiledLValue {
     Scalar {
         name: String,
@@ -576,6 +635,9 @@ enum CachedCommand {
     },
     Rect(Rc<CompiledRect>),
     Triangle(Rc<CompiledTriangle>),
+    TexturedRect(Rc<CompiledTexturedRect>),
+    TexturedTriangle(Rc<CompiledTexturedTriangle>),
+    TexturedQuad(Rc<CompiledTexturedQuad>),
     If {
         condition: Rc<Expr>,
         then_branch: CachedIfBranch,
@@ -720,6 +782,7 @@ pub struct Interpreter {
     pub program_dir: Option<PathBuf>,
     numeric_variables: FastHashMap<String, f64>,
     string_variables: FastHashMap<String, String>,
+    texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
     arrays: FastHashMap<String, ArrayValue>,
     data: Vec<Value>,
@@ -811,6 +874,7 @@ impl Interpreter {
             program_dir: None,
             numeric_variables: FastHashMap::default(),
             string_variables: FastHashMap::default(),
+            texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
             arrays: FastHashMap::default(),
             data: Vec::new(),
@@ -1594,6 +1658,7 @@ impl Interpreter {
     fn prepare_run(&mut self) {
         self.numeric_variables.clear();
         self.string_variables.clear();
+        self.texture_cache.clear();
         self.arrays.clear();
         self.data_pointer = 0;
         self.for_stack.clear();
@@ -1969,6 +2034,7 @@ impl Interpreter {
             "CLEAR" => {
                 self.numeric_variables.clear();
                 self.string_variables.clear();
+                self.texture_cache.clear();
                 self.arrays.clear();
                 self.for_stack.clear();
                 self.while_stack.clear();
@@ -2068,8 +2134,11 @@ impl Interpreter {
             "DRAWR" => self.execute_draw(command[5..].trim(), true),
             "RECTANGLE" => self.execute_rect(command[9..].trim(), false),
             "FRECTANGLE" => self.execute_rect(command[10..].trim(), true),
+            "TRECTANGLE" => self.execute_textured_rect(command[10..].trim()),
             "TRIANGLE" => self.execute_triangle(command[8..].trim(), false),
             "FTRIANGLE" => self.execute_triangle(command[9..].trim(), true),
+            "TTRIANGLE" => self.execute_textured_triangle(command[9..].trim()),
+            "TQUAD" => self.execute_textured_quad(command[5..].trim()),
             "CIRCLE" => self.execute_circle(command[6..].trim(), false),
             "CIRCLER" => self.execute_circle_relative(command[7..].trim(), false),
             "FCIRCLE" => self.execute_circle(command[7..].trim(), true),
@@ -2205,6 +2274,15 @@ impl Interpreter {
             }
             CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
             CachedCommand::Triangle(compiled) => self.execute_compiled_triangle(compiled.as_ref()),
+            CachedCommand::TexturedRect(compiled) => {
+                self.execute_compiled_textured_rect(compiled.as_ref())
+            }
+            CachedCommand::TexturedTriangle(compiled) => {
+                self.execute_compiled_textured_triangle(compiled.as_ref())
+            }
+            CachedCommand::TexturedQuad(compiled) => {
+                self.execute_compiled_textured_quad(compiled.as_ref())
+            }
             CachedCommand::If {
                 condition,
                 then_branch,
@@ -2554,6 +2632,10 @@ impl Interpreter {
         }
     }
 
+    fn invalidate_texture_cache_for(&mut self, name: &str) {
+        self.texture_cache.remove(name);
+    }
+
     fn execute_compiled_mid_assignment(
         &mut self,
         compiled: &CompiledMidAssignment,
@@ -2764,6 +2846,154 @@ impl Interpreter {
         }
     }
 
+    fn execute_compiled_textured_rect(
+        &mut self,
+        compiled: &CompiledTexturedRect,
+    ) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
+        let texture = self.eval_compiled_texture(&compiled.texture)?;
+        let x0 = self.eval_texture_number(&compiled.x0)?;
+        let y0 = self.eval_texture_number(&compiled.y0)?;
+        let x1 = self.eval_texture_number(&compiled.x1)?;
+        let y1 = self.eval_texture_number(&compiled.y1)?;
+        let uv = compiled
+            .uv
+            .as_ref()
+            .map(|(u0, v0, u1, v1)| {
+                Ok((
+                    self.eval_texture_number(u0)?,
+                    self.eval_texture_number(v0)?,
+                    self.eval_texture_number(u1)?,
+                    self.eval_texture_number(v1)?,
+                ))
+            })
+            .transpose()?;
+        self.graphics.textured_rect(&texture, x0, y0, x1, y1, uv)?;
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_textured_triangle(
+        &mut self,
+        compiled: &CompiledTexturedTriangle,
+    ) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
+        let texture = self.eval_compiled_texture(&compiled.texture)?;
+        let x0 = self.eval_texture_number(&compiled.x0)?;
+        let y0 = self.eval_texture_number(&compiled.y0)?;
+        let u0 = self.eval_texture_number(&compiled.u0)?;
+        let v0 = self.eval_texture_number(&compiled.v0)?;
+        let x1 = self.eval_texture_number(&compiled.x1)?;
+        let y1 = self.eval_texture_number(&compiled.y1)?;
+        let u1 = self.eval_texture_number(&compiled.u1)?;
+        let v1 = self.eval_texture_number(&compiled.v1)?;
+        let x2 = self.eval_texture_number(&compiled.x2)?;
+        let y2 = self.eval_texture_number(&compiled.y2)?;
+        let u2 = self.eval_texture_number(&compiled.u2)?;
+        let v2 = self.eval_texture_number(&compiled.v2)?;
+        self.graphics
+            .textured_triangle(&texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2)?;
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_textured_quad(
+        &mut self,
+        compiled: &CompiledTexturedQuad,
+    ) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked {
+            self.ensure_graphics_window()?;
+        }
+        let texture = self.eval_compiled_texture(&compiled.texture)?;
+        let x0 = self.eval_texture_number(&compiled.x0)?;
+        let y0 = self.eval_texture_number(&compiled.y0)?;
+        let u0 = self.eval_texture_number(&compiled.u0)?;
+        let v0 = self.eval_texture_number(&compiled.v0)?;
+        let x1 = self.eval_texture_number(&compiled.x1)?;
+        let y1 = self.eval_texture_number(&compiled.y1)?;
+        let u1 = self.eval_texture_number(&compiled.u1)?;
+        let v1 = self.eval_texture_number(&compiled.v1)?;
+        let x2 = self.eval_texture_number(&compiled.x2)?;
+        let y2 = self.eval_texture_number(&compiled.y2)?;
+        let u2 = self.eval_texture_number(&compiled.u2)?;
+        let v2 = self.eval_texture_number(&compiled.v2)?;
+        let x3 = self.eval_texture_number(&compiled.x3)?;
+        let y3 = self.eval_texture_number(&compiled.y3)?;
+        let u3 = self.eval_texture_number(&compiled.u3)?;
+        let v3 = self.eval_texture_number(&compiled.v3)?;
+        self.graphics.textured_quad(
+            &texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, x3, y3, u3, v3,
+        )?;
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn eval_texture_number(&mut self, expr: &Expr) -> BasicResult<f64> {
+        eval_compiled_number(self, expr).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })
+    }
+
+    fn eval_compiled_texture(
+        &mut self,
+        source: &CompiledTextureSource,
+    ) -> BasicResult<Rc<Texture>> {
+        if let Some(name) = &source.var_name {
+            if self.active_functions.is_empty() && self.function_call_stack.is_empty() {
+                if let Some(cached) = self.texture_cache.get(name) {
+                    return Ok(cached.texture.clone());
+                }
+                let text = self.string_variables.get(name).cloned().unwrap_or_default();
+                let texture = Rc::new(Texture::from_gscr(&text).map_err(|mut e| {
+                    if e.line.is_none() {
+                        e.line = self.current_line;
+                    }
+                    e
+                })?);
+                self.texture_cache.insert(
+                    name.clone(),
+                    CachedTexture {
+                        texture: texture.clone(),
+                    },
+                );
+                return Ok(texture);
+            }
+        }
+        let text = eval_compiled(self, &source.expr)
+            .and_then(|value| value.into_string())
+            .map_err(|mut e| {
+                if e.line.is_none() {
+                    e.line = self.current_line;
+                }
+                e
+            })?;
+        Texture::from_gscr(&text).map(Rc::new).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })
+    }
+
     fn eval_compiled_color(&mut self, expr: &Expr) -> BasicResult<i32> {
         let result = if expr.is_statically_numeric() {
             eval_compiled_number(self, expr).and_then(color_number_from_number)
@@ -2796,6 +3026,7 @@ impl Interpreter {
             .string_variables
             .get(source)
             .and_then(|text| string_char_at(text, start));
+        self.invalidate_texture_cache_for(target);
         if let Some(existing) = self.string_variables.get_mut(target) {
             existing.clear();
             if let Some(ch) = value {
@@ -3076,6 +3307,7 @@ impl Interpreter {
                     self.numeric_variables.insert(lhs, n);
                 }
                 Value::Str(s) => {
+                    self.invalidate_texture_cache_for(&lhs);
                     self.string_variables.insert(lhs, s);
                 }
                 Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
@@ -3099,6 +3331,7 @@ impl Interpreter {
                         }
                     }
                     Value::Str(s) => {
+                        self.invalidate_texture_cache_for(name);
                         if let Some(slot) = self.string_variables.get_mut(name) {
                             *slot = s;
                         } else {
@@ -3233,6 +3466,7 @@ impl Interpreter {
         count: Option<usize>,
         replacement: &str,
     ) {
+        self.invalidate_texture_cache_for(target);
         let Some(original) = self.string_variables.get_mut(target) else {
             return;
         };
@@ -6101,6 +6335,21 @@ impl Interpreter {
         self.refresh_graphics_window()
     }
 
+    fn execute_textured_rect(&mut self, args: &str) -> BasicResult<()> {
+        let compiled = compile_textured_rect_statement(args)?;
+        self.execute_compiled_textured_rect(&compiled)
+    }
+
+    fn execute_textured_triangle(&mut self, args: &str) -> BasicResult<()> {
+        let compiled = compile_textured_triangle_statement(args)?;
+        self.execute_compiled_textured_triangle(&compiled)
+    }
+
+    fn execute_textured_quad(&mut self, args: &str) -> BasicResult<()> {
+        let compiled = compile_textured_quad_statement(args)?;
+        self.execute_compiled_textured_quad(&compiled)
+    }
+
     fn execute_circle(&mut self, args: &str, filled: bool) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
@@ -7133,11 +7382,20 @@ impl Interpreter {
             "FRECTANGLE" => compile_rect_statement(trimmed[10..].trim(), true)
                 .map(|compiled| CachedCommand::Rect(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "TRECTANGLE" => compile_textured_rect_statement(trimmed[10..].trim())
+                .map(|compiled| CachedCommand::TexturedRect(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "TRIANGLE" => compile_triangle_statement(trimmed[8..].trim(), false)
                 .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "FTRIANGLE" => compile_triangle_statement(trimmed[9..].trim(), true)
                 .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "TTRIANGLE" => compile_textured_triangle_statement(trimmed[9..].trim())
+                .map(|compiled| CachedCommand::TexturedTriangle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "TQUAD" => compile_textured_quad_statement(trimmed[5..].trim())
+                .map(|compiled| CachedCommand::TexturedQuad(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "LET" => self
                 .compile_cached_assignment(trimmed[3..].trim())
@@ -8644,6 +8902,31 @@ mod interpreter_tests {
             interp.program_identifier_case().get("FOO"),
             Some(&"Foo".to_string())
         );
+    }
+
+    #[test]
+    fn texture_cache_tracks_string_variable_lifetime() {
+        let mut interp = Interpreter::new();
+        interp
+            .process_immediate(r#"T$="2x2:ff000000ff000000ffffffff""#)
+            .unwrap();
+        interp
+            .process_immediate("TRECTANGLE T$,10,10,30,30")
+            .unwrap();
+        assert_eq!(interp.graphics.test(15.0, 15.0), 0x0000ff);
+
+        interp
+            .process_immediate(r#"T$="2x2:111111111111222222222222""#)
+            .unwrap();
+        interp
+            .process_immediate("TRECTANGLE T$,10,10,30,30")
+            .unwrap();
+        assert_eq!(interp.graphics.test(15.0, 15.0), 0x222222);
+
+        interp.process_immediate("CLEAR").unwrap();
+        assert!(interp
+            .process_immediate("TRECTANGLE T$,10,10,30,30")
+            .is_err());
     }
 
     #[test]
@@ -10539,6 +10822,88 @@ fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<Compile
             .map(|arg| compile_expression(arg.trim()))
             .transpose()?,
         filled,
+    })
+}
+
+fn compile_texture_source(source: &str) -> BasicResult<CompiledTextureSource> {
+    let expr = compile_expression(source.trim())?;
+    let var_name = match &expr {
+        Expr::Var(name) if name.ends_with('$') => Some(name.clone()),
+        _ => None,
+    };
+    Ok(CompiledTextureSource { expr, var_name })
+}
+
+fn compile_textured_rect_statement(source: &str) -> BasicResult<CompiledTexturedRect> {
+    let args = split_arguments(source);
+    if !matches!(args.len(), 5 | 9) || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    let uv = if args.len() == 9 {
+        Some((
+            compile_expression(args[5].trim())?,
+            compile_expression(args[6].trim())?,
+            compile_expression(args[7].trim())?,
+            compile_expression(args[8].trim())?,
+        ))
+    } else {
+        None
+    };
+    Ok(CompiledTexturedRect {
+        texture: compile_texture_source(&args[0])?,
+        x0: compile_expression(args[1].trim())?,
+        y0: compile_expression(args[2].trim())?,
+        x1: compile_expression(args[3].trim())?,
+        y1: compile_expression(args[4].trim())?,
+        uv,
+    })
+}
+
+fn compile_textured_triangle_statement(source: &str) -> BasicResult<CompiledTexturedTriangle> {
+    let args = split_arguments(source);
+    if args.len() != 13 || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    Ok(CompiledTexturedTriangle {
+        texture: compile_texture_source(&args[0])?,
+        x0: compile_expression(args[1].trim())?,
+        y0: compile_expression(args[2].trim())?,
+        u0: compile_expression(args[3].trim())?,
+        v0: compile_expression(args[4].trim())?,
+        x1: compile_expression(args[5].trim())?,
+        y1: compile_expression(args[6].trim())?,
+        u1: compile_expression(args[7].trim())?,
+        v1: compile_expression(args[8].trim())?,
+        x2: compile_expression(args[9].trim())?,
+        y2: compile_expression(args[10].trim())?,
+        u2: compile_expression(args[11].trim())?,
+        v2: compile_expression(args[12].trim())?,
+    })
+}
+
+fn compile_textured_quad_statement(source: &str) -> BasicResult<CompiledTexturedQuad> {
+    let args = split_arguments(source);
+    if args.len() != 17 || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    Ok(CompiledTexturedQuad {
+        texture: compile_texture_source(&args[0])?,
+        x0: compile_expression(args[1].trim())?,
+        y0: compile_expression(args[2].trim())?,
+        u0: compile_expression(args[3].trim())?,
+        v0: compile_expression(args[4].trim())?,
+        x1: compile_expression(args[5].trim())?,
+        y1: compile_expression(args[6].trim())?,
+        u1: compile_expression(args[7].trim())?,
+        v1: compile_expression(args[8].trim())?,
+        x2: compile_expression(args[9].trim())?,
+        y2: compile_expression(args[10].trim())?,
+        u2: compile_expression(args[11].trim())?,
+        v2: compile_expression(args[12].trim())?,
+        x3: compile_expression(args[13].trim())?,
+        y3: compile_expression(args[14].trim())?,
+        u3: compile_expression(args[15].trim())?,
+        v3: compile_expression(args[16].trim())?,
     })
 }
 

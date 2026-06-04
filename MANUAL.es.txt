@@ -465,6 +465,12 @@ Notas rápidas (trazado)
 + FRECTANGLE x0,y0,x1,y1[,c]        Rectángulo relleno.
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triángulo (contorno).
 + FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Triángulo relleno.
++ TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
+                                      Rectángulo relleno texturado.
++ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
+                                      Triángulo relleno texturado.
++ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3
+                                      Cuadrilátero relleno texturado.
 + FILL [x,y[,c]]                    Flood-fill; sin coordenadas rellena a partir de la posición actual.
 
 Notas rápidas (figuras)
@@ -473,6 +479,10 @@ Notas rápidas (figuras)
 - `asp` controla la relación de aspecto del círculo (Y/X).
 - El radio `r` está en unidades de usuario (si hay `SCALE`, se adapta automáticamente).
 - `RECTANGLE/TRIANGLE` y sus versiones relativas respetan `MASK` y `PENWIDTH` como `DRAW`.
+- `TRECTANGLE/TTRIANGLE/TQUAD` usan una textura `gscr$`, normalmente cargada con `BLOAD "img.png",T$` o capturada con `SPRITE$`.
+- Las coordenadas de textura hacen wrap automático. `u=0,v=0` es el texel inferior-izquierdo; `u=ancho,v=alto` cubre un tile completo.
+- Si `TRECTANGLE` omite coordenadas UV, mapea un tile completo de la textura sobre el rectángulo.
+- `TTRIANGLE/TQUAD` usan mapeado afín. Son ideales para efectos 2D rápidos y aproximaciones por malla, no para 3D con perspectiva correcta.
 
 6.4 Colores
 
