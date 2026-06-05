@@ -480,9 +480,12 @@ Notas rápidas (figuras)
 - El radio `r` está en unidades de usuario (si hay `SCALE`, se adapta automáticamente).
 - `RECTANGLE/TRIANGLE` y sus versiones relativas respetan `MASK` y `PENWIDTH` como `DRAW`.
 - `TRECTANGLE/TTRIANGLE/TQUAD` usan una textura `gscr$`, normalmente cargada con `BLOAD "img.png",T$` o capturada con `SPRITE$`.
+- En `TRECTANGLE`, `(u0,v0)` se asigna a `(x0,y0)` y `(u1,v1)` a `(x1,y1)`; las otras dos esquinas usan `(u1,v0)` y `(u0,v1)`.
+- En `TTRIANGLE/TQUAD`, cada vértice combina una posición de pantalla `(x,y)` con una posición de textura `(u,v)`. El motor interpola linealmente las `u,v` dentro de cada triángulo, así que el escalado, giro, espejo o inclinación se deducen de esas correspondencias.
+- `SCALE` afecta solo a las coordenadas de pantalla `x,y`. Las coordenadas `u,v` siguen estando en texels de la textura y no se escalan con el sistema de usuario.
 - Las coordenadas de textura hacen wrap automático. `u=0,v=0` es el texel inferior-izquierdo; `u=ancho,v=alto` cubre un tile completo.
 - Si `TRECTANGLE` omite coordenadas UV, mapea un tile completo de la textura sobre el rectángulo.
-- `TTRIANGLE/TQUAD` usan mapeado afín. Son ideales para efectos 2D rápidos y aproximaciones por malla, no para 3D con perspectiva correcta.
+- `TTRIANGLE/TQUAD` usan mapeado afín y muestreo por texel más cercano (`floor(u),floor(v)`). Son ideales para efectos 2D rápidos y aproximaciones por malla; no hacen filtrado bilineal ni corrección de perspectiva.
 
 6.4 Colores
 
