@@ -7,7 +7,7 @@
 160 PAUSE
 170 END
 180 REM The latest guess was correct
-190 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!"
+190 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!";
 200 BEEP : END
 210 REM Time is up
 220 PRINT : PRINT "Too late. I still win! :DDD"
@@ -19,4 +19,3 @@
 280 REM Check whether the current guess is correct
 290 IF a$=s$ THEN DI:GOTO 190 'If so, disable interrupts before continuing
 300 RETURN
-

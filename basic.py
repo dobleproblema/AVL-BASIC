@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.44"
+__version__ = "1.5.45"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -4873,13 +4873,17 @@ class GraphicsWindow:
             self._set_pixel(x, y, color)
         else:
             padding = self.pen_width // 2
-            x_start = x - padding
-            y_start = y - padding
-            x_end = x + padding
-            y_end = y + padding
-            for dy in range(y_start, y_end):
-                for dx in range(x_start, x_end):
-                    self._set_pixel(dx, dy, color)
+            x_start = max(max(0, self.w_left), x - padding)
+            y_start = max(max(0, self.w_top), y - padding)
+            x_end = min(min(self.width - 1, self.w_right), x + padding - 1)
+            y_end = min(min(self.height - 1, self.w_bottom), y + padding - 1)
+            if x_start > x_end or y_start > y_end:
+                return
+            color_rgb = self._get_rgb_bytes(color)
+            set_fill = self._set_buffer_fill
+            for dy in range(y_start, y_end + 1):
+                row = dy * self.width
+                set_fill(row + x_start, row + x_end + 1, color, color_rgb)
 
     def draw_image(self, x1=0, y1=0, x2=None, y2=None):
         self._sync_buffer_from_pending_screen()

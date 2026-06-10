@@ -7817,6 +7817,28 @@ class AxisLabelTextWindow(ScaleCursorTestWindow):
         self.labels_seen.append(str(text))
 
 
+def test_plot_with_wide_pen_preserves_existing_brush_footprint():
+    for width in (2, 4):
+        gw = SpriteTestWindow(width=16, height=16)
+        gw.set_pen_width(width)
+        color = GraphicsWindow._resolve_color("#112233")
+
+        gw.plot(8, 7, color)
+
+        tx, ty = gw._transform_graphic(8, 7)
+        padding = width // 2
+        x_start = tx - padding
+        x_end = tx + padding - 1
+        y_start = ty - padding
+        y_end = ty + padding - 1
+        black = GraphicsWindow._resolve_color("#000000")
+
+        for y in range(y_start - 1, y_end + 2):
+            for x in range(x_start - 1, x_end + 2):
+                expected = color if x_start <= x <= x_end and y_start <= y <= y_end else black
+                assert gw.buffer[gw._index(x, y)] == expected
+
+
 def test_draw_sprite_renders_expected_pixels():
     GraphicsWindow._decode_sprite.cache_clear()
     gw = SpriteTestWindow(width=5, height=5)

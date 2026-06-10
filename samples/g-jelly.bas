@@ -9,7 +9,7 @@
 180 k(i)=9*COS(x(i)/8)
 190 e(i)=y(i)/8-12.5
 200 NEXT i
-210 t=0
+210 fps=t=fc=0 : t0=TIME
 220 CLG
 230 FOR i=1 TO PTS
 240 k=k(i) : e=e(i)
@@ -19,6 +19,8 @@
 280 c=d/2+e/69-t/16
 290 PLOT q*SIN(c),(q+19*d)*COS(c)
 300 NEXT i
-310 t=t+0.1
-320 FRAME
-330 GOTO 220
+310 t=t+0.1 : fc=fc+1 : IF TIME-t0>=0.5 THEN fps=fc/(TIME-t0):fc=0:t0=TIME
+320 DISP "AVL-BASIC JELLY  FPS: "+DEC$(fps,"###.0")+"  ESC=EXIT",14,0
+330 FRAME
+340 IF KEYDOWN(27) THEN SCREEN CLOSE:END
+350 GOTO 220

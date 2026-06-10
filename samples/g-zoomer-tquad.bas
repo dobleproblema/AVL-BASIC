@@ -3,8 +3,8 @@
 120 REM  one TQUAD per frame
 130 REM ============================================================
 140 TEXFILE$="assets/texture.png"
-150 W=640 : H=480
-160 SCREEN : MODE 640
+150 SCREEN : MODE 640
+160 W=WIDTH : H=HEIGHT
 170 PAPER 0 : CLG
 180 DEG
 190 BLOAD TEXFILE$,TEX$

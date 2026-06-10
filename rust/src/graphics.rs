@@ -1902,11 +1902,13 @@ impl Graphics {
             return;
         }
         let padding = self.pen_width / 2;
-        for dy in -padding..padding {
-            for dx in -padding..padding {
-                self.set_canvas_pixel(x + dx, y + dy, color);
-            }
-        }
+        self.fill_canvas_rect(
+            x - padding,
+            y - padding,
+            x + padding - 1,
+            y + padding - 1,
+            color,
+        );
     }
 
     fn draw_glyph(
@@ -2189,6 +2191,39 @@ mod tests {
             Some(resolve_color_number(2))
         );
         assert_eq!(graphics.get_canvas_pixel(9, 464), Some(0));
+    }
+
+    #[test]
+    fn plot_with_wide_pen_preserves_existing_brush_footprint() {
+        for width in [2, 4] {
+            let mut graphics = Graphics::new(640);
+            graphics.set_pen_width(width).unwrap();
+            graphics.plot(30.0, 40.0, Some(5));
+
+            let color = resolve_color_number(5);
+            let x = 30;
+            let y = graphics.height as i32 - 1 - 40;
+            let padding = width / 2;
+            let left = x - padding;
+            let right = x + padding - 1;
+            let top = y - padding;
+            let bottom = y + padding - 1;
+
+            for py in (top - 1)..=(bottom + 1) {
+                for px in (left - 1)..=(right + 1) {
+                    let expected = if (left..=right).contains(&px) && (top..=bottom).contains(&py) {
+                        Some(color)
+                    } else {
+                        Some(0)
+                    };
+                    assert_eq!(
+                        graphics.get_canvas_pixel(px, py),
+                        expected,
+                        "pen width {width}, pixel ({px},{py})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
