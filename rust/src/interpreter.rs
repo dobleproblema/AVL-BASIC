@@ -1758,26 +1758,23 @@ impl Interpreter {
                 continue;
             }
             self.current_line = Some(line_no);
-            self.check_user_interrupt(&cursor)?;
-            self.process_timers()?;
-            self.check_user_interrupt(&cursor)?;
-            if self.end_requested {
-                if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                    self.present_graphics_window()?;
-                }
-                return Ok(RunOutcome::End);
-            }
-            if self.stopped_cursor.is_some() {
-                if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                    self.present_graphics_window()?;
-                }
-                return Ok(RunOutcome::Stop);
-            }
             if self.trace {
                 self.write(&console::trace_text(self.ansi_output, line_no));
             }
             while cursor.cmd_idx < commands_len {
-                self.check_user_interrupt(&cursor)?;
+                self.poll_interrupts_and_timers(&cursor)?;
+                if self.end_requested {
+                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
+                        self.present_graphics_window()?;
+                    }
+                    return Ok(RunOutcome::End);
+                }
+                if self.stopped_cursor.is_some() {
+                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
+                        self.present_graphics_window()?;
+                    }
+                    return Ok(RunOutcome::Stop);
+                }
                 let command = commands
                     .as_ref()
                     .and_then(|commands| commands.get(cursor.cmd_idx))
@@ -1874,6 +1871,12 @@ impl Interpreter {
             self.finish_output_line();
         }
         Ok(RunOutcome::End)
+    }
+
+    fn poll_interrupts_and_timers(&mut self, cursor: &Cursor) -> BasicResult<()> {
+        self.check_user_interrupt(cursor)?;
+        self.process_timers()?;
+        self.check_user_interrupt(cursor)
     }
 
     fn check_user_interrupt(&mut self, cursor: &Cursor) -> BasicResult<()> {

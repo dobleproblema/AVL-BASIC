@@ -917,6 +917,8 @@ impl Drop for FullscreenEditorGuard {
 const MAX_UNDO_STEPS: usize = 200;
 const SELECTION_STYLE: &str = "\x1b[7m";
 const SELECTION_END_STYLE: &str = "\x1b[27m";
+const STATUS_KEY_STYLE: &str = "\x1b[3m\x1b[4m";
+const STATUS_KEY_END_STYLE: &str = "\x1b[23m\x1b[24m";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct EditorPosition {
@@ -2193,7 +2195,8 @@ fn render_fullscreen_editor(
         cols,
     );
     if ansi {
-        write!(stdout, "\x1b[7m{status_text:<cols$}\x1b[0m")?;
+        let status_text = style_editor_status_keys(&status_text);
+        write!(stdout, "\x1b[7m{status_text}\x1b[0m")?;
     } else {
         write!(stdout, "{status_text:<cols$}")?;
     }
@@ -2286,6 +2289,63 @@ fn editor_status_line(status: &str, dirty: bool, line: usize, col: usize, width:
     let left_width = left.chars().count();
     let spaces = width.saturating_sub(left_width + right_width);
     format!("{left}{}{right}", " ".repeat(spaces))
+}
+
+fn style_editor_status_keys(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(token_len) = status_key_token_len(&chars, index) {
+            out.push_str(STATUS_KEY_STYLE);
+            for ch in &chars[index..index + token_len] {
+                out.push(*ch);
+            }
+            out.push_str(STATUS_KEY_END_STYLE);
+            index += token_len;
+        } else {
+            out.push(chars[index]);
+            index += 1;
+        }
+    }
+    out
+}
+
+fn status_key_token_len(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start..start + 3) == Some(&['E', 's', 'c']) {
+        return Some(3);
+    }
+    status_function_key_token_len(chars, start)
+}
+
+fn status_function_key_token_len(chars: &[char], start: usize) -> Option<usize> {
+    let mut index = start;
+    loop {
+        if chars.get(index) != Some(&'F') {
+            return None;
+        }
+        index += 1;
+
+        let digit_start = index;
+        while chars.get(index).is_some_and(|ch| ch.is_ascii_digit()) {
+            index += 1;
+        }
+        if index == digit_start {
+            return None;
+        }
+
+        if chars.get(index) == Some(&'/')
+            && chars.get(index + 1) == Some(&'F')
+            && chars.get(index + 2).is_some_and(|ch| ch.is_ascii_digit())
+        {
+            index += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    Some(index - start)
 }
 
 fn truncate_plain_text(text: &str, width: usize) -> String {
@@ -3962,5 +4022,19 @@ mod tests {
 
         let narrow = editor_status_line("F12 Apply", false, 123, 456, 8);
         assert_eq!(narrow, "Ln 123 C");
+    }
+
+    #[test]
+    fn editor_status_styles_help_keys_without_changing_width() {
+        let plain = "F12 Apply Esc Cancel F3/F4 Undo/Redo F9 Renum Ln 1 Col 1";
+        let styled = style_editor_status_keys(plain);
+
+        assert_eq!(visible_width(&styled), plain.chars().count());
+        assert!(styled.contains(&format!("{STATUS_KEY_STYLE}F12{STATUS_KEY_END_STYLE}")));
+        assert!(styled.contains(&format!("{STATUS_KEY_STYLE}F3/F4{STATUS_KEY_END_STYLE}")));
+        assert!(styled.contains(&format!("{STATUS_KEY_STYLE}F9{STATUS_KEY_END_STYLE}")));
+        assert!(styled.contains(&format!(
+            "{STATUS_KEY_STYLE}Esc{STATUS_KEY_END_STYLE} Cancel"
+        )));
     }
 }

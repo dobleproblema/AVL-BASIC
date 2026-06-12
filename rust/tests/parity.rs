@@ -2,6 +2,7 @@ use avl_basic::{console, ErrorCode, Interpreter};
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn run_rust(program: &str) -> String {
     let mut interp = Interpreter::new();
@@ -36,6 +37,63 @@ fn run_rust_cli(program: &str, input: &str) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn run_rust_cli_with_timeout(program: &str, input: &str, timeout: Duration) -> String {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(program.as_bytes()).unwrap();
+    file.flush().unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .arg(file.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+
+    let deadline = Instant::now() + timeout;
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "interpreter timed out; stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "interpreter failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn timers_fire_during_busy_goto_loop_without_pause() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 EVERY 1 GOSUB 50
+20 GOTO 20
+50 PRINT "TICK"
+60 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "TICK\n");
 }
 
 #[test]
