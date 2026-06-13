@@ -221,6 +221,58 @@ fn g_balls_window_close_does_not_reopen_blank_window() {
     }
 }
 
+#[test]
+#[ignore = "opens a real graphics window, closes it, and checks that the implicit end frame does not reopen it"]
+fn closing_dirty_no_frame_program_does_not_reopen_window() {
+    let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .env("AVL_BASIC_WINDOW", "1")
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn avl-basic");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin
+        .write_all(
+            b"10 CLG : DISP \"escalera\"\n\
+20 MOVE 0,400 : FOR n=1 TO 8\n\
+30 DRAWR 50,0\n\
+40 DRAWR 0,-50\n\
+50 NEXT : MOVE 348,0 : FILL 3\n\
+60 GOTO 60\n\
+RUN\n",
+        )
+        .unwrap();
+
+    let hwnd = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    close_window(hwnd);
+    wait_for_line(
+        &rx,
+        "Execution interrupted by user.",
+        Duration::from_secs(5),
+    );
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    assert_no_graphics_window(child.child.id(), Duration::from_secs(2), hwnd);
+
+    let _ = stdin.write_all(b"QUIT\n");
+    let _ = child.child.wait();
+    child.finished = true;
+}
+
 struct ChildGuard {
     child: Child,
     finished: bool,

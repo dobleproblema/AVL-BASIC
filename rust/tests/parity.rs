@@ -777,6 +777,77 @@ fn error_statement_reports_python_messages() {
 }
 
 #[test]
+fn immediate_print_after_error_handler_end_is_not_skipped() {
+    let mut interp = Interpreter::new();
+    for line in r#"10 ON ERROR GOTO 30
+20 GOTO 1000
+30 PRINT "Error";ERR;"en la línea";ERL
+40 END"#
+        .lines()
+    {
+        interp.process_immediate(line).unwrap();
+    }
+
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), "Error 12 en la línea 20\n");
+
+    interp.process_immediate("PRINT ERR").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+    interp.process_immediate("PRINT ERL").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+
+    interp.process_immediate(r#"PRINT "hola""#).unwrap();
+    assert_eq!(interp.take_output(), "hola\n");
+
+    interp.process_immediate(r#"PRINT "hola""#).unwrap();
+    assert_eq!(interp.take_output(), "hola\n");
+
+    let err = interp.process_immediate("PRINT 3/0").unwrap_err();
+    assert_eq!(err.display_for_basic(), "Division by zero.");
+    interp.process_immediate("PRINT ERR").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+    interp.process_immediate("PRINT ERL").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+}
+
+#[test]
+fn program_error_state_is_cleared_only_when_program_ends() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 PRINT 3/0").unwrap();
+
+    let err = interp.process_immediate("RUN").unwrap_err();
+    assert_eq!(err.display_for_basic(), "Line 10. Division by zero.");
+    interp.process_immediate("PRINT ERR").unwrap();
+    assert_eq!(interp.take_output(), " 6\n");
+    interp.process_immediate("PRINT ERL").unwrap();
+    assert_eq!(interp.take_output(), " 10\n");
+
+    let mut interp = Interpreter::new();
+    for line in r#"10 ON ERROR GOTO 30
+20 GOTO 1000
+30 PRINT ERR;ERL
+40 STOP
+50 END"#
+        .lines()
+    {
+        interp.process_immediate(line).unwrap();
+    }
+
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), " 12  20\n");
+    interp.process_immediate("PRINT ERR").unwrap();
+    assert_eq!(interp.take_output(), " 12\n");
+    interp.process_immediate("PRINT ERL").unwrap();
+    assert_eq!(interp.take_output(), " 20\n");
+
+    interp.process_immediate("CONT").unwrap();
+    interp.process_immediate("PRINT ERR").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+    interp.process_immediate("PRINT ERL").unwrap();
+    assert_eq!(interp.take_output(), " 0\n");
+}
+
+#[test]
 fn console_normalization_completes_file_quotes_and_bas_extension() {
     assert_eq!(console::normalize_code("load\"demo"), "LOAD \"demo.bas\"");
     assert_eq!(
@@ -916,6 +987,25 @@ fn for_next_and_arrays_baseline() {
 60 END"#,
     );
     assert_eq!(output, " 1  4  9\n");
+}
+
+#[test]
+fn input_accepts_string_array_elements() {
+    let output = run_rust_cli(
+        r#"10 DIM amigo$(2),telefono$(2)
+20 FOR n=1 TO 2
+30 INPUT "Nombre ";amigo$(n)
+40 INPUT "Telefono ";telefono$(n)
+50 NEXT
+60 FOR n=1 TO 2
+70 PRINT n;amigo$(n),telefono$(n)
+80 NEXT"#,
+        "Pedro\n111\nAna\n222\n",
+    );
+    assert_eq!(
+        output,
+        "Nombre ? Telefono ? Nombre ? Telefono ?  1 Pedro\t111\n 2 Ana\t222\n"
+    );
 }
 
 #[test]

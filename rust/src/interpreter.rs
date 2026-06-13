@@ -1097,6 +1097,11 @@ impl Interpreter {
             return Ok(());
         }
         self.current_line = None;
+        self.end_requested = false;
+        self.function_return_requested = false;
+        self.sub_return_requested = false;
+        self.repeat_current_command = false;
+        self.restart_run_loop = false;
         self.graphics_window_suppressed = false;
         self.key_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
@@ -1733,6 +1738,10 @@ impl Interpreter {
             {
                 focus_console_window();
             }
+            if matches!(result, Ok(RunOutcome::End)) {
+                self.last_error = None;
+                self.handling_error = false;
+            }
             self.graphics_window_closed_by_current_run = false;
         }
         result
@@ -1764,15 +1773,11 @@ impl Interpreter {
             while cursor.cmd_idx < commands_len {
                 self.poll_interrupts_and_timers(&cursor)?;
                 if self.end_requested {
-                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                        self.present_graphics_window()?;
-                    }
+                    self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::End);
                 }
                 if self.stopped_cursor.is_some() {
-                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                        self.present_graphics_window()?;
-                    }
+                    self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
                 let command = commands
@@ -1812,15 +1817,11 @@ impl Interpreter {
                     return Err(err);
                 }
                 if self.end_requested {
-                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                        self.present_graphics_window()?;
-                    }
+                    self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::End);
                 }
                 if self.stopped_cursor.is_some() {
-                    if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-                        self.present_graphics_window()?;
-                    }
+                    self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
                 if self.function_return_requested {
@@ -1864,13 +1865,24 @@ impl Interpreter {
                 .unwrap_or_default();
             return Err(BasicError::new(ErrorCode::IfWithoutEndIf).at_line(line));
         }
-        if self.should_present_at_run_boundary() && self.graphics_window_dirty {
-            self.present_graphics_window()?;
-        }
+        self.present_dirty_graphics_at_run_boundary()?;
         if cursor.line_idx != usize::MAX {
             self.finish_output_line();
         }
         Ok(RunOutcome::End)
+    }
+
+    fn present_dirty_graphics_at_run_boundary(&mut self) -> BasicResult<()> {
+        if self.should_present_dirty_graphics_at_run_boundary() {
+            self.present_graphics_window()?;
+        }
+        Ok(())
+    }
+
+    fn should_present_dirty_graphics_at_run_boundary(&self) -> bool {
+        self.should_present_at_run_boundary()
+            && self.graphics_window_dirty
+            && !self.graphics_window_closed_by_current_run
     }
 
     fn poll_interrupts_and_timers(&mut self, cursor: &Cursor) -> BasicResult<()> {
@@ -1891,6 +1903,7 @@ impl Interpreter {
         if let Some(window) = self.graphics_window.as_mut() {
             window.clear_transient_input();
         }
+        self.present_dirty_graphics_at_run_boundary()?;
         self.finish_output_line();
         self.stopped_cursor = Some(cursor.clone());
         self.end_requested = false;
@@ -3201,7 +3214,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::InvalidValue));
         }
         for (target, raw) in targets.into_iter().zip(values.into_iter()) {
-            let value = if target.trim().ends_with('$') {
+            let value = if assignment_target_is_string(&target) {
                 Value::string(raw.trim_matches('"').to_string())
             } else {
                 Value::number(
@@ -8986,6 +8999,30 @@ mod interpreter_tests {
 
         interp.process_immediate("A=1").unwrap();
         assert!(!interp.graphics_window_suppressed);
+    }
+
+    #[test]
+    fn dirty_graphics_are_presented_at_ctrl_c_run_boundary() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(60);
+        interp.run_depth = 1;
+        interp.graphics_window_dirty = true;
+        interp.graphics_window_used_this_run = true;
+
+        assert!(interp.should_present_dirty_graphics_at_run_boundary());
+    }
+
+    #[test]
+    fn dirty_graphics_are_not_presented_after_window_close_interrupt() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(60);
+        interp.run_depth = 1;
+        interp.graphics_window_dirty = true;
+        interp.graphics_window_used_this_run = true;
+
+        interp.mark_graphics_window_user_closed();
+
+        assert!(!interp.should_present_dirty_graphics_at_run_boundary());
     }
 
     #[test]
