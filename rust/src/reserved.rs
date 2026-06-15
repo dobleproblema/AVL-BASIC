@@ -256,4 +256,5 @@ const RESERVED_IDENTIFIER_BASE_NAMES: &[&str] = &[
     "YMIN",
     "YPOS",
     "ZER",
+    "ZONE",
 ];

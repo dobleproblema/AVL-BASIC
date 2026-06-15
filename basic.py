@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.47"
+__version__ = "1.5.48"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -57,6 +57,9 @@ ANSI_ENABLED = True
 ANSI_256 = True
 
 TAB_SIZE = 8
+PRINT_ZONE_DEFAULT = TAB_SIZE
+PRINT_ZONE_MIN = 1
+PRINT_ZONE_MAX = 255
 INDENT = True
 RADIANS = True
 IMPLICIT_ARRAY_DIM = 10
@@ -577,7 +580,7 @@ RESERVED_WORDS = ('REM', 'CLEAR', 'CLS','DATA', 'DIM', 'REDIM', 'LET','PRINT', '
                   'COL', 'BASE', 'USING', 'INPUT', 'LINE', 'RANDOMIZE', 'ERROR', 'GOTO',
                   'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'NEXT', 'STEP', 
                   'RETURN', 'GOSUB', 'ON', 'OFF', 'DEF', 'FN', 'FNEND', 'FNEXIT', 'SUB', 'SUBEND', 'SUBEXIT', 'CALL', 'LOCAL',
-                  'READ', 'RESTORE', 'STOP', 'END',
+                  'READ', 'RESTORE', 'STOP', 'END', 'ZONE',
                   'SAVE', 'LOAD', 'EDIT', 'RENUM', 'NEW', 'WHILE', 'WEND', 'LIST',
                   'RUN', 'CONT', 'RESUME', 'TRON', 'TROFF', 'FILES', 'CAT', 'CD', 'DELETE',
                   'EXIT', 'QUIT', 'SYSTEM', 'SWAP', 'BEEP', 'DEBUG', 'MOVE', 'MOVER',
@@ -5125,6 +5128,8 @@ class BasicInterpreter:
         self.expression_cache = {}
         self._fast_expr_cache = {}
         self.at_line_start = True
+        self.output_col = 0
+        self.print_zone = PRINT_ZONE_DEFAULT
         self.new_program_line = False
         self.error_handler_line = None  # New variable for handling ON ERROR GOTO
         self.error_handler_resume_next = False  # ON ERROR RESUME NEXT
@@ -5466,7 +5471,92 @@ class BasicInterpreter:
         # New line if the previous print did not end with "\n"
         if not self.at_line_start:
             self.at_line_start = True 
+            self.output_col = 0
             print()
+
+    def _track_print_output(self, text):
+        for ch in text:
+            if ch == '\n':
+                self.output_col = 0
+                self.at_line_start = True
+            elif ch == '\r':
+                self.output_col = 0
+            else:
+                self.output_col += 1
+                self.at_line_start = False
+
+    def _write_print_output(self, text):
+        if not text:
+            return
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        self._track_print_output(text)
+
+    def _print_zone_spacing(self):
+        return ' ' * (self.print_zone - (self.output_col % self.print_zone))
+
+    @staticmethod
+    def _strip_redundant_outer_parens(expr):
+        s = expr.strip()
+        while len(s) >= 2 and s[0] == '(' and s[-1] == ')':
+            depth = 0
+            wrapped = True
+            in_quotes = False
+            for idx, ch in enumerate(s):
+                if ch == '"':
+                    in_quotes = not in_quotes
+                elif not in_quotes:
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0 and idx != len(s) - 1:
+                            wrapped = False
+                            break
+            if not wrapped or depth != 0:
+                break
+            s = s[1:-1].strip()
+        return s
+
+    def _print_control_output(self, expr):
+        s = BasicInterpreter._strip_redundant_outer_parens(expr)
+        match = re.fullmatch(r'(?i)(SPC|TAB)\s*\((.*)\)', s)
+        if not match:
+            return None
+
+        value = self.evaluate_expression(match.group(2))
+        if not isinstance(value, (int, float)):
+            self.handle_error(ErrorCode.TYPE_MISMATCH)
+            raise ReturnMain
+
+        count = max(0, int(value))
+        if match.group(1).upper() == 'SPC':
+            return ' ' * count
+
+        target_col = max(0, count - 1)
+        if target_col > self.output_col:
+            return ' ' * (target_col - self.output_col)
+        return ''
+
+    def execute_zone(self, args):
+        args = args.strip()
+        if not args:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+        if len(BasicInterpreter.split_arguments(args)) != 1:
+            self.handle_error(ErrorCode.ARGUMENT_MISMATCH)
+            raise ReturnMain
+
+        value = self.evaluate_expression(args)
+        if not isinstance(value, (int, float)) or int(value) != value:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+
+        zone = int(value)
+        if zone < PRINT_ZONE_MIN or zone > PRINT_ZONE_MAX:
+            self.handle_error(ErrorCode.INVALID_ARGUMENT)
+            raise ReturnMain
+        self.print_zone = zone
 
     def process_command(self, command):
         if not command:
@@ -9310,6 +9400,9 @@ class BasicInterpreter:
             elif first_word == 'LOCAL':
                 self.execute_local(cmd[5:].strip())
                 return
+            elif first_word == 'ZONE':
+                self.execute_zone(cmd[4:].strip())
+                return
             elif first_word == 'WHILE':
                 self.execute_while(cmd[5:].strip())
                 return
@@ -9348,6 +9441,8 @@ class BasicInterpreter:
                 self.execute_local(cmd[5:].strip())
             elif first_word == 'PRINT':
                 self.execute_print(cmd[5:].strip())
+            elif first_word == 'ZONE':
+                self.execute_zone(cmd[4:].strip())
             elif first_word == 'MAT':
                 self.execute_mat_command(arg_string)
             elif first_word == 'INPUT':
@@ -15977,92 +16072,80 @@ class BasicInterpreter:
 
             espacio = ''
             for idx, (expr, sep) in enumerate(expressions):
-                output = ""
+                spac = ''
 
                 # Allow consecutive separators, treating gaps as ""
                 if expr == "":
-                    value = ""
+                    formatted = ""
                 else:
-                    value = self.evaluate_expression(expr, is_print=True)
-                if isinstance(value, (int,float)):
-                    try:
-                        spac = ''
-                        espacio = '' # if value >= Decimal('0') else ''
-                        formatted = BasicInterpreter.format_using(value, using_format)
-                        formatted = espacio + formatted
-                    except ReturnMain:
-                        # Re-raise the exception so it propagates to main
-                        raise
-                    except Exception as e:
-                        self.handle_error(ErrorCode.USING_ERROR)
-                        formatted = str(value)
-                elif isinstance(value, str):
-                    spac = ''
-                    formatted = str(value)
-                else:
-                    return
+                    control_output = self._print_control_output(expr)
+                    if control_output is not None:
+                        formatted = control_output
+                    else:
+                        value = self.evaluate_expression(expr, is_print=True)
+                        if isinstance(value, (int,float)):
+                            try:
+                                espacio = '' # if value >= Decimal('0') else ''
+                                formatted = BasicInterpreter.format_using(value, using_format)
+                                formatted = espacio + formatted
+                            except ReturnMain:
+                                # Re-raise the exception so it propagates to main
+                                raise
+                            except Exception as e:
+                                self.handle_error(ErrorCode.USING_ERROR)
+                                formatted = str(value)
+                        elif isinstance(value, str):
+                            formatted = str(value)
+                        else:
+                            return
 
-                output += formatted
+                self._write_print_output(formatted)
 
                 # Add separators as needed
                 if sep == ',':
-                    output += '\t'  # tab for comma
+                    self._write_print_output(self._print_zone_spacing())
                 elif sep == ';':
-                    output += spac   # space for semicolon
+                    self._write_print_output(spac)
                 else:
-                    output += '\n'   # New line if there is no separator
-
-                sys.stdout.write(output)
-                sys.stdout.flush()
-
-                if output.endswith('\n'):
-                    self.at_line_start = True
-                else:
-                    # Update the state based on the text that was written
-                    self.at_line_start = output.endswith('\n') or (len(output) > 0 and output[-1] == '\n')
+                    self._write_print_output('\n')   # New line if there is no separator
 
             return
 
         # If it does not use 'USING', continue with the normal behavior
         # Get the expressions and their separators
         expressions = BasicInterpreter.split_print_args(args)
-        espacio = ""
         for expr, sep in expressions:
-            output = ""
+            spac = ''
 
             # Allow consecutive separators, treating gaps as ""
             if expr == "":
-                value = ""
+                formatted = ""
             else:
-                value = self.evaluate_expression(expr, is_print=True)
-            if isinstance(value, (int, float)):
-                spac = ' '
-                # Format the Decimal to avoid showing too many decimals
-                espacio = ' ' if value >= 0 else ''
-                value = BasicInterpreter.format_number(value)
-                output += espacio + str(value)
-            elif isinstance(value, str):
-                spac = ''
-                output += str(value)
-            else:
-               return
+                control_output = self._print_control_output(expr)
+                if control_output is not None:
+                    formatted = control_output
+                else:
+                    value = self.evaluate_expression(expr, is_print=True)
+                    if isinstance(value, (int, float)):
+                        spac = ' '
+                        # Format the Decimal to avoid showing too many decimals
+                        espacio = ' ' if value >= 0 else ''
+                        value = BasicInterpreter.format_number(value)
+                        formatted = espacio + str(value)
+                    elif isinstance(value, str):
+                        formatted = str(value)
+                    else:
+                       return
+
+            self._write_print_output(formatted)
 
             # Add separators as needed
             if sep == ',':
-                output += '\t'  # tab for comma
+                self._write_print_output(self._print_zone_spacing())
             elif sep == ';':
-                output += spac   # Nothing for semicolon
+                self._write_print_output(spac)
             else:
-                output += '\n'   # New line if there is no separator
-
-            sys.stdout.write(output)
-            sys.stdout.flush()
-
-            if output.endswith('\n'):
-                self.at_line_start = True
-            else:
-                # Update the state based on the text that was written
-                self.at_line_start = output.endswith('\n') or (len(output) > 0 and output[-1] == '\n')
+                self._write_print_output('\n')   # New line if there is no separator
     
     def execute_input(self, args):
         """

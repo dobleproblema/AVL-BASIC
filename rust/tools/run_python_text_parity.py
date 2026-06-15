@@ -42,6 +42,7 @@ DEFAULT_PY_REPO = default_python_repo()
 DEFAULT_RUST_BIN = PROJECT_DIR / "target" / "debug" / (
     "avl-basic.exe" if os.name == "nt" else "avl-basic"
 )
+PRINT_ZONE_DEFAULT = 8
 
 SESSION_NOISE_RE = re.compile(
     r"^(?:"
@@ -145,7 +146,7 @@ def extract_program_cases(py_repo: Path) -> list[ProgramCase]:
 
 
 def normalize_expected(text: str) -> str:
-    return text.replace("\r\n", "\n").rstrip("\n")
+    return text.replace("\r\n", "\n").expandtabs(PRINT_ZONE_DEFAULT).rstrip("\n")
 
 
 def normalize_rust_session_output(text: str) -> str:

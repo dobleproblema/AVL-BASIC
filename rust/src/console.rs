@@ -86,6 +86,7 @@ const KEYWORDS: &[&str] = &[
     "RESTORE",
     "STOP",
     "END",
+    "ZONE",
     "SAVE",
     "LOAD",
     "EDIT",

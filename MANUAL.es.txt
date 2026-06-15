@@ -277,18 +277,19 @@ Ejemplo
 
 5. Entrada / salida de texto en la consola
 
-+ PRINT [lista]                       `;` como separador, concatena los elementos de la lista, `,` inserta un tabulador entre ellos
++ PRINT [lista]                       `;` como separador concatena los elementos; `,` avanza a la siguiente zona de impresión
++ ZONE n                              Define el ancho de zona que usan las comas en `PRINT` (1..255, por defecto 8)
 + INPUT ["prompt"][,|;] var1[,var2…]  Entrada interactiva.
 + LINE INPUT ["prompt"][,|;] v$       Idéntico a INPUT pero lee una única cadena e incorpora las comas a la entrada. No las considera separadores.
 + CLS                                 Borra el contenido de la consola 
 
 Notas rápidas
-- `PRINT` con `;` al final no hace salto de línea; con `,` inserta un tabulador (no espacios fijos).
+- `PRINT` con `;` al final no hace salto de línea; con `,` avanza a la siguiente zona de impresión. El ancho por defecto es 8 y puede cambiarse con `ZONE n`.
 - `INPUT` detiene la ejecución hasta recibir los valores solicitados.
 
 Notas detalladas (PRINT)
 - Números: enteros sin decimales; reales con hasta 14 cifras significativas (sin ceros de cola). Positivos se imprimen con un espacio inicial; negativos con signo `-`.
-- Los elementos de la lista de impresión pueden estar vacios. Últil para añadir tabuladores extra de separación. Ej.: `PRINT ,,`, `PRINT "Hola",,,"Adios"`
+- Los elementos de la lista de impresión pueden estar vacios. Útil para avanzar por zonas de impresión extra. Ej.: `PRINT ,,`, `PRINT "Hola",,,"Adios"`
 - PRINT USING: `PRINT USING "máscara"; exprs` o `PRINT USING var$; exprs`.
   • Marcadores: `#` (dígito o espacio), `0` (dígito o cero forzado) y `+` como prefijo (fuerza la impresión del signo). 
   • El punto de la máscara separa la parte entera y la decimal; si no hay parte fraccionaria en la máscara, no se imprime `.`.
@@ -303,7 +304,7 @@ Notas detalladas (PRINT)
   • Con `USING`, los `,` y `;` separan y encadenan igual que en `PRINT` normal.
 - Funciones especiales de `PRINT`: `SPC(n)` y `TAB(n)`.
   • `SPC(n)`: imprime `n` espacios.
-  • `TAB(n)`: mueve el cursor a la columna `n` (si hay ANSI); en entornos sin ANSI, imprime `n` espacios.
+  • `TAB(n)`: mueve el cursor a la columna `n` si la columna actual todavía no ha llegado a ella; nunca retrocede.
   • Restricción: solo pueden usarse como expresión aislada de `PRINT` (p.ej., `PRINT TAB(20), "Hola"`). Fuera de `PRINT` o dentro de una expresión provocan “Expresión no permitida”.
 
 Notas detalladas (INPUT)
@@ -356,7 +357,7 @@ Notas sobre DISP
   • No se admite `DISP USING`, pero se puede obtener el mismo resultado usando la función `DEC$`, que formatea utilizando el mismo formato que `USING`.
 - Ejemplos de impresiones con PRINT y como reproducirlas con DISP:
   • PRINT USING "0########## ";B1(A); → DISP DEC$(B1(A), "0########## ")
-  • PRINT "NOMBRE","DIRECCIÓN"; → DISP "NOMBRE"+SPACE$(8)+"DIRECCIÓN" 'SPACE$(8) en lugar de la coma (que inserta una tabulación con PRINT)
+  • PRINT "NOMBRE","DIRECCIÓN"; → DISP "NOMBRE"+SPACE$(8)+"DIRECCIÓN" 'SPACE$(8) en lugar de la coma con la zona de impresión por defecto
   • PRINT "NOMBRE: ";X$ → DISP "NOMBRE: "+X$ : LOCATE 0,VPOS+1 'El LOCATE sitúa el cursor al comienzo de la siguiente línea, igual que un PRINT que no termina en `;`
   • PRINT 3+4; → DISP STR$(3+4) 
 

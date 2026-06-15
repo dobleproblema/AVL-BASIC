@@ -22,6 +22,7 @@ from basic import (
     VARIABLE_STYLE,
     RESET,
     IR_FRECTANGLE_FAST,
+    PRINT_ZONE_DEFAULT,
     ReturnMain,
     _key_q,
     _gui_key_q,
@@ -6842,9 +6843,10 @@ def test_basic_program(run_basic_interpreter, program_code, expected_output):
     relevant_output = '\n'.join(relevant_output_lines)
     
     if program_code.startswith('10 AFTER 20 GOSUB 50\n20 x=REMAIN(0)\n'):
+        expanded_expected = expected_output.expandtabs(PRINT_ZONE_DEFAULT)
         valid_outputs = {
-            expected_output,
-            expected_output.replace(' 20  19', ' 21  20  19', 1),
+            expanded_expected,
+            expanded_expected.replace(' 20  19', ' 21  20  19', 1),
         }
         assert relevant_output in valid_outputs, (
             f"La salida del temporizador no coincide.\n\nEsperado uno de:\n{valid_outputs}\n\nObtenido:\n{relevant_output}"
@@ -6852,7 +6854,8 @@ def test_basic_program(run_basic_interpreter, program_code, expected_output):
         return
 
     # Comparar que la salida esperada está incluida en la salida obtenida
-    assert expected_output == relevant_output, (
+    expected_relevant = expected_output.expandtabs(PRINT_ZONE_DEFAULT)
+    assert expected_relevant == relevant_output, (
         f"La salida no coincide exactamente con el texto esperado.\n\nEsperado:\n{expected_output}\n\nObtenido:\n{relevant_output}"
     )
 
@@ -7056,6 +7059,74 @@ def test_print_number_call_reports_syntax_error(run_basic_interpreter, statement
     assert "Syntax error." in output
     assert "SyntaxWarning" not in output
     assert "Invalid value type." not in output
+
+
+def test_print_comma_zones_and_tab_absolute_position(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'PRINT "a","b",TAB(20),"c"',
+        'PRINT "a","b";TAB(20);"c"',
+        'PRINT (TAB(5));"x"',
+        'EXIT',
+    ])
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        'a       b               c',
+        'a       b          c',
+        '    x',
+    ]
+
+
+def test_zone_changes_print_comma_width_without_changing_tab(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'ZONE 4',
+        'PRINT "a","b","c"',
+        'PRINT "a","b";TAB(10);"c"',
+        'ZONE 1',
+        'PRINT "a","b","c"',
+        'EXIT',
+    ])
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        'a   b   c',
+        'a   b    c',
+        'a b c',
+    ]
+
+
+@pytest.mark.parametrize("statement", [
+    "ZONE",
+    "ZONE 0",
+    "ZONE 256",
+    "ZONE 2.5",
+])
+def test_zone_rejects_invalid_widths(run_basic_interpreter, statement):
+    output = run_basic_interpreter([
+        statement,
+        'EXIT',
+    ])
+    assert "Invalid argument." in output or "Incorrect number of arguments." in output
+
+
+def test_mat_print_using_comma_keeps_wide_matrix_columns(run_basic_interpreter):
+    output = run_basic_interpreter([
+        'NEW',
+        '10 MAT BASE 1',
+        '20 DIM A(3,3),B(3,3)',
+        '30 MAT A=CON',
+        '40 MAT B=ZER',
+        '50 MAT PRINT USING "#";A;B,',
+        'RUN',
+        'EXIT',
+    ])
+
+    wide_zero_row = f"{'0':>22}{'0':>22}{'0':>22}"
+    assert _filtered_basic_output_lines(output) == [
+        '1  1  1',
+        '1  1  1',
+        '1  1  1',
+        '',
+        wide_zero_row,
+        wide_zero_row,
+        wide_zero_row,
+    ]
 
 
 def test_string_square_bracket_access_is_one_based():

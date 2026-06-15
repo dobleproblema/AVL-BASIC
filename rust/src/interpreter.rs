@@ -24,6 +24,9 @@ type FastHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<Fast
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const PRINT_ZONE_DEFAULT: usize = 8;
+const PRINT_ZONE_MIN: usize = 1;
+const PRINT_ZONE_MAX: usize = 255;
 
 #[derive(Debug, Clone)]
 struct FastHasher(u64);
@@ -821,6 +824,7 @@ pub struct Interpreter {
     stream_output: bool,
     line_open: bool,
     output_col: usize,
+    print_zone: usize,
     ansi_output: bool,
     debug_dirty_blocks: bool,
     debug_block_size: i32,
@@ -913,6 +917,7 @@ impl Interpreter {
             stream_output: false,
             line_open: false,
             output_col: 0,
+            print_zone: PRINT_ZONE_DEFAULT,
             ansi_output: console::ansi_enabled(),
             debug_dirty_blocks: false,
             debug_block_size: 32,
@@ -1733,9 +1738,7 @@ impl Interpreter {
         let closed_graphics_window = self.graphics_window_closed_by_current_run;
         self.run_depth -= 1;
         if self.run_depth == 0 {
-            if (self.graphics_window_used_this_run || self.graphics_window.is_some())
-                && !closed_graphics_window
-            {
+            if self.should_refocus_console_after_run(closed_graphics_window) {
                 focus_console_window();
             }
             if matches!(result, Ok(RunOutcome::End)) {
@@ -1885,6 +1888,10 @@ impl Interpreter {
             && !self.graphics_window_closed_by_current_run
     }
 
+    fn should_refocus_console_after_run(&self, closed_graphics_window: bool) -> bool {
+        self.graphics_window_used_this_run && !closed_graphics_window
+    }
+
     fn poll_interrupts_and_timers(&mut self, cursor: &Cursor) -> BasicResult<()> {
         self.check_user_interrupt(cursor)?;
         self.process_timers()?;
@@ -1977,6 +1984,7 @@ impl Interpreter {
         match first {
             "REM" | "DATA" => Ok(()),
             "PRINT" | "?" => self.execute_print(command[first.len()..].trim()),
+            "ZONE" => self.execute_zone(command[4..].trim()),
             "INPUT" => self.execute_input(command[5..].trim(), cursor),
             "LINE" if upper.starts_with("LINE INPUT") => {
                 self.execute_line_input(command[10..].trim(), cursor)
@@ -2472,7 +2480,7 @@ impl Interpreter {
                         {
                             return Ok(());
                         }
-                        self.write("\t");
+                        self.write_print_zone_spacing();
                         item.clear();
                         newline = false;
                         continue;
@@ -2503,6 +2511,27 @@ impl Interpreter {
         } else {
             self.flush_stream_output();
         }
+        Ok(())
+    }
+
+    fn execute_zone(&mut self, args: &str) -> BasicResult<()> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        let parts = split_arguments(trimmed);
+        if parts.len() != 1 {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        let value = self.eval_number(parts[0].trim())?;
+        if !value.is_finite() || value.fract() != 0.0 {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
+        let zone = value as isize;
+        if zone < PRINT_ZONE_MIN as isize || zone > PRINT_ZONE_MAX as isize {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
+        self.print_zone = zone as usize;
         Ok(())
     }
 
@@ -3151,7 +3180,7 @@ impl Interpreter {
         for (item, sep) in items {
             if item.trim().is_empty() {
                 if sep == Some(',') {
-                    self.write("\t");
+                    self.write_print_zone_spacing();
                 }
                 continue;
             }
@@ -3162,7 +3191,7 @@ impl Interpreter {
                 Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
             }
             match sep {
-                Some(',') => self.write("\t"),
+                Some(',') => self.write_print_zone_spacing(),
                 Some(';') | None => {}
                 _ => {}
             }
@@ -4641,12 +4670,15 @@ impl Interpreter {
                 let value = self.arrays.get(&name).unwrap().get(&indexes)?;
                 let cell = match value {
                     Value::Number(n) => {
-                        if let Some(fmt) = using_format {
+                        let formatted = if let Some(fmt) = using_format {
                             format_using(n, fmt)
-                        } else if wide {
-                            format!("{:>22}", format_basic_number(n))
                         } else {
                             format_basic_number(n)
+                        };
+                        if wide {
+                            format!("{formatted:>22}")
+                        } else {
+                            formatted
                         }
                     }
                     Value::Str(s) => {
@@ -7743,6 +7775,11 @@ impl Interpreter {
         self.output_col = 0;
     }
 
+    fn write_print_zone_spacing(&mut self) {
+        let spaces = self.print_zone - (self.output_col % self.print_zone);
+        self.write(&" ".repeat(spaces));
+    }
+
     fn flush_stream_output(&self) {
         if self.stream_output {
             let _ = io::stdout().flush();
@@ -9023,6 +9060,25 @@ mod interpreter_tests {
         interp.mark_graphics_window_user_closed();
 
         assert!(!interp.should_present_dirty_graphics_at_run_boundary());
+    }
+
+    #[test]
+    fn console_refocus_after_run_requires_current_graphics_use() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_used_this_run = false;
+
+        assert!(!interp.should_refocus_console_after_run(false));
+
+        interp.graphics_window_used_this_run = true;
+        assert!(interp.should_refocus_console_after_run(false));
+    }
+
+    #[test]
+    fn console_refocus_after_run_skips_window_close_interrupt() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_used_this_run = true;
+
+        assert!(!interp.should_refocus_console_after_run(true));
     }
 
     #[test]
@@ -10393,7 +10449,14 @@ fn strip_wrapping_parens(source: &str) -> &str {
 }
 
 fn whole_function_argument<'a>(source: &'a str, function: &str) -> Option<&'a str> {
-    let trimmed = source.trim();
+    let mut trimmed = source.trim();
+    loop {
+        let stripped = strip_wrapping_parens(trimmed).trim();
+        if stripped == trimmed {
+            break;
+        }
+        trimmed = stripped;
+    }
     let prefix_len = function.len();
     let Some(prefix) = trimmed.get(..prefix_len) else {
         return None;

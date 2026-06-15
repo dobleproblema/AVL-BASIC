@@ -1004,7 +1004,7 @@ fn input_accepts_string_array_elements() {
     );
     assert_eq!(
         output,
-        "Nombre ? Telefono ? Nombre ? Telefono ?  1 Pedro\t111\n 2 Ana\t222\n"
+        "Nombre ? Telefono ? Nombre ? Telefono ?  1 Pedro        111\n 2 Ana  222\n"
     );
 }
 
@@ -1050,7 +1050,32 @@ fn swap_exchanges_scalars_and_array_elements() {
 80 PRINT A$(7),A$(8)
 90 END"#,
     );
-    assert_eq!(output, " 2\t 7\nhola\tadios\n");
+    assert_eq!(output, " 2       7\nhola    adios\n");
+}
+
+#[test]
+fn print_commas_use_logical_zones_and_tab_is_absolute() {
+    let output = run_rust(
+        r#"10 PRINT "a","b",TAB(20),"c"
+20 PRINT "a","b";TAB(20);"c"
+30 PRINT (TAB(5));"x""#,
+    );
+    assert_eq!(
+        output,
+        "a       b               c\na       b          c\n    x\n"
+    );
+}
+
+#[test]
+fn zone_changes_print_comma_width() {
+    let output = run_rust(
+        r#"10 ZONE 4
+20 PRINT "a","b","c"
+30 PRINT "a","b";TAB(10);"c"
+40 ZONE 1
+50 PRINT "a","b","c""#,
+    );
+    assert_eq!(output, "a   b   c\na   b    c\na b c\n");
 }
 
 #[test]
@@ -1193,6 +1218,23 @@ fn multiline_fn_can_return_matrix_from_mat_assignment() {
 90 MAT PRINT C"#,
     );
     assert_eq!(output, " 3   3\n 3   3\n");
+}
+
+#[test]
+fn mat_print_using_comma_keeps_wide_matrix_columns() {
+    let output = run_rust(
+        r###"10 MAT BASE 1
+20 DIM A(3,3),B(3,3)
+30 MAT A=CON
+40 MAT B=ZER
+50 MAT PRINT USING "#";A;B,"###,
+    );
+    let wide_zero_row = format!("{:>22}{:>22}{:>22}", "0", "0", "0");
+    let expected = format!(
+        "1  1  1\n1  1  1\n1  1  1\n\n{0}\n{0}\n{0}\n",
+        wide_zero_row
+    );
+    assert_eq!(output, expected);
 }
 
 #[test]

@@ -278,18 +278,19 @@ Example
 
 5. Text input/output in the console
 
-+ PRINT [list]                        `;` as separator concatenates the items in the list; `,` inserts a tab between them
++ PRINT [list]                        `;` as separator concatenates items; `,` advances to the next print zone
++ ZONE n                              Sets the print-zone width used by commas in `PRINT` (1..255, default 8)
 + INPUT ["prompt"][,|;] var1[,var2...] Interactive input
 + LINE INPUT ["prompt"][,|;] v$       Same as INPUT but reads a single string and keeps commas as part of the input instead of separators
 + CLS                                 Clears the contents of the console
 
 Quick notes
-- `PRINT` with `;` at the end does not add a newline; with `,` it inserts a tab (not fixed spaces).
+- `PRINT` with `;` at the end does not add a newline; with `,` it advances to the next print zone. The default zone width is 8 and can be changed with `ZONE n`.
 - `INPUT` stops execution until the requested values are entered.
 
 Detailed notes (PRINT)
 - Numbers: integers are printed without decimals; reals with up to 14 significant digits (without trailing zeros). Positive values are printed with a leading space; negatives with the `-` sign.
-- The items in the print list may be empty. This is useful to insert extra tab stops. Example: `PRINT ,,`, `PRINT "Hello",,,"Goodbye"`.
+- The items in the print list may be empty. This is useful to advance through extra print zones. Example: `PRINT ,,`, `PRINT "Hello",,,"Goodbye"`.
 - PRINT USING: `PRINT USING "mask"; exprs` or `PRINT USING var$; exprs`.
   * Placeholders: `#` (digit or space), `0` (digit or forced zero), and `+` as a prefix (forces the sign to be printed).
   * The dot in the mask separates the integer and decimal parts; if there is no fractional part in the mask, `.` is not printed.
@@ -304,7 +305,7 @@ Detailed notes (PRINT)
   * With `USING`, `,` and `;` separate and chain items exactly as in normal `PRINT`.
 - Special `PRINT` functions: `SPC(n)` and `TAB(n)`.
   * `SPC(n)`: prints `n` spaces.
-  * `TAB(n)`: moves the cursor to column `n` (if ANSI is available); in non-ANSI environments, it prints `n` spaces.
+  * `TAB(n)`: moves the cursor to column `n` if the current column has not reached it yet; it never moves backwards.
   * Restriction: they may only be used as standalone expressions inside `PRINT` (for example, `PRINT TAB(20), "Hello"`). Outside `PRINT`, or inside a larger expression, they raise "Expression not allowed".
 
 Detailed notes (INPUT)
@@ -357,7 +358,7 @@ Notes on DISP
   * `DISP USING` is not supported, but the same result can be obtained with the `DEC$` function, which formats using the same rules as `USING`.
 - Examples of `PRINT` output and how to reproduce it with `DISP`:
   * `PRINT USING "0########## ";B1(A);` -> `DISP DEC$(B1(A), "0########## ")`
-  * `PRINT "NAME","ADDRESS";` -> `DISP "NAME"+SPACE$(8)+"ADDRESS"`  `'SPACE$(8)` instead of the comma (which inserts a tab with PRINT)
+  * `PRINT "NAME","ADDRESS";` -> `DISP "NAME"+SPACE$(8)+"ADDRESS"`  `'SPACE$(8)` instead of the comma with the default print zone
   * `PRINT "NAME: ";X$` -> `DISP "NAME: "+X$ : LOCATE 0,VPOS+1`  'The `LOCATE` places the cursor at the start of the next line, just like a `PRINT` that does not end with `;`
   * `PRINT 3+4;` -> `DISP STR$(3+4)`
 
