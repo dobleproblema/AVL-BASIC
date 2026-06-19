@@ -24,7 +24,8 @@ type FastHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<Fast
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-const PRINT_ZONE_DEFAULT: usize = 8;
+const PRINT_ZONE_DEFAULT_ENV: &str = "AVL_BASIC_PRINT_ZONE_DEFAULT";
+const PRINT_ZONE_DEFAULT: usize = 22;
 const PRINT_ZONE_MIN: usize = 1;
 const PRINT_ZONE_MAX: usize = 255;
 
@@ -50,6 +51,14 @@ impl Hasher for FastHasher {
     fn finish(&self) -> u64 {
         self.0
     }
+}
+
+fn default_print_zone() -> usize {
+    std::env::var(PRINT_ZONE_DEFAULT_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|zone| (PRINT_ZONE_MIN..=PRINT_ZONE_MAX).contains(zone))
+        .unwrap_or(PRINT_ZONE_DEFAULT)
 }
 
 const AVL_BASIC_LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -917,7 +926,7 @@ impl Interpreter {
             stream_output: false,
             line_open: false,
             output_col: 0,
-            print_zone: PRINT_ZONE_DEFAULT,
+            print_zone: default_print_zone(),
             ansi_output: console::ansi_enabled(),
             debug_dirty_blocks: false,
             debug_block_size: 32,

@@ -278,13 +278,13 @@ Ejemplo
 5. Entrada / salida de texto en la consola
 
 + PRINT [lista]                       `;` como separador concatena los elementos; `,` avanza a la siguiente zona de impresión
-+ ZONE n                              Define el ancho de zona que usan las comas en `PRINT` (1..255, por defecto 8)
++ ZONE n                              Define el ancho de zona que usan las comas en `PRINT` (1..255, por defecto 22)
 + INPUT ["prompt"][,|;] var1[,var2…]  Entrada interactiva.
 + LINE INPUT ["prompt"][,|;] v$       Idéntico a INPUT pero lee una única cadena e incorpora las comas a la entrada. No las considera separadores.
 + CLS                                 Borra el contenido de la consola 
 
 Notas rápidas
-- `PRINT` con `;` al final no hace salto de línea; con `,` avanza a la siguiente zona de impresión. El ancho por defecto es 8 y puede cambiarse con `ZONE n`.
+- `PRINT` con `;` al final no hace salto de línea; con `,` avanza a la siguiente zona de impresión. El ancho por defecto es 22 y puede cambiarse con `ZONE n`.
 - `INPUT` detiene la ejecución hasta recibir los valores solicitados.
 
 Notas detalladas (PRINT)
@@ -357,7 +357,7 @@ Notas sobre DISP
   • No se admite `DISP USING`, pero se puede obtener el mismo resultado usando la función `DEC$`, que formatea utilizando el mismo formato que `USING`.
 - Ejemplos de impresiones con PRINT y como reproducirlas con DISP:
   • PRINT USING "0########## ";B1(A); → DISP DEC$(B1(A), "0########## ")
-  • PRINT "NOMBRE","DIRECCIÓN"; → DISP "NOMBRE"+SPACE$(8)+"DIRECCIÓN" 'SPACE$(8) en lugar de la coma con la zona de impresión por defecto
+  • PRINT "NOMBRE","DIRECCIÓN"; → DISP "NOMBRE"+SPACE$(22)+"DIRECCIÓN" 'SPACE$(22) en lugar de la coma con la zona de impresión por defecto
   • PRINT "NOMBRE: ";X$ → DISP "NOMBRE: "+X$ : LOCATE 0,VPOS+1 'El LOCATE sitúa el cursor al comienzo de la siguiente línea, igual que un PRINT que no termina en `;`
   • PRINT 3+4; → DISP STR$(3+4) 
 
@@ -1336,5 +1336,5 @@ Conversión desde texto (`VAL`)
 Operadores lógicos (bit a bit)
 - `AND`, `OR`, `XOR` y `NOT` operan a nivel de bit sobre enteros.
 - Antes de aplicar los operadores lógicos, los operandos numéricos se redondean con `ROUND` de “medio hacia afuera” (away‑from‑zero). Ej.: `23.8 AND 1e3` → 8; `3.4 XOR 2.6` → 0.
-- Precedencia: `NOT` > `AND` > `XOR` > `OR` (asociación por la izquierda). Ej.: `45 XOR 123 AND 145` → 60.
+- Precedencia: las operaciones aritméticas y comparaciones se evalúan antes que los operadores lógicos; dentro de los lógicos: `NOT` > `AND` > `XOR` > `OR` (asociación por la izquierda). Ej.: `45 XOR 123 AND 145` → 60; `NOT 5=2` → `-1`.
 - Verdadero/Falso: las comparaciones y resultados lógicos se representan como `-1` (cierto) y `0` (falso). Ej.: `PRINT 7=7` → `-1`; `PRINT NOT 0` → `-1`; `PRINT NOT -1` → `0`.

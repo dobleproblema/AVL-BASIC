@@ -5,6 +5,8 @@ import subprocess
 import os
 import sys
 
+os.environ.setdefault("AVL_BASIC_PRINT_ZONE_DEFAULT", "8")
+
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 @pytest.fixture

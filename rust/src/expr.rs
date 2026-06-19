@@ -530,15 +530,25 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> BasicResult<Expr> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_not()?;
         while self.consume_ident("AND") {
             left = Expr::Binary {
                 op: BinaryOp::And,
                 left: Box::new(left),
-                right: Box::new(self.parse_comparison()?),
+                right: Box::new(self.parse_not()?),
             };
         }
         Ok(left)
+    }
+
+    fn parse_not(&mut self) -> BasicResult<Expr> {
+        if self.consume_ident("NOT") {
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(self.parse_not()?),
+            });
+        }
+        self.parse_comparison()
     }
 
     fn parse_comparison(&mut self) -> BasicResult<Expr> {
@@ -647,12 +657,6 @@ impl Parser {
                 expr: Box::new(self.parse_power_operand()?),
             });
         }
-        if self.consume_ident("NOT") {
-            return Ok(Expr::Unary {
-                op: UnaryOp::Not,
-                expr: Box::new(self.parse_power_operand()?),
-            });
-        }
         self.parse_primary()
     }
 
@@ -666,12 +670,6 @@ impl Parser {
         if self.consume_op("-") {
             return Ok(Expr::Unary {
                 op: UnaryOp::Minus,
-                expr: Box::new(self.parse_unary()?),
-            });
-        }
-        if self.consume_ident("NOT") {
-            return Ok(Expr::Unary {
-                op: UnaryOp::Not,
                 expr: Box::new(self.parse_unary()?),
             });
         }

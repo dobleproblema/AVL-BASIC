@@ -279,13 +279,13 @@ Example
 5. Text input/output in the console
 
 + PRINT [list]                        `;` as separator concatenates items; `,` advances to the next print zone
-+ ZONE n                              Sets the print-zone width used by commas in `PRINT` (1..255, default 8)
++ ZONE n                              Sets the print-zone width used by commas in `PRINT` (1..255, default 22)
 + INPUT ["prompt"][,|;] var1[,var2...] Interactive input
 + LINE INPUT ["prompt"][,|;] v$       Same as INPUT but reads a single string and keeps commas as part of the input instead of separators
 + CLS                                 Clears the contents of the console
 
 Quick notes
-- `PRINT` with `;` at the end does not add a newline; with `,` it advances to the next print zone. The default zone width is 8 and can be changed with `ZONE n`.
+- `PRINT` with `;` at the end does not add a newline; with `,` it advances to the next print zone. The default zone width is 22 and can be changed with `ZONE n`.
 - `INPUT` stops execution until the requested values are entered.
 
 Detailed notes (PRINT)
@@ -358,7 +358,7 @@ Notes on DISP
   * `DISP USING` is not supported, but the same result can be obtained with the `DEC$` function, which formats using the same rules as `USING`.
 - Examples of `PRINT` output and how to reproduce it with `DISP`:
   * `PRINT USING "0########## ";B1(A);` -> `DISP DEC$(B1(A), "0########## ")`
-  * `PRINT "NAME","ADDRESS";` -> `DISP "NAME"+SPACE$(8)+"ADDRESS"`  `'SPACE$(8)` instead of the comma with the default print zone
+  * `PRINT "NAME","ADDRESS";` -> `DISP "NAME"+SPACE$(22)+"ADDRESS"`  `'SPACE$(22)` instead of the comma with the default print zone
   * `PRINT "NAME: ";X$` -> `DISP "NAME: "+X$ : LOCATE 0,VPOS+1`  'The `LOCATE` places the cursor at the start of the next line, just like a `PRINT` that does not end with `;`
   * `PRINT 3+4;` -> `DISP STR$(3+4)`
 
@@ -1335,5 +1335,5 @@ Conversion from text (`VAL`)
 Logical operators (bitwise)
 - `AND`, `OR`, `XOR` and `NOT` operate bit by bit on integers.
 - Before applying logical operators, numeric operands are rounded with `ROUND` using "half away from zero". Example: `23.8 AND 1e3` -> 8; `3.4 XOR 2.6` -> 0.
-- Precedence: `NOT` > `AND` > `XOR` > `OR` (left-associative). Example: `45 XOR 123 AND 145` -> 60.
+- Precedence: arithmetic and comparisons are evaluated before logical operators; within logical operators: `NOT` > `AND` > `XOR` > `OR` (left-associative). Example: `45 XOR 123 AND 145` -> 60; `NOT 5=2` -> `-1`.
 - True/false: comparisons and logical results are represented as `-1` (true) and `0` (false). Example: `PRINT 7=7` -> `-1`; `PRINT NOT 0` -> `-1`; `PRINT NOT -1` -> `0`.

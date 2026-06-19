@@ -5,6 +5,7 @@ import re
 import sys
 import math
 import subprocess
+import os
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -1000,13 +1001,19 @@ Con <decimales> =-4  ->  0
 20 PRINT 8=5
 30 PRINT 8=5 OR 7=7'
 40 PRINT NOT 5=2
-50 PRINT NOT (5=2)''',
+50 PRINT NOT (5=2)
+60 IF NOT "juan"<"pepe" THEN PRINT "verdadero" ELSE PRINT "falso"
+70 PRINT NOT 5+2
+80 PRINT NOT 5 AND 1''',
 
 '''-1
  0
 -1
- 0
--1'''    
+-1
+-1
+falso
+-8
+ 0'''    
 ),
 (
 '''10 PRINT 3.8 AND 7.2
@@ -7075,6 +7082,45 @@ def test_print_comma_zones_and_tab_absolute_position(run_basic_interpreter):
     ]
 
 
+def _run_basic_with_print_zone_default(commands, zone_default):
+    env = os.environ.copy()
+    if zone_default is None:
+        env.pop("AVL_BASIC_PRINT_ZONE_DEFAULT", None)
+    else:
+        env["AVL_BASIC_PRINT_ZONE_DEFAULT"] = str(zone_default)
+    process = subprocess.Popen(
+        [sys.executable, "-X", "utf8", os.path.join(ROOT_DIR, "basic.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        env=env,
+    )
+    output, _ = process.communicate(input="\n".join(commands) + "\n", timeout=10)
+    assert process.returncode == 0
+    return output
+
+
+def test_default_print_zone_is_22_with_test_override_available():
+    default_output = _run_basic_with_print_zone_default(
+        ['PRINT "a","b"', 'EXIT'],
+        None,
+    )
+    override_output = _run_basic_with_print_zone_default(
+        ['PRINT "a","b"', 'EXIT'],
+        8,
+    )
+
+    assert _filtered_basic_output_lines(default_output, trim_trailing_blank=True) == [
+        'a' + (' ' * 21) + 'b',
+    ]
+    assert _filtered_basic_output_lines(override_output, trim_trailing_blank=True) == [
+        'a       b',
+    ]
+
+
 def test_zone_changes_print_comma_width_without_changing_tab(run_basic_interpreter):
     output = run_basic_interpreter([
         'ZONE 4',
@@ -9141,6 +9187,10 @@ def test_evaluate_expression_relational_operators_produce_basic_booleans(expr, e
         ('INT(0=0)', -1),
         ('NOT(1=1)', 0),
         ('NOT(1=0)', -1),
+        ('NOT 5=2', -1),
+        ('NOT "juan"<"pepe"', 0),
+        ('NOT 5+2', -8),
+        ('NOT 5 AND 1', 0),
         ('(1<2) AND (2<3)', -1),
         ('(1<2) AND (2>3)', 0),
         ('(1<2) OR (2>3)', -1),

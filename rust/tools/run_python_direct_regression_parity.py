@@ -35,6 +35,7 @@ DEFAULT_PY_REPO = default_python_repo()
 DEFAULT_RUST_BIN = PROJECT_DIR / "target" / "debug" / (
     "avl-basic.exe" if os.name == "nt" else "avl-basic"
 )
+TEST_PRINT_ZONE_ENV = {**os.environ, "AVL_BASIC_PRINT_ZONE_DEFAULT": "8"}
 
 SESSION_NOISE_RE = re.compile(
     r"^(?:"
@@ -262,6 +263,7 @@ def run_process(
         command,
         input=stdin,
         cwd=str(cwd),
+        env=TEST_PRINT_ZONE_ENV,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

@@ -28,6 +28,7 @@ DEFAULT_PY_REPO = default_python_repo()
 DEFAULT_RUST_BIN = PROJECT_DIR / "target" / "debug" / (
     "avl-basic.exe" if os.name == "nt" else "avl-basic"
 )
+TEST_PRINT_ZONE_ENV = {**os.environ, "AVL_BASIC_PRINT_ZONE_DEFAULT": "8"}
 
 
 BASE_FORMATS = [
@@ -194,6 +195,7 @@ def run_rust_program(rust_bin: Path, cases: list[tuple[str, float, str]]) -> lis
         completed = subprocess.run(
             [str(rust_bin), str(program_path)],
             cwd=PROJECT_DIR,
+            env=TEST_PRINT_ZONE_ENV,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

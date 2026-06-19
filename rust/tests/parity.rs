@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 fn run_rust(program: &str) -> String {
     let mut interp = Interpreter::new();
+    interp.process_immediate("ZONE 8").unwrap();
     for line in program.lines() {
         interp.process_immediate(line).unwrap();
     }
@@ -20,6 +21,7 @@ fn run_rust_cli(program: &str, input: &str) -> String {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
         .arg(file.path())
+        .env("AVL_BASIC_PRINT_ZONE_DEFAULT", "8")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -46,6 +48,7 @@ fn run_rust_cli_with_timeout(program: &str, input: &str, timeout: Duration) -> S
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
         .arg(file.path())
+        .env("AVL_BASIC_PRINT_ZONE_DEFAULT", "8")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -80,6 +83,42 @@ fn run_rust_cli_with_timeout(program: &str, input: &str, timeout: Duration) -> S
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn run_rust_cli_with_print_zone_default(program: &str, zone_default: Option<&str>) -> String {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(program.as_bytes()).unwrap();
+    file.flush().unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_avl-basic"));
+    command.arg(file.path()).stdin(Stdio::null()).stdout(Stdio::piped());
+    if let Some(zone) = zone_default {
+        command.env("AVL_BASIC_PRINT_ZONE_DEFAULT", zone);
+    } else {
+        command.env_remove("AVL_BASIC_PRINT_ZONE_DEFAULT");
+    }
+
+    let output = command.spawn().unwrap().wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "interpreter failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn default_print_zone_is_22_with_test_override_available() {
+    let program = r#"10 PRINT "a","b"
+20 END"#;
+    assert_eq!(
+        run_rust_cli_with_print_zone_default(program, None),
+        format!("a{}b\n", " ".repeat(21))
+    );
+    assert_eq!(
+        run_rust_cli_with_print_zone_default(program, Some("8")),
+        "a       b\n"
+    );
 }
 
 #[test]
@@ -203,6 +242,23 @@ fn print_and_arithmetic_baseline() {
 40 END"#,
     );
     assert_eq!(output, " 14\nHOLA BASIC\n-1\n");
+}
+
+#[test]
+fn not_has_logical_precedence_after_relational_operations() {
+    let output = run_rust(
+        r#"10 IF NOT "juan"<"pepe" THEN PRINT "verdadero" ELSE PRINT "falso"
+20 IF NOT 5=2 THEN PRINT "verdadero" ELSE PRINT "falso"
+30 PRINT NOT 5=2
+40 PRINT NOT (5=2)
+50 PRINT NOT 5+2
+60 PRINT NOT 5 AND 1
+70 END"#,
+    );
+    assert_eq!(
+        output,
+        "falso\nverdadero\n-1\n-1\n-8\n 0\n"
+    );
 }
 
 #[test]

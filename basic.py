@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.48"
+__version__ = "1.5.49"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -57,7 +57,8 @@ ANSI_ENABLED = True
 ANSI_256 = True
 
 TAB_SIZE = 8
-PRINT_ZONE_DEFAULT = TAB_SIZE
+PRINT_ZONE_DEFAULT_ENV = "AVL_BASIC_PRINT_ZONE_DEFAULT"
+PRINT_ZONE_DEFAULT_VALUE = 22
 PRINT_ZONE_MIN = 1
 PRINT_ZONE_MAX = 255
 INDENT = True
@@ -66,6 +67,20 @@ IMPLICIT_ARRAY_DIM = 10
 
 _NOWAIT = _tkinter.DONT_WAIT
 _WINDOW_NOWAIT = _tkinter.WINDOW_EVENTS | _tkinter.DONT_WAIT
+
+def _read_print_zone_default() -> int:
+    raw = os.environ.get(PRINT_ZONE_DEFAULT_ENV)
+    if raw is None:
+        return PRINT_ZONE_DEFAULT_VALUE
+    try:
+        zone = int(raw)
+    except ValueError:
+        return PRINT_ZONE_DEFAULT_VALUE
+    if PRINT_ZONE_MIN <= zone <= PRINT_ZONE_MAX:
+        return zone
+    return PRINT_ZONE_DEFAULT_VALUE
+
+PRINT_ZONE_DEFAULT = _read_print_zone_default()
 
 _FASTPATH_LOGICAL_RE = re.compile(r'\b(AND|OR|XOR|NOT)\b', re.IGNORECASE)
 _FASTPATH_FN_RE = re.compile(r'\bFN[A-Z][A-Z0-9$]*', re.IGNORECASE)
@@ -870,90 +885,151 @@ def _fix_pow(block: str) -> str:
         res = f'({res} ** {s})'
     return res
 
-# Helper that converts a BASIC string into Python with correct parentheses
 def _add_parens_and_translate(expr: str) -> str:
     """
-    • Add parentheses around AND/OR/XOR operands (only at the
-      level where they appear) so Python precedence stays correct.
-    • Replace the names with their bitwise equivalents (&, |, ^).
-    • Return the new expression as text.
+    Translate BASIC logical operators to Python bitwise operators while keeping
+    BASIC precedence: comparisons before NOT, then AND, XOR and OR.
     """
-    def process(s: str) -> str:
+    def is_word_char(ch: str) -> bool:
+        return ch.isalnum() or ch in '$_'
+
+    def keyword_at(s: str, pos: int, keyword: str) -> bool:
+        end = pos + len(keyword)
+        return (
+            s[pos:end].upper() == keyword
+            and (pos == 0 or not is_word_char(s[pos - 1]))
+            and (end == len(s) or not is_word_char(s[end]))
+        )
+
+    def split_top_keyword(s: str, keyword: str):
+        parts = []
+        start = 0
         i, n, depth = 0, len(s), 0
-        segments, ops, start = [], [], 0
 
         while i < n:
             ch = s[i]
-
-            # Skip string literals
             if ch in ('"', "'"):
                 quote = ch
                 i += 1
-                while i < n and s[i] != quote:
+                while i < n:
+                    if s[i] == quote:
+                        i += 1
+                        break
                     i += 1
+                continue
+            if ch == '(':
+                depth += 1
                 i += 1
                 continue
+            if ch == ')':
+                depth -= 1
+                i += 1
+                continue
+            if depth == 0 and keyword_at(s, i, keyword):
+                parts.append(s[start:i].strip())
+                i += len(keyword)
+                start = i
+                continue
+            i += 1
 
-            # Parenthesis bookkeeping
+        if not parts:
+            return None
+        parts.append(s[start:].strip())
+        return parts
+
+    def outer_parenthesized_inner(s: str):
+        s = s.strip()
+        if not (s.startswith('(') and s.endswith(')')):
+            return None
+
+        depth = 0
+        i, n = 0, len(s)
+        while i < n:
+            ch = s[i]
+            if ch in ('"', "'"):
+                quote = ch
+                i += 1
+                while i < n:
+                    if s[i] == quote:
+                        i += 1
+                        break
+                    i += 1
+                continue
             if ch == '(':
                 depth += 1
             elif ch == ')':
                 depth -= 1
-            # Logical operator at *level 0*
-            elif depth == 0:
-                for kw, sym in _OPERATOR_MAP.items():
-                    L = len(kw)
-                    if (s[i:i+L].upper() == kw and
-                        (i == 0 or not (s[i-1].isalnum() or s[i-1] == '$')) and
-                        (i+L == n or not (s[i+L].isalnum() or s[i+L] == '$'))):
-                        segments.append(s[start:i].strip())
-                        ops.append(sym)
-                        i += L
-                        start = i
-                        break
-                else:
-                    i += 1
-                    continue
+                if depth == 0 and i != n - 1:
+                    return None
             i += 1
 
-        if ops:
-            segments.append(s[start:].strip())
-            # Process each segment recursively
-            segs = [f'({process(seg)})' for seg in segments]
-            # Left association: ((((A) & (B)) & (C)) ...
-            res = segs[0]
-            for op, seg in zip(ops, segs[1:]):
-                res = f'{res} {op} {seg}'
-            return res
-        # No operators at the current level: process the contents of the parentheses
-        out, i = [], 0
+        return s[1:-1] if depth == 0 else None
+
+    def process_parentheses(s: str) -> str:
+        out = []
+        i, n = 0, len(s)
         while i < n:
-            if s[i] == '(':
-                j, d = i+1, 1
-                while j < n and d:
-                    if s[j] == '(':
-                        d += 1
-                    elif s[j] == ')':
-                        d -= 1
-                    j += 1
-                out.append('(' + process(s[i+1:j-1]) + ')')
-                i = j
-            else:
-                out.append(s[i])
+            ch = s[i]
+            if ch in ('"', "'"):
+                quote = ch
+                start = i
                 i += 1
+                while i < n:
+                    if s[i] == quote:
+                        i += 1
+                        break
+                    i += 1
+                out.append(s[start:i])
+                continue
+            if ch == '(':
+                start = i + 1
+                depth = 1
+                i += 1
+                while i < n and depth:
+                    if s[i] in ('"', "'"):
+                        quote = s[i]
+                        i += 1
+                        while i < n:
+                            if s[i] == quote:
+                                i += 1
+                                break
+                            i += 1
+                        continue
+                    if s[i] == '(':
+                        depth += 1
+                    elif s[i] == ')':
+                        depth -= 1
+                    i += 1
+                out.append('(' + process(s[start:i - 1]) + ')')
+                continue
+            out.append(ch)
+            i += 1
         return ''.join(out)
 
-    # Shortcut: if there are no logical operators, return as is
-    if _LOGIC_RE.search(expr) is None:
-        return expr
+    def process(s: str) -> str:
+        s = s.strip()
+        if not s:
+            return s
 
-    # Parentheses + AND/OR/XOR translation
-    expr = process(expr)
+        for keyword, symbol in (('OR', '|'), ('XOR', '^'), ('AND', '&')):
+            parts = split_top_keyword(s, keyword)
+            if parts:
+                segs = [f'({process(part)})' for part in parts]
+                res = segs[0]
+                for seg in segs[1:]:
+                    res = f'{res} {symbol} {seg}'
+                return res
 
-    # NOT -> ~
-    expr = re.sub(r'\bNOT\b', '~', expr, flags=re.I)
+        if keyword_at(s, 0, 'NOT'):
+            return f'~({process(s[3:].strip())})'
 
-    return expr
+        inner = outer_parenthesized_inner(s)
+        if inner is not None:
+            return '(' + process(inner) + ')'
+
+        return process_parentheses(s)
+
+    return process(expr)
 
 def _normalize_basic_equality(expr: str) -> tuple[str, bool]:
     """

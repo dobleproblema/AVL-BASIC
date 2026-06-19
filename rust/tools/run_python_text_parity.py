@@ -43,6 +43,7 @@ DEFAULT_RUST_BIN = PROJECT_DIR / "target" / "debug" / (
     "avl-basic.exe" if os.name == "nt" else "avl-basic"
 )
 PRINT_ZONE_DEFAULT = 8
+TEST_PRINT_ZONE_ENV = {**os.environ, "AVL_BASIC_PRINT_ZONE_DEFAULT": str(PRINT_ZONE_DEFAULT)}
 
 SESSION_NOISE_RE = re.compile(
     r"^(?:"
@@ -173,6 +174,7 @@ def run_rust_case(rust_bin: Path, case: ProgramCase, temp_dir: Path, timeout: fl
         [str(rust_bin)],
         input=stdin,
         cwd=str(PROJECT_DIR),
+        env=TEST_PRINT_ZONE_ENV,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
