@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.49"
+__version__ = "1.5.50"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -6509,7 +6509,7 @@ class BasicInterpreter:
         - If no pattern is given -> `*.bas`
         - Searches only in the current virtual directory
         - Supports `*` and `?` as wildcards
-        - Shows the list in 4 columns of 20 characters
+        - Shows the list in columns, using 20 characters as the minimum width
         """
         try:
             if wildcard is None or wildcard == "":
@@ -6531,11 +6531,12 @@ class BasicInterpreter:
         ]
         items = sorted(dirs, key=str.lower) + sorted(files, key=str.lower)
 
-        col_w, cols = 20, 4
-        for i, name in enumerate(items):
-            print(f"{name:<{col_w}}", end='' if (i + 1) % cols else '\n')
-        if items and len(items) % cols:   # Break if the last row remained incomplete
-            print()
+        min_col_w, max_cols, max_line_w = 20, 4, 80
+        col_w = max(min_col_w, max((len(name) for name in items), default=0) + 1)
+        cols = max(1, min(max_cols, max_line_w // col_w))
+        for i in range(0, len(items), cols):
+            row = items[i:i + cols]
+            print(''.join(name.ljust(col_w) for name in row).rstrip())
 
     def renum_program(self, args):
         args = args.strip()

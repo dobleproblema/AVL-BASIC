@@ -1424,10 +1424,20 @@ impl Interpreter {
         entries.extend(dirs);
         entries.extend(files);
 
-        for chunk in entries.chunks(4) {
+        let col_width = entries
+            .iter()
+            .map(|entry| entry.chars().count())
+            .max()
+            .map_or(20, |width| 20.max(width + 1));
+        let cols = 1.max(4.min(80 / col_width));
+        for chunk in entries.chunks(cols) {
             let mut line = String::new();
-            for entry in chunk {
-                line.push_str(&format!("{entry:<20}"));
+            for (index, entry) in chunk.iter().enumerate() {
+                if index + 1 == chunk.len() {
+                    line.push_str(entry);
+                } else {
+                    line.push_str(&format!("{entry:<col_width$}"));
+                }
             }
             self.write_line(&line);
         }

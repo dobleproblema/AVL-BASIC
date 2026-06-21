@@ -6932,6 +6932,21 @@ def test_files_lists_subdirectories_with_trailing_slash(tmp_path, run_basic_inte
     assert any('ejemplos/' in line for line in lines)
 
 
+def test_files_separates_names_longer_than_default_column(tmp_path, run_basic_interpreter):
+    for name in ["a.bas", "pimachin-modern-test.bas", "pimachin.bas", "zeta.bas"]:
+        (tmp_path / name).write_text('10 PRINT "OK"\n', encoding='utf-8')
+
+    output = run_basic_interpreter([
+        'FILES "*.bas"',
+        'EXIT',
+    ], cwd=tmp_path)
+
+    lines = _filtered_basic_output_lines(output, trim_trailing_blank=True)
+    listing = "\n".join(lines)
+    assert "pimachin-modern-test.baspimachin.bas" not in listing
+    assert re.search(r"pimachin-modern-test\.bas\s+pimachin\.bas", listing)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
 def test_cd_and_files_accept_directory_junctions_inside_virtual_root(tmp_path, run_basic_interpreter):
     root = tmp_path / "root"

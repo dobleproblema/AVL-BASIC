@@ -310,6 +310,15 @@ def setup_tmp_path_case(case: DirectCase, cwd: Path) -> None:
     if name == "test_files_lists_subdirectories_with_trailing_slash":
         (cwd / "ejemplos").mkdir()
         return
+    if name == "test_files_separates_names_longer_than_default_column":
+        for filename in [
+            "a.bas",
+            "pimachin-modern-test.bas",
+            "pimachin.bas",
+            "zeta.bas",
+        ]:
+            (cwd / filename).write_text('10 PRINT "OK"\n', encoding="utf-8")
+        return
     if name == "test_cd_and_files_accept_directory_junctions_inside_virtual_root":
         shared = cwd / "shared"
         shared.mkdir()

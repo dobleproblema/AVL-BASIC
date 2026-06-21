@@ -298,6 +298,36 @@ fn immediate_cat_save_load_delete_and_list_ranges() {
 }
 
 #[test]
+fn immediate_files_separates_entries_longer_than_default_column() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in [
+        "a.bas",
+        "pimachin-modern-test.bas",
+        "pimachin.bas",
+        "zeta.bas",
+    ] {
+        std::fs::write(temp.path().join(name), "10 PRINT \"OK\"\n").unwrap();
+    }
+
+    let mut interp = Interpreter::new();
+    interp.root_dir = temp.path().to_path_buf();
+    interp.current_dir = temp.path().to_path_buf();
+
+    interp.process_immediate("FILES").unwrap();
+    let output = interp.take_output();
+    assert!(!output.contains("pimachin-modern-test.baspimachin.bas"));
+    assert_eq!(
+        output.split_whitespace().collect::<Vec<_>>(),
+        vec![
+            "a.bas",
+            "pimachin-modern-test.bas",
+            "pimachin.bas",
+            "zeta.bas",
+        ]
+    );
+}
+
+#[test]
 fn renum_fourth_parameter_renumbers_arbitrary_block() {
     let mut interp = Interpreter::new();
     for line in [
