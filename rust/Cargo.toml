@@ -1,6 +1,6 @@
 [package]
 name = "avl-basic-rust"
-version = "1.5.50"
+version = "1.5.51"
 edition = "2021"
 license = "GPL-3.0-or-later"
 build = "build.rs"

@@ -401,6 +401,10 @@ Quick notes
 - `border` (optional) sets a physical margin in pixels: `xmin/xmax/ymin/ymax` fall at that distance from the edges.
 - `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
   * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
+- `CLG` clears and presents the graphics window immediately. In animation loops
+  that draw a complete frame before `FRAME`, this may show a mid-frame clear
+  (flicker/tearing in the Rust backend). Use `CLG OFFSCREEN` in those loops:
+  it clears the buffer and leaves the visible update to the next `FRAME`.
 - `FRAME fps` keeps bare `FRAME` semantics but limits later explicit `FRAME`
   calls to the requested maximum frame rate. The first `FRAME fps` presents
   immediately; subsequent calls wait only if the program is running faster than

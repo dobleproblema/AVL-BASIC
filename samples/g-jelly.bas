@@ -10,7 +10,7 @@
 190 e(i)=y(i)/8-12.5
 200 NEXT i
 210 fps=t=fc=0 : t0=TIME
-220 CLG
+220 CLG OFFSCREEN
 230 FOR i=1 TO PTS
 240 k=k(i) : e=e(i)
 250 d=(k*k+e*e)/99+SIN(t)/6+0.5

@@ -2,10 +2,10 @@
 110 W=WIDTH : H=HEIGHT : SCREEN
 120 Xc=W/2 : Yc=H/2
 130 REM ** Angular speeds and orbit **
-140 VrotY=24E-3 : VrotX=32E-3 'Cube rotation
+140 VrotY=2.4E-2 : VrotX=3.2E-2 'Cube rotation
 150 DistCam = 8 'Distance to the camera
 160 Rorb=3 'Orbit radius
-170 Vorb=28E-3 'Orbital speed
+170 Vorb=2.8E-2 'Orbital speed
 180 RotY=0 : RotX=0 : OrbA=0
 190 DIM P(3,8) 'Vertices
 200 DIM V1x(8),V1y(8),CZ1(8) 'Cube 1: screen and Z
@@ -19,7 +19,7 @@
 280 FOR I=1 TO 6 : FOR J=1 TO 4 : READ F(J,I) : NEXT J : NEXT I
 290 T0=TIME : FPS=0
 300 REM ** Main loop **
-310   FRAME 60 : CLG
+310   FRAME 60 : CLG OFFSCREEN
 320   'Advance angles
 330   RotY=RotY+VrotY
 340   RotX=RotX+VrotX
@@ -98,4 +98,3 @@
 1070 DATA 4, 3, 7, 8
 1080 DATA 2, 6, 7, 3
 1090 DATA 5, 1, 4, 8
-

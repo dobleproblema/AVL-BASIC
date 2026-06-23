@@ -2155,7 +2155,11 @@ impl Interpreter {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
                 self.graphics.clg();
-                self.refresh_graphics_window()
+                if mode.eq_ignore_ascii_case("OFFSCREEN") {
+                    self.refresh_graphics_window()
+                } else {
+                    self.present_graphics_window()
+                }
             }
             "INK" => {
                 self.ensure_graphics_window()?;
