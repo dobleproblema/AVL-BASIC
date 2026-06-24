@@ -47,14 +47,13 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.51"
+__version__ = "1.5.53"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
 SHOW_DIRTY_BLOCKS = False
 READY_PROMPT = True
 ANSI_ENABLED = True
-ANSI_256 = True
 
 TAB_SIZE = 8
 PRINT_ZONE_DEFAULT_ENV = "AVL_BASIC_PRINT_ZONE_DEFAULT"
@@ -481,22 +480,17 @@ WHEAT = "\033[38;5;229m"
 DARK_GRAY = "\033[38;5;240m"
 DEEP_SKY = "\033[38;5;39m"
 SILVER = "\033[38;5;248m"
-# ANSI 16 colors
+VIVID_GREEN = "\033[38;5;34m"
+VIVID_BLUE = "\033[38;5;33m"
+VIVID_ORANGE = "\033[38;5;166m"
+VIVID_GOLD = "\033[38;5;172m"
+VIVID_RED = "\033[38;5;160m"
+DARK_HEADER = "\033[38;5;238m"
+# Standard ANSI colors
 BLACK = "\033[30m"
 GRAY = "\033[90m"
 GREEN = "\033[32m"
-LIGHT_GREEN = "\033[92m"
-YELLOW = "\033[33m"
-LIGHT_YELLOW = "\033[93m"   
 RED = "\033[31m"
-LIGHT_RED = "\033[91m"
-BLUE = "\033[34m"     
-LIGHT_BLUE = "\033[94m"  
-CYAN = "\033[36m"
-LIGHT_CYAN = "\033[96m"
-MAGENTA = "\033[35m"
-LIGHT_MAGENTA = "\033[95m"      
-WHITE = "\033[37m"
 BRIGHT_WHITE = "\033[97m"       
 # Other ANSI
 BOLD = "\033[1m"                # Negrita
@@ -506,31 +500,41 @@ LINE_UP = "\033[A"              # Move cursor up one line
 DEL_LINE ="\033[K"              # Clear the line
 RESET = "\033[0m"               # Restablecer estilos
 
-if ANSI_256:
+SYNTAX_THEME_ENV = "AVL_BASIC_THEME"
+
+
+def _select_syntax_theme():
+    value = os.environ.get(SYNTAX_THEME_ENV, "dark").strip().lower()
+    return "light" if value == "light" else "dark"
+
+
+SYNTAX_THEME = _select_syntax_theme()
+
+if SYNTAX_THEME == "light":
+    KEYWORD_STYLE = f"{BOLD}{ITALICS}{BLACK}"
+    PROMPT_STYLE = f"{VIVID_GREEN}"
+    COMMENT_STYLE = f"{VIVID_GREEN}"
+    LINE_NUMBER_STYLE = f"{VIVID_ORANGE}"
+    VARIABLE_STYLE = f"{BOLD}{VIVID_BLUE}"
+    NUMBER_STYLE = f"{VIVID_ORANGE}"
+    STRING_STYLE = f"{ORCHID}"
+    HEX_STYLE = f"{VIVID_GOLD}"
+    BIN_STYLE = f"{VIVID_GOLD}"
+    ERROR_STYLE = f"{ITALICS}{VIVID_RED}"
+    OTHER_STYLE = f"{SILVER}"
+    HEADER_STYLE = f"{DARK_HEADER}"
+else:
     KEYWORD_STYLE = f"{BOLD}{ITALICS}{BRIGHT_WHITE}"
     PROMPT_STYLE = f"{GREEN}"
     COMMENT_STYLE = f"{GREEN}"
     LINE_NUMBER_STYLE = f"{TAN}"
     VARIABLE_STYLE = f"{BOLD}{DEEP_SKY}"
     NUMBER_STYLE = f"{TAN}"
-    STRING_STYLE = f"{ORCHID}" 
+    STRING_STYLE = f"{ORCHID}"
     HEX_STYLE = f"{WHEAT}"
     BIN_STYLE = f"{WHEAT}"
     ERROR_STYLE = f"{ITALICS}{RED}"
     OTHER_STYLE = f"{SILVER}"
-    HEADER_STYLE = f"{GRAY}"
-else:
-    KEYWORD_STYLE = f"{BOLD}{ITALICS}{WHITE}"
-    PROMPT_STYLE = f"{GREEN}"
-    COMMENT_STYLE = f"{GREEN}"
-    LINE_NUMBER_STYLE = f"{YELLOW}"
-    VARIABLE_STYLE = f"{BOLD}{LIGHT_BLUE}"
-    NUMBER_STYLE = f"{YELLOW}"
-    STRING_STYLE = f"{LIGHT_MAGENTA}" 
-    HEX_STYLE = f"{LIGHT_YELLOW}"
-    BIN_STYLE = f"{LIGHT_YELLOW}"
-    ERROR_STYLE = f"{ITALICS}{RED}"
-    OTHER_STYLE = f"{GRAY}"
     HEADER_STYLE = f"{GRAY}"
 
 IMMEDIATE_COMMANDS = ('NEW', 'LIST', 'RUN', 'SAVE', 'LOAD', 'FILES', 'CAT', 'CD', 'CONT',
@@ -1777,6 +1781,16 @@ def stdout_supports_ansi() -> bool:
     Return True if stdout is a Win32 console where VT can be enabled,
     or if we are not on Windows (where ANSI usually works).
     """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    color = os.environ.get("AVL_BASIC_COLOR")
+    if color is not None:
+        color = color.strip().lower()
+        if color in ("1", "true", "yes", "on", "always"):
+            return True
+        if color in ("0", "false", "no", "off", "never"):
+            return False
+
     if os.name != "nt":
         return sys.stdout.isatty()          # Linux, macOS, WSL…
     

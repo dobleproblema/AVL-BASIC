@@ -2,7 +2,8 @@ use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::expr::{
     call_pure_function, checked_number, compile_expression, eval_compiled, eval_compiled_number,
-    is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp, EvalContext, Expr,
+    is_pi_constant_name, is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp,
+    EvalContext, Expr,
 };
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
@@ -9086,6 +9087,17 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn pi_compiles_as_fast_number_constant() {
+        let expr = compile_expression("7*PI").unwrap();
+        let fast = compile_fast_number_expr(&expr, false).expect("PI should stay on fast path");
+        let mut interp = Interpreter::new();
+
+        let value = fast.eval(&mut interp).unwrap();
+
+        assert!((value - 7.0 * std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    #[test]
     fn console_refocus_after_run_requires_current_graphics_use() {
         let mut interp = Interpreter::new();
         interp.graphics_window_used_this_run = false;
@@ -10905,10 +10917,16 @@ fn compile_fast_rect(
 fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
     match expr {
         Expr::Number(value) => Some(FastNumberExpr::Number(*value)),
+        Expr::Var(name) if is_pi_constant_name(name) => {
+            Some(FastNumberExpr::Number(std::f64::consts::PI))
+        }
         Expr::Var(name)
             if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name) =>
         {
             Some(FastNumberExpr::Var(name.clone()))
+        }
+        Expr::ArrayOrCall { name, args, .. } if args.is_empty() && is_pi_constant_name(name) => {
+            Some(FastNumberExpr::Number(std::f64::consts::PI))
         }
         Expr::ArrayOrCall { name, args, kind }
             if allow_arrays && *kind == ArrayOrCallKind::Array =>

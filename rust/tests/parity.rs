@@ -91,7 +91,10 @@ fn run_rust_cli_with_print_zone_default(program: &str, zone_default: Option<&str
     file.flush().unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_avl-basic"));
-    command.arg(file.path()).stdin(Stdio::null()).stdout(Stdio::piped());
+    command
+        .arg(file.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped());
     if let Some(zone) = zone_default {
         command.env("AVL_BASIC_PRINT_ZONE_DEFAULT", zone);
     } else {
@@ -255,10 +258,7 @@ fn not_has_logical_precedence_after_relational_operations() {
 60 PRINT NOT 5 AND 1
 70 END"#,
     );
-    assert_eq!(
-        output,
-        "falso\nverdadero\n-1\n-1\n-8\n 0\n"
-    );
+    assert_eq!(output, "falso\nverdadero\n-1\n-1\n-8\n 0\n");
 }
 
 #[test]

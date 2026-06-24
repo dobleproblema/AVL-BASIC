@@ -103,7 +103,18 @@ Quick notes
 
 1.1 Code normalization
 
-Whenever you enter a line, the console automatically highlights the syntax: for example, keywords in bold italics, comments in green, or variables in cyan. If your terminal supports ANSI-256, a richer palette is used; otherwise the standard 16 colors are used.
+Whenever you enter a line, the console automatically highlights the syntax with an ANSI-256 palette: for example, keywords in bold italics, comments in green, or variables in cyan. The dark-background palette is used by default, which is best suited to Windows Terminal and most black-background consoles.
+
+Light theme in white-background terminals
+- If you use a light-background terminal, such as some xterm or gnome-terminal configurations, launch the interpreter with `AVL_BASIC_THEME=light` to use the light palette.
+- On Linux/WSL, for a single run:
+  `AVL_BASIC_THEME=light ./avl-basic`
+- To make it permanent in Bash, add this line to your `.bashrc`:
+  `export AVL_BASIC_THEME=light`
+- In PowerShell:
+  `$env:AVL_BASIC_THEME = "light"`
+  `.\avl-basic.exe`
+- Any other `AVL_BASIC_THEME` value is treated as `dark`. ANSI highlighting can be disabled with `NO_COLOR` or `AVL_BASIC_COLOR=0`.
 
 It also automatically normalizes what you type both in program lines and in immediate mode: it uppercases keywords, inserts required spaces, closes missing quotes in string commands, and gives numbers a canonical format. Indentation in the code is preserved.
 

@@ -1,10 +1,10 @@
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
     LeaveAlternateScreen,
 };
+use crossterm::{execute, queue};
 use std::collections::{HashMap, HashSet};
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -15,16 +15,19 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const RESET: &str = "\x1b[0m";
-const ITALICS: &str = "\x1b[3m";
 const GREEN: &str = "\x1b[32m";
-const RED: &str = "\x1b[31m";
 const GRAY: &str = "\x1b[90m";
 const TAN: &str = "\x1b[38;5;214m";
 const ORCHID: &str = "\x1b[38;5;165m";
 const WHEAT: &str = "\x1b[38;5;229m";
 const SILVER: &str = "\x1b[38;5;248m";
+const VIVID_GREEN: &str = "\x1b[38;5;34m";
+const VIVID_ORANGE: &str = "\x1b[38;5;166m";
+const VIVID_GOLD: &str = "\x1b[38;5;172m";
+const DARK_HEADER: &str = "\x1b[38;5;238m";
 
 const KEYWORD_STYLE: &str = "\x1b[1m\x1b[3m\x1b[97m";
+const ERROR_STYLE: &str = "\x1b[3m\x1b[31m";
 const PROMPT_STYLE: &str = GREEN;
 const COMMENT_STYLE: &str = GREEN;
 const LINE_NUMBER_STYLE: &str = TAN;
@@ -40,6 +43,71 @@ const HEX_STYLE: &str = WHEAT;
 const BIN_STYLE: &str = WHEAT;
 const OTHER_STYLE: &str = SILVER;
 const HEADER_STYLE: &str = GRAY;
+
+const LIGHT_KEYWORD_STYLE: &str = "\x1b[1m\x1b[3m\x1b[30m";
+const LIGHT_PROMPT_STYLE: &str = VIVID_GREEN;
+const LIGHT_COMMENT_STYLE: &str = VIVID_GREEN;
+const LIGHT_LINE_NUMBER_STYLE: &str = VIVID_ORANGE;
+const LIGHT_VARIABLE_STYLE: &str = "\x1b[1m\x1b[38;5;33m";
+const LIGHT_NUMBER_STYLE: &str = VIVID_ORANGE;
+const LIGHT_STRING_STYLE: &str = ORCHID;
+const LIGHT_HEX_STYLE: &str = VIVID_GOLD;
+const LIGHT_BIN_STYLE: &str = VIVID_GOLD;
+const LIGHT_OTHER_STYLE: &str = SILVER;
+const LIGHT_HEADER_STYLE: &str = DARK_HEADER;
+const LIGHT_ERROR_STYLE: &str = "\x1b[3m\x1b[38;5;160m";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyntaxTheme {
+    Dark,
+    Light,
+}
+
+#[derive(Clone, Copy)]
+struct SyntaxPalette {
+    keyword: &'static str,
+    prompt: &'static str,
+    comment: &'static str,
+    line_number: &'static str,
+    variable: &'static str,
+    number: &'static str,
+    string: &'static str,
+    hex: &'static str,
+    bin: &'static str,
+    other: &'static str,
+    header: &'static str,
+    error: &'static str,
+}
+
+const DARK_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
+    keyword: KEYWORD_STYLE,
+    prompt: PROMPT_STYLE,
+    comment: COMMENT_STYLE,
+    line_number: LINE_NUMBER_STYLE,
+    variable: VARIABLE_STYLE,
+    number: NUMBER_STYLE,
+    string: STRING_STYLE,
+    hex: HEX_STYLE,
+    bin: BIN_STYLE,
+    other: OTHER_STYLE,
+    header: HEADER_STYLE,
+    error: ERROR_STYLE,
+};
+
+const LIGHT_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
+    keyword: LIGHT_KEYWORD_STYLE,
+    prompt: LIGHT_PROMPT_STYLE,
+    comment: LIGHT_COMMENT_STYLE,
+    line_number: LIGHT_LINE_NUMBER_STYLE,
+    variable: LIGHT_VARIABLE_STYLE,
+    number: LIGHT_NUMBER_STYLE,
+    string: LIGHT_STRING_STYLE,
+    hex: LIGHT_HEX_STYLE,
+    bin: LIGHT_BIN_STYLE,
+    other: LIGHT_OTHER_STYLE,
+    header: LIGHT_HEADER_STYLE,
+    error: LIGHT_ERROR_STYLE,
+};
 
 const KEYWORDS: &[&str] = &[
     "REM",
@@ -290,9 +358,45 @@ pub fn ansi_enabled() -> bool {
         return false;
     }
     match std::env::var("AVL_BASIC_COLOR") {
-        Ok(value) if value.eq_ignore_ascii_case("always") => true,
-        Ok(value) if value.eq_ignore_ascii_case("never") => false,
+        Ok(value)
+            if matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "always"
+            ) =>
+        {
+            true
+        }
+        Ok(value)
+            if matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off" | "never"
+            ) =>
+        {
+            false
+        }
         _ => io::stdout().is_terminal(),
+    }
+}
+
+fn current_syntax_palette() -> SyntaxPalette {
+    syntax_palette_for(current_syntax_theme())
+}
+
+fn current_syntax_theme() -> SyntaxTheme {
+    syntax_theme_from_env_value(std::env::var("AVL_BASIC_THEME").ok().as_deref())
+}
+
+fn syntax_palette_for(theme: SyntaxTheme) -> SyntaxPalette {
+    match theme {
+        SyntaxTheme::Dark => DARK_SYNTAX_PALETTE,
+        SyntaxTheme::Light => LIGHT_SYNTAX_PALETTE,
+    }
+}
+
+fn syntax_theme_from_env_value(value: Option<&str>) -> SyntaxTheme {
+    match value.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("light") => SyntaxTheme::Light,
+        _ => SyntaxTheme::Dark,
     }
 }
 
@@ -405,7 +509,8 @@ pub fn read_runtime_key_code() -> Option<u8> {
 
 pub fn prompt_text(ansi: bool, plain: &str) -> String {
     if ansi {
-        format!("{PROMPT_STYLE}{plain}{RESET}")
+        let palette = current_syntax_palette();
+        format!("{}{plain}{RESET}", palette.prompt)
     } else {
         plain.to_string()
     }
@@ -413,7 +518,8 @@ pub fn prompt_text(ansi: bool, plain: &str) -> String {
 
 pub fn error_text(ansi: bool, text: &str) -> String {
     if ansi {
-        format!("{ITALICS}{RED}{text}{RESET}")
+        let palette = current_syntax_palette();
+        format!("{}{text}{RESET}", palette.error)
     } else {
         text.to_string()
     }
@@ -422,7 +528,8 @@ pub fn error_text(ansi: bool, text: &str) -> String {
 pub fn trace_text(ansi: bool, line: i32) -> String {
     let text = format!("[{line}]");
     if ansi {
-        format!("{LINE_NUMBER_STYLE}{text}{RESET}")
+        let palette = current_syntax_palette();
+        format!("{}{text}{RESET}", palette.line_number)
     } else {
         text
     }
@@ -455,7 +562,12 @@ pub fn syntax_highlight_with_cases(
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
 ) -> String {
-    highlight_normalized_code(normalize_code(line), ansi, cases)
+    highlight_normalized_code(normalize_code(line), ansi, cases, current_syntax_palette())
+}
+
+#[cfg(test)]
+fn syntax_highlight_with_theme_for_test(line: &str, theme: SyntaxTheme) -> String {
+    highlight_normalized_code(normalize_code(line), true, None, syntax_palette_for(theme))
 }
 
 fn syntax_highlight_editing_with_cases(
@@ -464,13 +576,19 @@ fn syntax_highlight_editing_with_cases(
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
 ) -> String {
-    highlight_normalized_code(normalize_code_for_editing(line, cursor), ansi, cases)
+    highlight_normalized_code(
+        normalize_code_for_editing(line, cursor),
+        ansi,
+        cases,
+        current_syntax_palette(),
+    )
 }
 
 fn highlight_normalized_code(
     mut line: String,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
+    palette: SyntaxPalette,
 ) -> String {
     if let Some(cases) = cases {
         line = apply_identifier_case_for_display(&line, cases);
@@ -482,16 +600,16 @@ fn highlight_normalized_code(
     let mut out = String::new();
     let mut rest = main;
     if let Some((line_no, after)) = split_line_number(rest) {
-        out.push_str(LINE_NUMBER_STYLE);
+        out.push_str(palette.line_number);
         out.push_str(line_no);
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest));
+    out.push_str(&highlight_main(rest, palette));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
-        out.push_str(COMMENT_STYLE);
+        out.push_str(palette.comment);
         out.push_str(comment);
         out.push_str(RESET);
     }
@@ -538,17 +656,18 @@ pub fn syntax_highlight_raw_with_cases(
     let (main, comment) = split_single_quote_comment(&line);
     let mut out = String::new();
     let mut rest = main;
+    let palette = current_syntax_palette();
     if let Some((line_no, after)) = split_line_number(rest) {
-        out.push_str(LINE_NUMBER_STYLE);
+        out.push_str(palette.line_number);
         out.push_str(line_no);
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest));
+    out.push_str(&highlight_main(rest, palette));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
-        out.push_str(COMMENT_STYLE);
+        out.push_str(palette.comment);
         out.push_str(comment);
         out.push_str(RESET);
     }
@@ -918,8 +1037,9 @@ impl Drop for FullscreenEditorGuard {
 const MAX_UNDO_STEPS: usize = 200;
 const SELECTION_STYLE: &str = "\x1b[7m";
 const SELECTION_END_STYLE: &str = "\x1b[27m";
-const STATUS_KEY_STYLE: &str = "\x1b[3m\x1b[4m";
-const STATUS_KEY_END_STYLE: &str = "\x1b[23m\x1b[24m";
+const STATUS_BAR_STYLE: &str = "\x1b[30m\x1b[48;5;250m";
+const STATUS_KEY_STYLE: &str = "\x1b[38;5;21m";
+const STATUS_KEY_END_STYLE: &str = STATUS_BAR_STYLE;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct EditorPosition {
@@ -2132,13 +2252,13 @@ fn render_fullscreen_editor_prompt(
     };
 
     let mut stdout = io::stdout();
-    execute!(stdout, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
+    queue!(stdout, MoveTo(0, status_row))?;
     if ansi {
-        write!(stdout, "\x1b[7m{status_text}\x1b[0m")?;
+        write!(stdout, "{STATUS_BAR_STYLE}{status_text}{RESET}")?;
     } else {
         write!(stdout, "{status_text}")?;
     }
-    execute!(stdout, MoveTo(cursor_x as u16, status_row), Show)?;
+    queue!(stdout, MoveTo(cursor_x as u16, status_row), Show)?;
     stdout.flush()
 }
 
@@ -2156,13 +2276,10 @@ fn render_fullscreen_editor(
     let render_cases = editor_identifier_cases(&editor.lines, cases);
 
     let mut stdout = io::stdout();
-    execute!(stdout, Hide)?;
+    queue!(stdout, Hide)?;
     for screen_row in 0..edit_rows {
-        execute!(
-            stdout,
-            MoveTo(0, screen_row.min(u16::MAX as usize) as u16),
-            Clear(ClearType::CurrentLine)
-        )?;
+        queue!(stdout, MoveTo(0, screen_row.min(u16::MAX as usize) as u16))?;
+        let mut rendered_width = 0usize;
         if let Some(line) = editor.lines.get(editor.top_line + screen_row) {
             let line_index = editor.top_line + screen_row;
             let visible: String = line.iter().skip(editor.left_col).take(cols).collect();
@@ -2182,12 +2299,18 @@ fn render_fullscreen_editor(
                     });
             let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
             let rendered = apply_selection_to_rendered(&rendered, ansi, selection);
+            rendered_width = visible_width(&rendered);
             write!(stdout, "{rendered}")?;
+        }
+        // Avoid EL after a full-width write: terminals with pending autowrap
+        // may clear the last cell instead of just the unused tail.
+        if rendered_width < cols {
+            queue!(stdout, Clear(ClearType::UntilNewLine))?;
         }
     }
 
     let status_row = rows.saturating_sub(1).min(u16::MAX as usize) as u16;
-    execute!(stdout, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
+    queue!(stdout, MoveTo(0, status_row))?;
     let status_text = editor_status_line(
         status,
         editor.dirty,
@@ -2195,11 +2318,13 @@ fn render_fullscreen_editor(
         editor.cursor_col + 1,
         cols,
     );
+    // The status line is already padded to the terminal width. Clearing after
+    // it can erase the final cell on terminals that keep autowrap pending.
     if ansi {
         let status_text = style_editor_status_keys(&status_text);
-        write!(stdout, "\x1b[7m{status_text}\x1b[0m")?;
+        write!(stdout, "{STATUS_BAR_STYLE}{status_text}{RESET}")?;
     } else {
-        write!(stdout, "{status_text:<cols$}")?;
+        write!(stdout, "{status_text}")?;
     }
 
     let cursor_x = editor
@@ -2210,7 +2335,7 @@ fn render_fullscreen_editor(
         .cursor_line
         .saturating_sub(editor.top_line)
         .min(edit_rows - 1) as u16;
-    execute!(stdout, MoveTo(cursor_x, cursor_y), Show)?;
+    queue!(stdout, MoveTo(cursor_x, cursor_y), Show)?;
     stdout.flush()
 }
 
@@ -3161,7 +3286,7 @@ fn increment_fixed_decimal(int_part: &str, frac_part: &str, frac_width: usize) -
     (trim_leading_decimal_zeros(&int_part).to_string(), frac_part)
 }
 
-fn highlight_main(text: &str) -> String {
+fn highlight_main(text: &str, palette: SyntaxPalette) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0usize;
@@ -3181,7 +3306,7 @@ fn highlight_main(text: &str) -> String {
             }
             push_styled(
                 &mut out,
-                STRING_STYLE,
+                palette.string,
                 &chars[start..i].iter().collect::<String>(),
             );
             continue;
@@ -3195,19 +3320,19 @@ fn highlight_main(text: &str) -> String {
             let word: String = chars[start..i].iter().collect();
             let upper = word.to_ascii_uppercase();
             if expect_sub_name {
-                push_styled(&mut out, KEYWORD_STYLE, &upper);
+                push_styled(&mut out, palette.keyword, &upper);
                 expect_sub_name = false;
                 after_def = false;
             } else if upper == "REM" && token_boundary(&chars, start, i) {
-                push_styled(&mut out, KEYWORD_STYLE, "REM");
+                push_styled(&mut out, palette.keyword, "REM");
                 push_styled(
                     &mut out,
-                    COMMENT_STYLE,
+                    palette.comment,
                     &chars[i..].iter().collect::<String>(),
                 );
                 return out;
             } else if KEYWORDS.contains(&upper.as_str()) {
-                push_styled(&mut out, KEYWORD_STYLE, &upper);
+                push_styled(&mut out, palette.keyword, &upper);
                 if upper == "DEF" {
                     after_def = true;
                 } else if upper == "CALL" || (after_def && upper == "SUB") {
@@ -3217,10 +3342,10 @@ fn highlight_main(text: &str) -> String {
                     after_def = false;
                 }
             } else if is_non_reserved_known_word(&upper) || upper.starts_with("FN") {
-                push_styled(&mut out, OTHER_STYLE, &upper);
+                push_styled(&mut out, palette.other, &upper);
                 after_def = false;
             } else {
-                push_styled(&mut out, VARIABLE_STYLE, &word);
+                push_styled(&mut out, palette.variable, &word);
                 after_def = false;
             }
             continue;
@@ -3241,15 +3366,15 @@ fn highlight_main(text: &str) -> String {
                     .get(0..2)
                     .is_some_and(|p| p.eq_ignore_ascii_case("&h"))
                 {
-                    out.push_str(HEADER_STYLE);
+                    out.push_str(palette.header);
                     out.push_str("&H");
-                    out.push_str(HEX_STYLE);
+                    out.push_str(palette.hex);
                     out.push_str(&token[2..].to_ascii_uppercase());
                     out.push_str(RESET);
                 } else {
-                    out.push_str(HEADER_STYLE);
+                    out.push_str(palette.header);
                     out.push_str("&X");
-                    out.push_str(BIN_STYLE);
+                    out.push_str(palette.bin);
                     out.push_str(&token[2..]);
                     out.push_str(RESET);
                 }
@@ -3272,14 +3397,14 @@ fn highlight_main(text: &str) -> String {
                 }
                 push_styled(
                     &mut out,
-                    NUMBER_STYLE,
+                    palette.number,
                     &chars[start..i].iter().collect::<String>(),
                 );
             }
             continue;
         }
         let other = ch.to_string();
-        push_styled(&mut out, OTHER_STYLE, &other);
+        push_styled(&mut out, palette.other, &other);
         i += 1;
     }
     out
@@ -3654,6 +3779,41 @@ mod tests {
             syntax_highlight_with_cases(source, false, None),
             "10 PRINT 1 :"
         );
+    }
+
+    #[test]
+    fn syntax_theme_is_explicit_light_or_default_dark() {
+        assert_eq!(
+            syntax_theme_from_env_value(Some("light")),
+            SyntaxTheme::Light
+        );
+        assert_eq!(
+            syntax_theme_from_env_value(Some(" LIGHT ")),
+            SyntaxTheme::Light
+        );
+        assert_eq!(syntax_theme_from_env_value(Some("dark")), SyntaxTheme::Dark);
+        assert_eq!(
+            syntax_theme_from_env_value(Some("unknown")),
+            SyntaxTheme::Dark
+        );
+        assert_eq!(syntax_theme_from_env_value(None), SyntaxTheme::Dark);
+    }
+
+    #[test]
+    fn light_syntax_theme_uses_dark_visible_styles() {
+        let highlighted =
+            syntax_highlight_with_theme_for_test("10 PRINT ABS(X)+&HFF", SyntaxTheme::Light);
+
+        assert!(highlighted.contains(&format!("{LIGHT_KEYWORD_STYLE}PRINT{RESET}")));
+        assert!(highlighted.contains(&format!("{LIGHT_OTHER_STYLE}ABS{RESET}")));
+        assert!(highlighted.contains(&format!("{LIGHT_VARIABLE_STYLE}X{RESET}")));
+        assert!(highlighted.contains(&format!("{LIGHT_HEADER_STYLE}&H{LIGHT_HEX_STYLE}FF{RESET}")));
+        assert!(!highlighted.contains(&format!("{KEYWORD_STYLE}PRINT{RESET}")));
+        assert_eq!(
+            syntax_palette_for(SyntaxTheme::Light).error,
+            LIGHT_ERROR_STYLE
+        );
+        assert_eq!(syntax_palette_for(SyntaxTheme::Dark).error, ERROR_STYLE);
     }
 
     #[test]

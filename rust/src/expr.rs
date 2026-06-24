@@ -121,6 +121,9 @@ impl Expr {
             Expr::Number(n) => Ok(*n),
             Expr::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
             Expr::Var(name) => {
+                if is_pi_constant_name(name) {
+                    return Ok(std::f64::consts::PI);
+                }
                 if is_zero_arg_function(name) || name.starts_with("FN") {
                     ctx.call_runtime_function(name, Vec::new())?.as_number()
                 } else {
@@ -289,6 +292,9 @@ impl Expr {
             Expr::Number(n) => Ok(Value::number(*n)),
             Expr::Str(s) => Ok(Value::string(s.clone())),
             Expr::Var(name) => {
+                if is_pi_constant_name(name) {
+                    return Ok(Value::number(std::f64::consts::PI));
+                }
                 if is_zero_arg_function(name) || name.starts_with("FN") {
                     ctx.call_runtime_function(name, Vec::new())
                 } else {
@@ -1097,6 +1103,7 @@ fn eval_direct_numeric_function(
             x.log10()
         }
         "EXP" if args.len() == 1 => checked_number(args[0].eval_number(ctx)?.exp())?,
+        "PI" if args.is_empty() => std::f64::consts::PI,
         "ROUND" if args.len() == 1 => round_half_away(args[0].eval_number(ctx)?, 0),
         "ROUND" if args.len() == 2 => {
             round_half_away(args[0].eval_number(ctx)?, args[1].eval_number(ctx)? as i32)
@@ -1764,4 +1771,8 @@ pub(crate) fn is_zero_arg_function(name: &str) -> bool {
             | "MAXABROW"
             | "RNORMROW"
     )
+}
+
+pub(crate) fn is_pi_constant_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("PI")
 }

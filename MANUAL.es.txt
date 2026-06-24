@@ -102,7 +102,18 @@ Notas rápidas
 
 1.1 Normalización del código
 
-Al introducir cualquier línea, la consola resalta automáticamente la sintaxis: por ejemplo, palabras clave en negrita y cursiva, comentarios en verde o variables en cian. Si tu terminal soporta ANSI-256 se usa una paleta rica; en caso contrario se emplean los 16 colores estándar.
+Al introducir cualquier línea, la consola resalta automáticamente la sintaxis con una paleta ANSI-256: por ejemplo, palabras clave en negrita y cursiva, comentarios en verde o variables en cian. Por defecto se usa la paleta para fondo oscuro, que es la más adecuada para Windows Terminal y la mayoría de consolas con fondo negro.
+
+Tema claro en terminales con fondo blanco
+- Si usas un terminal con fondo claro, como algunas configuraciones de xterm o gnome-terminal, lanza el intérprete con `AVL_BASIC_THEME=light` para usar la paleta clara.
+- En Linux/WSL, para una sola ejecución:
+  `AVL_BASIC_THEME=light ./avl-basic`
+- Para dejarlo permanente en Bash, añade esta línea a tu `.bashrc`:
+  `export AVL_BASIC_THEME=light`
+- En PowerShell:
+  `$env:AVL_BASIC_THEME = "light"`
+  `.\avl-basic.exe`
+- Cualquier otro valor de `AVL_BASIC_THEME` se interpreta como `dark`. El resaltado ANSI se puede desactivar con `NO_COLOR` o `AVL_BASIC_COLOR=0`.
 
 También normaliza automáticamente lo tecleado tanto en líneas de programa como en el modo inmediato: pone las palabras clave en mayúsculas, inserta espacios necesarios, cierra comillas que falten en comandos de cadena y da a los números un formato canónico. Las indentaciones en el código se conservan.
 

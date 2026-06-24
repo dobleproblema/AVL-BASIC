@@ -72,7 +72,11 @@ implementation is the parent directory. Set `AVL_BASIC_PY_REPO` or
 ## Useful Environment Variables
 
 - `AVL_BASIC_WINDOW=0`: suppress the native graphics window during automated runs.
-- `AVL_BASIC_COLOR=0`: disable console colors.
+- `AVL_BASIC_COLOR=0|never` disables console colors; `AVL_BASIC_COLOR=1|always`
+  forces them even when stdout is not detected as an interactive terminal.
+- `AVL_BASIC_THEME=dark|light`: choose the syntax-highlighting palette. `dark`
+  is the default; `light` is intended for terminals with a light background.
+  Any other value is treated as `dark`.
 - `PYTHON=python3`: choose the Python executable used by parity tests.
 
 ## Layout
