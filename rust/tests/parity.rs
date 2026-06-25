@@ -212,6 +212,39 @@ fn immediate_colon_commands_run_after_stopped_program_without_losing_cont() {
 }
 
 #[test]
+fn editing_program_after_stop_invalidates_cont_with_standard_error() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 PRINT \"A\"").unwrap();
+    interp.process_immediate("20 STOP").unwrap();
+    interp.process_immediate("30 PRINT \"B\"").unwrap();
+
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), "A\n");
+
+    interp.process_immediate("30 PRINT \"C\"").unwrap();
+    let err = interp.process_immediate("CONT").unwrap_err();
+    assert_eq!(
+        err.display_for_basic(),
+        "There is no stopped program to continue."
+    );
+    assert_eq!(interp.take_output(), "");
+}
+
+#[test]
+fn immediate_assignment_after_stop_keeps_cont_available() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 A=1").unwrap();
+    interp.process_immediate("20 STOP").unwrap();
+    interp.process_immediate("30 PRINT A").unwrap();
+
+    interp.process_immediate("RUN").unwrap();
+    interp.process_immediate("A=7").unwrap();
+    interp.process_immediate("CONT").unwrap();
+
+    assert_eq!(interp.take_output(), " 7\n");
+}
+
+#[test]
 fn run_file_clears_previous_routine_line_owners() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(

@@ -657,6 +657,10 @@ enum CachedCommand {
         then_branch: CachedIfBranch,
         else_branch: Option<CachedIfBranch>,
     },
+    BlockIf(Rc<Expr>),
+    BlockElseIf(Rc<Expr>),
+    Else,
+    EndIf,
     OnGoto {
         selector: Rc<Expr>,
         targets: Vec<i32>,
@@ -673,6 +677,10 @@ enum CachedCommand {
     GosubConst {
         line: i32,
         target: Option<Cursor>,
+    },
+    Call {
+        name: String,
+        args: Vec<String>,
     },
     Return,
     FnEnd,
@@ -791,6 +799,8 @@ pub struct Interpreter {
     line_numbers_cache: Rc<[i32]>,
     next_after_for_cache: HashMap<Cursor, Cursor>,
     wend_after_while_cache: HashMap<Cursor, Cursor>,
+    next_if_branch_cache: HashMap<Cursor, IfBranch>,
+    after_end_if_cache: HashMap<Cursor, Cursor>,
     pub root_dir: PathBuf,
     pub current_dir: PathBuf,
     pub program_dir: Option<PathBuf>,
@@ -884,6 +894,8 @@ impl Interpreter {
             line_numbers_cache: Rc::from(Vec::<i32>::new().into_boxed_slice()),
             next_after_for_cache: HashMap::new(),
             wend_after_while_cache: HashMap::new(),
+            next_if_branch_cache: HashMap::new(),
+            after_end_if_cache: HashMap::new(),
             root_dir: root_dir.clone(),
             current_dir: root_dir,
             program_dir: None,
@@ -1130,6 +1142,7 @@ impl Interpreter {
                 self.record_identifier_case_from_numbered_line(trimmed, false);
             }
             self.clear_command_caches();
+            self.invalidate_continuation_after_program_change();
             return Ok(());
         }
         let upper = trimmed.to_ascii_uppercase();
@@ -1258,6 +1271,10 @@ impl Interpreter {
         Ok(())
     }
 
+    fn invalidate_continuation_after_program_change(&mut self) {
+        self.stopped_cursor = None;
+    }
+
     fn execute_immediate_goto(&mut self, arg: &str) -> BasicResult<()> {
         let line = parse_line_number_literal(arg.trim())
             .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
@@ -1380,6 +1397,7 @@ impl Interpreter {
         self.rebuild_data();
         self.data_pointer = 0;
         self.rebuild_command_cache();
+        self.invalidate_continuation_after_program_change();
         Ok(())
     }
 
@@ -1451,6 +1469,7 @@ impl Interpreter {
             self.program.clear();
             self.clear_command_caches();
             self.identifier_case.clear();
+            self.invalidate_continuation_after_program_change();
             return Ok(());
         }
         let range = parse_line_range_spec(trimmed, ErrorCode::Syntax, ErrorCode::InvalidArgument)?;
@@ -1466,6 +1485,7 @@ impl Interpreter {
         }
         self.clear_command_caches();
         self.refresh_identifier_case_from_program();
+        self.invalidate_continuation_after_program_change();
         Ok(())
     }
 
@@ -1500,6 +1520,7 @@ impl Interpreter {
                 self.program = Self::program_from_editor_lines(&lines)?;
                 self.clear_command_caches();
                 self.refresh_identifier_case_from_program();
+                self.invalidate_continuation_after_program_change();
             }
             console::FullscreenEditOutcome::Cancel => {}
         }
@@ -1527,6 +1548,7 @@ impl Interpreter {
                 self.record_identifier_case_from_numbered_line(&normalized, true);
             }
             self.clear_command_caches();
+            self.invalidate_continuation_after_program_change();
         }
         Ok(())
     }
@@ -2342,6 +2364,14 @@ impl Interpreter {
                 else_branch.as_ref(),
                 cursor,
             ),
+            CachedCommand::BlockIf(condition) => {
+                self.execute_cached_block_if(condition.as_ref(), cursor)
+            }
+            CachedCommand::BlockElseIf(condition) => {
+                self.execute_cached_block_elseif(condition.as_ref(), cursor)
+            }
+            CachedCommand::Else => self.execute_else(cursor),
+            CachedCommand::EndIf => self.execute_end_if(cursor),
             CachedCommand::OnGoto { selector, targets } => {
                 self.execute_cached_on(selector.as_ref(), targets, false, cursor)
             }
@@ -2359,6 +2389,7 @@ impl Interpreter {
                 });
                 self.jump_to_cached_line_checked(*line, target.as_ref(), cursor, true)
             }
+            CachedCommand::Call { name, args } => self.execute_cached_call(name, args),
             CachedCommand::Return => {
                 let ret = self
                     .gosub_stack
@@ -2410,6 +2441,53 @@ impl Interpreter {
                 self.execute_cached_inline_commands(commands, cursor)
             }
         }
+    }
+
+    fn execute_cached_block_if(
+        &mut self,
+        condition: &Expr,
+        cursor: &mut Cursor,
+    ) -> BasicResult<()> {
+        if eval_compiled_number(self, condition).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })? != 0.0
+        {
+            self.if_stack.push(Cursor {
+                line_idx: cursor.line_idx,
+                cmd_idx: cursor.cmd_idx,
+            });
+            return Ok(());
+        }
+        self.jump_to_next_if_branch(cursor)
+    }
+
+    fn execute_cached_block_elseif(
+        &mut self,
+        condition: &Expr,
+        cursor: &mut Cursor,
+    ) -> BasicResult<()> {
+        let current = Cursor {
+            line_idx: cursor.line_idx,
+            cmd_idx: cursor.cmd_idx,
+        };
+        if self.pending_if_branch.as_ref() != Some(&current) {
+            return self.skip_after_matching_end_if(cursor);
+        }
+        self.pending_if_branch = None;
+        if eval_compiled_number(self, condition).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = self.current_line;
+            }
+            e
+        })? == 0.0
+        {
+            return self.jump_to_next_if_branch(cursor);
+        }
+        self.if_stack.push(current);
+        Ok(())
     }
 
     fn execute_cached_on(
@@ -3776,6 +3854,9 @@ impl Interpreter {
     }
 
     fn find_next_if_branch(&self, cursor: &Cursor) -> BasicResult<IfBranch> {
+        if let Some(branch) = self.next_if_branch_cache.get(cursor) {
+            return Ok(branch.clone());
+        }
         let lines = self.program.line_numbers();
         let mut depth = 0i32;
         for line_idx in cursor.line_idx..lines.len() {
@@ -3816,6 +3897,9 @@ impl Interpreter {
     }
 
     fn find_after_matching_end_if(&self, cursor: &Cursor) -> BasicResult<Cursor> {
+        if let Some(target) = self.after_end_if_cache.get(cursor) {
+            return Ok(target.clone());
+        }
         let lines = self.program.line_numbers();
         let mut depth = 0i32;
         for line_idx in cursor.line_idx..lines.len() {
@@ -7003,6 +7087,7 @@ impl Interpreter {
         self.rebuild_command_cache();
         self.expression_cache.clear();
         self.program_structure_changed = true;
+        self.invalidate_continuation_after_program_change();
         Ok(())
     }
 
@@ -7047,6 +7132,7 @@ impl Interpreter {
                 let range = trimmed[6..].trim();
                 let (start, end) = parse_delete_range(range)?;
                 self.program.delete_range(start, end);
+                self.invalidate_continuation_after_program_change();
             }
         }
         let text = read_text_file(&path)?;
@@ -7084,6 +7170,7 @@ impl Interpreter {
         self.data_pointer = 0;
         self.rebuild_command_cache();
         self.expression_cache.clear();
+        self.invalidate_continuation_after_program_change();
         Ok(())
     }
 
@@ -7317,6 +7404,8 @@ impl Interpreter {
         self.line_numbers_cache = Rc::from(Vec::<i32>::new().into_boxed_slice());
         self.next_after_for_cache.clear();
         self.wend_after_while_cache.clear();
+        self.next_if_branch_cache.clear();
+        self.after_end_if_cache.clear();
     }
 
     fn rebuild_command_cache(&mut self) {
@@ -7343,14 +7432,65 @@ impl Interpreter {
     }
 
     fn rebuild_block_target_caches(&mut self) {
+        struct IfCacheFrame {
+            branches: Vec<Cursor>,
+            last_branch: Cursor,
+        }
+
         let lines = self.line_numbers_cache.clone();
         let mut for_stack = Vec::new();
         let mut while_stack = Vec::new();
+        let mut if_stack: Vec<IfCacheFrame> = Vec::new();
         for (line_idx, line_no) in lines.iter().copied().enumerate() {
             let Some(commands) = self.command_cache.get(&line_no) else {
                 continue;
             };
             for (cmd_idx, command) in commands.iter().enumerate() {
+                let cursor = Cursor { line_idx, cmd_idx };
+                if is_multiline_if_start(command) {
+                    if_stack.push(IfCacheFrame {
+                        branches: vec![cursor.clone()],
+                        last_branch: cursor,
+                    });
+                    continue;
+                }
+                if let Some(kind) = classify_if_branch_command(command) {
+                    if let Some(frame) = if_stack.last_mut() {
+                        match kind {
+                            IfBranchKind::ElseIf | IfBranchKind::Else => {
+                                self.next_if_branch_cache.insert(
+                                    frame.last_branch.clone(),
+                                    IfBranch {
+                                        cursor: cursor.clone(),
+                                        kind,
+                                    },
+                                );
+                                frame.branches.push(cursor.clone());
+                                frame.last_branch = cursor;
+                                continue;
+                            }
+                            IfBranchKind::EndIf => {
+                                let after = Cursor {
+                                    line_idx,
+                                    cmd_idx: cmd_idx + 1,
+                                };
+                                self.next_if_branch_cache.insert(
+                                    frame.last_branch.clone(),
+                                    IfBranch {
+                                        cursor: cursor.clone(),
+                                        kind,
+                                    },
+                                );
+                                let branches = frame.branches.clone();
+                                if_stack.pop();
+                                for branch in branches {
+                                    self.after_end_if_cache.insert(branch, after.clone());
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
                 let first = command
                     .trim_start()
                     .split_whitespace()
@@ -7409,10 +7549,16 @@ impl Interpreter {
             "SUBEXIT" if upper == "SUBEXIT" => CachedCommand::SubExit,
             "EXIT" if upper == "EXIT FN" => CachedCommand::FnExit,
             "EXIT" if upper == "EXIT SUB" => CachedCommand::SubExit,
+            "ENDIF" if upper == "ENDIF" => CachedCommand::EndIf,
+            "END" if upper == "END IF" => CachedCommand::EndIf,
             "LOCAL" => CachedCommand::Local,
             "IF" => self
                 .compile_cached_if(trimmed)
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "ELSEIF" => compile_block_elseif(trimmed)
+                .map(|condition| CachedCommand::BlockElseIf(Rc::new(condition)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "ELSE" if upper == "ELSE" => CachedCommand::Else,
             "FOR" => compile_for_statement(trimmed[3..].trim())
                 .map(|compiled| CachedCommand::For(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
@@ -7431,6 +7577,9 @@ impl Interpreter {
                     target: self.cursor_for_line(line),
                 })
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "CALL" => parse_call_statement(trimmed[4..].trim())
+                .map(|(name, args)| CachedCommand::Call { name, args })
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "NEXT" => {
                 let arg = trimmed[4..].trim();
                 if arg.is_empty() {
@@ -7491,10 +7640,10 @@ impl Interpreter {
         } else {
             return None;
         };
-        if rest.is_empty() {
-            return None;
-        }
         let condition = Rc::new(compile_expression(cond).ok()?);
+        if rest.is_empty() {
+            return Some(CachedCommand::BlockIf(condition));
+        }
         let (then_part, else_part) = split_else(rest);
         let then_branch = self.compile_cached_if_branch(then_part)?;
         let else_branch = if let Some(branch) = else_part {
@@ -8526,47 +8675,6 @@ impl Interpreter {
         Ok(())
     }
 
-    fn bind_local_specs(
-        &mut self,
-        local_specs: &[LocalSpec],
-        saved_numeric: &mut HashMap<String, Option<f64>>,
-        saved_string: &mut HashMap<String, Option<String>>,
-        saved_arrays: &mut HashMap<String, Option<ArrayValue>>,
-    ) -> BasicResult<()> {
-        for spec in local_specs {
-            match spec {
-                LocalSpec::Scalar(name) => {
-                    if name.ends_with('$') {
-                        saved_string
-                            .entry(name.clone())
-                            .or_insert_with(|| self.string_variables.get(name).cloned());
-                        set_string_binding_ref(&mut self.string_variables, name, String::new());
-                    } else {
-                        saved_numeric
-                            .entry(name.clone())
-                            .or_insert_with(|| self.numeric_variables.get(name).copied());
-                        set_numeric_binding_ref(&mut self.numeric_variables, name, 0.0);
-                    }
-                }
-                LocalSpec::Array { name, dims } => {
-                    let mut evaluated = Vec::with_capacity(dims.len());
-                    for dim in dims {
-                        let value = self.eval_number(dim)?;
-                        if value < 0.0 {
-                            return Err(self.err(ErrorCode::InvalidValue));
-                        }
-                        evaluated.push(value as usize);
-                    }
-                    saved_arrays
-                        .entry(name.clone())
-                        .or_insert_with(|| self.arrays.get(name).cloned());
-                    set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn bind_function_args_vec(&mut self, params: &[String], args: Vec<Value>) -> BasicResult<()> {
         for (param, value) in params.iter().zip(args.into_iter()) {
             match value {
@@ -8643,6 +8751,17 @@ impl Interpreter {
         self.call_multiline_sub(name, values)
     }
 
+    fn execute_cached_call(&mut self, name: &str, arg_exprs: &[String]) -> BasicResult<()> {
+        if self.inside_multiline_function() {
+            return Err(self.err(ErrorCode::FunctionForbidden));
+        }
+        let mut values = Vec::with_capacity(arg_exprs.len());
+        for expr in arg_exprs {
+            values.push(self.eval_sub_call_argument(expr)?);
+        }
+        self.call_multiline_sub(name.to_string(), values)
+    }
+
     fn eval_sub_call_argument(&mut self, expr: &str) -> BasicResult<Value> {
         let trimmed = expr.trim();
         let upper = trimmed.to_ascii_uppercase();
@@ -8667,82 +8786,74 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
 
-        let mut saved_numeric = HashMap::new();
-        let mut saved_string = HashMap::new();
-        let mut saved_arrays = HashMap::new();
-        let mut array_copybacks: Vec<(String, String)> = Vec::new();
+        let mut saved_numeric: Vec<(&str, Option<f64>)> = Vec::with_capacity(sub.params.len() + 1);
+        let mut saved_string: Vec<(&str, Option<String>)> =
+            Vec::with_capacity(sub.params.len() + 1);
+        let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
+            Vec::with_capacity(sub.params.len() + 1);
+        let mut array_copybacks: Vec<(&str, String)> = Vec::new();
 
         if name.ends_with('$') {
-            saved_string.insert(name.clone(), self.string_variables.get(&name).cloned());
+            save_string_binding_ref(&self.string_variables, &mut saved_string, &name);
         } else {
-            saved_numeric.insert(name.clone(), self.numeric_variables.get(&name).copied());
+            save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, &name);
         }
 
         for (param, value) in sub.params.iter().zip(args.into_iter()) {
             match value {
                 Value::Number(n) => {
                     if param.ends_with('$') {
-                        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings(&mut self.string_variables, saved_string);
-                        restore_array_bindings(&mut self.arrays, saved_arrays);
+                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    saved_numeric
-                        .entry(param.clone())
-                        .or_insert_with(|| self.numeric_variables.get(param).copied());
-                    self.numeric_variables.insert(param.clone(), n);
+                    save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
+                    set_numeric_binding_ref(&mut self.numeric_variables, param, n);
                 }
                 Value::Str(s) => {
                     if !param.ends_with('$') {
-                        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings(&mut self.string_variables, saved_string);
-                        restore_array_bindings(&mut self.arrays, saved_arrays);
+                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    saved_string
-                        .entry(param.clone())
-                        .or_insert_with(|| self.string_variables.get(param).cloned());
-                    self.string_variables.insert(param.clone(), s);
+                    save_string_binding_ref(&self.string_variables, &mut saved_string, param);
+                    set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
                     let Some(array) = self.arrays.get(&source).cloned() else {
-                        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings(&mut self.string_variables, saved_string);
-                        restore_array_bindings(&mut self.arrays, saved_arrays);
+                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
-                        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings(&mut self.string_variables, saved_string);
-                        restore_array_bindings(&mut self.arrays, saved_arrays);
+                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    saved_numeric
-                        .entry(param.clone())
-                        .or_insert_with(|| self.numeric_variables.get(param).copied());
-                    saved_string
-                        .entry(param.clone())
-                        .or_insert_with(|| self.string_variables.get(param).cloned());
+                    save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
+                    save_string_binding_ref(&self.string_variables, &mut saved_string, param);
                     self.numeric_variables.remove(param);
                     self.string_variables.remove(param);
-                    saved_arrays
-                        .entry(param.clone())
-                        .or_insert_with(|| self.arrays.get(param).cloned());
-                    self.arrays.insert(param.clone(), array);
-                    array_copybacks.push((param.clone(), source));
+                    save_array_binding_ref(&self.arrays, &mut saved_arrays, param);
+                    set_array_binding_ref(&mut self.arrays, param, array);
+                    array_copybacks.push((param, source));
                 }
             }
         }
 
-        if let Err(err) = self.bind_local_specs(
+        if let Err(err) = self.bind_local_specs_vec(
             &sub.local_specs,
             &mut saved_numeric,
             &mut saved_string,
             &mut saved_arrays,
         ) {
-            restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-            restore_string_bindings(&mut self.string_variables, saved_string);
-            restore_array_bindings(&mut self.arrays, saved_arrays);
+            restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+            restore_string_bindings_ref(&mut self.string_variables, saved_string);
+            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
             return Err(err);
         }
 
@@ -8755,14 +8866,14 @@ impl Interpreter {
         let previous_sub_return = self.sub_return_requested;
         self.sub_return_requested = false;
         self.sub_call_stack.push(name.clone());
-        self.active_subs.push(ActiveSubFrame { name });
+        self.active_subs.push(ActiveSubFrame { name: name.clone() });
 
         let run_result = self.run_from(sub.start);
         self.active_subs.pop();
         self.sub_call_stack.pop();
 
         for (param, source) in &array_copybacks {
-            if let Some(array) = self.arrays.get(param).cloned() {
+            if let Some(array) = self.arrays.get(*param).cloned() {
                 self.arrays.insert(source.clone(), array);
             }
         }
@@ -8774,9 +8885,9 @@ impl Interpreter {
         self.pending_if_branch = saved_pending_if;
         self.current_line = saved_current_line;
         self.sub_return_requested = previous_sub_return;
-        restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-        restore_string_bindings(&mut self.string_variables, saved_string);
-        restore_array_bindings(&mut self.arrays, saved_arrays);
+        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
 
         run_result?;
         Ok(())
@@ -10037,19 +10148,6 @@ fn restore_string_bindings(
     }
 }
 
-fn restore_array_bindings(
-    arrays: &mut FastHashMap<String, ArrayValue>,
-    saved: HashMap<String, Option<ArrayValue>>,
-) {
-    for (name, value) in saved {
-        if let Some(value) = value {
-            arrays.insert(name, value);
-        } else {
-            arrays.remove(&name);
-        }
-    }
-}
-
 fn set_numeric_binding_ref(variables: &mut FastHashMap<String, f64>, name: &str, value: f64) {
     if let Some(slot) = variables.get_mut(name) {
         *slot = value;
@@ -10686,6 +10784,21 @@ fn is_multiline_if_start(command: &str) -> bool {
         return false;
     };
     trimmed[then_end..].trim().is_empty()
+}
+
+fn compile_block_elseif(command: &str) -> BasicResult<Expr> {
+    let trimmed = command.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper.starts_with("ELSEIF ") {
+        return Err(BasicError::new(ErrorCode::Syntax));
+    }
+    let Some((then_pos, then_end)) = find_then_keyword(&upper) else {
+        return Err(BasicError::new(ErrorCode::Syntax));
+    };
+    if !trimmed[then_end..].trim().is_empty() {
+        return Err(BasicError::new(ErrorCode::Syntax));
+    }
+    compile_expression(trimmed[6..then_pos].trim())
 }
 
 fn find_then_keyword(upper: &str) -> Option<(usize, usize)> {

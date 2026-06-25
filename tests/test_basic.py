@@ -6867,6 +6867,37 @@ def test_basic_program(run_basic_interpreter, program_code, expected_output):
     )
 
 
+def test_editing_program_after_stop_invalidates_cont(run_basic_interpreter):
+    output = run_basic_interpreter([
+        '10 PRINT "A"',
+        '20 STOP',
+        '30 PRINT "B"',
+        'RUN',
+        '30 PRINT "C"',
+        'CONT',
+        'EXIT',
+    ])
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [
+        'A',
+        'There is no stopped program to continue.',
+    ]
+
+
+def test_immediate_assignment_after_stop_keeps_cont_available(run_basic_interpreter):
+    output = run_basic_interpreter([
+        '10 A=1',
+        '20 STOP',
+        '30 PRINT A',
+        'RUN',
+        'A=7',
+        'CONT',
+        'EXIT',
+    ])
+
+    assert _filtered_basic_output_lines(output, trim_trailing_blank=True) == [' 7']
+
+
 def _filtered_basic_output_lines(output, trim_trailing_blank=False):
     exclude_patterns = DEFAULT_SESSION_NOISE_PATTERNS
 

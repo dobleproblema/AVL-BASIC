@@ -944,7 +944,7 @@ Expected output
 8.1 Execution and resumption (`RUN` - `STOP` - `CONT` - `END` - `CTRL+C`)
 
 + STOP                  Stops execution while keeping the state (current line, stacks and variables). It can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
-+ CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. If the interruption was caused by closing a graphics window, `CONT` is not available.
++ CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. Modifying the stored program cancels the stopped context; use `RUN` after editing. If the interruption was caused by closing a graphics window, `CONT` is not available.
 + END                   Ends the program. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 45) because there is no pending execution to continue.
 + RUN [line]            If a line number is included, the program runs from that line.
 

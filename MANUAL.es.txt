@@ -946,7 +946,7 @@ Salida esperada
 8.1 Ejecución, pausa y reanudación (RUN · STOP · CONT · END · CTRL+C)
 
 + STOP                  Detiene la ejecución manteniendo el estado (línea actual, pilas y variables). Permite reanudar con `CONT` desde el punto donde se detuvo o, con `GOTO n`, desde cualquier línea.
-+ CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
++ CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Modificar el programa almacenado cancela el contexto detenido; usa `RUN` después de editar. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
 + END                   Finaliza el programa. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 45) porque no hay ejecución pendiente que continuar.
 + RUN [numlin]          Si se incluye el número de línea, el programa se ejecuta desde esa línea.
 

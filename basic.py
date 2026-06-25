@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 if not _TK_IS_PRESENT:
     sys.exit("AVL BASIC needs Tkinter to run. Install tkinter and launch the interpreter again.")
 
-__version__ = "1.5.53"
+__version__ = "1.5.54"
 VERSION = ".".join(__version__.split(".")[:2])
 
 PROFILER = False
@@ -5754,6 +5754,7 @@ class BasicInterpreter:
         self.expression_cache.clear()
         self.current_line = None
         self.running = False
+        self.stopped = False
         self._cont_allowed = False
         self.while_skip = False
         self.for_skip = False
@@ -5766,6 +5767,12 @@ class BasicInterpreter:
         self._loop_exit_jump = False
         global RADIANS
         RADIANS = True
+
+    def _invalidate_continuation_after_program_change(self):
+        if not self.running and (self.stopped or self._cont_allowed):
+            self.stopped = False
+            self._cont_allowed = False
+            self.current_line = None
 
     def clear_variables(self, input =""):
         if input.strip().upper() == "INPUT":
@@ -6337,6 +6344,7 @@ class BasicInterpreter:
         self.on_gosub = False
         self.on_goto = False
         self.stopped = False
+        self._cont_allowed = False
 
     def _load_lines_from_file(self, filepath: str):
         """
@@ -6712,6 +6720,7 @@ class BasicInterpreter:
                     t['target_idx'] = self._line_to_index.get(old_tgt)
 
         self.reset_state(variables=False, graphics=False)
+        self._invalidate_continuation_after_program_change()
     
     def _rebuild_data_from_program(self):
         self.data.clear()
@@ -6785,6 +6794,7 @@ class BasicInterpreter:
             self.in_error_handler = False 
             # If the deleted line is a DATA line, remove its data too
             self.delete_data(line_num)       
+            self._invalidate_continuation_after_program_change()
         else:
             self.handle_error(f"Line {line_num} does not exist in the program.", only_message=True)
         self._if_block_info_dirty = True
@@ -6910,6 +6920,7 @@ class BasicInterpreter:
                 self.in_error_handler = False
 
             self._if_block_info_dirty = True
+            self._invalidate_continuation_after_program_change()
 
     # The main function that applies variable casing
     def apply_variable_casing(self, code):
