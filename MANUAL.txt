@@ -46,11 +46,11 @@ Requirements
 - Building from source: Rust stable toolchain and a native desktop environment for the graphics window.
 
 Installation by system
-- Windows: download the latest `avl-basic-*-windows-x64.zip` from GitHub Releases, extract it, and run `avl-basic.cmd`.
+- Windows: download the latest `avl-basic-*-windows-x64.zip` from GitHub Releases, extract it, and run `avl-basic.exe`.
 - Linux/macOS: build from source with `cargo build --release` until prebuilt packages are published for those platforms.
 
 Quick check
-- Windows package: run `avl-basic.cmd`.
+- Windows package: run `avl-basic.exe`.
 - Source build: run `target/release/avl-basic` or `target\release\avl-basic.exe` on Windows.
 
 0.1 Design motivation
@@ -1098,7 +1098,7 @@ Notes on `CD`
 - Paths starting with `/` are interpreted from the virtual root; the rest are interpreted from the current virtual directory.
 - `CD` only changes the current virtual directory visible to the user. `LOAD`, `RUN` and `CHAIN` do not perform any implicit `CD`.
 - In this repository, the included examples are under `samples/`, and their supporting PNG files are under `samples/assets/`.
-- In local source builds, `cargo build` also exposes `samples/` next to the compiled executable, so `CD "samples"` works when launching `target/release/avl-basic` directly.
+- In local source builds, `cargo build` creates a `samples/` directory link next to the compiled executable. If your working directory is `target/release`, `CD "samples"` works by normal path resolution.
 
 9.4 Saving and loading programs
 

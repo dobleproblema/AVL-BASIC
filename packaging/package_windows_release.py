@@ -37,15 +37,6 @@ def copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=ignore)
 
 
-def write_launcher(dst: Path) -> None:
-    dst.write_text(
-        '@echo off\r\n'
-        'cd /d "%~dp0"\r\n'
-        '"%~dp0avl-basic.exe" %*\r\n',
-        encoding="ascii",
-    )
-
-
 def write_first_readme(dst: Path, version: str) -> None:
     dst.write_text(
         f"""AVL BASIC {version} for Windows
@@ -53,13 +44,13 @@ def write_first_readme(dst: Path, version: str) -> None:
 Quick start
 -----------
 
-Double-click avl-basic.cmd, or open a terminal in this folder and run:
+Double-click avl-basic.exe, or open a terminal in this folder and run:
 
-    avl-basic.cmd
+    avl-basic.exe
 
 Run a bundled example:
 
-    avl-basic.cmd samples\\g-cube2.bas
+    avl-basic.exe samples\\g-cube2.bas
 
 Inside AVL BASIC:
 
@@ -74,7 +65,6 @@ Included files
 --------------
 
 - avl-basic.exe: native Windows interpreter
-- avl-basic.cmd: launcher that starts in this folder
 - samples/: bundled BASIC programs and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
@@ -104,7 +94,6 @@ def build_package(skip_build: bool) -> Path:
     stage.mkdir(parents=True)
 
     shutil.copy2(exe, stage / "avl-basic.exe")
-    write_launcher(stage / "avl-basic.cmd")
     write_first_readme(stage / "README-FIRST.txt", version)
 
     for name in [
