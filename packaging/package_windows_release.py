@@ -1,8 +1,7 @@
 """Build a Windows end-user ZIP for AVL BASIC.
 
-The ZIP is intentionally for people who do not have Rust, Cargo, Python, or
-Tkinter installed. It contains the native Rust executable plus the shared
-manuals and samples.
+The ZIP is intentionally for people who do not have Rust or Cargo installed. It
+contains the native Rust executable plus the manuals and samples.
 """
 
 from __future__ import annotations
@@ -15,18 +14,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUST_DIR = ROOT / "rust"
 RELEASE_DIR = ROOT / "release"
 
 
 def language_version() -> str:
     match = re.search(
-        r'^__version__\s*=\s*"([^"]+)"',
-        (ROOT / "basic.py").read_text(encoding="utf-8"),
+        r'^version\s*=\s*"([^"]+)"',
+        (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
         re.MULTILINE,
     )
     if not match:
-        raise SystemExit("Could not read __version__ from basic.py")
+        raise SystemExit("Could not read version from Cargo.toml")
     return match.group(1)
 
 
@@ -69,8 +67,8 @@ Inside AVL BASIC:
     FILES "*.bas"
     RUN "g-cube2.bas"
 
-This package uses the native Rust runtime. You do not need to install Rust,
-Cargo, Python, or Tkinter to use it.
+This package uses the native Rust runtime. You do not need to install Rust or
+Cargo to use it.
 
 Included files
 --------------
@@ -80,7 +78,6 @@ Included files
 - samples/: bundled BASIC programs and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
-- basic.py: Python reference implementation
 - COPYING: GPLv3-or-later license
 """,
         encoding="utf-8",
@@ -93,10 +90,10 @@ def build_package(skip_build: bool) -> Path:
     package_name = f"avl-basic-{version}-windows-x64"
     stage = RELEASE_DIR / package_name
     zip_path = RELEASE_DIR / f"{package_name}.zip"
-    exe = RUST_DIR / "target" / "release" / "avl-basic.exe"
+    exe = ROOT / "target" / "release" / "avl-basic.exe"
 
     if not skip_build:
-        run(["cargo", "build", "--release"], RUST_DIR)
+        run(["cargo", "build", "--release"], ROOT)
     if not exe.exists():
         raise SystemExit(f"Missing release executable: {exe}")
 
@@ -116,8 +113,6 @@ def build_package(skip_build: bool) -> Path:
         "MANUAL.txt",
         "MANUAL.es.txt",
         "COPYING",
-        "basic.py",
-        "basicfonts.py",
     ]:
         shutil.copy2(ROOT / name, stage / name)
 
@@ -131,7 +126,7 @@ def main() -> int:
     parser.add_argument(
         "--skip-build",
         action="store_true",
-        help="Reuse rust/target/release/avl-basic.exe instead of running cargo build.",
+        help="Reuse target/release/avl-basic.exe instead of running cargo build.",
     )
     args = parser.parse_args()
 

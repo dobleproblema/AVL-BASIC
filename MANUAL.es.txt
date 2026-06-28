@@ -41,30 +41,25 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 0. Requisitos e instalación
 
 Requisitos
-- Python 3.8 o superior. El intérprete usa características de Python 3.8 (p. ej., operador “walrus” :=).
-- Tkinter (Tk 8.6+). Tkinter viene incluido en las distribuciones oficiales de Python para Windows y macOS.
+- Paquete precompilado para Windows: Windows x64. No necesita toolchain Rust ni runtime externo.
+- Compilación desde el código fuente: toolchain Rust estable y un entorno gráfico nativo para la ventana gráfica.
 
 Instalación por sistema
-- Windows: instala Python desde https://www.python.org/downloads/ (marca “Add Python to PATH” durante la instalación). No necesitas nada más: Tkinter ya viene incluido.
-- macOS: instala Python desde https://www.python.org/downloads/. Tkinter (Tk 8.6) ya está incluido. Evita usar el Python preinstalado del sistema; el de python.org es el recomendado.
-- Linux: además de Python 3, instala los paquetes de Tk/Tkinter de tu distro.
-  • Debian/Ubuntu: `sudo apt install python3 python3-tk tk`
-  • Fedora: `sudo dnf install python3-tkinter tk`
-  • Arch: `sudo pacman -S tk`
-  • openSUSE: `sudo zypper install python3-tk tk`
-  Si usas Anaconda/Miniconda normalmente no hace falta nada extra; en caso necesario: `conda install python tk`.
+- Windows: descarga el último `avl-basic-*-windows-x64.zip` de GitHub Releases, extráelo y ejecuta `avl-basic.exe`.
+- Linux/macOS: compila desde el código fuente con `cargo build --release` hasta que se publiquen paquetes precompilados para esas plataformas.
 
 Verificación rápida
-- `python3 -c "import tkinter as tk; print('Tk', tk.TkVersion)"` debería imprimir una versión de Tk (p. ej., 8.6).
-- Ejecuta el intérprete con `python3 basic.py`.
+- Paquete Windows: ejecuta `avl-basic.exe`.
+- Compilación desde fuente: ejecuta `target/release/avl-basic` o `target\release\avl-basic.exe` en Windows.
 
 0.1 Motivación del diseño
 
-AVL BASIC está implementado como un único archivo Python puro (`basic.py`) con Tk, incluyendo incluso la definición de las fuentes bitmap. ¿Por qué?
-- Facilidad de uso: basta con tener Python 3.8+ y Tk. No hay dependencias externas ni instalación de paquetes.
-- Instalación y distribución simples: todo es un único fichero de menos de 700 KB que puedes copiar y ejecutar en cualquier equipo.
-- Portabilidad real: funciona igual en Windows, macOS y Linux.
-- Reproducibilidad: al incluir las fuentes en `basic.py`, el aspecto visual es idéntico sin depender de fuentes del sistema.
+AVL BASIC es un intérprete nativo Rust con un runtime deliberadamente autocontenido. ¿Por qué?
+- Velocidad: conserva el modo inmediato de un BASIC interactivo, pero hace prácticos los programas gráficos y numéricos exigentes.
+- Uso sencillo: el paquete Windows es un ejecutable listo para usar con manuales, ejemplos y assets.
+- Portabilidad: el código compila de forma nativa en Windows y Linux, y está pensado para seguir siendo portable a macOS.
+- Reproducibilidad: las fuentes bitmap están embebidas en el binario Rust, de modo que el texto de la ventana gráfica no depende de fuentes del sistema.
+- Mantenibilidad: la fuente editable de los bitmaps vive en `assets/fonts/avl-basic-fonts.txt` y el build Rust la valida/genera.
 
 0.2 Limitaciones de las fuentes
 
@@ -416,6 +411,9 @@ Notas rápidas
   un borrado a mitad de frame (parpadeo/tearing en Rust). Usa `CLG OFFSCREEN`
   en esos bucles: borra el buffer y deja la actualización visible para el
   siguiente `FRAME`.
+- `CLG` y `CLG OFFSCREEN` también devuelven el cursor gráfico y el cursor de
+  texto a `(0,0)`. Por tanto, un `DISP` posterior vuelve a empezar en la
+  columna/fila 0 salvo que se use `LOCATE`.
 - `FRAME fps` conserva la semántica de `FRAME` sin argumentos, pero limita las
   siguientes llamadas explícitas a `FRAME` al máximo de FPS indicado. El primer
   `FRAME fps` se muestra inmediatamente; las llamadas posteriores solo esperan
