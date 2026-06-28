@@ -1,7 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+use std::process::Command;
 
 #[derive(Debug)]
 struct FontSource {
@@ -14,14 +18,76 @@ fn main() {
     println!("cargo:rerun-if-changed=windows.rc");
     println!("cargo:rerun-if-changed=assets/avl-basic.ico");
     println!("cargo:rerun-if-changed=assets/fonts/avl-basic-fonts.txt");
+    println!("cargo:rerun-if-changed=samples");
 
     generate_font_tables();
+    link_samples_into_target_profile();
 
     if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
         embed_resource::compile("windows.rc", embed_resource::NONE)
             .manifest_optional()
             .unwrap();
     }
+}
+
+fn link_samples_into_target_profile() {
+    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
+    let samples = root.join("samples");
+    let Some(profile_dir) = target_profile_dir() else {
+        return;
+    };
+    let link = profile_dir.join("samples");
+
+    if !samples.is_dir() || fs::symlink_metadata(&link).is_ok() {
+        return;
+    }
+    if let Err(err) = create_dir_link(&samples, &link) {
+        println!(
+            "cargo:warning=failed to link {} to {}: {}",
+            link.display(),
+            samples.display(),
+            err
+        );
+    }
+}
+
+fn target_profile_dir() -> Option<PathBuf> {
+    let mut dir = PathBuf::from(env::var_os("OUT_DIR")?);
+    loop {
+        if dir.file_name().and_then(|name| name.to_str()) == Some("build") {
+            return dir.parent().map(Path::to_path_buf);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn create_dir_link(target: &Path, link: &Path) -> io::Result<()> {
+    let status = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("mklink /J exited with {status}"),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn create_dir_link(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn create_dir_link(_target: &Path, _link: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 fn generate_font_tables() {

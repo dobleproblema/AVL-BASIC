@@ -19,7 +19,7 @@ For Windows users, the easiest option is the prebuilt native package:
 1. Download the latest `avl-basic-*-windows-x64.zip` from
    [GitHub Releases](https://github.com/dobleproblema/AVL-BASIC/releases/latest).
 2. Extract the ZIP.
-3. Run `avl-basic.exe`.
+3. Run `avl-basic.cmd`.
 
 The Windows package includes the native interpreter, manuals, examples, assets,
 and license. You do not need Rust or Cargo to use it.
@@ -32,8 +32,8 @@ published for those platforms.
 With the Windows package:
 
 ```bat
-avl-basic.exe
-avl-basic.exe samples\g-cube2.bas
+avl-basic.cmd
+avl-basic.cmd samples\g-cube2.bas
 ```
 
 From BASIC immediate mode:
@@ -42,7 +42,6 @@ From BASIC immediate mode:
 CD "samples"
 FILES "*.bas"
 RUN "g-cube2.bas"
-CD "/"
 ```
 
 ## Build From Source
@@ -74,6 +73,10 @@ The compiled executable is created at:
 
 - Windows: `target/release/avl-basic.exe`
 - Linux/macOS: `target/release/avl-basic`
+
+The build also exposes the bundled examples as `target/release/samples`, so
+`CD "samples"` works even when you launch the compiled executable directly from
+`target/release`.
 
 ## Why It Is Interesting
 

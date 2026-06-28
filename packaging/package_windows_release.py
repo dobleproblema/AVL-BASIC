@@ -53,13 +53,13 @@ def write_first_readme(dst: Path, version: str) -> None:
 Quick start
 -----------
 
-Double-click avl-basic.exe, or open a terminal in this folder and run:
+Double-click avl-basic.cmd, or open a terminal in this folder and run:
 
-    avl-basic.exe
+    avl-basic.cmd
 
 Run a bundled example:
 
-    avl-basic.exe samples\\g-cube2.bas
+    avl-basic.cmd samples\\g-cube2.bas
 
 Inside AVL BASIC:
 

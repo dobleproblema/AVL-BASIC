@@ -45,11 +45,11 @@ Requisitos
 - Compilación desde el código fuente: toolchain Rust estable y un entorno gráfico nativo para la ventana gráfica.
 
 Instalación por sistema
-- Windows: descarga el último `avl-basic-*-windows-x64.zip` de GitHub Releases, extráelo y ejecuta `avl-basic.exe`.
+- Windows: descarga el último `avl-basic-*-windows-x64.zip` de GitHub Releases, extráelo y ejecuta `avl-basic.cmd`.
 - Linux/macOS: compila desde el código fuente con `cargo build --release` hasta que se publiquen paquetes precompilados para esas plataformas.
 
 Verificación rápida
-- Paquete Windows: ejecuta `avl-basic.exe`.
+- Paquete Windows: ejecuta `avl-basic.cmd`.
 - Compilación desde fuente: ejecuta `target/release/avl-basic` o `target\release\avl-basic.exe` en Windows.
 
 0.1 Motivación del diseño
@@ -86,9 +86,8 @@ Si lo primero que quieres es probar los ejemplos incluidos en el repositorio, un
 CD "samples"
 FILES "*.bas"
 RUN "g-demo.bas"
-CD "/"
 
-Es decir: entra en `samples`, lista los ejemplos disponibles, ejecuta uno y, cuando quieras volver al directorio raíz del intérprete, usa `CD "/"`.
+Es decir: entra en `samples`, lista los ejemplos disponibles y ejecuta uno.
 
 Notas rápidas
 - Usa `RUN` para ejecutar, `STOP` o CTRL+C para pausar y `CONT` para reanudar.
@@ -1101,6 +1100,7 @@ Notas sobre CD
 - Las rutas con `/` al inicio se interpretan desde la raíz virtual; el resto, desde el directorio virtual actual.
 - `CD` solo cambia el directorio virtual actual visible para el usuario. `LOAD`, `RUN` y `CHAIN` no hacen ningún `CD` implícito.
 - En este repositorio, los ejemplos incluidos están en `samples/`, sus PNG de apoyo en `samples/assets/`.
+- En compilaciones locales desde fuente, `cargo build` también expone `samples/` junto al ejecutable compilado, así que `CD "samples"` funciona al lanzar `target/release/avl-basic` directamente.
 
 9.4 Guardar y cargar programas
 

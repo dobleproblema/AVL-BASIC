@@ -46,11 +46,11 @@ Requirements
 - Building from source: Rust stable toolchain and a native desktop environment for the graphics window.
 
 Installation by system
-- Windows: download the latest `avl-basic-*-windows-x64.zip` from GitHub Releases, extract it, and run `avl-basic.exe`.
+- Windows: download the latest `avl-basic-*-windows-x64.zip` from GitHub Releases, extract it, and run `avl-basic.cmd`.
 - Linux/macOS: build from source with `cargo build --release` until prebuilt packages are published for those platforms.
 
 Quick check
-- Windows package: run `avl-basic.exe`.
+- Windows package: run `avl-basic.cmd`.
 - Source build: run `target/release/avl-basic` or `target\release\avl-basic.exe` on Windows.
 
 0.1 Design motivation
@@ -87,9 +87,8 @@ If the first thing you want to do is try the examples included in the repository
 CD "samples"
 FILES "*.bas"
 RUN "g-demo.bas"
-CD "/"
 
-That is: enter `samples`, list the available examples, run one, and when you want to go back to the interpreter's root directory, use `CD "/"`.
+That is: enter `samples`, list the available examples, and run one.
 
 Quick notes
 - Use `RUN` to execute, `STOP` or CTRL+C to pause, and `CONT` to resume.
@@ -1099,6 +1098,7 @@ Notes on `CD`
 - Paths starting with `/` are interpreted from the virtual root; the rest are interpreted from the current virtual directory.
 - `CD` only changes the current virtual directory visible to the user. `LOAD`, `RUN` and `CHAIN` do not perform any implicit `CD`.
 - In this repository, the included examples are under `samples/`, and their supporting PNG files are under `samples/assets/`.
+- In local source builds, `cargo build` also exposes `samples/` next to the compiled executable, so `CD "samples"` works when launching `target/release/avl-basic` directly.
 
 9.4 Saving and loading programs
 
