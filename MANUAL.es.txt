@@ -52,6 +52,17 @@ Verificación rápida
 - Paquete Windows: ejecuta `avl-basic.exe`.
 - Compilación desde fuente: ejecuta `target/release/avl-basic` o `target\release\avl-basic.exe` en Windows.
 
+Tema claro en terminales con fondo blanco
+- Si usas un terminal con fondo claro, como algunas configuraciones de xterm o gnome-terminal, lanza el intérprete con `AVL_BASIC_THEME=light` para usar la paleta clara.
+- En Linux/WSL, para una sola ejecución:
+  `AVL_BASIC_THEME=light ./avl-basic`
+- Para dejarlo permanente en Bash, añade esta línea a tu `.bashrc`:
+  `export AVL_BASIC_THEME=light`
+- En PowerShell:
+  `$env:AVL_BASIC_THEME = "light"`
+  `.\avl-basic.exe`
+- Cualquier otro valor de `AVL_BASIC_THEME` se interpreta como `dark`. El resaltado ANSI se puede desactivar con `NO_COLOR` o `AVL_BASIC_COLOR=0`.
+
 0.1 Motivación del diseño
 
 AVL BASIC es un intérprete nativo Rust con un runtime deliberadamente autocontenido. ¿Por qué?
@@ -97,17 +108,6 @@ Notas rápidas
 1.1 Normalización del código
 
 Al introducir cualquier línea, la consola resalta automáticamente la sintaxis con una paleta ANSI-256: por ejemplo, palabras clave en negrita y cursiva, comentarios en verde o variables en cian. Por defecto se usa la paleta para fondo oscuro, que es la más adecuada para Windows Terminal y la mayoría de consolas con fondo negro.
-
-Tema claro en terminales con fondo blanco
-- Si usas un terminal con fondo claro, como algunas configuraciones de xterm o gnome-terminal, lanza el intérprete con `AVL_BASIC_THEME=light` para usar la paleta clara.
-- En Linux/WSL, para una sola ejecución:
-  `AVL_BASIC_THEME=light ./avl-basic`
-- Para dejarlo permanente en Bash, añade esta línea a tu `.bashrc`:
-  `export AVL_BASIC_THEME=light`
-- En PowerShell:
-  `$env:AVL_BASIC_THEME = "light"`
-  `.\avl-basic.exe`
-- Cualquier otro valor de `AVL_BASIC_THEME` se interpreta como `dark`. El resaltado ANSI se puede desactivar con `NO_COLOR` o `AVL_BASIC_COLOR=0`.
 
 También normaliza automáticamente lo tecleado tanto en líneas de programa como en el modo inmediato: pone las palabras clave en mayúsculas, inserta espacios necesarios, cierra comillas que falten en comandos de cadena y da a los números un formato canónico. Las indentaciones en el código se conservan.
 
@@ -182,7 +182,7 @@ Ejemplo
 + NEW                            Borra todas las variables y el programa actual. Pone el intérprete en su estado inicial.
 
 Notas rápidas (arrays)
-- Cada dimensión de DIM/REDIM indica el índice superior inclusivo. Los índices de los arrays arrancan en 0 siempre, pero tras `MAT BASE 1` las operaciones `MAT` ignoran los índices 0.
+- Cada dimensión de DIM/REDIM indica el índice superior inclusivo. Los índices de los arrays arrancan en 0 siempre, pero tras `MAT BASE 1` las operaciones `MAT` que recorren el bloque matricial activo ignoran los índices 0.
 - `REDIM` solo actúa sobre arrays existentes y mantiene tipo y número de dimensiones. Los elementos que sigan dentro de los nuevos límites se conservan; el resto se descarta y las posiciones recién creadas se inicializan a `0` o `""`.
 - Si accedes normalmente a un array no declarado, se crea implícitamente con límites 0..10 en cada dimensión. Esto no se aplica a las instrucciones MAT.
 
@@ -242,8 +242,8 @@ Notas detalladas (`MAT nombre = ...`)
 - Con arrays de texto (`$`) solo se admite la suma: `MAT A$ = B$ + "sufijo"` concatena elemento a elemento; otras operaciones provocan "Expresión no permitida".
 
 Notas detalladas (`MAT BASE`)
-- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, `MAT IDN`, `MAT TRN`, `MAT INV` y `DET`.
-- No modifica los datos almacenados: únicamente determina qué filas/columnas se recorren y dónde se traza la diagonal principal en `IDN`.
+- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV` y `DET`.
+- No modifica los datos almacenados: únicamente determina qué filas/columnas se recorren y dónde se traza la diagonal principal en `IDN`. Con `MAT BASE 1`, el producto matricial deja fuera la fila y columna 0 del cálculo.
 
 Notas detalladas (`MAT PRINT`)
 - Cada entrada puede escribirse como `A`, `ROW A` o `COL A`; `ROW` muestra la matriz por filas normalmente (es el valor implícito), `COL` transpone la matriz para mostrar las columnas como filas y viceversa.
@@ -258,7 +258,7 @@ Notas detalladas (`MAT INPUT` / `MAT READ`)
 
 Funciones relacionadas
 - `DET(expr)` devuelve un número real con el determinante de una matriz cuadrada. Usa `MAT BASE` para determinar el bloque activo y devuelve 0 cuando la matriz es singular.
-- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN` y `MAXAB` trabajan con arrays numéricos de una o dos dimensiones y respetan la base activa igual que las demás operaciones `MAT`.
+- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN` y `MAXAB` trabajan con arrays numéricos de una o dos dimensiones y respetan la base activa igual que las operaciones `MAT` estructurales.
 - `CNORM(expr)` devuelve la mayor suma de valores absolutos por columna; `CNORMCOL` devuelve la columna correspondiente del último `CNORM` ejecutado correctamente.
 - `RNORM(expr)` devuelve la mayor suma de valores absolutos por fila; `RNORMROW` devuelve la fila correspondiente del último `RNORM` ejecutado correctamente.
 - `AMAXCOL/AMAXROW`, `AMINCOL/AMINROW` y `MAXABCOL/MAXABROW` recuperan la columna/fila del último `AMAX`, `AMIN` o `MAXAB` ejecutado correctamente. Si todavía no existe un resultado previo, devuelven 0.

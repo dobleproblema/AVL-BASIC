@@ -53,6 +53,17 @@ Quick check
 - Windows package: run `avl-basic.exe`.
 - Source build: run `target/release/avl-basic` or `target\release\avl-basic.exe` on Windows.
 
+Light theme in white-background terminals
+- If you use a light-background terminal, such as some xterm or gnome-terminal configurations, launch the interpreter with `AVL_BASIC_THEME=light` to use the light palette.
+- On Linux/WSL, for a single run:
+  `AVL_BASIC_THEME=light ./avl-basic`
+- To make it permanent in Bash, add this line to your `.bashrc`:
+  `export AVL_BASIC_THEME=light`
+- In PowerShell:
+  `$env:AVL_BASIC_THEME = "light"`
+  `.\avl-basic.exe`
+- Any other `AVL_BASIC_THEME` value is treated as `dark`. ANSI highlighting can be disabled with `NO_COLOR` or `AVL_BASIC_COLOR=0`.
+
 0.1 Design motivation
 
 AVL BASIC is a native Rust interpreter with an intentionally self-contained runtime. Why?
@@ -98,17 +109,6 @@ Quick notes
 1.1 Code normalization
 
 Whenever you enter a line, the console automatically highlights the syntax with an ANSI-256 palette: for example, keywords in bold italics, comments in green, or variables in cyan. The dark-background palette is used by default, which is best suited to Windows Terminal and most black-background consoles.
-
-Light theme in white-background terminals
-- If you use a light-background terminal, such as some xterm or gnome-terminal configurations, launch the interpreter with `AVL_BASIC_THEME=light` to use the light palette.
-- On Linux/WSL, for a single run:
-  `AVL_BASIC_THEME=light ./avl-basic`
-- To make it permanent in Bash, add this line to your `.bashrc`:
-  `export AVL_BASIC_THEME=light`
-- In PowerShell:
-  `$env:AVL_BASIC_THEME = "light"`
-  `.\avl-basic.exe`
-- Any other `AVL_BASIC_THEME` value is treated as `dark`. ANSI highlighting can be disabled with `NO_COLOR` or `AVL_BASIC_COLOR=0`.
 
 It also automatically normalizes what you type both in program lines and in immediate mode: it uppercases keywords, inserts required spaces, closes missing quotes in string commands, and gives numbers a canonical format. Indentation in the code is preserved.
 
@@ -183,7 +183,7 @@ Example
 + NEW                            Clears all variables and the current program. Returns the interpreter to its initial state.
 
 Quick notes (arrays)
-- Each DIM/REDIM dimension indicates the inclusive upper index. Array indices always start at 0, but after `MAT BASE 1` the `MAT` operations ignore the 0 indices.
+- Each DIM/REDIM dimension indicates the inclusive upper index. Array indices always start at 0, but after `MAT BASE 1` the `MAT` operations that traverse the active matrix block ignore the 0 indices.
 - `REDIM` only acts on existing arrays and preserves type and number of dimensions. Elements that still lie within the new bounds are kept; the rest are discarded, and newly created positions are initialized to `0` or `""`.
 - If you normally access an undeclared array, it is created implicitly with bounds 0..10 in each dimension. This does not apply to `MAT` statements.
 
@@ -243,8 +243,8 @@ Detailed notes (`MAT name = ...`)
 - With text arrays (`$`), only addition is allowed: `MAT A$ = B$ + "suffix"` concatenates element by element; other operations raise "Expression not allowed".
 
 Detailed notes (`MAT BASE`)
-- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, `MAT IDN`, `MAT TRN`, `MAT INV` and `DET`.
-- It does not modify the stored data: it only determines which rows/columns are traversed and where the main diagonal is drawn in `IDN`.
+- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, matrix multiplication (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV` and `DET`.
+- It does not modify the stored data: it only determines which rows/columns are traversed and where the main diagonal is drawn in `IDN`. With `MAT BASE 1`, matrix multiplication leaves row and column 0 out of the calculation.
 
 Detailed notes (`MAT PRINT`)
 - Each entry may be written as `A`, `ROW A` or `COL A`; `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
@@ -259,7 +259,7 @@ Detailed notes (`MAT INPUT` / `MAT READ`)
 
 Related functions
 - `DET(expr)` returns the real-number determinant of a square matrix. It uses `MAT BASE` to determine the active block and returns 0 when the matrix is singular.
-- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN`, and `MAXAB` work with one- or two-dimensional numeric arrays and respect the active base just like the other `MAT` operations.
+- `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN`, and `MAXAB` work with one- or two-dimensional numeric arrays and respect the active base just like the structural `MAT` operations.
 - `CNORM(expr)` returns the largest sum of absolute values by column; `CNORMCOL` returns the corresponding column from the last successfully executed `CNORM`.
 - `RNORM(expr)` returns the largest sum of absolute values by row; `RNORMROW` returns the corresponding row from the last successfully executed `RNORM`.
 - `AMAXCOL/AMAXROW`, `AMINCOL/AMINROW`, and `MAXABCOL/MAXABROW` recover the column/row from the last successfully executed `AMAX`, `AMIN`, or `MAXAB`. If there is no previous result yet, they return 0.

@@ -2077,6 +2077,10 @@ impl Interpreter {
             }
             "RANDOMIZE" => self.execute_randomize(command[9..].trim()),
             "SWAP" => self.execute_swap(command[4..].trim()),
+            "CLEAR" if upper == "CLEAR INPUT" => {
+                self.clear_input_buffer();
+                Ok(())
+            }
             "CLEAR" => {
                 self.numeric_variables.clear();
                 self.string_variables.clear();
@@ -5397,47 +5401,19 @@ impl Interpreter {
 
     fn execute_pause(&mut self, arg: &str, cursor: &Cursor) -> BasicResult<()> {
         if arg.trim().is_empty() {
-            if self.graphics_window.is_some()
-                && self.graphics_window_enabled
-                && self.current_run_uses_graphics_window()
-            {
-                loop {
-                    std::thread::sleep(Duration::from_millis(2));
-                    self.check_user_interrupt(cursor)?;
-                    self.process_timers()?;
-                    self.check_user_interrupt(cursor)?;
-                    if self.mouse_state.event == "LEFTDOWN" && !self.mouse_event_consumed {
-                        self.graphics
-                            .set_cursor_from_logical_screen(self.mouse_state.x, self.mouse_state.y);
-                        break;
-                    }
-                    if self.end_requested
-                        || self.stopped_cursor.is_some()
-                        || self.function_return_requested
-                        || self.sub_return_requested
-                    {
-                        break;
-                    }
-                }
-                return Ok(());
-            }
             loop {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(2));
                 self.check_user_interrupt(cursor)?;
                 self.process_timers()?;
+                self.check_user_interrupt(cursor)?;
+                if self.pause_user_input_ready()? {
+                    break;
+                }
                 self.check_user_interrupt(cursor)?;
                 if self.end_requested
                     || self.stopped_cursor.is_some()
                     || self.function_return_requested
                     || self.sub_return_requested
-                {
-                    break;
-                }
-                if !self
-                    .timers
-                    .iter()
-                    .any(|timer| timer.active || timer.pending)
-                    && self.mouse_handlers.is_empty()
                 {
                     break;
                 }
@@ -5450,9 +5426,13 @@ impl Interpreter {
         while Instant::now() < deadline {
             let now = Instant::now();
             let remaining = deadline.saturating_duration_since(now);
-            std::thread::sleep(remaining.min(Duration::from_millis(20)));
+            std::thread::sleep(remaining.min(Duration::from_millis(2)));
             self.check_user_interrupt(cursor)?;
             self.process_timers()?;
+            self.check_user_interrupt(cursor)?;
+            if self.pause_user_input_ready()? {
+                break;
+            }
             self.check_user_interrupt(cursor)?;
             if self.end_requested
                 || self.stopped_cursor.is_some()
@@ -5463,6 +5443,45 @@ impl Interpreter {
             }
         }
         Ok(())
+    }
+
+    fn clear_input_buffer(&mut self) {
+        console::flush_pending_input();
+        self.key_queue.clear();
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.clear_transient_input();
+        }
+    }
+
+    fn pause_user_input_ready(&mut self) -> BasicResult<bool> {
+        if self.pause_uses_graphics_input() {
+            self.pump_graphics_window_now()?;
+            if self.mouse_state.event == "LEFTDOWN" && !self.mouse_event_consumed {
+                self.graphics
+                    .set_cursor_from_logical_screen(self.mouse_state.x, self.mouse_state.y);
+                self.mouse_event_consumed = true;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        if !self.key_queue.is_empty() {
+            self.key_queue.clear();
+            return Ok(true);
+        }
+        self.scan_console_key_once();
+        if !self.key_queue.is_empty() {
+            self.key_queue.clear();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn pause_uses_graphics_input(&self) -> bool {
+        self.graphics_window.is_some()
+            && self.graphics_window_enabled
+            && !self.graphics_window_suppressed
+            && self.current_run_uses_graphics_window()
     }
 
     fn execute_timer(&mut self, args: &str, repeat: bool) -> BasicResult<()> {
@@ -8954,6 +8973,34 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn clear_input_buffer_clears_pending_keys_without_clearing_variables() {
+        let mut interp = Interpreter::new();
+        interp.numeric_variables.insert("A".to_string(), 123.0);
+        interp.key_queue.push_back(b'X');
+
+        interp.clear_input_buffer();
+
+        assert!(interp.key_queue.is_empty());
+        assert_eq!(interp.numeric_variables.get("A").copied(), Some(123.0));
+    }
+
+    #[test]
+    fn pause_returns_immediately_for_pending_console_key() {
+        let mut interp = Interpreter::new();
+        interp.key_queue.push_back(b'X');
+        let cursor = Cursor {
+            line_idx: 0,
+            cmd_idx: 0,
+        };
+        let started = Instant::now();
+
+        interp.execute_pause("1000", &cursor).unwrap();
+
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(interp.key_queue.is_empty());
+    }
 
     #[test]
     fn handled_mouse_event_is_consumed_for_pause_and_not_replayed_at_prompt() {

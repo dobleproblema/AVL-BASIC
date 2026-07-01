@@ -1278,6 +1278,17 @@ fn clear_resets_runtime_variables_without_clearing_program() {
 }
 
 #[test]
+fn clear_input_clears_input_without_clearing_variables() {
+    let output = run_rust(
+        r#"10 A=123
+20 CLEAR INPUT
+30 PRINT A
+40 END"#,
+    );
+    assert_eq!(output, " 123\n");
+}
+
+#[test]
 fn mat_base_controls_lbound_and_ubound_reports_dimensions() {
     let mut interp = Interpreter::new();
     for line in r#"10 DIM A(20)
@@ -1354,6 +1365,26 @@ fn mat_print_using_comma_keeps_wide_matrix_columns() {
         wide_zero_row
     );
     assert_eq!(output, expected);
+}
+
+#[test]
+fn mat_multiplication_respects_mat_base_active_block() {
+    let output = run_rust(
+        r#"10 MAT BASE 1
+20 DIM A(2,2),B(2,2),V(2),R(1,2)
+30 A(1,1)=1:A(1,2)=0:A(2,1)=0:A(2,2)=1
+40 B(1,1)=1:B(1,2)=0:B(2,1)=0:B(2,2)=1
+50 A(1,0)=100:B(0,1)=100
+60 MAT C=A*B
+70 PRINT C(1,1);C(0,1);C(1,0)
+80 V(1)=1:V(2)=0:R(1,1)=1:R(1,2)=0
+90 V(0)=100:R(0,1)=100
+100 MAT X=V*R
+110 MAT Y=R*V
+120 PRINT X(1,1);X(0,1);X(1,0)
+130 PRINT Y(1,1);Y(0,1);Y(1,0)"#,
+    );
+    assert_eq!(output, " 1  0  0\n 1  0  0\n 1  0  0\n");
 }
 
 #[test]
