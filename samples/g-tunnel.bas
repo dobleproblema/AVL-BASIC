@@ -2,7 +2,7 @@
 1005 REM  TUNNEL EFFECT - AVL BASIC
 1010 REM  Texture mapping done in BASIC
 1015 REM ============================================================
-1020 TEXFILE$="assets\tunnel.png"
+1020 TEXFILE$="assets/tunnel.png"
 1025 W=640 : H=480
 1030 S=3
 1035 NX=(W+S-1)\S : NY=(H+S-1)\S
