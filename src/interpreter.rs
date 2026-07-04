@@ -13,6 +13,7 @@ use crate::reserved::is_reserved_identifier_name;
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -137,14 +138,18 @@ struct NumericMatrix {
 
 #[derive(Debug, Clone)]
 struct BasicTimer {
+    number: i32,
     interval: Duration,
     next_fire: Instant,
     target: i32,
     repeat: bool,
     active: bool,
-    pending: bool,
-    pending_delay: u8,
-    remaining_ticks: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimerInterruptState {
+    priority: i32,
+    interrupts_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -809,6 +814,7 @@ pub struct Interpreter {
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
     arrays: FastHashMap<String, ArrayValue>,
+    array_aliases: FastHashMap<String, String>,
     data: Vec<Value>,
     data_line_starts: HashMap<i32, usize>,
     data_pointer: usize,
@@ -828,6 +834,9 @@ pub struct Interpreter {
     gosub_stack: Vec<Cursor>,
     pending_if_branch: Option<Cursor>,
     timers: Vec<BasicTimer>,
+    timer_isr_stack: Vec<TimerInterruptState>,
+    timer_isr_markers: Vec<usize>,
+    current_interrupt_priority: i32,
     mouse_handlers: HashMap<String, i32>,
     mouse_state: MouseSnapshot,
     mouse_event_queue: VecDeque<String>,
@@ -839,6 +848,7 @@ pub struct Interpreter {
     handling_error: bool,
     last_error: Option<RuntimeErrorState>,
     stopped_cursor: Option<Cursor>,
+    pause_deadline: Option<(Cursor, Instant)>,
     key_queue: VecDeque<u8>,
     output: String,
     stream_output: bool,
@@ -904,6 +914,7 @@ impl Interpreter {
             texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
             arrays: FastHashMap::default(),
+            array_aliases: FastHashMap::default(),
             data: Vec::new(),
             data_line_starts: HashMap::new(),
             data_pointer: 0,
@@ -923,6 +934,9 @@ impl Interpreter {
             gosub_stack: Vec::new(),
             pending_if_branch: None,
             timers: Vec::new(),
+            timer_isr_stack: Vec::new(),
+            timer_isr_markers: Vec::new(),
+            current_interrupt_priority: -1,
             mouse_handlers: HashMap::new(),
             mouse_state: MouseSnapshot::default(),
             mouse_event_queue: VecDeque::new(),
@@ -934,6 +948,7 @@ impl Interpreter {
             handling_error: false,
             last_error: None,
             stopped_cursor: None,
+            pause_deadline: None,
             key_queue: VecDeque::new(),
             output: String::new(),
             stream_output: false,
@@ -1692,6 +1707,7 @@ impl Interpreter {
         self.string_variables.clear();
         self.texture_cache.clear();
         self.arrays.clear();
+        self.array_aliases.clear();
         self.data_pointer = 0;
         self.for_stack.clear();
         self.while_stack.clear();
@@ -1699,6 +1715,9 @@ impl Interpreter {
         self.gosub_stack.clear();
         self.pending_if_branch = None;
         self.timers.clear();
+        self.timer_isr_stack.clear();
+        self.timer_isr_markers.clear();
+        self.current_interrupt_priority = -1;
         self.mouse_handlers.clear();
         self.mouse_state = MouseSnapshot::default();
         self.mouse_event_queue.clear();
@@ -1719,6 +1738,7 @@ impl Interpreter {
         self.handling_error = false;
         self.last_error = None;
         self.stopped_cursor = None;
+        self.pause_deadline = None;
         self.end_requested = false;
         self.function_return_requested = false;
         self.sub_return_requested = false;
@@ -1795,7 +1815,9 @@ impl Interpreter {
                 self.write(&console::trace_text(self.ansi_output, line_no));
             }
             while cursor.cmd_idx < commands_len {
-                self.poll_interrupts_and_timers(&cursor)?;
+                if self.poll_interrupts_and_timers(&mut cursor)? {
+                    continue 'run_loop;
+                }
                 if self.end_requested {
                     self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::End);
@@ -1913,10 +1935,11 @@ impl Interpreter {
         self.graphics_window_used_this_run && !closed_graphics_window
     }
 
-    fn poll_interrupts_and_timers(&mut self, cursor: &Cursor) -> BasicResult<()> {
+    fn poll_interrupts_and_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         self.check_user_interrupt(cursor)?;
-        self.process_timers()?;
-        self.check_user_interrupt(cursor)
+        let dispatched = self.process_timers(cursor)?;
+        self.check_user_interrupt(cursor)?;
+        Ok(dispatched)
     }
 
     fn check_user_interrupt(&mut self, cursor: &Cursor) -> BasicResult<()> {
@@ -2027,17 +2050,7 @@ impl Interpreter {
                 });
                 self.jump_to_gosub(command[5..].trim(), cursor)
             }
-            "RETURN" => {
-                let ret = self
-                    .gosub_stack
-                    .pop()
-                    .ok_or_else(|| self.err(ErrorCode::ReturnWithoutGosub))?;
-                if !self.if_stack.is_empty() {
-                    self.reconcile_if_stack_for_jump(&ret)?;
-                }
-                *cursor = ret;
-                Ok(())
-            }
+            "RETURN" => self.execute_return(cursor),
             "FOR" => self.execute_for(command[3..].trim(), cursor),
             "NEXT" => self.execute_next(command[4..].trim(), cursor),
             "WHILE" => self.execute_while(command[5..].trim(), cursor),
@@ -2067,13 +2080,14 @@ impl Interpreter {
             }
             "AFTER" => self.execute_timer(command[5..].trim(), false),
             "EVERY" => self.execute_timer(command[5..].trim(), true),
+            "CANCEL" => self.execute_cancel(command[6..].trim()),
             "DI" => {
                 self.interrupts_enabled = false;
                 Ok(())
             }
             "EI" => {
                 self.interrupts_enabled = true;
-                self.process_timers()
+                self.process_timers(cursor).map(|_| ())
             }
             "RANDOMIZE" => self.execute_randomize(command[9..].trim()),
             "SWAP" => self.execute_swap(command[4..].trim()),
@@ -2373,17 +2387,7 @@ impl Interpreter {
                 self.jump_to_cached_line_checked(*line, target.as_ref(), cursor, true)
             }
             CachedCommand::Call { name, args } => self.execute_cached_call(name, args),
-            CachedCommand::Return => {
-                let ret = self
-                    .gosub_stack
-                    .pop()
-                    .ok_or_else(|| self.err(ErrorCode::ReturnWithoutGosub))?;
-                if !self.if_stack.is_empty() {
-                    self.reconcile_if_stack_for_jump(&ret)?;
-                }
-                *cursor = ret;
-                Ok(())
-            }
+            CachedCommand::Return => self.execute_return(cursor),
             CachedCommand::FnEnd => self.execute_fnend(),
             CachedCommand::FnExit => self.execute_fnexit(),
             CachedCommand::SubEnd => self.execute_subend(),
@@ -2394,6 +2398,33 @@ impl Interpreter {
                 self.execute_compiled_while(condition.clone(), cursor)
             }
             CachedCommand::Wend => self.execute_wend(cursor),
+        }
+    }
+
+    fn execute_return(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
+        let ret = self
+            .gosub_stack
+            .pop()
+            .ok_or_else(|| self.err(ErrorCode::ReturnWithoutGosub))?;
+        if !self.if_stack.is_empty() {
+            self.reconcile_if_stack_for_jump(&ret)?;
+        }
+        *cursor = ret;
+        self.restore_timer_interrupt_if_returned();
+        Ok(())
+    }
+
+    fn restore_timer_interrupt_if_returned(&mut self) {
+        if self
+            .timer_isr_markers
+            .last()
+            .is_some_and(|marker| *marker == self.gosub_stack.len())
+        {
+            self.timer_isr_markers.pop();
+            if let Some(state) = self.timer_isr_stack.pop() {
+                self.current_interrupt_priority = state.priority;
+                self.interrupts_enabled = state.interrupts_enabled;
+            }
         }
     }
 
@@ -2625,12 +2656,12 @@ impl Interpreter {
             return Ok(false);
         }
         if let Some(inner) = whole_function_argument(item, "SPC") {
-            let count = self.eval_number(inner)?.max(0.0) as usize;
+            let count = nonnegative_usize_arg(self.eval_number(inner)?)?;
             self.write(&" ".repeat(count));
             return Ok(false);
         }
         if let Some(inner) = whole_function_argument(item, "TAB") {
-            let target = self.eval_number(inner)?.max(0.0) as usize;
+            let target = nonnegative_usize_arg(self.eval_number(inner)?)?;
             let target_col = target.saturating_sub(1);
             if target_col > self.output_col {
                 self.write(&" ".repeat(target_col - self.output_col));
@@ -3325,17 +3356,21 @@ impl Interpreter {
         let values = split_top_level(line.trim_end_matches(&['\r', '\n'][..]), &[',']);
         let targets = split_arguments(body);
         if values.len() < targets.len() {
-            return Err(self.err(ErrorCode::InvalidValue));
+            return Err(self.err(ErrorCode::VarNumberMismatch));
         }
         for (target, raw) in targets.into_iter().zip(values.into_iter()) {
             let value = if assignment_target_is_string(&target) {
                 Value::string(raw.trim_matches('"').to_string())
             } else {
-                Value::number(
-                    raw.trim()
+                let trimmed = raw.trim();
+                let number = if trimmed.is_empty() {
+                    0.0
+                } else {
+                    trimmed
                         .parse::<f64>()
-                        .map_err(|_| self.err(ErrorCode::TypeMismatch))?,
-                )
+                        .map_err(|_| self.err(ErrorCode::TypeMismatch))?
+                };
+                Value::number(number)
             };
             self.assign(&target, value)?;
         }
@@ -3412,13 +3447,14 @@ impl Interpreter {
                 .into_iter()
                 .map(|arg| self.eval_number(&arg).map(|n| n as i32))
                 .collect::<BasicResult<Vec<_>>>()?;
-            let indexes = self.normalize_array_indexes_for_name(&name, indexes)?;
-            if !self.arrays.contains_key(&name) {
+            let key = self.array_lookup_key(&name);
+            let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes)?;
+            if !self.arrays.contains_key(key.as_ref()) {
                 let dims = vec![10; indexes.len()];
                 self.arrays
-                    .insert(name.clone(), ArrayValue::new(&name, dims));
+                    .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
             }
-            let array = self.arrays.get_mut(&name).unwrap();
+            let array = self.arrays.get_mut(key.as_ref()).unwrap();
             if array.is_string() != matches!(value, Value::Str(_)) {
                 return Err(self.err(ErrorCode::TypeMismatch));
             }
@@ -3507,12 +3543,56 @@ impl Interpreter {
         is_string: bool,
         value: Value,
     ) -> BasicResult<()> {
+        if self.array_aliases.is_empty() {
+            if self
+                .arrays
+                .get(name)
+                .is_some_and(|array| array.dims.len() == raw_indexes.len())
+            {
+                let array = self.arrays.get_mut(name).unwrap();
+                if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
+                    return Err(self.err(ErrorCode::TypeMismatch));
+                }
+                if raw_indexes.len() == 1 {
+                    return array.set_direct_1d(raw_indexes[0], value).map_err(|mut e| {
+                        if e.line.is_none() {
+                            e.line = self.current_line;
+                        }
+                        e
+                    });
+                }
+                return array.set(raw_indexes, value).map_err(|mut e| {
+                    if e.line.is_none() {
+                        e.line = self.current_line;
+                    }
+                    e
+                });
+            }
+            let indexes = self.normalize_array_indexes_for_name(name, raw_indexes.to_vec())?;
+            if !self.arrays.contains_key(name) {
+                let dims = vec![10; indexes.len()];
+                self.arrays
+                    .insert(name.to_string(), ArrayValue::new(name, dims));
+            }
+            let array = self.arrays.get_mut(name).unwrap();
+            if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
+                return Err(self.err(ErrorCode::TypeMismatch));
+            }
+            return array.set(&indexes, value).map_err(|mut e| {
+                if e.line.is_none() {
+                    e.line = self.current_line;
+                }
+                e
+            });
+        }
+
+        let key = self.array_lookup_key(name);
         if self
             .arrays
-            .get(name)
+            .get(key.as_ref())
             .is_some_and(|array| array.dims.len() == raw_indexes.len())
         {
-            let array = self.arrays.get_mut(name).unwrap();
+            let array = self.arrays.get_mut(key.as_ref()).unwrap();
             if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
                 return Err(self.err(ErrorCode::TypeMismatch));
             }
@@ -3531,13 +3611,13 @@ impl Interpreter {
                 e
             });
         }
-        let indexes = self.normalize_array_indexes_for_name(name, raw_indexes.to_vec())?;
-        if !self.arrays.contains_key(name) {
+        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
+        if !self.arrays.contains_key(key.as_ref()) {
             let dims = vec![10; indexes.len()];
             self.arrays
-                .insert(name.to_string(), ArrayValue::new(name, dims));
+                .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
         }
-        let array = self.arrays.get_mut(name).unwrap();
+        let array = self.arrays.get_mut(key.as_ref()).unwrap();
         if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
@@ -3650,7 +3730,7 @@ impl Interpreter {
         }
         if !self.numeric_variables.contains_key(&upper)
             && !self.string_variables.contains_key(&upper)
-            && self.arrays.contains_key(&upper)
+            && self.array_exists(&upper)
         {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
@@ -3663,7 +3743,7 @@ impl Interpreter {
         indexes: Vec<i32>,
     ) -> BasicResult<Vec<i32>> {
         if indexes.len() == 2 {
-            if let Some(array) = self.arrays.get(name) {
+            if let Some(array) = self.array_ref(name) {
                 if array.dims.len() == 1 {
                     if indexes[1] == self.mat_base {
                         return Ok(vec![indexes[0]]);
@@ -3678,6 +3758,34 @@ impl Interpreter {
             }
         }
         Ok(indexes)
+    }
+
+    fn array_lookup_key<'a>(&self, name: &'a str) -> Cow<'a, str> {
+        if self.array_aliases.is_empty() {
+            return Cow::Borrowed(name);
+        }
+        self.array_aliases
+            .get(name)
+            .map(|key| Cow::Owned(key.clone()))
+            .unwrap_or(Cow::Borrowed(name))
+    }
+
+    fn array_exists(&self, name: &str) -> bool {
+        let key = self.array_lookup_key(name);
+        self.arrays.contains_key(key.as_ref())
+    }
+
+    fn array_ref(&self, name: &str) -> Option<&ArrayValue> {
+        if let Some(key) = self.array_aliases.get(name) {
+            self.arrays.get(key)
+        } else {
+            self.arrays.get(name)
+        }
+    }
+
+    fn array_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
+        let key = self.array_lookup_key(name);
+        self.arrays.get_mut(key.as_ref())
     }
 
     fn execute_if(
@@ -3931,7 +4039,8 @@ impl Interpreter {
             return Ok(());
         }
 
-        let target = self.eval_number(&targets[selector as usize - 1])? as i32;
+        let target = parse_line_number_literal(&targets[selector as usize - 1])
+            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
         if kind == "GOSUB" {
             self.gosub_stack.push(Cursor {
                 line_idx: cursor.line_idx,
@@ -3963,7 +4072,8 @@ impl Interpreter {
         if target_expr.is_empty() {
             return Err(self.err(ErrorCode::Syntax));
         }
-        let target_line = self.eval_number(target_expr)? as i32;
+        let target_line = parse_line_number_literal(target_expr)
+            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
         if target_line == 0 {
             self.mouse_handlers.remove(event);
             self.mouse_event_queue
@@ -3989,7 +4099,8 @@ impl Interpreter {
     }
 
     fn execute_inline_gosub(&mut self, target_expr: &str) -> BasicResult<()> {
-        let line = self.eval_number(target_expr)? as i32;
+        let line = parse_line_number_literal(target_expr)
+            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
         let Some(index) = self.line_index(line) else {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         };
@@ -4021,10 +4132,12 @@ impl Interpreter {
         }
         if upper.starts_with("GOTO") {
             let target = tail[4..].trim();
-            let line = self.eval_number(target)? as i32;
+            let line = parse_line_number_literal(target)
+                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
             if line == 0 {
                 self.error_handler_line = None;
                 self.error_resume_next = false;
+                self.last_error = None;
                 return Ok(());
             }
             if self.line_index(line).is_none() {
@@ -4041,11 +4154,13 @@ impl Interpreter {
     }
 
     fn execute_error(&mut self, arg: &str) -> BasicResult<()> {
-        let number = if arg.trim().is_empty() {
-            0
-        } else {
-            self.eval_number(arg)? as i32
-        };
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            return Err(self.err(ErrorCode::Syntax));
+        }
+        let number = trimmed
+            .parse::<i32>()
+            .map_err(|_| self.err(ErrorCode::InvalidValue))?;
         let err = ErrorCode::from_number(number)
             .map(|code| self.err(code))
             .unwrap_or_else(|| {
@@ -4066,7 +4181,8 @@ impl Interpreter {
         } else if arg.eq_ignore_ascii_case("NEXT") {
             *cursor = state.next;
         } else {
-            let line = self.eval_number(arg)? as i32;
+            let line = parse_line_number_literal(arg)
+                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
             self.jump_to_line_for_resume(line, cursor)?;
         }
         self.handling_error = false;
@@ -4433,7 +4549,8 @@ impl Interpreter {
                 .entry(raw_name.to_ascii_uppercase())
                 .or_insert_with(|| raw_name.to_string());
             let name = raw_name.to_ascii_uppercase();
-            if !self.arrays.contains_key(&name) {
+            let key = self.array_lookup_key(&name);
+            if !self.arrays.contains_key(key.as_ref()) {
                 return Err(self.err(ErrorCode::Undefined));
             }
             let dims = split_arguments(&spec[open + 1..close])
@@ -4451,13 +4568,13 @@ impl Interpreter {
                 .collect::<BasicResult<Vec<_>>>()?;
             if self
                 .arrays
-                .get(&name)
+                .get(key.as_ref())
                 .is_some_and(|previous| previous.dims.len() != dims.len())
             {
                 return Err(self.err(ErrorCode::InvalidDimensions));
             }
-            let mut next = ArrayValue::new(&name, dims);
-            if let Some(previous) = self.arrays.get(&name) {
+            let mut next = ArrayValue::new(key.as_ref(), dims);
+            if let Some(previous) = self.arrays.get(key.as_ref()) {
                 if previous.is_string() == next.is_string()
                     && previous.dims.len() == next.dims.len()
                 {
@@ -4470,7 +4587,7 @@ impl Interpreter {
                     }
                 }
             }
-            self.arrays.insert(name, next);
+            self.arrays.insert(key.into_owned(), next);
         }
         Ok(())
     }
@@ -4507,20 +4624,21 @@ impl Interpreter {
             if !is_basic_identifier(&name) {
                 return Err(self.err(ErrorCode::InvalidArgument));
             }
-            let Some(array) = self.arrays.get(&name) else {
+            let key = self.array_lookup_key(&name);
+            let Some(array) = self.arrays.get(key.as_ref()) else {
                 return Err(self.err(ErrorCode::Undefined));
             };
             if array.dims.len() > 2 {
                 return Err(self.err(ErrorCode::InvalidDimensions));
             }
-            let positions = self.mat_positions(&name, MatOrientation::Normal)?;
+            let positions = self.mat_positions(key.as_ref(), MatOrientation::Normal)?;
             for indexes in positions {
                 if self.data_pointer >= self.data.len() {
                     return Err(self.err(ErrorCode::DataExhausted));
                 }
                 let value = self.data[self.data_pointer].clone();
                 self.data_pointer += 1;
-                let array = self.arrays.get_mut(&name).unwrap();
+                let array = self.arrays.get_mut(key.as_ref()).unwrap();
                 if array.is_string() != matches!(value, Value::Str(_)) {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
@@ -4550,14 +4668,15 @@ impl Interpreter {
                 return Err(self.err(ErrorCode::InvalidArgument));
             }
             let name = raw_name.to_ascii_uppercase();
-            let Some(array) = self.arrays.get(&name) else {
+            let key = self.array_lookup_key(&name);
+            let Some(array) = self.arrays.get(key.as_ref()) else {
                 return Err(self.err(ErrorCode::Undefined));
             };
             if array.dims.len() > 2 {
                 return Err(self.err(ErrorCode::InvalidDimensions));
             }
             entries.push(MatInputEntry {
-                positions: self.mat_positions(&name, MatOrientation::Normal)?,
+                positions: self.mat_positions(&key, MatOrientation::Normal)?,
                 name,
                 position: 0,
             });
@@ -4648,8 +4767,7 @@ impl Interpreter {
     ) -> BasicResult<()> {
         let raw = raw_token.trim();
         let is_string = self
-            .arrays
-            .get(name)
+            .array_ref(name)
             .ok_or_else(|| self.err(ErrorCode::Undefined))?
             .is_string();
         let value = if is_string {
@@ -4669,7 +4787,7 @@ impl Interpreter {
             }
         };
 
-        let Some(array) = self.arrays.get_mut(name) else {
+        let Some(array) = self.array_mut(name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         array.set(indexes, value).map_err(|mut e| {
@@ -4687,7 +4805,7 @@ impl Interpreter {
         start_position: usize,
     ) {
         for (idx, entry) in entries.iter().enumerate().skip(start_entry) {
-            let Some(array) = self.arrays.get(&entry.name) else {
+            let Some(array) = self.array_ref(&entry.name) else {
                 continue;
             };
             let default = if array.is_string() {
@@ -4700,9 +4818,9 @@ impl Interpreter {
             } else {
                 0
             };
-            let name = entry.name.clone();
+            let name = self.array_lookup_key(&entry.name);
             for indexes in entry.positions.iter().skip(position) {
-                if let Some(array) = self.arrays.get_mut(&name) {
+                if let Some(array) = self.arrays.get_mut(name.as_ref()) {
                     let _ = array.set(indexes, default.clone());
                 }
             }
@@ -4747,18 +4865,19 @@ impl Interpreter {
         wide: bool,
     ) -> BasicResult<()> {
         let name = name.to_ascii_uppercase();
-        let Some(array) = self.arrays.get(&name) else {
+        let key = self.array_lookup_key(&name);
+        let Some(array) = self.arrays.get(key.as_ref()) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         if array.dims.len() > 2 {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
-        let (rows, cols) = self.mat_shape_for_print(&name, orientation)?;
+        let (rows, cols) = self.mat_shape_for_print(key.as_ref(), orientation)?;
         for r in 0..rows {
             let mut cells = Vec::with_capacity(cols);
             for c in 0..cols {
-                let indexes = self.mat_indexes_for_print(&name, orientation, r, c)?;
-                let value = self.arrays.get(&name).unwrap().get(&indexes)?;
+                let indexes = self.mat_indexes_for_print(key.as_ref(), orientation, r, c)?;
+                let value = self.arrays.get(key.as_ref()).unwrap().get(&indexes)?;
                 let cell = match value {
                     Value::Number(n) => {
                         let formatted = if let Some(fmt) = using_format {
@@ -4790,11 +4909,12 @@ impl Interpreter {
 
     fn mat_positions(&self, name: &str, orientation: MatOrientation) -> BasicResult<Vec<Vec<i32>>> {
         let name = name.to_ascii_uppercase();
-        let (rows, cols) = self.mat_shape_for_print(&name, orientation)?;
+        let key = self.array_lookup_key(&name);
+        let (rows, cols) = self.mat_shape_for_print(key.as_ref(), orientation)?;
         let mut positions = Vec::with_capacity(rows * cols);
         for r in 0..rows {
             for c in 0..cols {
-                positions.push(self.mat_indexes_for_print(&name, orientation, r, c)?);
+                positions.push(self.mat_indexes_for_print(key.as_ref(), orientation, r, c)?);
             }
         }
         Ok(positions)
@@ -4805,7 +4925,7 @@ impl Interpreter {
         name: &str,
         orientation: MatOrientation,
     ) -> BasicResult<(usize, usize)> {
-        let Some(array) = self.arrays.get(name) else {
+        let Some(array) = self.array_ref(name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         let lower = self.mat_base.max(0) as usize;
@@ -4845,7 +4965,7 @@ impl Interpreter {
         row: usize,
         col: usize,
     ) -> BasicResult<Vec<i32>> {
-        let Some(array) = self.arrays.get(name) else {
+        let Some(array) = self.array_ref(name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         let lower = self.mat_base.max(0) as usize;
@@ -4875,24 +4995,27 @@ impl Interpreter {
         if !is_basic_identifier(&target) {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
-        if !self.arrays.contains_key(&target) {
-            self.arrays
-                .insert(target.clone(), ArrayValue::new(&target, vec![10]));
-        }
+        let target_key = self.array_lookup_key(&target);
         let rhs_upper = rhs.to_ascii_uppercase();
         if rhs_upper == "CON" {
-            return self.mat_fill_array(&target, Value::number(1.0));
+            return self.mat_fill_array(target_key.as_ref(), Value::number(1.0));
         }
         if rhs_upper == "ZER" {
-            return self.mat_fill_array(&target, Value::number(0.0));
+            return self.mat_fill_array(target_key.as_ref(), Value::number(0.0));
         }
         if rhs_upper == "IDN" {
-            return self.mat_identity(&target);
+            return self.mat_identity(target_key.as_ref());
+        }
+        if !self.arrays.contains_key(target_key.as_ref()) {
+            self.arrays.insert(
+                target_key.to_string(),
+                ArrayValue::new(target_key.as_ref(), vec![10]),
+            );
         }
 
         match self.eval_mat_expr(rhs)? {
             MatExprValue::Scalar(value) => {
-                self.mat_fill_array(&target, value)?;
+                self.mat_fill_array(target_key.as_ref(), value)?;
                 self.return_array_for_active_function(&target);
                 Ok(())
             }
@@ -4906,13 +5029,13 @@ impl Interpreter {
                 if matrix.is_string()
                     != self
                         .arrays
-                        .get(&target)
+                        .get(target_key.as_ref())
                         .map(|array| array.is_string())
                         .unwrap_or_else(|| target.ends_with('$'))
                 {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
-                self.arrays.insert(target.clone(), matrix);
+                self.arrays.insert(target_key.into_owned(), matrix);
                 self.return_array_for_active_function(&target);
                 Ok(())
             }
@@ -5025,13 +5148,13 @@ impl Interpreter {
         }
 
         if is_basic_identifier(&upper) {
-            if let Some(array) = self.arrays.get(&upper) {
+            if let Some(array) = self.array_ref(&upper) {
                 return Ok(MatExprValue::Matrix(array.clone()));
             }
         }
         match self.eval_value(expr)? {
             Value::ArrayRef(name) => {
-                let Some(array) = self.arrays.get(&name).cloned() else {
+                let Some(array) = self.array_ref(&name).cloned() else {
                     return Err(self.err(ErrorCode::Undefined));
                 };
                 Ok(MatExprValue::Matrix(array))
@@ -5088,13 +5211,19 @@ impl Interpreter {
             }
             (MatExprValue::Matrix(matrix), MatExprValue::Scalar(scalar)) => {
                 if matrix.is_string() {
-                    return Err(self.err(ErrorCode::ForbiddenExpression));
+                    if op != '+' {
+                        return Err(self.err(ErrorCode::ForbiddenExpression));
+                    }
+                    return self.mat_string_matrix_scalar_add(matrix, scalar, false);
                 }
                 self.mat_matrix_scalar(matrix, scalar.as_number()?, op, false)
             }
             (MatExprValue::Scalar(scalar), MatExprValue::Matrix(matrix)) => {
                 if matrix.is_string() {
-                    return Err(self.err(ErrorCode::ForbiddenExpression));
+                    if op != '+' {
+                        return Err(self.err(ErrorCode::ForbiddenExpression));
+                    }
+                    return self.mat_string_matrix_scalar_add(matrix, scalar, true);
                 }
                 self.mat_matrix_scalar(matrix, scalar.as_number()?, op, true)
             }
@@ -5131,6 +5260,27 @@ impl Interpreter {
             let a = left.get(&indexes)?.into_string()?;
             let b = right.get(&indexes)?.into_string()?;
             out.set(&indexes, Value::string(format!("{a}{b}")))?;
+        }
+        Ok(MatExprValue::Matrix(out))
+    }
+
+    fn mat_string_matrix_scalar_add(
+        &mut self,
+        matrix: ArrayValue,
+        scalar: Value,
+        scalar_left: bool,
+    ) -> BasicResult<MatExprValue> {
+        let scalar = scalar.into_string()?;
+        let mut out = ArrayValue::new("$", matrix.dims.clone());
+        for flat in 0..matrix.data_len() {
+            let indexes = matrix.indexes_for_flat(flat);
+            let text = matrix.get(&indexes)?.into_string()?;
+            let value = if scalar_left {
+                format!("{scalar}{text}")
+            } else {
+                format!("{text}{scalar}")
+            };
+            out.set(&indexes, Value::string(value))?;
         }
         Ok(MatExprValue::Matrix(out))
     }
@@ -5399,12 +5549,14 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute_pause(&mut self, arg: &str, cursor: &Cursor) -> BasicResult<()> {
+    fn execute_pause(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
         if arg.trim().is_empty() {
             loop {
                 std::thread::sleep(Duration::from_millis(2));
                 self.check_user_interrupt(cursor)?;
-                self.process_timers()?;
+                if self.process_timers(cursor)? {
+                    break;
+                }
                 self.check_user_interrupt(cursor)?;
                 if self.pause_user_input_ready()? {
                     break;
@@ -5421,14 +5573,26 @@ impl Interpreter {
             return Ok(());
         }
 
-        let ms = self.eval_number(arg)?.max(0.0) as u64;
-        let deadline = Instant::now() + Duration::from_millis(ms);
+        let pause_cursor = *cursor;
+        let ms = nonnegative_millis_arg(self.eval_number(arg)?)?;
+        let deadline = match self.pause_deadline {
+            Some((saved_cursor, saved_deadline)) if saved_cursor == pause_cursor => saved_deadline,
+            _ => {
+                let deadline = Instant::now() + Duration::from_millis(ms);
+                self.pause_deadline = Some((pause_cursor, deadline));
+                deadline
+            }
+        };
+        let mut interrupted_by_timer = false;
         while Instant::now() < deadline {
             let now = Instant::now();
             let remaining = deadline.saturating_duration_since(now);
             std::thread::sleep(remaining.min(Duration::from_millis(2)));
             self.check_user_interrupt(cursor)?;
-            self.process_timers()?;
+            if self.process_timers(cursor)? {
+                interrupted_by_timer = true;
+                break;
+            }
             self.check_user_interrupt(cursor)?;
             if self.pause_user_input_ready()? {
                 break;
@@ -5440,6 +5604,14 @@ impl Interpreter {
                 || self.sub_return_requested
             {
                 break;
+            }
+        }
+        if !interrupted_by_timer {
+            if self
+                .pause_deadline
+                .is_some_and(|(saved_cursor, _)| saved_cursor == pause_cursor)
+            {
+                self.pause_deadline = None;
             }
         }
         Ok(())
@@ -5492,79 +5664,115 @@ impl Interpreter {
         let before = args[..pos].trim();
         let target = parse_line_number_literal(&args[pos + 7..])
             .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let Some(target_cursor) = self.cursor_for_line(target) else {
+            return Err(self.err(ErrorCode::TargetLineNotFound));
+        };
+        self.validate_function_jump(target, &target_cursor, true)?;
         let parts = split_arguments(before);
-        if parts.is_empty() {
-            return Err(self.err(ErrorCode::Syntax));
+        if parts.is_empty() || parts.len() > 2 {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let ticks = self.eval_number(&parts[0])?.max(0.0) as i32;
+        let timer_no = if parts.len() == 2 {
+            self.eval_number(&parts[1])? as i32
+        } else {
+            0
+        };
+        if !(0..=3).contains(&timer_no) {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
         let interval = Duration::from_millis((ticks as u64).saturating_mul(20));
+        self.timers.retain(|timer| timer.number != timer_no);
         self.timers.push(BasicTimer {
+            number: timer_no,
             interval,
             next_fire: Instant::now() + interval,
             target,
             repeat,
             active: true,
-            pending: false,
-            pending_delay: 0,
-            remaining_ticks: ticks,
         });
         Ok(())
     }
 
-    fn process_timers(&mut self) -> BasicResult<()> {
+    fn execute_cancel(&mut self, args: &str) -> BasicResult<()> {
+        let parts = split_arguments(args);
+        if parts.len() != 1 {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        let timer_no = self.eval_number(&parts[0])? as i32;
+        if !(0..=3).contains(&timer_no) {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
+        self.timers.retain(|timer| timer.number != timer_no);
+        Ok(())
+    }
+
+    fn process_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         if self.timers.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let now = Instant::now();
-        for timer in &mut self.timers {
-            if timer.active && now >= timer.next_fire {
-                timer.pending = true;
-            }
-        }
-        for timer in &mut self.timers {
-            if timer.pending && timer.pending_delay > 0 {
-                timer.pending_delay -= 1;
-            }
-        }
         if !self.interrupts_enabled {
-            return Ok(());
+            return Ok(false);
         }
         let Some(index) = self
             .timers
             .iter()
-            .position(|timer| timer.active && timer.pending && timer.pending_delay == 0)
+            .enumerate()
+            .filter(|(_, timer)| {
+                timer.active
+                    && now >= timer.next_fire
+                    && timer.number > self.current_interrupt_priority
+            })
+            .max_by_key(|(_, timer)| timer.number)
+            .map(|(index, _)| index)
         else {
-            return Ok(());
+            return Ok(false);
         };
+        let priority = self.timers[index].number;
         let target = self.timers[index].target;
         if self.timers[index].repeat {
-            self.timers[index].pending = false;
-            let mut next = self.timers[index].next_fire + self.timers[index].interval;
-            while next <= now {
-                next += self.timers[index].interval;
+            if self.timers[index].interval.is_zero() {
+                self.timers[index].next_fire = now + Duration::from_micros(100);
+            } else {
+                let mut next = self.timers[index].next_fire + self.timers[index].interval;
+                while next <= now {
+                    next += self.timers[index].interval;
+                }
+                self.timers[index].next_fire = next;
             }
-            self.timers[index].next_fire = next;
         } else {
-            self.timers[index].pending = false;
             self.timers[index].active = false;
-            self.timers[index].remaining_ticks = 0;
         }
-        self.execute_inline_gosub(&target.to_string())
+        let Some(target_cursor) = self.cursor_for_line(target) else {
+            return Err(self.err(ErrorCode::TargetLineNotFound));
+        };
+        self.validate_function_jump(target, &target_cursor, true)?;
+        let base_depth = self.gosub_stack.len();
+        self.timer_isr_stack.push(TimerInterruptState {
+            priority: self.current_interrupt_priority,
+            interrupts_enabled: self.interrupts_enabled,
+        });
+        self.current_interrupt_priority = priority;
+        self.gosub_stack.push(*cursor);
+        self.timer_isr_markers.push(base_depth);
+        *cursor = target_cursor;
+        Ok(true)
     }
 
-    fn remain_value(&mut self) -> f64 {
-        let Some(timer) = self.timers.iter_mut().find(|timer| timer.active) else {
-            return 0.0;
-        };
-        let value = timer.remaining_ticks.max(0);
-        if value > 0 {
-            timer.remaining_ticks -= 1;
-            if timer.remaining_ticks == 0 {
-                timer.pending = true;
-                timer.pending_delay = 2;
-            }
+    fn remain_value(&self, timer_no: i32) -> BasicResult<f64> {
+        if !(0..=3).contains(&timer_no) {
+            return Err(self.err(ErrorCode::InvalidArgument));
         }
-        value as f64
+        let Some(timer) = self
+            .timers
+            .iter()
+            .find(|timer| timer.active && timer.number == timer_no)
+        else {
+            return Ok(0.0);
+        };
+        let remaining = timer.next_fire.saturating_duration_since(Instant::now());
+        Ok((remaining.as_secs_f64() / 0.02).ceil())
     }
 
     fn execute_def(&mut self, command: &str, cursor: &mut Cursor) -> BasicResult<()> {
@@ -6012,7 +6220,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute_frame(&mut self, arg: &str, cursor: &Cursor) -> BasicResult<()> {
+    fn execute_frame(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
         let arg = arg.trim();
         if arg.is_empty() {
             self.graphics_window_dirty = true;
@@ -6022,12 +6230,16 @@ impl Interpreter {
         }
 
         let parts = split_arguments(arg);
+        let before_wait = *cursor;
         let frame_time = match parts.len() {
             1 => self
                 .wait_for_frame_rate(&parts[0], cursor)?
                 .unwrap_or_else(Instant::now),
             _ => return Err(self.err(ErrorCode::ArgumentMismatch)),
         };
+        if *cursor != before_wait {
+            return Ok(());
+        }
 
         self.graphics_window_dirty = true;
         self.record_frame_command_present_at(frame_time);
@@ -6047,7 +6259,7 @@ impl Interpreter {
     fn wait_for_frame_rate(
         &mut self,
         fps_arg: &str,
-        cursor: &Cursor,
+        cursor: &mut Cursor,
     ) -> BasicResult<Option<Instant>> {
         let fps = self.eval_number(fps_arg)?;
         if !fps.is_finite() || fps <= 0.0 {
@@ -6071,7 +6283,9 @@ impl Interpreter {
             let remaining = deadline.saturating_duration_since(Instant::now());
             std::thread::sleep(remaining.min(Duration::from_millis(2)));
             self.check_user_interrupt(cursor)?;
-            self.process_timers()?;
+            if self.process_timers(cursor)? {
+                return Ok(Some(Instant::now()));
+            }
             self.check_user_interrupt(cursor)?;
             if self.end_requested
                 || self.stopped_cursor.is_some()
@@ -7307,6 +7521,8 @@ impl Interpreter {
             if let Some(state) = &self.last_error {
                 *cursor = state.next.clone();
             }
+            self.handling_error = false;
+            self.last_error = None;
             return Ok(true);
         }
         if let Some(handler) = self.error_handler_line {
@@ -8054,9 +8270,9 @@ impl EvalContext for Interpreter {
             }
             if !self.function_call_stack.is_empty()
                 && !self.numeric_variables.contains_key(name)
-                && self.arrays.contains_key(name)
+                && self.array_exists(name)
             {
-                return Ok(Value::ArrayRef(name.to_string()));
+                return Ok(Value::ArrayRef(self.array_lookup_key(name).into_owned()));
             }
             Ok(Value::number(
                 self.numeric_variables.get(name).copied().unwrap_or(0.0),
@@ -8076,7 +8292,7 @@ impl EvalContext for Interpreter {
         }
         if !self.function_call_stack.is_empty()
             && !self.numeric_variables.contains_key(name)
-            && self.arrays.contains_key(name)
+            && self.array_exists(name)
         {
             return Err(BasicError::new(ErrorCode::TypeMismatch));
         }
@@ -8084,7 +8300,28 @@ impl EvalContext for Interpreter {
     }
 
     fn get_array_value(&mut self, name: &str, indexes: &[i32]) -> BasicResult<Value> {
-        if let Some(array) = self.arrays.get(name) {
+        if self.array_aliases.is_empty() {
+            if let Some(array) = self.arrays.get(name) {
+                if array.dims.len() == indexes.len() {
+                    if indexes.len() == 1 {
+                        return array.get_direct_1d(indexes[0]);
+                    }
+                    return array.get(indexes);
+                }
+            }
+            let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+            if !self.arrays.contains_key(name) {
+                self.arrays.insert(
+                    name.to_string(),
+                    ArrayValue::new(name, vec![10; indexes.len()]),
+                );
+            }
+            let array = self.arrays.get(name).unwrap();
+            return array.get(&indexes);
+        }
+
+        let key = self.array_lookup_key(name);
+        if let Some(array) = self.arrays.get(key.as_ref()) {
             if array.dims.len() == indexes.len() {
                 if indexes.len() == 1 {
                     return array.get_direct_1d(indexes[0]);
@@ -8092,19 +8329,40 @@ impl EvalContext for Interpreter {
                 return array.get(indexes);
             }
         }
-        let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
-        if !self.arrays.contains_key(name) {
+        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        if !self.arrays.contains_key(key.as_ref()) {
             self.arrays.insert(
-                name.to_string(),
-                ArrayValue::new(name, vec![10; indexes.len()]),
+                key.to_string(),
+                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
             );
         }
-        let array = self.arrays.get(name).unwrap();
+        let array = self.arrays.get(key.as_ref()).unwrap();
         array.get(&indexes)
     }
 
     fn get_array_number(&mut self, name: &str, indexes: &[i32]) -> BasicResult<f64> {
-        if let Some(array) = self.arrays.get(name) {
+        if self.array_aliases.is_empty() {
+            if let Some(array) = self.arrays.get(name) {
+                if array.dims.len() == indexes.len() {
+                    if indexes.len() == 1 {
+                        return array.get_number_direct_1d(indexes[0]);
+                    }
+                    return array.get_number(indexes);
+                }
+            }
+            let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+            if !self.arrays.contains_key(name) {
+                self.arrays.insert(
+                    name.to_string(),
+                    ArrayValue::new(name, vec![10; indexes.len()]),
+                );
+            }
+            let array = self.arrays.get(name).unwrap();
+            return array.get_number(&indexes);
+        }
+
+        let key = self.array_lookup_key(name);
+        if let Some(array) = self.arrays.get(key.as_ref()) {
             if array.dims.len() == indexes.len() {
                 if indexes.len() == 1 {
                     return array.get_number_direct_1d(indexes[0]);
@@ -8112,21 +8370,20 @@ impl EvalContext for Interpreter {
                 return array.get_number(indexes);
             }
         }
-        let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
-        if !self.arrays.contains_key(name) {
+        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        if !self.arrays.contains_key(key.as_ref()) {
             self.arrays.insert(
-                name.to_string(),
-                ArrayValue::new(name, vec![10; indexes.len()]),
+                key.to_string(),
+                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
             );
         }
-        let array = self.arrays.get(name).unwrap();
+        let array = self.arrays.get(key.as_ref()).unwrap();
         array.get_number(&indexes)
     }
 
     fn array_reference(&mut self, name: &str) -> Option<Value> {
-        self.arrays
-            .contains_key(name)
-            .then(|| Value::ArrayRef(name.to_string()))
+        self.array_exists(name)
+            .then(|| Value::ArrayRef(self.array_lookup_key(name).into_owned()))
     }
 
     fn call_runtime_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value> {
@@ -8233,7 +8490,9 @@ impl EvalContext for Interpreter {
                     .unwrap_or_default()
                     .as_secs_f64(),
             )),
-            "REMAIN" if args.len() == 1 => Ok(Value::number(self.remain_value())),
+            "REMAIN" if args.len() == 1 => Ok(Value::number(
+                self.remain_value(args[0].as_number()? as i32)?,
+            )),
             "ERR" if args.is_empty() => Ok(Value::number(
                 self.last_error
                     .as_ref()
@@ -8263,6 +8522,11 @@ impl EvalContext for Interpreter {
             }
             "WIDTH" if args.is_empty() => Ok(Value::number(self.graphics.width as f64)),
             "HEIGHT" if args.is_empty() => Ok(Value::number(self.graphics.height as f64)),
+            "XMIN" if args.is_empty() => Ok(Value::number(self.graphics.scale_bounds().0)),
+            "XMAX" if args.is_empty() => Ok(Value::number(self.graphics.scale_bounds().1)),
+            "YMIN" if args.is_empty() => Ok(Value::number(self.graphics.scale_bounds().2)),
+            "YMAX" if args.is_empty() => Ok(Value::number(self.graphics.scale_bounds().3)),
+            "BORDER" if args.is_empty() => Ok(Value::number(self.graphics.scale_border() as f64)),
             "XPOS" if args.is_empty() => Ok(Value::number(self.graphics.xpos())),
             "YPOS" if args.is_empty() => Ok(Value::number(self.graphics.ypos())),
             "HPOS" if args.is_empty() => Ok(Value::number(self.graphics.hpos() as f64)),
@@ -8311,30 +8575,38 @@ impl EvalContext for Interpreter {
             "HITSPRITE" if args.is_empty() => Ok(Value::number(self.graphics.hitsprite() as f64)),
             "HITID" if args.is_empty() => Ok(Value::number(self.graphics.hitid() as f64)),
             "RGB" => match args.as_slice() {
-                [Value::Number(r), Value::Number(g), Value::Number(b)] => Ok(Value::number(
-                    rgb_number(*r as i32, *g as i32, *b as i32)? as f64,
-                )),
+                [r, g, b] => Ok(Value::number(rgb_number(
+                    rgb_component_from_value(r)?,
+                    rgb_component_from_value(g)?,
+                    rgb_component_from_value(b)?,
+                )? as f64)),
                 [Value::Str(s)] => {
                     let (r, g, b) = parse_rgb_string(s)?;
                     Ok(Value::number(rgb_number(r, g, b)? as f64))
                 }
-                [Value::Number(n)] if *n as i32 == 31 => Ok(Value::number(16_777_200.0)),
-                [Value::Number(n)] => Ok(Value::number(*n)),
+                [Value::Number(n)] => {
+                    let color = color_number_from_number(*n)?;
+                    if color == 31 {
+                        Ok(Value::number(16_777_200.0))
+                    } else {
+                        Ok(Value::number(color as f64))
+                    }
+                }
                 _ => Err(self.err(ErrorCode::ArgumentMismatch)),
             },
             "RGB$" => match args.as_slice() {
-                [Value::Number(r), Value::Number(g), Value::Number(b)] => Ok(Value::string(
-                    format!("{},{},{}", *r as i32, *g as i32, *b as i32),
-                )),
+                [r, g, b] => Ok(Value::string(format!(
+                    "{},{},{}",
+                    rgb_component_from_value(r)?,
+                    rgb_component_from_value(g)?,
+                    rgb_component_from_value(b)?
+                ))),
                 [Value::Str(s)] => {
                     let (r, g, b) = parse_rgb_string(s)?;
                     Ok(Value::string(format!("{r},{g},{b}")))
                 }
-                [Value::Number(n)] if *n as i32 == 32 || *n as i32 == 31 => {
-                    Ok(Value::string(format!("0,0,{}", *n as i32)))
-                }
                 [Value::Number(n)] => {
-                    let n = *n as i32;
+                    let n = color_number_from_number(*n)?;
                     Ok(Value::string(format!(
                         "{},{},{}",
                         (n >> 16) & 255,
@@ -8379,7 +8651,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let array_name = args[0].clone().into_string()?.to_ascii_uppercase();
-        let Some(array) = self.arrays.get(&array_name) else {
+        let Some(array) = self.array_ref(&array_name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         let round_dimension = matches!(name.to_ascii_uppercase().as_str(), "LBND" | "UBND");
@@ -8415,7 +8687,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let array_name = args[0].clone().into_string()?.to_ascii_uppercase();
-        let Some(array) = self.arrays.get(&array_name) else {
+        let Some(array) = self.array_ref(&array_name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         let matrix = self.array_to_numeric_matrix(array)?;
@@ -8431,12 +8703,10 @@ impl Interpreter {
             let left_name = args[0].clone().into_string()?.to_ascii_uppercase();
             let right_name = args[1].clone().into_string()?.to_ascii_uppercase();
             let left = self
-                .arrays
-                .get(&left_name)
+                .array_ref(&left_name)
                 .ok_or_else(|| self.err(ErrorCode::Undefined))?;
             let right = self
-                .arrays
-                .get(&right_name)
+                .array_ref(&right_name)
                 .ok_or_else(|| self.err(ErrorCode::Undefined))?;
             let left_values = self.numeric_vector_values(left)?;
             let right_values = self.numeric_vector_values(right)?;
@@ -8455,7 +8725,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let array_name = args[0].clone().into_string()?.to_ascii_uppercase();
-        let Some(array) = self.arrays.get(&array_name) else {
+        let Some(array) = self.array_ref(&array_name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         let stats = self.analyze_numeric_array(array)?;
@@ -8647,7 +8917,7 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(array) = self.arrays.get(&source).cloned() else {
+                    let Some(array) = self.array_ref(&source).cloned() else {
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
@@ -8676,7 +8946,7 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(array) = self.arrays.get(&source).cloned() else {
+                    let Some(array) = self.array_ref(&source).cloned() else {
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
@@ -8695,6 +8965,7 @@ impl Interpreter {
         saved_numeric: &mut Vec<(&'a str, Option<f64>)>,
         saved_string: &mut Vec<(&'a str, Option<String>)>,
         saved_arrays: &mut Vec<(&'a str, Option<ArrayValue>)>,
+        saved_aliases: &mut Vec<(&'a str, Option<String>)>,
     ) -> BasicResult<()> {
         for spec in local_specs {
             match spec {
@@ -8716,6 +8987,8 @@ impl Interpreter {
                         }
                         evaluated.push(value as usize);
                     }
+                    save_array_alias_binding_ref(&self.array_aliases, saved_aliases, name);
+                    self.array_aliases.remove(name);
                     save_array_binding_ref(&self.arrays, saved_arrays, name);
                     set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
                 }
@@ -8751,11 +9024,11 @@ impl Interpreter {
         let trimmed = expr.trim();
         let upper = trimmed.to_ascii_uppercase();
         if is_basic_identifier(&upper)
-            && self.arrays.contains_key(&upper)
+            && self.array_exists(&upper)
             && !self.numeric_variables.contains_key(&upper)
             && !self.string_variables.contains_key(&upper)
         {
-            return Ok(Value::ArrayRef(upper));
+            return Ok(Value::ArrayRef(self.array_lookup_key(&upper).into_owned()));
         }
         self.eval_value(trimmed)
     }
@@ -8776,7 +9049,8 @@ impl Interpreter {
             Vec::with_capacity(sub.params.len() + 1);
         let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
             Vec::with_capacity(sub.params.len() + 1);
-        let mut array_copybacks: Vec<(&str, String)> = Vec::new();
+        let mut saved_aliases: Vec<(&str, Option<String>)> =
+            Vec::with_capacity(sub.params.len() + 1);
 
         if name.ends_with('$') {
             save_string_binding_ref(&self.string_variables, &mut saved_string, &name);
@@ -8791,6 +9065,7 @@ impl Interpreter {
                         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
                         restore_string_bindings_ref(&mut self.string_variables, saved_string);
                         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
                     save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
@@ -8801,31 +9076,35 @@ impl Interpreter {
                         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
                         restore_string_bindings_ref(&mut self.string_variables, saved_string);
                         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
                     save_string_binding_ref(&self.string_variables, &mut saved_string, param);
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(array) = self.arrays.get(&source).cloned() else {
+                    let source_key = self.array_lookup_key(&source);
+                    let Some(array) = self.arrays.get(source_key.as_ref()) else {
                         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
                         restore_string_bindings_ref(&mut self.string_variables, saved_string);
                         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
                         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
                         restore_string_bindings_ref(&mut self.string_variables, saved_string);
                         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
                     save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
                     save_string_binding_ref(&self.string_variables, &mut saved_string, param);
+                    save_array_alias_binding_ref(&self.array_aliases, &mut saved_aliases, param);
                     self.numeric_variables.remove(param);
                     self.string_variables.remove(param);
-                    save_array_binding_ref(&self.arrays, &mut saved_arrays, param);
-                    set_array_binding_ref(&mut self.arrays, param, array);
-                    array_copybacks.push((param, source));
+                    self.array_aliases
+                        .insert(param.to_string(), source_key.into_owned());
                 }
             }
         }
@@ -8835,10 +9114,12 @@ impl Interpreter {
             &mut saved_numeric,
             &mut saved_string,
             &mut saved_arrays,
+            &mut saved_aliases,
         ) {
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
             restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
             return Err(err);
         }
 
@@ -8857,12 +9138,6 @@ impl Interpreter {
         self.active_subs.pop();
         self.sub_call_stack.pop();
 
-        for (param, source) in &array_copybacks {
-            if let Some(array) = self.arrays.get(*param).cloned() {
-                self.arrays.insert(source.clone(), array);
-            }
-        }
-
         self.for_stack.truncate(saved_for_len);
         self.while_stack.truncate(saved_while_len);
         self.gosub_stack.truncate(saved_gosub_len);
@@ -8873,6 +9148,7 @@ impl Interpreter {
         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
         restore_string_bindings_ref(&mut self.string_variables, saved_string);
         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
 
         run_result?;
         Ok(())
@@ -8890,6 +9166,7 @@ impl Interpreter {
         let mut saved_string: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len() + 1);
         let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
             Vec::with_capacity(params.len() + 1);
+        let mut saved_aliases: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len() + 1);
         for param in params {
             if param.ends_with('$') {
                 save_string_binding_ref(&self.string_variables, &mut saved_string, param);
@@ -8911,6 +9188,7 @@ impl Interpreter {
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
             restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
             return Err(err);
         }
         if let Err(err) = self.bind_local_specs_vec(
@@ -8918,11 +9196,13 @@ impl Interpreter {
             &mut saved_numeric,
             &mut saved_string,
             &mut saved_arrays,
+            &mut saved_aliases,
         ) {
             self.function_call_stack.pop();
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
             restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
             return Err(err);
         }
 
@@ -8943,7 +9223,7 @@ impl Interpreter {
         let active = self.active_functions.pop();
         let mut return_value = active.and_then(|frame| frame.return_value);
         let return_array = if let Some(Value::ArrayRef(source)) = &return_value {
-            self.arrays.get(source).cloned()
+            self.array_ref(source).cloned()
         } else {
             None
         };
@@ -8959,6 +9239,7 @@ impl Interpreter {
         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
         restore_string_bindings_ref(&mut self.string_variables, saved_string);
         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
+        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
         if let Some(array) = return_array {
             let array_name = name.to_string();
             self.arrays.insert(array_name.clone(), array);
@@ -8990,13 +9271,13 @@ mod interpreter_tests {
     fn pause_returns_immediately_for_pending_console_key() {
         let mut interp = Interpreter::new();
         interp.key_queue.push_back(b'X');
-        let cursor = Cursor {
+        let mut cursor = Cursor {
             line_idx: 0,
             cmd_idx: 0,
         };
         let started = Instant::now();
 
-        interp.execute_pause("1000", &cursor).unwrap();
+        interp.execute_pause("1000", &mut cursor).unwrap();
 
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(interp.key_queue.is_empty());
@@ -10222,6 +10503,17 @@ fn save_array_binding_ref<'a>(
     saved.push((name, arrays.get(name).cloned()));
 }
 
+fn save_array_alias_binding_ref<'a>(
+    aliases: &FastHashMap<String, String>,
+    saved: &mut Vec<(&'a str, Option<String>)>,
+    name: &'a str,
+) {
+    if saved.iter().any(|(existing, _)| *existing == name) {
+        return;
+    }
+    saved.push((name, aliases.get(name).cloned()));
+}
+
 fn restore_numeric_bindings_ref(
     variables: &mut FastHashMap<String, f64>,
     saved: Vec<(&str, Option<f64>)>,
@@ -10257,6 +10549,19 @@ fn restore_array_bindings_ref(
             set_array_binding_ref(arrays, name, value);
         } else {
             arrays.remove(name);
+        }
+    }
+}
+
+fn restore_array_alias_bindings_ref(
+    aliases: &mut FastHashMap<String, String>,
+    saved: Vec<(&str, Option<String>)>,
+) {
+    for (name, value) in saved {
+        if let Some(value) = value {
+            aliases.insert(name.to_string(), value);
+        } else {
+            aliases.remove(name);
         }
     }
 }
@@ -10400,11 +10705,48 @@ fn color_number_from_value(value: Value) -> BasicResult<i32> {
 }
 
 fn color_number_from_number(n: f64) -> BasicResult<i32> {
+    if !n.is_finite() {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
     let color = n as i32;
     if color < 0 || color > 0x00ff_ffff {
         return Err(BasicError::new(ErrorCode::InvalidArgument));
     }
     Ok(color)
+}
+
+fn rgb_component_from_value(value: &Value) -> BasicResult<i32> {
+    match value {
+        Value::Number(n) => rgb_component_from_number(*n),
+        Value::Str(text) => rgb_component_from_string(text),
+        Value::ArrayRef(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+    }
+}
+
+fn rgb_component_from_number(n: f64) -> BasicResult<i32> {
+    if !n.is_finite() {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    let component = n as i32;
+    validate_rgb_component(component)
+}
+
+fn rgb_component_from_string(text: &str) -> BasicResult<i32> {
+    let value = text
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| BasicError::new(ErrorCode::InvalidArgument))?;
+    if !value.is_finite() {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    validate_rgb_component(value.round() as i32)
+}
+
+fn validate_rgb_component(component: i32) -> BasicResult<i32> {
+    if !(0..=255).contains(&component) {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(component)
 }
 
 fn color_number_from_string(text: &str) -> BasicResult<i32> {
@@ -10454,16 +10796,29 @@ fn parse_rgb_string_components(text: &str) -> BasicResult<Option<(i32, i32, i32)
     }
     let mut rgb = [0i32; 3];
     for (idx, part) in parts.iter().enumerate() {
-        let component = part
-            .parse::<f64>()
-            .map_err(|_| BasicError::new(ErrorCode::InvalidArgument))?
-            .round() as i32;
-        if !(0..=255).contains(&component) {
-            return Err(BasicError::new(ErrorCode::InvalidArgument));
-        }
-        rgb[idx] = component;
+        rgb[idx] = rgb_component_from_string(part)?;
     }
     Ok(Some((rgb[0], rgb[1], rgb[2])))
+}
+
+fn nonnegative_usize_arg(value: f64) -> BasicResult<usize> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() || value > usize::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    Ok(value.max(0.0) as usize)
+}
+
+fn nonnegative_millis_arg(value: f64) -> BasicResult<u64> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() || value > u64::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    Ok(value.max(0.0) as u64)
 }
 
 fn clip_graph_segment(
@@ -10939,6 +11294,9 @@ fn compile_for_statement(source: &str) -> BasicResult<CompiledFor> {
     let var = source[..eq].trim().to_ascii_uppercase();
     if !is_basic_identifier(&var) {
         return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    if var.ends_with('$') {
+        return Err(BasicError::new(ErrorCode::TypeMismatch));
     }
     let Some(to_pos) = upper[eq + 1..].find(" TO ") else {
         return Err(BasicError::new(ErrorCode::Syntax));

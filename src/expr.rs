@@ -826,6 +826,55 @@ fn checked_power(base: f64, exponent: f64) -> BasicResult<f64> {
     checked_number(base.powf(exponent))
 }
 
+fn nonnegative_count(value: f64) -> BasicResult<usize> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() || value > usize::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    Ok(value.max(0.0) as usize)
+}
+
+fn zero_based_string_start(value: f64) -> BasicResult<usize> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() || value > isize::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    if value <= 1.0 {
+        return Ok(0);
+    }
+    Ok(value as usize - 1)
+}
+
+fn positive_string_start(value: f64) -> BasicResult<usize> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() || value > usize::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    if value < 1.0 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(value as usize)
+}
+
+fn character_from_code(value: f64) -> BasicResult<char> {
+    if value.is_nan() {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    if !value.is_finite() {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    if value < 0.0 || value > char::MAX as u32 as f64 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    char::from_u32(value as u32).ok_or_else(|| BasicError::new(ErrorCode::InvalidArgument))
+}
+
 fn compare_values(left: &Value, right: &Value, op: &str) -> BasicResult<bool> {
     match (left, right) {
         (Value::Number(a), Value::Number(b)) => Ok(match op {
@@ -941,26 +990,71 @@ fn parse_basic_val(text: &str) -> f64 {
     sign * rest[..end].parse::<f64>().unwrap_or(0.0)
 }
 
-fn format_radix_string(value: i64, width: Option<usize>, radix: u32) -> String {
-    let bits = if radix == 2 { 8 } else { 16 };
-    let unsigned = if value < 0 {
-        ((1i64 << bits) + value) as u64
-    } else {
-        value as u64
-    };
-    let mut text = if radix == 2 {
-        format!("{unsigned:b}")
-    } else {
-        format!("{unsigned:X}")
-    };
-    if value < 0 && radix == 2 && text.len() > 8 {
-        text = text[text.len() - 8..].to_string();
+fn radix_integer(value: f64) -> BasicResult<i64> {
+    if !value.is_finite() {
+        return Err(BasicError::new(ErrorCode::Overflow));
     }
-    if let Some(width) = width {
-        if text.len() < width {
-            text = format!("{}{}", "0".repeat(width - text.len()), text);
-        } else if text.len() > width {
-            text = text[text.len() - width..].to_string();
+    Ok(value as i64)
+}
+
+fn radix_width(value: f64) -> BasicResult<usize> {
+    if !value.is_finite() {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    let width = value as i64;
+    if width < 0 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(width as usize)
+}
+
+fn abs_bit_length(value: i64) -> usize {
+    let abs = if value < 0 {
+        (-(value as i128)) as u128
+    } else {
+        value as u128
+    };
+    if abs == 0 {
+        0
+    } else {
+        128 - abs.leading_zeros() as usize
+    }
+}
+
+fn format_radix_string(value: i64, width: Option<usize>, radix: u32) -> String {
+    let width = width.unwrap_or_else(|| {
+        let signed_bits = abs_bit_length(value) + usize::from(value < 0);
+        match radix {
+            2 if value < 0 => signed_bits.div_ceil(8) * 8,
+            2 => signed_bits,
+            16 if value < 0 => signed_bits.div_ceil(4).div_ceil(2) * 2,
+            16 => signed_bits.div_ceil(4),
+            _ => unreachable!(),
+        }
+    });
+    let bits_per_digit = if radix == 2 { 1 } else { 4 };
+    let bits = width.saturating_mul(bits_per_digit);
+    let max_bits = 128usize;
+    let masked_bits = bits.min(max_bits);
+    let mask = match masked_bits {
+        0 => 0,
+        128 => u128::MAX,
+        n => (1u128 << n) - 1,
+    };
+    let masked = (value as i128 as u128) & mask;
+    let low_width = width.min(max_bits / bits_per_digit);
+    let mut text = if radix == 2 {
+        format!("{masked:0low_width$b}")
+    } else {
+        format!("{masked:0low_width$X}")
+    };
+    if bits > max_bits {
+        let extra_digits = width.saturating_sub(low_width);
+        let fill = if value < 0 { '1' } else { '0' };
+        if radix == 16 && value < 0 {
+            text = format!("{}{}", "F".repeat(extra_digits), text);
+        } else {
+            text = format!("{}{}", fill.to_string().repeat(extra_digits), text);
         }
     }
     text
@@ -1164,11 +1258,10 @@ fn eval_mid_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult<V
     if !(2..=3).contains(&args.len()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    let start = args[1].eval_number(ctx)? as isize - 1;
-    let start = start.max(0) as usize;
+    let start = zero_based_string_start(args[1].eval_number(ctx)?)?;
     let count = args
         .get(2)
-        .map(|arg| arg.eval_number(ctx).map(|value| value as usize))
+        .map(|arg| arg.eval_number(ctx).and_then(nonnegative_count))
         .transpose()?;
 
     if let Some(name) = direct_string_variable_name(&args[0]) {
@@ -1214,11 +1307,11 @@ fn eval_instr_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult
     let (start, text_arg, needle_arg) = if args.len() == 2 {
         (1usize, &args[0], &args[1])
     } else {
-        let start = args[0].eval_number(ctx)? as isize;
-        if start < 1 {
-            return Err(BasicError::new(ErrorCode::InvalidArgument));
-        }
-        (start as usize, &args[1], &args[2])
+        (
+            positive_string_start(args[0].eval_number(ctx)?)?,
+            &args[1],
+            &args[2],
+        )
     };
     let needle = needle_arg.eval(ctx)?.into_string()?;
     if let Some(name) = direct_string_variable_name(text_arg) {
@@ -1236,7 +1329,7 @@ fn eval_left_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult<
     if args.len() != 2 {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    let count = args[1].eval_number(ctx)?.max(0.0) as usize;
+    let count = nonnegative_count(args[1].eval_number(ctx)?)?;
     if let Some(name) = direct_string_variable_name(&args[0]) {
         if let Some(result) = ctx.string_variable_slice(name, 0, Some(count)) {
             return result.map(Value::string);
@@ -1250,7 +1343,7 @@ fn eval_right_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult
     if args.len() != 2 {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    let count = args[1].eval_number(ctx)?.max(0.0) as usize;
+    let count = nonnegative_count(args[1].eval_number(ctx)?)?;
     if let Some(name) = direct_string_variable_name(&args[0]) {
         if let Some(text) = ctx.with_string_variable(name, |text| right_string(text, count)) {
             return Ok(Value::string(text));
@@ -1435,6 +1528,8 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
             }
             Value::number(1.0 / t)
         }
+        "RTD" if args.len() == 1 => Value::number(n(&args[0])?.to_degrees()),
+        "DTR" if args.len() == 1 => Value::number(n(&args[0])?.to_radians()),
         "PI" if args.is_empty() => Value::number(std::f64::consts::PI),
         "ROUND" if args.len() == 1 => Value::number(round_half_away(n(&args[0])?, 0)),
         "ROUND" if args.len() == 2 => {
@@ -1470,12 +1565,8 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
             let (start, text, needle) = if it.len() == 2 {
                 (1usize, s(it.next().unwrap())?, s(it.next().unwrap())?)
             } else {
-                let start = n(&it.next().unwrap())? as isize;
-                if start < 1 {
-                    return Err(BasicError::new(ErrorCode::InvalidArgument));
-                }
                 (
-                    start as usize,
+                    positive_string_start(n(&it.next().unwrap())?)?,
                     s(it.next().unwrap())?,
                     s(it.next().unwrap())?,
                 )
@@ -1485,25 +1576,25 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
         "LEFT$" if args.len() == 2 => {
             let mut it = args.into_iter();
             let text = s(it.next().unwrap())?;
-            let count = n(&it.next().unwrap())?.max(0.0) as usize;
+            let count = nonnegative_count(n(&it.next().unwrap())?)?;
             Value::string(string_slice(&text, 0, Some(count)))
         }
         "RIGHT$" if args.len() == 2 => {
             let mut it = args.into_iter();
             let text = s(it.next().unwrap())?;
-            let count = n(&it.next().unwrap())?.max(0.0) as usize;
+            let count = nonnegative_count(n(&it.next().unwrap())?)?;
             Value::string(right_string(&text, count))
         }
         "MID$" if args.len() == 2 || args.len() == 3 => {
             let mut it = args.into_iter();
             let text = s(it.next().unwrap())?;
-            let start = n(&it.next().unwrap())? as isize - 1;
+            let start = zero_based_string_start(n(&it.next().unwrap())?)?;
             let count = it
                 .next()
                 .map(|v| v.as_number())
                 .transpose()?
-                .map(|v| v as usize);
-            let start = start.max(0) as usize;
+                .map(nonnegative_count)
+                .transpose()?;
             Value::string(string_slice(&text, start, count))
         }
         "STR$" if args.len() == 1 => {
@@ -1514,13 +1605,23 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
             Value::string(text)
         }
         "BIN$" if args.len() == 1 || args.len() == 2 => {
-            let value = n(&args[0])? as i64;
-            let width = args.get(1).map(n).transpose()?.map(|v| v as usize);
+            let value = radix_integer(n(&args[0])?)?;
+            let width = args
+                .get(1)
+                .map(n)
+                .transpose()?
+                .map(radix_width)
+                .transpose()?;
             Value::string(format_radix_string(value, width, 2))
         }
         "HEX$" if args.len() == 1 || args.len() == 2 => {
-            let value = n(&args[0])? as i64;
-            let width = args.get(1).map(n).transpose()?.map(|v| v as usize);
+            let value = radix_integer(n(&args[0])?)?;
+            let width = args
+                .get(1)
+                .map(n)
+                .transpose()?
+                .map(radix_width)
+                .transpose()?;
             Value::string(format_radix_string(value, width, 16))
         }
         "DEC$" if args.len() == 2 => {
@@ -1528,27 +1629,39 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
             let fmt = args[1].clone().into_string()?;
             Value::string(format_using(value, &fmt))
         }
-        "CHR$" if args.len() == 1 => {
-            let code = n(&args[0])? as u32;
-            Value::string(char::from_u32(code).unwrap_or('\u{fffd}').to_string())
-        }
+        "CHR$" if args.len() == 1 => Value::string(character_from_code(n(&args[0])?)?.to_string()),
         "UPPER$" if args.len() == 1 => {
             Value::string(s(args.into_iter().next().unwrap())?.to_ascii_uppercase())
         }
         "LOWER$" if args.len() == 1 => {
             Value::string(s(args.into_iter().next().unwrap())?.to_ascii_lowercase())
         }
-        "SPACE$" if args.len() == 1 => Value::string(" ".repeat(n(&args[0])?.max(0.0) as usize)),
+        "SPACE$" if args.len() == 1 => Value::string(" ".repeat(nonnegative_count(n(&args[0])?)?)),
         "STRING$" if args.len() == 2 => {
-            let count = n(&args[0])?.max(0.0) as usize;
+            let count = nonnegative_count(n(&args[0])?)?;
             let text = match &args[1] {
-                Value::Str(s) => s
-                    .chars()
-                    .find(|ch| !ch.is_whitespace())
-                    .or_else(|| s.chars().next())
-                    .unwrap_or(' ')
-                    .to_string(),
-                Value::Number(n) => char::from_u32(*n as u32).unwrap_or(' ').to_string(),
+                Value::Str(s) => {
+                    let ch = s
+                        .chars()
+                        .find(|ch| !ch.is_whitespace())
+                        .or_else(|| s.chars().next())
+                        .ok_or_else(|| BasicError::new(ErrorCode::InvalidArgument))?;
+                    ch.to_string()
+                }
+                Value::Number(n) => {
+                    if n.is_nan() {
+                        return Err(BasicError::new(ErrorCode::InvalidValue));
+                    }
+                    if !n.is_finite() {
+                        return Err(BasicError::new(ErrorCode::Overflow));
+                    }
+                    if *n < 0.0 || *n > char::MAX as u32 as f64 {
+                        return Err(BasicError::new(ErrorCode::InvalidArgument));
+                    }
+                    char::from_u32(*n as u32)
+                        .ok_or_else(|| BasicError::new(ErrorCode::InvalidArgument))?
+                        .to_string()
+                }
                 Value::ArrayRef(_) => return Err(BasicError::new(ErrorCode::TypeMismatch)),
             };
             Value::string(text.repeat(count))
@@ -1583,6 +1696,8 @@ fn is_pure_function_name(name: &str) -> bool {
             | "ACS"
             | "ATN"
             | "COT"
+            | "RTD"
+            | "DTR"
             | "ROUND"
             | "MIN"
             | "MAX"
@@ -1626,6 +1741,8 @@ fn is_builtin_function(name: &str) -> bool {
             | "ACS"
             | "ATN"
             | "COT"
+            | "RTD"
+            | "DTR"
             | "ROUND"
             | "MIN"
             | "MAX"
@@ -1660,6 +1777,11 @@ fn is_builtin_function(name: &str) -> bool {
             | "TEST"
             | "WIDTH"
             | "HEIGHT"
+            | "XMIN"
+            | "XMAX"
+            | "YMIN"
+            | "YMAX"
+            | "BORDER"
             | "XPOS"
             | "YPOS"
             | "HPOS"
@@ -1748,6 +1870,11 @@ pub(crate) fn is_zero_arg_function(name: &str) -> bool {
             | "SCREEN$"
             | "WIDTH"
             | "HEIGHT"
+            | "XMIN"
+            | "XMAX"
+            | "YMIN"
+            | "YMAX"
+            | "BORDER"
             | "XPOS"
             | "YPOS"
             | "HPOS"

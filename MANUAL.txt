@@ -306,6 +306,7 @@ Detailed notes (PRINT)
   * Exponential example: `PRINT USING "0.00^^^^"; 12345` prints `1.23E+04`; with leading European comma, `PRINT USING ",0.00^^^^"; 12345` prints `1,23E+04`.
   * `+` only forces the sign when it is the first character of the mask; anywhere else it is just a literal.
   * Numbers longer than the integer part of the mask do not overflow: they are shown in full, expanding to the left.
+  * In fixed masks (without `^^^^`), that expansion uses the actual floating-point value stored. Very large magnitudes can therefore reveal the full IEEE-754 approximation; use an exponential mask (`#.##^^^^`) for compact output.
   * The format accepts either a literal mask or a non-empty string variable; otherwise, a format error is raised.
   * With `USING`, `,` and `;` separate and chain items exactly as in normal `PRINT`.
 - Special `PRINT` functions: `SPC(n)` and `TAB(n)`.
@@ -874,8 +875,8 @@ Examples (right button exits)
 
 + AFTER <timer delay>[, <timer number>] GOSUB [line number]
 + EVERY <time period>[, <timer number>] GOSUB <line number>
-+ EI              Enables interrupts that were previously inhibited with `DI`.
-+ DI              Inhibits interrupts
++ EI              Enables timer/mouse interrupts previously inhibited with `DI`.
++ DI              Inhibits timer/mouse interrupts; it does not inhibit `CTRL+C`.
 + CANCEL n        Permanently disables current timer `n`
 + REMAIN(n)       Function. Returns the remaining count of the specified timer (0 to 3)
 
@@ -901,8 +902,9 @@ Example
 70 RETURN
 
 Notes
-- `AFTER` and `EVERY` timers have a priority equal to their number. One timer may interrupt the dispatch routine of another with lower priority.
-- Interrupts inhibited with `DI` remain inhibited until they are explicitly re-enabled with `EI`, or implicitly by `RETURN` if the `DI` was inside the subroutine invoked as a result of the interrupt.
+- `AFTER` and `EVERY` timers have a priority equal to their number. When an interrupt routine is entered, AVL BASIC saves the current `DI`/`EI` state and raises the current priority to that interrupt's priority.
+- While an interrupt is being handled, interrupts with equal or lower priority are not dispatched. A timer can interrupt only another timer routine with lower priority.
+- `DI` inhibits all timer/mouse interrupts until `EI`. If `DI` is executed inside an interrupt routine that ends with `RETURN`, that `RETURN` restores the state saved on entry; it is not always the same as an unconditional `EI`. If the routine is left with `GOTO` or `END`, there is no automatic restoration.
 - Mouse events (`ON MOUSE`) have higher priority than timers and can therefore interrupt them.
 
 8. System, time and debugging
@@ -1128,7 +1130,7 @@ Zero-argument functions are used without parentheses.
 Numeric and conversions
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP |
-+ SIN | COS | TAN | ASN | ACS | ATN | COT | PI | INF
++ SIN | COS | TAN | ASN | ACS | ATN | COT | RTD | DTR | PI | INF
 + RND
 + TIME
 + MIN | MAX
@@ -1152,6 +1154,7 @@ Clarifying notes for some functions
 - `MIN(x1[,x2[,...]])`: returns the smallest value among one or more numeric arguments. Example: `MIN(3,1,2.5,-7)` -> -7.
 - `MAX(x1[,x2[,...]])`: returns the largest value among one or more numeric arguments. Example: `MAX(3,1,2.5,-7)` -> 3.
 - `INF`: positive-infinity constant. It is useful for open-ended limits such as `FOR X=0 TO INF`; operations that produce a non-finite real still report numeric overflow.
+- `RTD(x)` converts radians to degrees; `DTR(x)` converts degrees to radians. They do not change the angular mode and are not affected by `DEG/RAD`.
 - `INSTR([start,] string, substring)`:
   * Returns the position (1-based) of the first occurrence of `substring` in `string`, or 0 if not found.
   * With 2 arguments it searches from the first character.

@@ -305,6 +305,7 @@ Notas detalladas (PRINT)
   • Ejemplo exponencial: `PRINT USING "0.00^^^^"; 12345` imprime `1.23E+04`; con coma inicial europea, `PRINT USING ",0.00^^^^"; 12345` imprime `1,23E+04`.
   • `+` solo funciona para forzar el signo si es el primer carácter de la máscara; en cualquier otra posición es meramente un literal
   • Números más largos que la parte entera de la máscara no desbordan: se muestran completos creciendo hacia la izquierda.
+  • En máscaras fijas (sin `^^^^`), esa expansión usa el valor real almacenado en coma flotante. Con magnitudes enormes puede revelar la aproximación IEEE-754 completa; usa una máscara exponencial (`#.##^^^^`) para una salida compacta.
   • El formato acepta máscara literal o variable de cadena no vacía; en caso contrario → error de formato.
   • Con `USING`, los `,` y `;` separan y encadenan igual que en `PRINT` normal.
 - Funciones especiales de `PRINT`: `SPC(n)` y `TAB(n)`.
@@ -876,8 +877,8 @@ Ejemplos (botón derecho finaliza)
 
 + AFTER <retardo del temporizador >[, <número de temporizador>] GOSUB [número de línea]
 + EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <número de línea>
-+ EI              Habilita interrupciones que hayan sido inhibidas previamente con DI.
-+ DI              Inhibe las interrupciones 
++ EI              Habilita interrupciones de temporizador/ratón inhibidas previamente con `DI`.
++ DI              Inhibe las interrupciones de temporizador/ratón; no inhibe `CTRL+C`.
 + CANCEL n        Desactiva permanentemente el temporizador n actual
 + REMAIN (<n>)    Función. Da la cuenta restante en el temporizador especificado (0 a 3)
 
@@ -903,8 +904,9 @@ Ejemplo
 70 RETURN
 
 Notas
-- Los temporizadores `AFTER` y `EVERY` tienen una prioridad igual a su número. Un temporizador puede interrumpir la rutina de despacho de otro de prioridad menor.
-- Las interrupciones inhibidas con `DI` permanecen así hasta que se las habilita explícitamente con `EI` o implícitamente con `RETURN` si el `DI` estaba en el interior de la subrutina invocada como consecuencia de la interrupción.
+- Los temporizadores `AFTER` y `EVERY` tienen una prioridad igual a su número. Al entrar en una rutina de interrupción, AVL BASIC guarda el estado de `DI`/`EI` y eleva la prioridad actual a la de esa interrupción.
+- Mientras se atiende una interrupción, no se despachan otras de prioridad igual o inferior. Un temporizador solo puede interrumpir la rutina de otro temporizador de prioridad menor.
+- `DI` inhibe todas las interrupciones de temporizador/ratón hasta `EI`. Si `DI` se ejecuta dentro de una rutina de interrupción que termina con `RETURN`, ese `RETURN` restaura el estado guardado al entrar; no equivale siempre a un `EI` incondicional. Si la rutina se abandona con `GOTO` o `END`, no hay restauración automática.
 - Los eventos de ratón (`ON MOUSE`) tienen una prioridad mayor que los temporizadores y, por lo tanto, pueden interrumpirlos.
 
 8. Sistema, tiempo y depuración
@@ -1130,7 +1132,7 @@ Las de cero argumentos se usan sin paréntesis.
 Numéricas y conversiones
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP | 
-+ SIN | COS | TAN | ASN | ACS | ATN | COT | PI | INF
++ SIN | COS | TAN | ASN | ACS | ATN | COT | RTD | DTR | PI | INF
 + RND 
 + TIME
 + MIN | MAX
@@ -1154,6 +1156,7 @@ Notas aclaratorias para algunas funciones
 - MIN(x1[,x2[,...]]): devuelve el menor valor de 1 o mas argumentos numericos. Ej.: `MIN(3,1,2.5,-7)` -> -7.
 - MAX(x1[,x2[,...]]): devuelve el mayor valor de 1 o mas argumentos numericos. Ej.: `MAX(3,1,2.5,-7)` -> 3.
 - INF: constante de infinito positivo. Es útil para límites abiertos como `FOR X=0 TO INF`; las operaciones que devuelvan un real no finito siguen dando desbordamiento numérico.
+- RTD(x) convierte radianes a grados; DTR(x) convierte grados a radianes. No cambian el modo angular ni dependen de `DEG/RAD`.
 - INSTR([inicio,] cadena, subcadena):
   • Devuelve la posicion (1-basada) de la primera aparicion de `subcadena` en `cadena`, o 0 si no se encuentra.
   • Con 2 argumentos busca desde el primer caracter.

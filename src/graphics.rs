@@ -1466,7 +1466,7 @@ impl Graphics {
         }
     }
 
-    fn scale_border(&self) -> i32 {
+    pub fn scale_border(&self) -> i32 {
         self.scale.map(|scale| scale.border).unwrap_or(0)
     }
 

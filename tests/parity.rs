@@ -41,6 +41,37 @@ fn run_rust_cli(program: &str, input: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn run_rust_cli_error(program: &str, input: &str) -> (String, String) {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(program.as_bytes()).unwrap();
+    file.flush().unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .arg(file.path())
+        .env("AVL_BASIC_PRINT_ZONE_DEFAULT", "8")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !output.status.success(),
+        "interpreter unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
 fn run_rust_cli_with_timeout(program: &str, input: &str, timeout: Duration) -> String {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     file.write_all(program.as_bytes()).unwrap();
@@ -110,6 +141,14 @@ fn run_rust_cli_with_print_zone_default(program: &str, zone_default: Option<&str
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn run_rust_error_code(program: &str) -> ErrorCode {
+    let mut interp = Interpreter::new();
+    for line in program.lines() {
+        interp.process_immediate(line).unwrap();
+    }
+    interp.process_immediate("RUN").unwrap_err().code
+}
+
 #[test]
 fn default_print_zone_is_22_with_test_override_available() {
     let program = r#"10 PRINT "a","b"
@@ -136,6 +175,283 @@ fn timers_fire_during_busy_goto_loop_without_pause() {
     );
 
     assert_eq!(output, "TICK\n");
+}
+
+#[test]
+fn timer_target_line_must_be_literal() {
+    assert_eq!(
+        run_rust_error_code("10 AFTER 1 GOSUB 100+10\n20 GOTO 20\n110 END"),
+        ErrorCode::InvalidLineNumber
+    );
+}
+
+#[test]
+fn numbered_after_remain_uses_real_time_and_missing_return_ends_run() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 50,1 GOSUB 60
+20 AFTER 25,2 GOSUB 70
+30 GOTO 30
+60 PRINT "T1 ";REMAIN(1) : RETURN
+70 PRINT "LEFT ";REMAIN(1)
+80 PRINT "DONE""#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 2, "{output:?}");
+    assert!(lines[0].starts_with("LEFT "), "{output:?}");
+    let left: i32 = lines[0]["LEFT ".len()..].trim().parse().unwrap();
+    assert!(
+        (1..50).contains(&left),
+        "REMAIN(1) should be partially elapsed, got {left}; output: {output:?}"
+    );
+    assert_eq!(lines[1], "DONE");
+}
+
+#[test]
+fn timer_default_number_zero_can_be_cancelled_independently() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 2 GOSUB 100
+20 CANCEL 0
+30 AFTER 4,1 GOSUB 200
+40 GOTO 40
+100 PRINT "BAD"
+110 END
+200 PRINT "OK"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn cancel_timer_disables_only_selected_number() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 2,1 GOSUB 100
+20 AFTER 4,2 GOSUB 200
+30 CANCEL 1
+40 GOTO 40
+100 PRINT "BAD"
+110 END
+200 PRINT "OK"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn rescheduling_same_timer_number_replaces_previous_target() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 2,1 GOSUB 100
+20 AFTER 4,1 GOSUB 200
+30 GOTO 30
+100 PRINT "OLD"
+110 END
+200 PRINT "NEW"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "NEW\n");
+}
+
+#[test]
+fn after_is_one_shot_and_every_repeats_until_cancelled() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 A=0:E=0
+20 AFTER 2,1 GOSUB 100
+30 EVERY 1,2 GOSUB 200
+40 AFTER 8,0 GOSUB 300
+50 GOTO 50
+100 A=A+1
+110 RETURN
+200 E=E+1
+210 RETURN
+300 CANCEL 2
+310 PRINT "A";A
+320 PRINT "E";E
+330 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 2, "{output:?}");
+    assert_eq!(lines[0], "A 1", "{output:?}");
+    let every_count: i32 = lines[1]["E ".len()..].trim().parse().unwrap();
+    assert!(
+        every_count >= 2,
+        "EVERY should repeat before the ending AFTER fires; output: {output:?}"
+    );
+}
+
+#[test]
+fn remain_reports_inactive_zero_and_does_not_modify_timer() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 PRINT REMAIN(3)
+20 AFTER 200,3 GOSUB 200
+30 A=REMAIN(3)
+40 B=REMAIN(3):C=REMAIN(3):D=REMAIN(3):E=REMAIN(3):F=REMAIN(3)
+50 IF A-F<3 THEN PRINT "OK" ELSE PRINT "BAD";A;F
+60 CANCEL 3
+70 PRINT REMAIN(3)
+80 END
+200 PRINT "BAD FIRED"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 3, "{output:?}");
+    assert_eq!(lines[0].trim(), "0");
+    assert_eq!(lines[1], "OK");
+    assert_eq!(lines[2].trim(), "0");
+}
+
+#[test]
+fn di_defers_timer_until_ei_dispatches_it() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 DI
+20 AFTER 1,1 GOSUB 100
+30 PAUSE 80
+40 PRINT "BEFORE EI"
+50 EI
+60 PRINT "AFTER EI"
+70 END
+100 PRINT "TIMER"
+110 RETURN"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "BEFORE EI\nTIMER\nAFTER EI\n");
+}
+
+#[test]
+fn return_from_timer_isr_restores_interrupts_after_di_inside_handler() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 1,1 GOSUB 100
+20 AFTER 4,2 GOSUB 200
+30 GOTO 30
+100 PRINT "ONE"
+110 DI
+120 RETURN
+200 PRINT "TWO"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "ONE\nTWO\n");
+}
+
+#[test]
+fn higher_priority_timer_interrupts_lower_priority_isr() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 1,1 GOSUB 100
+20 AFTER 2,3 GOSUB 200
+30 GOTO 30
+100 PRINT "LOW START"
+110 PAUSE 80
+120 PRINT "LOW END"
+130 END
+200 PRINT "HIGH"
+210 RETURN"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "LOW START\nHIGH\nLOW END\n");
+}
+
+#[test]
+fn lower_priority_timer_waits_until_higher_priority_isr_returns() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 AFTER 1,3 GOSUB 100
+20 AFTER 2,1 GOSUB 200
+30 GOTO 30
+100 PRINT "HIGH START"
+110 PAUSE 80
+120 PRINT "HIGH END"
+130 RETURN
+200 PRINT "LOW"
+210 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "HIGH START\nHIGH END\nLOW\n");
+}
+
+#[test]
+fn interrupts_sample_timer_pattern_runs_to_completion() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 S$="Z"
+20 A$=""
+30 EVERY 2,1 GOSUB 100
+40 EVERY 1,2 GOSUB 200
+50 AFTER 8,0 GOSUB 300
+60 PAUSE
+70 END
+100 A$="Z"
+110 PRINT "GUESS"
+120 RETURN
+200 IF A$=S$ THEN DI:GOTO 400
+210 RETURN
+300 PRINT "TIME"
+310 END
+400 PRINT "WIN"
+410 END"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(output, "GUESS\nWIN\n");
+}
+
+#[test]
+fn timed_pause_keeps_deadline_across_timer_interrupts() {
+    let output = run_rust_cli_with_timeout(
+        r#"10 EVERY 5,1 GOSUB 100
+20 PAUSE 250
+30 CANCEL 1
+40 PRINT "DONE";C
+50 END
+100 C=C+1
+110 RETURN"#,
+        "",
+        Duration::from_secs(2),
+    );
+
+    let line = output.trim();
+    assert!(line.starts_with("DONE "), "{output:?}");
+    let count: i32 = line["DONE ".len()..].trim().parse().unwrap();
+    assert!(
+        count >= 1,
+        "timer should interrupt PAUSE at least once; output: {output:?}"
+    );
+}
+
+#[test]
+fn timer_numbers_outside_zero_to_three_are_rejected() {
+    let cases = [
+        "10 AFTER 1,4 GOSUB 100\n100 END",
+        "10 EVERY 1,-1 GOSUB 100\n100 END",
+        "10 CANCEL 4\n20 END",
+        "10 PRINT REMAIN(4)\n20 END",
+    ];
+
+    for program in cases {
+        assert_eq!(run_rust_error_code(program), ErrorCode::InvalidArgument);
+    }
 }
 
 #[test]
@@ -278,6 +594,151 @@ fn print_and_arithmetic_baseline() {
 40 END"#,
     );
     assert_eq!(output, " 14\nHOLA BASIC\n-1\n");
+}
+
+#[test]
+fn mod_uses_classic_basic_remainder_sign() {
+    let output = run_rust(
+        r#"10 PRINT -5 MOD 3
+20 PRINT 5 MOD -3
+30 PRINT -5 MOD -3
+40 PRINT 5.5 MOD 2"#,
+    );
+    assert_eq!(output, "-2\n 2\n-2\n 1.5\n");
+}
+
+#[test]
+fn hex_and_bin_strings_use_documented_twos_complement_widths() {
+    let output = run_rust(
+        r#"10 PRINT HEX$(255)
+20 PRINT HEX$(255,4)
+30 PRINT HEX$(-1)
+40 PRINT HEX$(-1,4)
+50 PRINT BIN$(10)
+60 PRINT BIN$(10,8)
+70 PRINT BIN$(-1)
+80 PRINT BIN$(-1,4)
+90 PRINT BIN$(10,3)"#,
+    );
+
+    assert_eq!(
+        output,
+        "FF\n00FF\nFF\nFFFF\n1010\n00001010\n11111111\n1111\n010\n"
+    );
+}
+
+#[test]
+fn hex_and_bin_reject_negative_widths_and_non_finite_values() {
+    assert_eq!(
+        run_rust_error_code("10 PRINT HEX$(255,-1)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT BIN$(5,-1)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT HEX$(1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT BIN$(1E309)"),
+        ErrorCode::Overflow
+    );
+}
+
+#[test]
+fn string_repeat_helpers_reject_invalid_counts_and_empty_pattern() {
+    let output = run_rust(r#"10 PRINT "[";SPACE$(-2);STRING$(3," -");"]""#);
+    assert_eq!(output, "[---]\n");
+
+    assert_eq!(
+        run_rust_error_code("10 PRINT SPACE$(1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT STRING$(1E309,\"x\")"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT STRING$(3,1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT STRING$(3,\"\")"),
+        ErrorCode::InvalidArgument
+    );
+}
+
+#[test]
+fn string_slice_helpers_reject_non_finite_counts_and_positions() {
+    assert_eq!(
+        run_rust_error_code("10 PRINT LEFT$(\"abc\",1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT RIGHT$(\"abc\",1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT MID$(\"abc\",1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT MID$(\"abc\",1,1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT INSTR(1E309,\"abc\",\"a\")"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT CHR$(1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT CHR$(-1)"),
+        ErrorCode::InvalidArgument
+    );
+}
+
+#[test]
+fn print_spacing_and_pause_reject_non_finite_counts() {
+    assert_eq!(
+        run_rust_error_code("10 PRINT SPC(1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT TAB(1E309)"),
+        ErrorCode::Overflow
+    );
+    assert_eq!(run_rust_error_code("10 PAUSE 1E309"), ErrorCode::Overflow);
+}
+
+#[test]
+fn rgb_accepts_string_components_and_rejects_invalid_colors() {
+    let output = run_rust(
+        r#"10 PRINT RGB("1","2","3"),RGB$("1","2","3")
+20 PRINT RGB$("4,0,251")"#,
+    );
+    assert_eq!(output, " 66051  1,2,3\n4,0,251\n");
+
+    assert_eq!(
+        run_rust_error_code("10 PRINT RGB(\"256\",\"0\",\"0\")"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT RGB$(300,0,0)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT RGB$(-1)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT RGB(1E309)"),
+        ErrorCode::InvalidArgument
+    );
 }
 
 #[test]
@@ -896,6 +1357,99 @@ fn error_statement_reports_python_messages() {
 }
 
 #[test]
+fn error_statement_requires_integer_literal_like_python() {
+    for (program, expected) in [
+        ("10 ERROR", "Line 10. Syntax error."),
+        ("10 ERROR 2.9", "Line 10. Invalid value."),
+        ("10 ERROR \"A\"", "Line 10. Invalid value."),
+        ("10 ERROR 1E309", "Line 10. Invalid value."),
+    ] {
+        let mut interp = Interpreter::new();
+        interp.process_immediate(program).unwrap();
+        let err = interp.process_immediate("RUN").unwrap_err();
+        assert_eq!(err.display_for_basic(), expected, "{program}");
+    }
+
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 ERROR -1").unwrap();
+    let err = interp.process_immediate("RUN").unwrap_err();
+    assert_eq!(err.display_for_basic(), "Line 10. Error -1");
+}
+
+#[test]
+fn on_error_clears_err_and_erl_when_handler_is_disabled() {
+    let output = run_rust(
+        r#"10 ON ERROR GOTO 100
+20 ERROR 200
+30 END
+100 PRINT ERR;ERL
+110 ON ERROR GOTO 0
+120 PRINT ERR;ERL"#,
+    );
+
+    assert_eq!(output, " 200  20\n 0  0\n");
+}
+
+#[test]
+fn disabling_error_handler_inside_handler_still_reports_nested_handler_error() {
+    let mut interp = Interpreter::new();
+    for line in r###"10 A$="##"
+20 PRINT USING A$;12.34
+30 ON ERROR GOTO 50
+40 A==W
+50 Z$ = ""
+60 ON ERROR GOTO 0
+70 PRINT USING W$;12.34
+80 END"###
+        .lines()
+    {
+        interp.process_immediate(line).unwrap();
+    }
+
+    let err = interp.process_immediate("RUN").unwrap_err();
+    assert_eq!(interp.take_output(), "12\n");
+    assert_eq!(
+        err.display_for_basic(),
+        "Error in error handler: Error in PRINT USING format."
+    );
+}
+
+#[test]
+fn on_error_resume_next_clears_err_and_erl_after_skipped_error() {
+    let output = run_rust(
+        r#"10 ON ERROR RESUME NEXT
+20 ERROR 200
+30 PRINT ERR;ERL"#,
+    );
+
+    assert_eq!(output, " 0  0\n");
+}
+
+#[test]
+fn error_flow_targets_must_be_literal_line_numbers() {
+    assert_eq!(
+        run_rust_error_code("10 ON ERROR GOTO 100+10\n20 END\n110 END"),
+        ErrorCode::InvalidLineNumber
+    );
+
+    let mut interp = Interpreter::new();
+    for line in r#"10 ON ERROR GOTO 100
+20 ERROR 200
+30 END
+100 RESUME 200+10
+210 END"#
+        .lines()
+    {
+        interp.process_immediate(line).unwrap();
+    }
+    let err = interp.process_immediate("RUN").unwrap_err();
+    assert_eq!(
+        err.display_for_basic(),
+        "Error in error handler: Invalid line number."
+    );
+}
+
+#[test]
 fn immediate_print_after_error_handler_end_is_not_skipped() {
     let mut interp = Interpreter::new();
     for line in r#"10 ON ERROR GOTO 30
@@ -1128,6 +1682,30 @@ fn input_accepts_string_array_elements() {
 }
 
 #[test]
+fn input_empty_numeric_value_defaults_to_zero() {
+    let output = run_rust_cli(
+        r#"10 INPUT A
+20 PRINT A"#,
+        "\n",
+    );
+    assert_eq!(output, "?  0\n");
+}
+
+#[test]
+fn input_reports_mismatch_when_values_are_missing() {
+    let (stdout, stderr) = run_rust_cli_error(
+        r#"10 INPUT A,B
+20 PRINT "BAD""#,
+        "1\n",
+    );
+    assert_eq!(stdout, "? ");
+    assert_eq!(
+        stderr,
+        "Line 10. Number of inputs does not match number of variables.\n"
+    );
+}
+
+#[test]
 fn for_parser_preserves_spaces_after_equals() {
     let output = run_rust(
         r#"10 FOR C= 0 TO 2
@@ -1137,6 +1715,14 @@ fn for_parser_preserves_spaces_after_equals() {
 50 END"#,
     );
     assert_eq!(output, " 0  1  2 \n");
+}
+
+#[test]
+fn for_rejects_string_loop_variable() {
+    assert_eq!(
+        run_rust_error_code("10 FOR I$=1 TO 3\n20 PRINT I$\n30 NEXT"),
+        ErrorCode::TypeMismatch
+    );
 }
 
 #[test]
@@ -1422,6 +2008,115 @@ fn multiline_subroutine_locals_and_array_references() {
 }
 
 #[test]
+fn multiline_subroutine_array_parameters_are_real_aliases() {
+    let output = run_rust(
+        r#"10 DEF SUB TOUCH(A,B)
+20 A(0)=10
+30 B(1)=20
+40 SUBEND
+50 DIM Z(1)
+60 Z(0)=1:Z(1)=2
+70 CALL TOUCH(Z,Z)
+80 PRINT Z(0);Z(1)"#,
+    );
+    assert_eq!(output, " 10  20\n");
+
+    let output = run_rust(
+        r#"10 DEF SUB TOUCH(A,B)
+20 A(0)=10
+30 PRINT B(0)
+40 SUBEND
+50 DIM Z(1)
+60 Z(0)=1:Z(1)=2
+70 CALL TOUCH(Z,Z)"#,
+    );
+    assert_eq!(output, " 10\n");
+}
+
+#[test]
+fn multiline_subroutine_array_aliases_share_global_name_and_nested_calls() {
+    let output = run_rust(
+        r#"10 DEF SUB TOUCH(A)
+20 A(0)=10
+30 Z(1)=20
+40 SUBEND
+50 DIM Z(1)
+60 Z(0)=1:Z(1)=2
+70 CALL TOUCH(Z)
+80 PRINT Z(0);Z(1)"#,
+    );
+    assert_eq!(output, " 10  20\n");
+
+    let output = run_rust(
+        r#"10 DEF SUB INNER(B)
+20 B(0)=8
+30 SUBEND
+40 DEF SUB OUTER(A)
+50 CALL INNER(A)
+60 SUBEND
+70 DIM Z(0)
+80 CALL OUTER(Z)
+90 PRINT Z(0)"#,
+    );
+    assert_eq!(output, " 8\n");
+}
+
+#[test]
+fn multiline_subroutine_redim_and_mat_modify_array_alias() {
+    let output = run_rust(
+        r#"10 DEF SUB WORK(A)
+20 REDIM A(2)
+30 A(2)=7
+40 SUBEND
+50 DIM Z(1)
+60 CALL WORK(Z)
+70 PRINT Z(2)"#,
+    );
+    assert_eq!(output, " 7\n");
+
+    let output = run_rust(
+        r#"10 DEF SUB WORK(A)
+20 MAT A=CON
+30 SUBEND
+40 DIM Z(1)
+50 CALL WORK(Z)
+60 MAT PRINT Z"#,
+    );
+    assert_eq!(output, " 1\n 1\n");
+}
+
+#[test]
+fn mat_string_arrays_concatenate_scalar_strings() {
+    let output = run_rust(
+        r#"10 DIM A$(1),B$(1)
+20 A$(0)="A":A$(1)="B"
+30 MAT B$=A$+"!"
+40 MAT A$="<"+B$
+50 PRINT A$(0);A$(1)"#,
+    );
+    assert_eq!(output, "<A!<B!\n");
+}
+
+#[test]
+fn mat_string_arrays_reject_non_add_scalar_operations() {
+    assert_eq!(
+        run_rust_error_code("10 DIM A$(1),B$(1)\n20 MAT B$=A$*\"!\""),
+        ErrorCode::ForbiddenExpression
+    );
+    assert_eq!(
+        run_rust_error_code("10 DIM A$(1),B$(1)\n20 MAT B$=A$+1"),
+        ErrorCode::TypeMismatch
+    );
+}
+
+#[test]
+fn mat_con_zer_idn_require_existing_array() {
+    assert_eq!(run_rust_error_code("10 MAT A=CON"), ErrorCode::Undefined);
+    assert_eq!(run_rust_error_code("10 MAT A=ZER"), ErrorCode::Undefined);
+    assert_eq!(run_rust_error_code("10 MAT A=IDN"), ErrorCode::Undefined);
+}
+
+#[test]
 fn mat_stat_functions_update_context_values() {
     let output = run_rust(
         r#"10 MAT BASE 1
@@ -1618,6 +2313,50 @@ fn graphics_mask_consumes_low_bit_first() {
 }
 
 #[test]
+fn scale_parameter_functions_report_physical_scale_by_default() {
+    let output = run_rust(
+        r#"10 IF XMIN<>0 THEN PRINT "BAD XMIN":END
+20 IF XMAX<>WIDTH-1 THEN PRINT "BAD XMAX":END
+30 IF YMIN<>0 THEN PRINT "BAD YMIN":END
+40 IF YMAX<>HEIGHT-1 THEN PRINT "BAD YMAX":END
+50 IF BORDER<>0 THEN PRINT "BAD BORDER":END
+60 PRINT "OK"
+70 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn scale_parameter_functions_report_active_scale() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640
+20 SCALE -PI,PI,-1,1,20
+30 IF ROUND(XMIN,6)<>-3.141593 THEN PRINT "BAD XMIN":END
+40 IF ROUND(XMAX,6)<>3.141593 THEN PRINT "BAD XMAX":END
+50 IF YMIN<>-1 THEN PRINT "BAD YMIN":END
+60 IF YMAX<>1 THEN PRINT "BAD YMAX":END
+70 IF BORDER<>20 THEN PRINT "BAD BORDER":END
+80 PRINT "OK"
+90 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn degree_radian_conversion_functions_are_angle_mode_independent() {
+    let output = run_rust(
+        r#"10 IF ROUND(RTD(PI),6)<>180 THEN PRINT "BAD RTD":END
+20 IF ROUND(DTR(180),6)<>ROUND(PI,6) THEN PRINT "BAD DTR":END
+30 DEG
+40 IF ROUND(RTD(PI),6)<>180 THEN PRINT "BAD DEG RTD":END
+50 IF ROUND(DTR(180),6)<>ROUND(PI,6) THEN PRINT "BAD DEG DTR":END
+60 PRINT "OK"
+70 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
 fn graphics_triangle_axis_and_graph_commands_run() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
@@ -1710,6 +2449,26 @@ fn on_gosub_selects_one_based_target_and_returns() {
 310 RETURN"#,
     );
     assert_eq!(output, " 110\n");
+}
+
+#[test]
+fn gosub_and_on_targets_must_be_literal_line_numbers() {
+    assert_eq!(
+        run_rust_error_code("10 ON 1 GOTO 100+10\n110 END"),
+        ErrorCode::InvalidLineNumber
+    );
+    assert_eq!(
+        run_rust_error_code("10 ON 1 GOSUB 100+10\n110 RETURN"),
+        ErrorCode::InvalidLineNumber
+    );
+    assert_eq!(
+        run_rust_error_code("10 ON MOUSE LEFTDOWN GOSUB 100+10\n110 RETURN"),
+        ErrorCode::InvalidLineNumber
+    );
+    assert_eq!(
+        run_rust_error_code("10 IF -1 THEN GOSUB 100+10: PRINT \"BAD\"\n110 RETURN"),
+        ErrorCode::InvalidLineNumber
+    );
 }
 
 #[test]
