@@ -274,6 +274,7 @@ const FUNCTIONS: &[&str] = &[
     "VAL",
     "LEFT$",
     "TEST",
+    "TESTCHR$",
     "RIGHT$",
     "MID$",
     "STR$",
@@ -2923,7 +2924,7 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                 out.push_str(&upper);
                 if matches!(
                     upper.as_str(),
-                    "LOAD" | "SAVE" | "RUN" | "CHAIN" | "MERGE" | "CAT" | "FILES" | "CD"
+                    "LOAD" | "SAVE" | "RUN" | "CHAIN" | "MERGE" | "CAT" | "FILES" | "CD" | "USING"
                 ) {
                     let mut probe = i;
                     while probe < chars.len() && chars[probe] == ' ' {

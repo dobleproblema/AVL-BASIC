@@ -225,6 +225,7 @@ const RESERVED_IDENTIFIER_BASE_NAMES: &[&str] = &[
     "TAB",
     "TAN",
     "TEST",
+    "TESTCHR",
     "THEN",
     "TIME",
     "TO",

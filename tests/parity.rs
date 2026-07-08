@@ -1524,6 +1524,18 @@ fn program_error_state_is_cleared_only_when_program_ends() {
 fn console_normalization_completes_file_quotes_and_bas_extension() {
     assert_eq!(console::normalize_code("load\"demo"), "LOAD \"demo.bas\"");
     assert_eq!(
+        console::normalize_code("10 print using\"0#\";8"),
+        "10 PRINT USING \"0#\";8"
+    );
+    assert_eq!(
+        console::normalize_code("10 print \"A\";using\"0#\";8"),
+        "10 PRINT \"A\";USING \"0#\";8"
+    );
+    assert_eq!(
+        console::normalize_code("10 print using(\"0#\");8"),
+        "10 PRINT USING(\"0#\");8"
+    );
+    assert_eq!(
         console::normalize_code("10 print 1e3 'comment"),
         "10 PRINT 1E+3 'comment"
     );
@@ -2177,6 +2189,30 @@ fn print_using_leading_comma_uses_european_separators() {
 }
 
 #[test]
+fn print_using_clause_can_follow_regular_print_items() {
+    let output = run_rust(
+        r#"10 PRINT "Precio";USING "0#";8;" EUR"
+20 PRINT "A",USING "0#";9
+30 PRINT USING"0#";8
+40 PRINT "B";USING"0#";7
+50 PRINT USING "0#";8,9"#,
+    );
+    assert_eq!(output, "Precio08 EUR\nA       09\n08\nB07\n08      09\n");
+}
+
+#[test]
+fn print_using_template_still_requires_semicolon() {
+    assert_eq!(
+        run_rust_error_code(r#"10 PRINT USING "0#",8"#),
+        ErrorCode::Syntax
+    );
+    assert_eq!(
+        run_rust_error_code(r#"10 PRINT USING("0#");8"#),
+        ErrorCode::Syntax
+    );
+}
+
+#[test]
 fn print_using_scientific_formats_general_masks() {
     let output = run_rust(
         r###"10 PRINT USING "#.##^^^^"; 123245435234
@@ -2260,6 +2296,47 @@ fn graphics_screen_string_baseline() {
 80 END"##,
     );
     assert_eq!(output, "640x48\n 16711680\n");
+}
+
+#[test]
+fn testchr_reads_recognizable_text_cells_without_moving_cursor() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 LOCATE 5,7 : DISP "Z"
+30 PRINT TESTCHR$(5,7)
+40 PRINT HPOS;VPOS
+50 LOCATE 5,7
+60 PRINT TESTCHR$
+70 PRINT HPOS;VPOS
+80 END"#,
+    );
+    assert_eq!(output, "Z\n 6  7\nZ\n 5  7\n");
+}
+
+#[test]
+fn testchr_reads_pixels_after_screen_restore() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 DISP "Extremo superior izquierdo"
+30 A$=SCREEN$
+40 SCREEN
+50 SCREEN A$
+60 PRINT TESTCHR$(0,0)
+70 END"#,
+    );
+    assert_eq!(output, "E\n");
+}
+
+#[test]
+fn testchr_returns_empty_for_modified_cell() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 DISP "E"
+30 PLOT 0,479,2
+40 PRINT "["+TESTCHR$(0,0)+"]"
+50 END"#,
+    );
+    assert_eq!(output, "[]\n");
 }
 
 #[test]

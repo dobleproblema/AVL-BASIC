@@ -295,7 +295,7 @@ Notas rápidas
 Notas detalladas (PRINT)
 - Números: enteros sin decimales; reales con hasta 14 cifras significativas (sin ceros de cola). Positivos se imprimen con un espacio inicial; negativos con signo `-`.
 - Los elementos de la lista de impresión pueden estar vacios. Útil para avanzar por zonas de impresión extra. Ej.: `PRINT ,,`, `PRINT "Hola",,,"Adios"`
-- PRINT USING: `PRINT USING "máscara"; exprs` o `PRINT USING var$; exprs`.
+- PRINT USING: `PRINT USING "máscara"; exprs`, `PRINT USING var$; exprs` o, dentro de una lista de impresión, `PRINT "Precio";USING "máscara"; exprs`.
   • Marcadores: `#` (dígito o espacio), `0` (dígito o cero forzado) y `+` como prefijo (fuerza la impresión del signo). 
   • El punto de la máscara separa la parte entera y la decimal; si no hay parte fraccionaria en la máscara, no se imprime `.`.
   • Una coma inicial tras el `+` opcional activa la salida “europea”: se intercambian el separador decimal y el de miles. Ej.: `PRINT USING ",#,###,###.##"; 1234567.23` imprime `1.234.567,23`.
@@ -307,7 +307,7 @@ Notas detalladas (PRINT)
   • Números más largos que la parte entera de la máscara no desbordan: se muestran completos creciendo hacia la izquierda.
   • En máscaras fijas (sin `^^^^`), esa expansión usa el valor real almacenado en coma flotante. Con magnitudes enormes puede revelar la aproximación IEEE-754 completa; usa una máscara exponencial (`#.##^^^^`) para una salida compacta.
   • El formato acepta máscara literal o variable de cadena no vacía; en caso contrario → error de formato.
-  • Con `USING`, los `,` y `;` separan y encadenan igual que en `PRINT` normal.
+  • La plantilla de `USING` se separa de la lista formateada con `;`. Dentro de esa lista posterior, `,` y `;` separan y encadenan igual que en `PRINT` normal.
 - Funciones especiales de `PRINT`: `SPC(n)` y `TAB(n)`.
   • `SPC(n)`: imprime `n` espacios.
   • `TAB(n)`: mueve el cursor a la columna `n` si la columna actual todavía no ha llegado a ella; nunca retrocede.
@@ -333,11 +333,15 @@ Notas detalladas (INPUT)
 + BIGFONT | SMALLFONT         Fuente 16×16 / 8×16 (filas/columnas escalan con MODE).
 + DISP txt$[,tinta][,papel]   Imprime en coordenadas texto (ignora ORIGIN).
 + GDISP txt$[,tinta][,papel]  Imprime en coordenadas gráficas. 
++ c$ = TESTCHR$[(columna,fila)] Lee el carácter reconocible en una celda de texto.
 + LDIR grados                 Orientación del texto de GDISP. LDIR 0 = horizontal.
 
 Notas rápidas
 - `LOCATE` usa filas y columnas de texto; escala con `MODE` y la fuente (BIG/SMALL).
 - `DISP` y `GDISP` usan siempre las fuentes internas embebidas en el intérprete (`SMALLFONT` o `BIGFONT`).
+- `TESTCHR$` no mueve el cursor de texto. Sin argumentos lee en `HPOS,VPOS`; con dos argumentos lee esa columna/fila.
+- `TESTCHR$` lee una celda de la cuadrícula de texto. Está pensado para caracteres emitidos con `DISP` en columnas/filas de texto. Si el carácter se dibuja con `GDISP` en coordenadas gráficas arbitrarias, normalmente no se reconocerá salvo que su esquina superior izquierda coincida exactamente con la celda que se está leyendo.
+- `TESTCHR$` usa la fuente actual (`SMALLFONT` o `BIGFONT`) para reconocer los píxeles. Devuelve `""` si la celda no coincide exactamente con un glifo conocido: por ejemplo, si el carácter está recortado, deformado, sobrescrito o sobre un fondo no uniforme.
 - Si un carácter no está definido en la fuente, se muestra `□` (cuadro de sustitución).
 - Igual para los caracteres de control, que no son soportados por DISP/GDISP. Por ejemplo: `DISP CHR$(13)` → □
 - La orientación de LDIR está en grados; se redondea al entero más cercano y se normaliza módulo 360. Los ángulos positivos giran en sentido horario. Solo afecta a GDISP (en DISP se ignora).

@@ -1,6 +1,6 @@
 100 REM Sierpinski triangle
 110 DEG : CLG
-120 P=6 : L=500 : A=N=0 : DIM C(10)
+120 P=6 : L=HEIGHT : A=N=0 : DIM C(10)
 130 X=(WIDTH-L)/2 : Y=(HEIGHT-SQR(3)*L/2)/2
 140 MOVE X,Y
 150 GOSUB 170
@@ -15,4 +15,3 @@
 240 C(N)=C(N)+1
 250 IF C(N)<=3 THEN 180
 260 RETURN
-

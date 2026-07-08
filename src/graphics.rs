@@ -1,5 +1,5 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
-use crate::fonts::{font_dimensions, glyph_rows, FontKind};
+use crate::fonts::{font_dimensions, glyph_chars, glyph_rows, FontKind};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -944,6 +944,31 @@ impl Graphics {
             out.push_str(&format!("{rgb:06x}"));
         }
         out
+    }
+
+    pub fn testchr(&self, col: i32, row: i32) -> Option<char> {
+        let (cell_w, cell_h) = font_dimensions(self.font);
+        let x = col.checked_mul(cell_w)?;
+        let y = row.checked_mul(cell_h)?;
+        let x2 = x.checked_add(cell_w)?;
+        let y2 = y.checked_add(cell_h)?;
+        if x < 0 || y < 0 || x2 > self.width as i32 || y2 > self.height as i32 {
+            return None;
+        }
+
+        let mut found = None;
+        for ch in glyph_chars(self.font) {
+            let Some(rows) = glyph_rows(self.font, *ch) else {
+                continue;
+            };
+            if self.cell_matches_glyph(x, y, cell_w, rows) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(*ch);
+            }
+        }
+        found
     }
 
     pub fn restore_screen(&mut self, screen: &str) -> BasicResult<()> {
@@ -1948,6 +1973,40 @@ impl Graphics {
                     self.set_canvas_pixel(px, py, color);
                 }
             }
+        }
+    }
+
+    fn cell_matches_glyph(&self, x: i32, y: i32, w: i32, rows: &[u32]) -> bool {
+        let mut ink = None;
+        let mut paper = None;
+        for (row_idx, bits) in rows.iter().enumerate() {
+            let py = y + row_idx as i32;
+            for col_idx in 0..w {
+                let px = x + col_idx;
+                let Some(color) = self.get_canvas_pixel(px, py) else {
+                    return false;
+                };
+                let on = (bits >> (w - 1 - col_idx)) & 1 != 0;
+                if on {
+                    match ink {
+                        Some(ink) if ink != color => return false,
+                        None => ink = Some(color),
+                        _ => {}
+                    }
+                } else {
+                    match paper {
+                        Some(paper) if paper != color => return false,
+                        None => paper = Some(color),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        match (ink, paper) {
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (Some(ink), Some(paper)) => ink != paper,
+            _ => false,
         }
     }
 

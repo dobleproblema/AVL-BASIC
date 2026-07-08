@@ -2557,13 +2557,11 @@ impl Interpreter {
             self.write_line("");
             return Ok(());
         }
-        if args.trim_start().to_ascii_uppercase().starts_with("USING") {
-            return self.execute_print_using(args.trim_start()[5..].trim());
-        }
         let mut item = String::new();
         let mut depth = 0i32;
         let mut in_string = false;
         let mut newline = true;
+        let mut using_format: Option<String> = None;
         for ch in args.chars().chain(std::iter::once('\n')) {
             if ch == '"' {
                 in_string = !in_string;
@@ -2575,9 +2573,7 @@ impl Interpreter {
                     '(' => depth += 1,
                     ')' => depth -= 1,
                     ';' if depth == 0 => {
-                        if self.print_item(item.trim())? {
-                            self.write(" ");
-                        }
+                        self.print_list_item(item.trim(), Some(';'), &mut using_format)?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
@@ -2589,20 +2585,19 @@ impl Interpreter {
                         continue;
                     }
                     ',' if depth == 0 => {
-                        self.print_item(item.trim())?;
+                        self.print_list_item(item.trim(), Some(','), &mut using_format)?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
                         {
                             return Ok(());
                         }
-                        self.write_print_zone_spacing();
                         item.clear();
                         newline = false;
                         continue;
                     }
                     '\n' if depth == 0 => {
-                        self.print_item(item.trim())?;
+                        self.print_list_item(item.trim(), None, &mut using_format)?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
@@ -2626,6 +2621,38 @@ impl Interpreter {
             self.write_line("");
         } else {
             self.flush_stream_output();
+        }
+        Ok(())
+    }
+
+    fn print_list_item(
+        &mut self,
+        item: &str,
+        sep: Option<char>,
+        using_format: &mut Option<String>,
+    ) -> BasicResult<()> {
+        if let Some(fmt_expr) =
+            print_using_format_expr(item).map_err(|()| self.err(ErrorCode::Syntax))?
+        {
+            if sep != Some(';') {
+                return Err(self.err(ErrorCode::Syntax));
+            }
+            let fmt = self.eval_value(fmt_expr)?.into_string()?;
+            if !valid_using_format(&fmt) {
+                return Err(self.err(ErrorCode::UsingFormat));
+            }
+            *using_format = Some(fmt);
+            return Ok(());
+        }
+
+        if let Some(fmt) = using_format.as_deref() {
+            self.print_using_item(item, fmt)?;
+        } else if self.print_item(item)? && sep == Some(';') {
+            self.write(" ");
+        }
+
+        if sep == Some(',') {
+            self.write_print_zone_spacing();
         }
         Ok(())
     }
@@ -2683,6 +2710,22 @@ impl Interpreter {
             }
             Value::ArrayRef(_) => Err(self.err(ErrorCode::TypeMismatch)),
         }
+    }
+
+    fn print_using_item(&mut self, item: &str, fmt: &str) -> BasicResult<()> {
+        if item.is_empty() {
+            return Ok(());
+        }
+        let value = self.eval_value(item)?;
+        if self.end_requested || self.function_return_requested || self.sub_return_requested {
+            return Ok(());
+        }
+        match value {
+            Value::Number(n) => self.write(&format_using(n, fmt)),
+            Value::Str(s) => self.write(&s),
+            Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
+        }
+        Ok(())
     }
 
     fn execute_assignment(&mut self, source: &str) -> BasicResult<()> {
@@ -3281,43 +3324,6 @@ impl Interpreter {
         self.assignment_cache
             .insert(key.to_string(), compiled.clone());
         Ok(compiled)
-    }
-
-    fn execute_print_using(&mut self, args: &str) -> BasicResult<()> {
-        let Some((fmt_expr, tail)) = split_first_top_level(args, ';') else {
-            return Err(self.err(ErrorCode::Syntax));
-        };
-        let fmt = self.eval_value(fmt_expr.trim())?.into_string()?;
-        if !valid_using_format(&fmt) {
-            return Err(self.err(ErrorCode::UsingFormat));
-        }
-        let items = split_print_items(tail);
-        let newline = !tail.trim_end().ends_with(';') && !tail.trim_end().ends_with(',');
-        for (item, sep) in items {
-            if item.trim().is_empty() {
-                if sep == Some(',') {
-                    self.write_print_zone_spacing();
-                }
-                continue;
-            }
-            let value = self.eval_value(item.trim())?;
-            match value {
-                Value::Number(n) => self.write(&format_using(n, &fmt)),
-                Value::Str(s) => self.write(&s),
-                Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
-            }
-            match sep {
-                Some(',') => self.write_print_zone_spacing(),
-                Some(';') | None => {}
-                _ => {}
-            }
-        }
-        if newline {
-            self.write_line("");
-        } else {
-            self.flush_stream_output();
-        }
-        Ok(())
     }
 
     fn execute_input(&mut self, args: &str, cursor: &Cursor) -> BasicResult<()> {
@@ -8566,6 +8572,18 @@ impl EvalContext for Interpreter {
                 args[2].as_number()?,
                 args[3].as_number()?,
             ))),
+            "TESTCHR$" if args.is_empty() => Ok(Value::string(
+                self.graphics
+                    .testchr(self.graphics.hpos(), self.graphics.vpos())
+                    .map(|ch| ch.to_string())
+                    .unwrap_or_default(),
+            )),
+            "TESTCHR$" if args.len() == 2 => Ok(Value::string(
+                self.graphics
+                    .testchr(args[0].as_number()? as i32, args[1].as_number()? as i32)
+                    .map(|ch| ch.to_string())
+                    .unwrap_or_default(),
+            )),
             "TEST" if args.len() == 2 => Ok(Value::number(
                 self.graphics
                     .test(args[0].as_number()?, args[1].as_number()?) as f64,
@@ -11778,6 +11796,27 @@ fn split_print_items(source: &str) -> Vec<(&str, Option<char>)> {
         out.push((&source[start..], None));
     }
     out
+}
+
+fn print_using_format_expr(item: &str) -> Result<Option<&str>, ()> {
+    let trimmed = item.trim_start();
+    if trimmed.len() < 5 || !trimmed[..5].eq_ignore_ascii_case("USING") {
+        return Ok(None);
+    }
+    let rest = &trimmed[5..];
+    match rest.chars().next() {
+        None => Err(()),
+        Some(ch) if ch.is_whitespace() => {
+            let expr = rest.trim();
+            if expr.is_empty() {
+                Err(())
+            } else {
+                Ok(Some(expr))
+            }
+        }
+        Some('"') | Some('(') => Err(()),
+        _ => Ok(None),
+    }
 }
 
 fn renumber_line_references(code: &str, mapping: &HashMap<i32, i32>) -> String {

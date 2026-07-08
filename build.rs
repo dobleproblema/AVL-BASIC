@@ -304,6 +304,7 @@ fn render_font_tables(fonts: &BTreeMap<String, FontSource>) -> String {
     out.push_str("// Do not edit by hand; edit the source font file instead.\n\n");
     render_font_constants(&mut out, "SMALL", font(fonts, "small"));
     render_font_constants(&mut out, "BIG", font(fonts, "big"));
+    render_glyph_chars(&mut out, fonts);
     render_glyph_count(&mut out, fonts);
     render_glyph_rows(&mut out, fonts);
     out
@@ -323,6 +324,32 @@ fn render_font_constants(out: &mut String, prefix: &str, font: &FontSource) {
         ));
     }
     out.push('\n');
+}
+
+fn render_glyph_chars(out: &mut String, fonts: &BTreeMap<String, FontSource>) {
+    render_font_chars_constant(out, "SMALL", font(fonts, "small"));
+    render_font_chars_constant(out, "BIG", font(fonts, "big"));
+    out.push_str("pub fn glyph_chars(font: FontKind) -> &'static [char] {\n");
+    out.push_str("    match font {\n");
+    out.push_str("        FontKind::Small => &SMALL_CHARS,\n");
+    out.push_str("        FontKind::Big => &BIG_CHARS,\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+}
+
+fn render_font_chars_constant(out: &mut String, prefix: &str, font: &FontSource) {
+    out.push_str(&format!(
+        "const {}_CHARS: [char; {}] = [",
+        prefix,
+        font.glyphs.len()
+    ));
+    for (idx, codepoint) in font.glyphs.keys().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("'\\u{{{:X}}}'", codepoint));
+    }
+    out.push_str("];\n");
 }
 
 fn render_glyph_rows(out: &mut String, fonts: &BTreeMap<String, FontSource>) {

@@ -296,7 +296,7 @@ Quick notes
 Detailed notes (PRINT)
 - Numbers: integers are printed without decimals; reals with up to 14 significant digits (without trailing zeros). Positive values are printed with a leading space; negatives with the `-` sign.
 - The items in the print list may be empty. This is useful to advance through extra print zones. Example: `PRINT ,,`, `PRINT "Hello",,,"Goodbye"`.
-- PRINT USING: `PRINT USING "mask"; exprs` or `PRINT USING var$; exprs`.
+- PRINT USING: `PRINT USING "mask"; exprs`, `PRINT USING var$; exprs`, or, inside a print list, `PRINT "Price";USING "mask"; exprs`.
   * Placeholders: `#` (digit or space), `0` (digit or forced zero), and `+` as a prefix (forces the sign to be printed).
   * The dot in the mask separates the integer and decimal parts; if there is no fractional part in the mask, `.` is not printed.
   * A leading comma after the optional `+` activates "European" output: the decimal separator and thousands separator are swapped. Example: `PRINT USING ",#,###,###.##"; 1234567.23` prints `1.234.567,23`.
@@ -308,7 +308,7 @@ Detailed notes (PRINT)
   * Numbers longer than the integer part of the mask do not overflow: they are shown in full, expanding to the left.
   * In fixed masks (without `^^^^`), that expansion uses the actual floating-point value stored. Very large magnitudes can therefore reveal the full IEEE-754 approximation; use an exponential mask (`#.##^^^^`) for compact output.
   * The format accepts either a literal mask or a non-empty string variable; otherwise, a format error is raised.
-  * With `USING`, `,` and `;` separate and chain items exactly as in normal `PRINT`.
+  * The `USING` mask is separated from the formatted list with `;`. Inside that following list, `,` and `;` separate and chain items exactly as in normal `PRINT`.
 - Special `PRINT` functions: `SPC(n)` and `TAB(n)`.
   * `SPC(n)`: prints `n` spaces.
   * `TAB(n)`: moves the cursor to column `n` if the current column has not reached it yet; it never moves backwards.
@@ -334,11 +334,15 @@ Detailed notes (INPUT)
 + BIGFONT | SMALLFONT        16x16 / 8x16 font (rows/columns scale with MODE)
 + DISP txt$[,ink][,paper]    Prints in text coordinates (ignores ORIGIN)
 + GDISP txt$[,ink][,paper]   Prints in graphics coordinates
++ c$ = TESTCHR$[(column,row)] Reads the recognizable character in a text cell
 + LDIR degrees               Orientation of GDISP text. `LDIR 0` = horizontal
 
 Quick notes
 - `LOCATE` uses text rows and columns; it scales with `MODE` and the current font (BIG/SMALL).
 - `DISP` and `GDISP` always use the interpreter's embedded internal fonts (`SMALLFONT` or `BIGFONT`).
+- `TESTCHR$` does not move the text cursor. With no arguments it reads `HPOS,VPOS`; with two arguments it reads that column/row.
+- `TESTCHR$` reads one cell of the text grid. It is intended for characters printed with `DISP` at text columns/rows. If a character is drawn with `GDISP` at arbitrary graphics coordinates, it will normally not be recognized unless its upper-left corner exactly matches the cell being read.
+- `TESTCHR$` uses the current font (`SMALLFONT` or `BIGFONT`) to recognize pixels. It returns `""` if the cell does not exactly match a known glyph, for example when the character is clipped, distorted, overwritten, or on a non-uniform background.
 - If a character is not defined in the font, `□` (replacement box) is shown.
 - The same applies to control characters, which are not supported by DISP/GDISP. For example: `DISP CHR$(13)` -> `□`.
 - `LDIR` uses degrees; it is rounded to the nearest integer and normalized modulo 360. Positive angles rotate clockwise. It only affects `GDISP` (it is ignored by `DISP`).
