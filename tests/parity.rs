@@ -756,6 +756,41 @@ fn not_has_logical_precedence_after_relational_operations() {
 }
 
 #[test]
+fn cached_numeric_conditions_and_array_assignments_preserve_semantics() {
+    let output = run_rust(
+        r#"10 DIM A(2)
+20 I=1:A(I)=SQR(9)+ABS(-2)
+30 X=0
+40 IF NOT A(I)=4 AND ABS(A(I)-8)=3 THEN X=1
+50 WHILE X<4:X=X+1:WEND
+60 PRINT A(I),X"#,
+    );
+    assert_eq!(output, " 5       4\n");
+
+    let output = run_rust(
+        r#"10 DIM L$(2)
+20 L$(1)="B":L$(2)="A"
+30 IF L$(1)<L$(2) THEN PRINT "BAD" ELSE PRINT "OK""#,
+    );
+    assert_eq!(output, "OK\n");
+
+    assert_eq!(
+        run_rust_error_code("10 IF SQR(-1) THEN END"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 IF SQR(INF) THEN END"),
+        ErrorCode::Overflow
+    );
+}
+
+#[test]
+fn print_using_detection_does_not_split_utf8_text() {
+    let output = run_rust("10 PRINT \"aqu\u{00ed}\"");
+    assert_eq!(output, "aqu\u{00ed}\n");
+}
+
+#[test]
 fn immediate_cat_save_load_delete_and_list_ranges() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("alpha.bas"), "10 PRINT 1\n").unwrap();

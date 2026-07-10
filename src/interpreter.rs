@@ -3,7 +3,7 @@ use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::expr::{
     call_pure_function, checked_number, compile_expression, eval_compiled, eval_compiled_number,
     is_pi_constant_name, is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp,
-    EvalContext, Expr,
+    EvalContext, Expr, UnaryOp,
 };
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
@@ -11,7 +11,7 @@ use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
 use crate::using_format::{format_using, valid_using_format};
-use crate::value::{format_basic_number, round_half_away, Value};
+use crate::value::{format_basic_number, logical_round, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
@@ -67,6 +67,7 @@ const AVL_BASIC_LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 const FRAME_DRIVEN_PUMP_CHECK_SKIP: u8 = 64;
+const RUNTIME_POLL_COMMAND_SKIP: u8 = 31;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -90,7 +91,7 @@ struct ForFrame {
 
 #[derive(Debug, Clone)]
 struct WhileFrame {
-    expr: Rc<Expr>,
+    expr: Rc<CompiledNumberExpr>,
     header: Cursor,
     resume: Cursor,
 }
@@ -495,11 +496,31 @@ struct CompiledAssignment {
 }
 
 #[derive(Debug, Clone)]
+struct CompiledNumberExpr {
+    expr: Expr,
+    fast: Option<FastNumberExpr>,
+}
+
+#[derive(Debug, Clone)]
 struct CompiledMidAssignment {
     target: String,
     start: Expr,
     count: Option<Expr>,
     rhs: Expr,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledColorArguments {
+    Single(Expr),
+    Rgb(Box<[CompiledNumberExpr; 3]>),
+}
+
+#[derive(Debug, Clone)]
+struct CompiledPlot {
+    x: CompiledNumberExpr,
+    y: CompiledNumberExpr,
+    color: Option<Expr>,
+    relative: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -544,6 +565,12 @@ enum FastNumberExpr {
         function: FastNumberFunction,
         arg: Box<FastNumberExpr>,
     },
+    Unary {
+        op: UnaryOp,
+        expr: Box<FastNumberExpr>,
+    },
+    Min(Vec<FastNumberExpr>),
+    Max(Vec<FastNumberExpr>),
     Binary {
         op: BinaryOp,
         left: Box<FastNumberExpr>,
@@ -553,7 +580,9 @@ enum FastNumberExpr {
 
 #[derive(Debug, Clone, Copy)]
 enum FastNumberFunction {
+    Abs,
     Int,
+    Sqr,
     Sin,
     Cos,
 }
@@ -648,6 +677,8 @@ enum CachedCommand {
         source: String,
         index: Rc<Expr>,
     },
+    Ink(Rc<CompiledColorArguments>),
+    Plot(Rc<CompiledPlot>),
     DrawRelative2 {
         x: Rc<Expr>,
         y: Rc<Expr>,
@@ -658,20 +689,20 @@ enum CachedCommand {
     TexturedTriangle(Rc<CompiledTexturedTriangle>),
     TexturedQuad(Rc<CompiledTexturedQuad>),
     If {
-        condition: Rc<Expr>,
+        condition: Rc<CompiledNumberExpr>,
         then_branch: CachedIfBranch,
         else_branch: Option<CachedIfBranch>,
     },
-    BlockIf(Rc<Expr>),
-    BlockElseIf(Rc<Expr>),
+    BlockIf(Rc<CompiledNumberExpr>),
+    BlockElseIf(Rc<CompiledNumberExpr>),
     Else,
     EndIf,
     OnGoto {
-        selector: Rc<Expr>,
+        selector: Rc<CompiledNumberExpr>,
         targets: Vec<i32>,
     },
     OnGosub {
-        selector: Rc<Expr>,
+        selector: Rc<CompiledNumberExpr>,
         targets: Vec<i32>,
     },
     For(Rc<CompiledFor>),
@@ -694,7 +725,7 @@ enum CachedCommand {
     SubExit,
     Local,
     Next(Option<String>),
-    While(Rc<Expr>),
+    While(Rc<CompiledNumberExpr>),
     Wend,
 }
 
@@ -708,6 +739,16 @@ impl CompiledLValue {
     fn name(&self) -> &str {
         match self {
             CompiledLValue::Scalar { name, .. } | CompiledLValue::Array { name, .. } => name,
+        }
+    }
+}
+
+impl CompiledNumberExpr {
+    fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
+        if let Some(fast) = &self.fast {
+            fast.eval(interpreter)
+        } else {
+            eval_compiled_number(interpreter, &self.expr)
         }
     }
 }
@@ -735,7 +776,14 @@ impl FastNumberExpr {
             FastNumberExpr::Function1 { function, arg } => {
                 let mut arg = arg.eval(interpreter)?;
                 Ok(match function {
+                    FastNumberFunction::Abs => arg.abs(),
                     FastNumberFunction::Int => arg.floor(),
+                    FastNumberFunction::Sqr => {
+                        if arg < 0.0 {
+                            return Err(BasicError::new(ErrorCode::InvalidArgument));
+                        }
+                        checked_number(arg.sqrt())?
+                    }
                     FastNumberFunction::Sin => {
                         if interpreter.angle_degrees {
                             arg = arg.to_radians();
@@ -749,6 +797,28 @@ impl FastNumberExpr {
                         arg.cos()
                     }
                 })
+            }
+            FastNumberExpr::Unary { op, expr } => {
+                let value = expr.eval(interpreter)?;
+                Ok(match op {
+                    UnaryOp::Plus => value,
+                    UnaryOp::Minus => -value,
+                    UnaryOp::Not => (!logical_round(value)) as f64,
+                })
+            }
+            FastNumberExpr::Min(args) => {
+                let mut value = args[0].eval(interpreter)?;
+                for arg in &args[1..] {
+                    value = value.min(arg.eval(interpreter)?);
+                }
+                Ok(value)
+            }
+            FastNumberExpr::Max(args) => {
+                let mut value = args[0].eval(interpreter)?;
+                for arg in &args[1..] {
+                    value = value.max(arg.eval(interpreter)?);
+                }
+                Ok(value)
             }
             FastNumberExpr::Binary { op, left, right } => {
                 let left = left.eval(interpreter)?;
@@ -779,7 +849,15 @@ impl FastNumberExpr {
                         }
                     }
                     BinaryOp::Pow => checked_number(left.powf(right)),
-                    _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
+                    BinaryOp::Eq => Ok(if left == right { -1.0 } else { 0.0 }),
+                    BinaryOp::Ne => Ok(if left != right { -1.0 } else { 0.0 }),
+                    BinaryOp::Lt => Ok(if left < right { -1.0 } else { 0.0 }),
+                    BinaryOp::Gt => Ok(if left > right { -1.0 } else { 0.0 }),
+                    BinaryOp::Le => Ok(if left <= right { -1.0 } else { 0.0 }),
+                    BinaryOp::Ge => Ok(if left >= right { -1.0 } else { 0.0 }),
+                    BinaryOp::And => Ok((logical_round(left) & logical_round(right)) as f64),
+                    BinaryOp::Xor => Ok((logical_round(left) ^ logical_round(right)) as f64),
+                    BinaryOp::Or => Ok((logical_round(left) | logical_round(right)) as f64),
                 }
             }
         }
@@ -1798,13 +1876,15 @@ impl Interpreter {
     fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();
+        let mut runtime_poll_skip = 0u8;
         'run_loop: loop {
             if cursor.line_idx >= lines.len() {
                 break;
             }
             let line_no = lines[cursor.line_idx];
-            let commands = compiled_lines.get(cursor.line_idx).cloned();
-            let commands_len = commands.as_ref().map_or(0usize, |commands| commands.len());
+            let commands_len = compiled_lines
+                .get(cursor.line_idx)
+                .map_or(0usize, |commands| commands.len());
             if cursor.cmd_idx >= commands_len {
                 cursor.line_idx += 1;
                 cursor.cmd_idx = 0;
@@ -1815,8 +1895,17 @@ impl Interpreter {
                 self.write(&console::trace_text(self.ansi_output, line_no));
             }
             while cursor.cmd_idx < commands_len {
-                if self.poll_interrupts_and_timers(&mut cursor)? {
-                    continue 'run_loop;
+                let poll_now = runtime_poll_skip == 0
+                    || self.test_interrupt_requested
+                    || !self.timers.is_empty()
+                    || console::interrupt_requested();
+                if poll_now {
+                    if self.poll_interrupts_and_timers(&mut cursor)? {
+                        continue 'run_loop;
+                    }
+                    runtime_poll_skip = RUNTIME_POLL_COMMAND_SKIP;
+                } else {
+                    runtime_poll_skip -= 1;
                 }
                 if self.end_requested {
                     self.present_dirty_graphics_at_run_boundary()?;
@@ -1826,17 +1915,13 @@ impl Interpreter {
                     self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
-                let command = commands
-                    .as_ref()
-                    .and_then(|commands| commands.get(cursor.cmd_idx))
-                    .cloned()
-                    .unwrap_or_else(|| Rc::new(CachedCommand::Noop));
+                let command = compiled_lines[cursor.line_idx][cursor.cmd_idx].as_ref();
                 let before = cursor.clone();
                 let next = Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 };
-                if let Err(err) = self.execute_cached_command(command.as_ref(), &mut cursor, &[]) {
+                if let Err(err) = self.execute_cached_command(command, &mut cursor, &[]) {
                     let err = if err
                         .detail
                         .as_deref()
@@ -1937,6 +2022,9 @@ impl Interpreter {
 
     fn poll_interrupts_and_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         self.check_user_interrupt(cursor)?;
+        if self.timers.is_empty() {
+            return Ok(false);
+        }
         let dispatched = self.process_timers(cursor)?;
         self.check_user_interrupt(cursor)?;
         Ok(dispatched)
@@ -2337,6 +2425,8 @@ impl Interpreter {
                 source,
                 index,
             } => self.execute_string_char_assignment(target, source, index.as_ref()),
+            CachedCommand::Ink(compiled) => self.execute_compiled_ink(compiled.as_ref()),
+            CachedCommand::Plot(compiled) => self.execute_compiled_plot(compiled.as_ref()),
             CachedCommand::DrawRelative2 { x, y } => {
                 self.execute_compiled_draw_relative2(x.as_ref(), y.as_ref())
             }
@@ -2430,12 +2520,12 @@ impl Interpreter {
 
     fn execute_cached_if(
         &mut self,
-        condition: &Expr,
+        condition: &CompiledNumberExpr,
         then_branch: &CachedIfBranch,
         else_branch: Option<&CachedIfBranch>,
         cursor: &mut Cursor,
     ) -> BasicResult<()> {
-        let selected = if eval_compiled_number(self, condition).map_err(|mut e| {
+        let selected = if condition.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -2459,10 +2549,10 @@ impl Interpreter {
 
     fn execute_cached_block_if(
         &mut self,
-        condition: &Expr,
+        condition: &CompiledNumberExpr,
         cursor: &mut Cursor,
     ) -> BasicResult<()> {
-        if eval_compiled_number(self, condition).map_err(|mut e| {
+        if condition.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -2480,7 +2570,7 @@ impl Interpreter {
 
     fn execute_cached_block_elseif(
         &mut self,
-        condition: &Expr,
+        condition: &CompiledNumberExpr,
         cursor: &mut Cursor,
     ) -> BasicResult<()> {
         let current = Cursor {
@@ -2491,7 +2581,7 @@ impl Interpreter {
             return self.skip_after_matching_end_if(cursor);
         }
         self.pending_if_branch = None;
-        if eval_compiled_number(self, condition).map_err(|mut e| {
+        if condition.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -2506,12 +2596,12 @@ impl Interpreter {
 
     fn execute_cached_on(
         &mut self,
-        selector: &Expr,
+        selector: &CompiledNumberExpr,
         targets: &[i32],
         gosub: bool,
         cursor: &mut Cursor,
     ) -> BasicResult<()> {
-        let selector = eval_compiled_number(self, selector).map_err(|mut e| {
+        let selector = selector.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -2747,16 +2837,27 @@ impl Interpreter {
 
     fn execute_compiled_assignment(&mut self, compiled: &CompiledAssignment) -> BasicResult<()> {
         if !compiled.rhs_is_string && compiled.targets.len() == 1 {
+            let target = &compiled.targets[0];
+            if let Some(fast_rhs) = &compiled.fast_numeric_rhs {
+                let value = fast_rhs.eval(self).map_err(|e| self.with_current_line(e))?;
+                if let CompiledLValue::Scalar {
+                    name,
+                    is_string: false,
+                } = target
+                {
+                    self.assign_numeric_scalar_target(name, value);
+                } else {
+                    let value = Value::number(value);
+                    self.assign_compiled_lvalue(target, value.clone())?;
+                    self.return_value_for_active_function(target.name(), &value);
+                }
+                return Ok(());
+            }
             if let CompiledLValue::Scalar {
                 name,
                 is_string: false,
-            } = &compiled.targets[0]
+            } = target
             {
-                if let Some(fast_rhs) = &compiled.fast_numeric_rhs {
-                    let value = fast_rhs.eval(self).map_err(|e| self.with_current_line(e))?;
-                    self.assign_numeric_scalar_target(name, value);
-                    return Ok(());
-                }
                 let value = eval_compiled_number(self, &compiled.rhs).map_err(|mut e| {
                     if e.line.is_none() {
                         e.line = self.current_line;
@@ -2881,6 +2982,52 @@ impl Interpreter {
             .transpose()?;
         self.replace_mid_string_variable(&compiled.target, start, count, &replacement);
         Ok(())
+    }
+
+    fn eval_compiled_color_arguments(
+        &mut self,
+        compiled: &CompiledColorArguments,
+    ) -> BasicResult<i32> {
+        match compiled {
+            CompiledColorArguments::Single(expr) => self.eval_compiled_color(expr),
+            CompiledColorArguments::Rgb(rgb) => {
+                let red = rgb[0].eval(self).map_err(|e| self.with_current_line(e))? as i32;
+                let green = rgb[1].eval(self).map_err(|e| self.with_current_line(e))? as i32;
+                let blue = rgb[2].eval(self).map_err(|e| self.with_current_line(e))? as i32;
+                rgb_number(red, green, blue).map_err(|e| self.with_current_line(e))
+            }
+        }
+    }
+
+    fn execute_compiled_ink(&mut self, compiled: &CompiledColorArguments) -> BasicResult<()> {
+        self.ensure_graphics_window()?;
+        let color = self.eval_compiled_color_arguments(compiled)?;
+        self.graphics.set_ink(color);
+        Ok(())
+    }
+
+    fn execute_compiled_plot(&mut self, compiled: &CompiledPlot) -> BasicResult<()> {
+        self.ensure_graphics_window()?;
+        let x = compiled
+            .x
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y = compiled
+            .y
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let color = compiled
+            .color
+            .as_ref()
+            .map(|expr| self.eval_compiled_color(expr))
+            .transpose()?;
+        if compiled.relative {
+            self.graphics
+                .plot(self.graphics.xpos() + x, self.graphics.ypos() + y, color);
+        } else {
+            self.graphics.plot(x, y, color);
+        }
+        self.refresh_graphics_window()
     }
 
     fn execute_compiled_draw_relative2(&mut self, x: &Expr, y: &Expr) -> BasicResult<()> {
@@ -4388,24 +4535,21 @@ impl Interpreter {
     }
 
     fn execute_while(&mut self, expr: &str, cursor: &mut Cursor) -> BasicResult<()> {
-        let compiled = if let Some(compiled) = self.expression_cache.get(expr.trim()) {
-            compiled.clone()
-        } else {
-            let compiled =
-                Rc::new(compile_expression(expr).map_err(|e| self.with_current_line(e))?);
-            self.expression_cache
-                .insert(expr.trim().to_string(), compiled.clone());
-            compiled
-        };
+        let compiled =
+            Rc::new(compile_number_expression(expr).map_err(|e| self.with_current_line(e))?);
         self.execute_compiled_while(compiled, cursor)
     }
 
-    fn execute_compiled_while(&mut self, expr: Rc<Expr>, cursor: &mut Cursor) -> BasicResult<()> {
+    fn execute_compiled_while(
+        &mut self,
+        expr: Rc<CompiledNumberExpr>,
+        cursor: &mut Cursor,
+    ) -> BasicResult<()> {
         let header = Cursor {
             line_idx: cursor.line_idx,
             cmd_idx: cursor.cmd_idx,
         };
-        if eval_compiled_number(self, expr.as_ref()).map_err(|mut e| {
+        if expr.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -4478,7 +4622,7 @@ impl Interpreter {
         let Some(frame) = self.while_stack.last().cloned() else {
             return Err(self.err(ErrorCode::WendWithoutWhile));
         };
-        if eval_compiled_number(self, frame.expr.as_ref()).map_err(|mut e| {
+        if frame.expr.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -7810,10 +7954,19 @@ impl Interpreter {
                     CachedCommand::Raw(Rc::<str>::from(trimmed))
                 }
             }
-            "WHILE" => compile_expression(trimmed[5..].trim())
+            "WHILE" => compile_number_expression(trimmed[5..].trim())
                 .map(|expr| CachedCommand::While(Rc::new(expr)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "WEND" if upper == "WEND" => CachedCommand::Wend,
+            "INK" => compile_color_arguments(trimmed[3..].trim())
+                .map(|compiled| CachedCommand::Ink(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "PLOT" => compile_plot_statement(trimmed[4..].trim(), false)
+                .map(|compiled| CachedCommand::Plot(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "PLOTR" => compile_plot_statement(trimmed[5..].trim(), true)
+                .map(|compiled| CachedCommand::Plot(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "DRAWR" => compile_draw_relative2(trimmed[5..].trim())
                 .map(|(x, y)| CachedCommand::DrawRelative2 {
                     x: Rc::new(x),
@@ -7860,7 +8013,7 @@ impl Interpreter {
         } else {
             return None;
         };
-        let condition = Rc::new(compile_expression(cond).ok()?);
+        let condition = Rc::new(compile_number_expression(cond).ok()?);
         if rest.is_empty() {
             return Some(CachedCommand::BlockIf(condition));
         }
@@ -7912,7 +8065,7 @@ impl Interpreter {
         } else {
             return None;
         };
-        let selector = Rc::new(compile_expression(body[..pos].trim()).ok()?);
+        let selector = Rc::new(compile_number_expression(body[..pos].trim()).ok()?);
         let targets = split_arguments(body[pos + keyword_len..].trim())
             .iter()
             .map(|target| parse_line_number_literal(target))
@@ -9430,6 +9583,28 @@ mod interpreter_tests {
         assert!(interp
             .process_immediate("TRECTANGLE T$,10,10,30,30")
             .is_err());
+    }
+
+    #[test]
+    fn cached_ink_plot_and_plotr_preserve_graphics_behavior() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp
+            .program
+            .load_text(
+                r##"10 R=1:G=2:B=3
+20 INK R,G,B
+30 X=4:Y=5:PLOT X,Y
+40 INK "#00FF00":PLOTR 1,2"##,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.graphics.test(4.0, 5.0), 0x010203);
+        assert_eq!(interp.graphics.test(5.0, 7.0), 0x00ff00);
+        assert_eq!(interp.graphics.xpos(), 5.0);
+        assert_eq!(interp.graphics.ypos(), 7.0);
     }
 
     #[test]
@@ -11172,7 +11347,7 @@ fn is_multiline_if_start(command: &str) -> bool {
     trimmed[then_end..].trim().is_empty()
 }
 
-fn compile_block_elseif(command: &str) -> BasicResult<Expr> {
+fn compile_block_elseif(command: &str) -> BasicResult<CompiledNumberExpr> {
     let trimmed = command.trim();
     let upper = trimmed.to_ascii_uppercase();
     if !upper.starts_with("ELSEIF ") {
@@ -11184,7 +11359,7 @@ fn compile_block_elseif(command: &str) -> BasicResult<Expr> {
     if !trimmed[then_end..].trim().is_empty() {
         return Err(BasicError::new(ErrorCode::Syntax));
     }
-    compile_expression(trimmed[6..then_pos].trim())
+    compile_number_expression(trimmed[6..then_pos].trim())
 }
 
 fn find_then_keyword(upper: &str) -> Option<(usize, usize)> {
@@ -11361,6 +11536,41 @@ fn compile_mid_assignment_statement(source: &str) -> BasicResult<CompiledMidAssi
     })
 }
 
+fn compile_color_arguments(source: &str) -> BasicResult<CompiledColorArguments> {
+    let args = split_arguments(source);
+    match args.as_slice() {
+        [color] if !color.trim().is_empty() => Ok(CompiledColorArguments::Single(
+            compile_expression(color.trim())?,
+        )),
+        [red, green, blue]
+            if !red.trim().is_empty() && !green.trim().is_empty() && !blue.trim().is_empty() =>
+        {
+            Ok(CompiledColorArguments::Rgb(Box::new([
+                compile_number_expression(red.trim())?,
+                compile_number_expression(green.trim())?,
+                compile_number_expression(blue.trim())?,
+            ])))
+        }
+        _ => Err(BasicError::new(ErrorCode::ArgumentMismatch)),
+    }
+}
+
+fn compile_plot_statement(source: &str, relative: bool) -> BasicResult<CompiledPlot> {
+    let args = split_arguments(source);
+    if !(2..=3).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    Ok(CompiledPlot {
+        x: compile_number_expression(args[0].trim())?,
+        y: compile_number_expression(args[1].trim())?,
+        color: args
+            .get(2)
+            .map(|arg| compile_expression(arg.trim()))
+            .transpose()?,
+        relative,
+    })
+}
+
 fn compile_draw_relative2(source: &str) -> BasicResult<(Expr, Expr)> {
     let args = split_arguments(source);
     if args.len() != 2 || args.iter().any(|arg| arg.trim().is_empty()) {
@@ -11431,7 +11641,7 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
             Some(FastNumberExpr::Number(std::f64::consts::PI))
         }
         Expr::ArrayOrCall { name, args, kind }
-            if allow_arrays && *kind == ArrayOrCallKind::Array =>
+            if allow_arrays && !name.ends_with('$') && *kind == ArrayOrCallKind::Array =>
         {
             match args.as_slice() {
                 [index] => Some(FastNumberExpr::Array1 {
@@ -11446,9 +11656,24 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
                 _ => None,
             }
         }
+        Expr::ArrayOrCall { name, args, .. }
+            if !args.is_empty() && matches!(name.as_str(), "MIN" | "MAX") =>
+        {
+            let args = args
+                .iter()
+                .map(|arg| compile_fast_number_expr(arg, allow_arrays))
+                .collect::<Option<Vec<_>>>()?;
+            if name == "MIN" {
+                Some(FastNumberExpr::Min(args))
+            } else {
+                Some(FastNumberExpr::Max(args))
+            }
+        }
         Expr::ArrayOrCall { name, args, .. } if args.len() == 1 => {
             let function = match name.as_str() {
+                "ABS" => FastNumberFunction::Abs,
                 "INT" => FastNumberFunction::Int,
+                "SQR" => FastNumberFunction::Sqr,
                 "SIN" => FastNumberFunction::Sin,
                 "COS" => FastNumberFunction::Cos,
                 _ => return None,
@@ -11458,26 +11683,23 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
                 arg: Box::new(compile_fast_number_expr(&args[0], allow_arrays)?),
             })
         }
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Div
-                    | BinaryOp::IntDiv
-                    | BinaryOp::Mod
-                    | BinaryOp::Pow
-            ) =>
-        {
-            Some(FastNumberExpr::Binary {
-                op: *op,
-                left: Box::new(compile_fast_number_expr(left, allow_arrays)?),
-                right: Box::new(compile_fast_number_expr(right, allow_arrays)?),
-            })
-        }
+        Expr::Unary { op, expr } => Some(FastNumberExpr::Unary {
+            op: *op,
+            expr: Box::new(compile_fast_number_expr(expr, allow_arrays)?),
+        }),
+        Expr::Binary { op, left, right } => Some(FastNumberExpr::Binary {
+            op: *op,
+            left: Box::new(compile_fast_number_expr(left, allow_arrays)?),
+            right: Box::new(compile_fast_number_expr(right, allow_arrays)?),
+        }),
         _ => None,
     }
+}
+
+fn compile_number_expression(source: &str) -> BasicResult<CompiledNumberExpr> {
+    let expr = compile_expression(source)?;
+    let fast = compile_fast_number_expr(&expr, true);
+    Ok(CompiledNumberExpr { expr, fast })
 }
 
 fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<CompiledTriangle> {
@@ -11657,13 +11879,16 @@ fn compile_fast_assignment_rhs(
     if rhs_is_string || targets.len() != 1 {
         return None;
     }
-    let CompiledLValue::Scalar {
-        is_string: false, ..
-    } = &targets[0]
-    else {
-        return None;
-    };
-    compile_fast_number_expr(rhs, false)
+    match &targets[0] {
+        CompiledLValue::Scalar {
+            is_string: false, ..
+        }
+        | CompiledLValue::Array {
+            is_string: false, ..
+        } => {}
+        _ => return None,
+    }
+    compile_fast_number_expr(rhs, true)
 }
 
 fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
@@ -11800,7 +12025,10 @@ fn split_print_items(source: &str) -> Vec<(&str, Option<char>)> {
 
 fn print_using_format_expr(item: &str) -> Result<Option<&str>, ()> {
     let trimmed = item.trim_start();
-    if trimmed.len() < 5 || !trimmed[..5].eq_ignore_ascii_case("USING") {
+    let Some(keyword) = trimmed.get(..5) else {
+        return Ok(None);
+    };
+    if !keyword.eq_ignore_ascii_case("USING") {
         return Ok(None);
     }
     let rest = &trimmed[5..];

@@ -404,7 +404,7 @@ fn syntax_theme_from_env_value(value: Option<&str>) -> SyntaxTheme {
 pub fn install_ctrl_c_handler() -> io::Result<()> {
     let result = CTRL_C_HANDLER.get_or_init(|| {
         ctrlc::set_handler(|| {
-            INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+            INTERRUPT_REQUESTED.store(true, Ordering::Relaxed);
         })
         .map_err(|err| err.to_string())
     });
@@ -415,11 +415,16 @@ pub fn install_ctrl_c_handler() -> io::Result<()> {
 }
 
 pub fn take_interrupt_requested() -> bool {
-    INTERRUPT_REQUESTED.swap(false, Ordering::SeqCst)
+    INTERRUPT_REQUESTED.load(Ordering::Relaxed)
+        && INTERRUPT_REQUESTED.swap(false, Ordering::Relaxed)
+}
+
+pub fn interrupt_requested() -> bool {
+    INTERRUPT_REQUESTED.load(Ordering::Relaxed)
 }
 
 pub fn clear_interrupt_requested() {
-    INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
+    INTERRUPT_REQUESTED.store(false, Ordering::Relaxed);
 }
 
 pub fn flush_pending_input() {
@@ -428,7 +433,7 @@ pub fn flush_pending_input() {
 }
 
 pub fn request_interrupt() {
-    INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+    INTERRUPT_REQUESTED.store(true, Ordering::Relaxed);
 }
 
 #[cfg(windows)]
