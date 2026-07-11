@@ -1,19 +1,159 @@
 use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
-use crate::graphics::Graphics;
+use crate::graphics::{DamageRect, Graphics};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle,
+};
+use softbuffer::{Context, Rect as SoftbufferRect, Surface};
 use std::collections::VecDeque;
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::fmt;
+use std::num::NonZeroU32;
+
+const MAX_PARTIAL_DAMAGE_PERCENT: usize = 60;
+const MAX_DAMAGE_HISTORY: usize = 8;
 
 pub struct GraphicsWindow {
+    // The presenter borrows native handles and must be dropped before the window.
+    partial_presenter: Option<PartialPresenter>,
     window: Window,
     width: usize,
     height: usize,
     mouse: MouseSnapshot,
     key_queue: VecDeque<u8>,
     ctrl_c_down: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RawHandles {
+    display: RawDisplayHandle,
+    window: RawWindowHandle,
+}
+
+impl HasDisplayHandle for RawHandles {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        // GraphicsWindow owns the native window for longer than this handle wrapper.
+        Ok(unsafe { DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
+impl HasWindowHandle for RawHandles {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        // GraphicsWindow owns the native window for longer than this handle wrapper.
+        Ok(unsafe { WindowHandle::borrow_raw(self.window) })
+    }
+}
+
+struct PartialPresenter {
+    surface: Surface<RawHandles, RawHandles>,
+    _context: Context<RawHandles>,
+    damage_history: VecDeque<Vec<DamageRect>>,
+    synchronized: bool,
+}
+
+impl fmt::Debug for PartialPresenter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PartialPresenter")
+            .field("history_len", &self.damage_history.len())
+            .field("synchronized", &self.synchronized)
+            .finish()
+    }
+}
+
+impl PartialPresenter {
+    fn new(window: &Window, graphics: &Graphics) -> Result<Self, softbuffer::SoftBufferError> {
+        let handles = RawHandles {
+            display: window.display_handle()?.as_raw(),
+            window: window.window_handle()?.as_raw(),
+        };
+        let context = Context::new(handles)?;
+        let mut surface = Surface::new(&context, handles)?;
+        surface.resize(
+            NonZeroU32::new(graphics.width as u32).unwrap(),
+            NonZeroU32::new(graphics.height as u32).unwrap(),
+        )?;
+        {
+            let mut buffer = surface.buffer_mut()?;
+            buffer.copy_from_slice(graphics.buffer());
+            buffer.present()?;
+        }
+        Ok(Self {
+            surface,
+            _context: context,
+            damage_history: VecDeque::new(),
+            synchronized: true,
+        })
+    }
+
+    fn present(
+        &mut self,
+        graphics: &Graphics,
+        damage: &[DamageRect],
+    ) -> Result<(), softbuffer::SoftBufferError> {
+        let mut buffer = self.surface.buffer_mut()?;
+        let age = buffer.age() as usize;
+        let historical_frames = age.saturating_sub(1);
+        if !self.synchronized || age == 0 || historical_frames > self.damage_history.len() {
+            buffer.copy_from_slice(graphics.buffer());
+        } else {
+            for rect in self.damage_history.iter().take(historical_frames).flatten() {
+                copy_damage_rect(&mut buffer, graphics.buffer(), graphics.width, *rect);
+            }
+            for rect in damage {
+                copy_damage_rect(&mut buffer, graphics.buffer(), graphics.width, *rect);
+            }
+        }
+        let softbuffer_damage = damage
+            .iter()
+            .map(|rect| SoftbufferRect {
+                x: rect.x as u32,
+                y: rect.y as u32,
+                width: NonZeroU32::new(rect.width as u32).unwrap(),
+                height: NonZeroU32::new(rect.height as u32).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        buffer.present_with_damage(&softbuffer_damage)?;
+        self.damage_history.push_front(damage.to_vec());
+        self.damage_history.truncate(MAX_DAMAGE_HISTORY);
+        self.synchronized = true;
+        Ok(())
+    }
+
+    fn invalidate(&mut self) {
+        self.synchronized = false;
+        self.damage_history.clear();
+    }
+}
+
+fn copy_damage_rect(target: &mut [u32], source: &[u32], stride: usize, rect: DamageRect) {
+    for y in rect.y..rect.y + rect.height {
+        let start = y * stride + rect.x;
+        target[start..start + rect.width].copy_from_slice(&source[start..start + rect.width]);
+    }
+}
+
+fn should_present_partially(width: usize, height: usize, damage: &[DamageRect]) -> bool {
+    if damage.is_empty() || damage.len() > 8 {
+        return false;
+    }
+    let damaged_area = damage.iter().map(|rect| rect.area()).sum::<usize>();
+    damaged_area.saturating_mul(100)
+        <= width
+            .saturating_mul(height)
+            .saturating_mul(MAX_PARTIAL_DAMAGE_PERCENT)
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn create_partial_presenter(window: &Window, graphics: &Graphics) -> Option<PartialPresenter> {
+    PartialPresenter::new(window, graphics).ok()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn create_partial_presenter(_window: &Window, _graphics: &Graphics) -> Option<PartialPresenter> {
+    None
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,6 +196,7 @@ impl GraphicsWindow {
         // event/buffer update and make PLOT-heavy programs unusably slow.
         window.set_target_fps(0);
         let mut graphics_window = Self {
+            partial_presenter: None,
             window,
             width: graphics.width,
             height: graphics.height,
@@ -67,6 +208,8 @@ impl GraphicsWindow {
             .window
             .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
             .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
+        graphics_window.partial_presenter =
+            create_partial_presenter(&graphics_window.window, graphics);
         graphics_window.clear_transient_input();
         Ok(graphics_window)
     }
@@ -79,9 +222,38 @@ impl GraphicsWindow {
         if !self.window.is_open() {
             return Ok(self.mouse.clone());
         }
-        self.window
-            .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
-            .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
+        let damage = graphics.damage_regions();
+        if damage.is_empty() {
+            self.window.update();
+        } else if self.partial_presenter.is_some()
+            && should_present_partially(graphics.width, graphics.height, damage)
+        {
+            self.window.update();
+            if self.window.is_open() {
+                let partial_result = self
+                    .partial_presenter
+                    .as_mut()
+                    .unwrap()
+                    .present(graphics, damage);
+                if partial_result.is_err() {
+                    self.partial_presenter = None;
+                    self.window
+                        .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
+                        .map_err(|err| {
+                            BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
+                        })?;
+                }
+            }
+        } else {
+            self.window
+                .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
+                .map_err(|err| {
+                    BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
+                })?;
+            if let Some(presenter) = self.partial_presenter.as_mut() {
+                presenter.invalidate();
+            }
+        }
         self.update_keyboard();
         Ok(self.update_mouse())
     }
@@ -497,7 +669,8 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{code_to_key, key_to_code};
+    use super::{code_to_key, key_to_code, should_present_partially};
+    use crate::graphics::DamageRect;
     use minifb::Key;
 
     #[test]
@@ -510,5 +683,29 @@ mod tests {
         assert_eq!(code_to_key(29), Some(Key::Right));
         assert_eq!(code_to_key(30), Some(Key::Up));
         assert_eq!(code_to_key(31), Some(Key::Down));
+    }
+
+    #[test]
+    fn partial_presenter_uses_conservative_area_threshold() {
+        assert!(should_present_partially(
+            100,
+            100,
+            &[DamageRect {
+                x: 0,
+                y: 0,
+                width: 60,
+                height: 100,
+            }]
+        ));
+        assert!(!should_present_partially(
+            100,
+            100,
+            &[DamageRect {
+                x: 0,
+                y: 0,
+                width: 61,
+                height: 100,
+            }]
+        ));
     }
 }

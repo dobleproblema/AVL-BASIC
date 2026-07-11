@@ -1,4 +1,4 @@
-100 REM 3D surface. Painter's algorithm with Lambert shading
+100 REM 3D surface. Painter 's algorithm with Lambert shading
 105 DEG : T1=TIME
 110 REM Resolution and graphics origin
 115 SCRW=WIDTH : SCRH=HEIGHT
@@ -52,7 +52,7 @@
 355   K=TIDX(I) 'Get the index of the triangle to draw
 360   INK TC(K)
 365   FTRIANGLE TX0(K),TY0(K),TX1(K),TY1(K),TX2(K),TY2(K)
-370   'FRAME
+370   FRAME
 375 NEXT I
 380 PRINT "Elapsed time:";TIME-T1
 385 END
@@ -108,8 +108,8 @@
 635     I=I+1 : J=J-1
 640     IF I<=J THEN GOTO 615
 645     'Push the larger segment onto the stack, process the smaller one
-650     IF (J-L)<(R-I) THEN SWAP L,I : SWAP J,R
-655     IF L<J THEN ST=ST+1 : SL(ST)=L : SR(ST)=J
+650     IF (J-L)<(R-I) THEN SWAP L,I:SWAP J,R
+655     IF L<J THEN ST=ST+1:SL(ST)=L:SR(ST)=J
 660     L=I
 665   WEND
 670 WEND 'While there are ranges left in the stack

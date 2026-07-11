@@ -502,6 +502,13 @@ struct CompiledNumberExpr {
 }
 
 #[derive(Debug, Clone)]
+struct CompiledColorExpr {
+    expr: Expr,
+    fast_numeric: Option<FastNumberExpr>,
+    is_numeric: bool,
+}
+
+#[derive(Debug, Clone)]
 struct CompiledMidAssignment {
     target: String,
     start: Expr,
@@ -511,36 +518,32 @@ struct CompiledMidAssignment {
 
 #[derive(Debug, Clone)]
 enum CompiledColorArguments {
-    Single(Expr),
+    Single(CompiledColorExpr),
     Rgb(Box<[CompiledNumberExpr; 3]>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EvaluatedColorArguments {
+    Single(i32),
+    Rgb(i32, i32, i32),
 }
 
 #[derive(Debug, Clone)]
 struct CompiledPlot {
     x: CompiledNumberExpr,
     y: CompiledNumberExpr,
-    color: Option<Expr>,
+    color: Option<CompiledColorExpr>,
     relative: bool,
 }
 
 #[derive(Debug, Clone)]
 struct CompiledRect {
-    x1: Expr,
-    y1: Expr,
-    x2: Expr,
-    y2: Expr,
-    color: Option<Expr>,
-    fast: Option<CompiledFastRect>,
+    x1: CompiledNumberExpr,
+    y1: CompiledNumberExpr,
+    x2: CompiledNumberExpr,
+    y2: CompiledNumberExpr,
+    color: Option<CompiledColorExpr>,
     filled: bool,
-}
-
-#[derive(Debug, Clone)]
-struct CompiledFastRect {
-    x1: FastNumberExpr,
-    y1: FastNumberExpr,
-    x2: FastNumberExpr,
-    y2: FastNumberExpr,
-    color: Option<FastNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -552,6 +555,7 @@ struct CachedTexture {
 enum FastNumberExpr {
     Number(f64),
     Var(String),
+    Function0(FastZeroArgFunction),
     Array1 {
         name: String,
         index: Box<FastNumberExpr>,
@@ -576,6 +580,12 @@ enum FastNumberExpr {
         left: Box<FastNumberExpr>,
         right: Box<FastNumberExpr>,
     },
+    BinaryConst {
+        op: BinaryOp,
+        expr: Box<FastNumberExpr>,
+        constant: f64,
+        constant_left: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -587,16 +597,60 @@ enum FastNumberFunction {
     Cos,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FastZeroArgFunction {
+    Rnd,
+    Time,
+    Err,
+    Erl,
+    Width,
+    Height,
+    Xmin,
+    Xmax,
+    Ymin,
+    Ymax,
+    Border,
+    Xpos,
+    Ypos,
+    Hpos,
+    Vpos,
+}
+
 #[derive(Debug, Clone)]
 struct CompiledTriangle {
-    x0: Expr,
-    y0: Expr,
-    x1: Expr,
-    y1: Expr,
-    x2: Expr,
-    y2: Expr,
-    color: Option<Expr>,
+    x0: CompiledNumberExpr,
+    y0: CompiledNumberExpr,
+    x1: CompiledNumberExpr,
+    y1: CompiledNumberExpr,
+    x2: CompiledNumberExpr,
+    y2: CompiledNumberExpr,
+    color: Option<CompiledColorExpr>,
     filled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledCircle {
+    x: CompiledNumberExpr,
+    y: CompiledNumberExpr,
+    radius: CompiledNumberExpr,
+    color: Option<CompiledColorExpr>,
+    start: Option<CompiledNumberExpr>,
+    end: Option<CompiledNumberExpr>,
+    aspect: Option<CompiledNumberExpr>,
+    relative: bool,
+    filled: bool,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledFill {
+    Current {
+        color: Option<CompiledColorExpr>,
+    },
+    Position {
+        x: CompiledNumberExpr,
+        y: CompiledNumberExpr,
+        color: Option<CompiledColorExpr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -685,6 +739,8 @@ enum CachedCommand {
     },
     Rect(Rc<CompiledRect>),
     Triangle(Rc<CompiledTriangle>),
+    Circle(Rc<CompiledCircle>),
+    Fill(Rc<CompiledFill>),
     TexturedRect(Rc<CompiledTexturedRect>),
     TexturedTriangle(Rc<CompiledTexturedTriangle>),
     TexturedQuad(Rc<CompiledTexturedQuad>),
@@ -753,11 +809,50 @@ impl CompiledNumberExpr {
     }
 }
 
+impl CompiledColorExpr {
+    fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<i32> {
+        let result = if let Some(fast) = &self.fast_numeric {
+            fast.eval(interpreter).and_then(color_number_from_number)
+        } else if self.is_numeric {
+            eval_compiled_number(interpreter, &self.expr).and_then(color_number_from_number)
+        } else {
+            eval_compiled(interpreter, &self.expr).and_then(color_number_from_value)
+        };
+        result.map_err(|e| interpreter.with_current_line(e))
+    }
+}
+
 impl FastNumberExpr {
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
         match self {
             FastNumberExpr::Number(value) => Ok(*value),
             FastNumberExpr::Var(name) => interpreter.get_fast_number_variable(name),
+            FastNumberExpr::Function0(function) => Ok(match function {
+                FastZeroArgFunction::Rnd => interpreter.rng.next_f64(),
+                FastZeroArgFunction::Time => SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64(),
+                FastZeroArgFunction::Err => interpreter
+                    .last_error
+                    .as_ref()
+                    .map_or(0.0, |state| state.number as f64),
+                FastZeroArgFunction::Erl => interpreter
+                    .last_error
+                    .as_ref()
+                    .map_or(0.0, |state| state.line as f64),
+                FastZeroArgFunction::Width => interpreter.graphics.width as f64,
+                FastZeroArgFunction::Height => interpreter.graphics.height as f64,
+                FastZeroArgFunction::Xmin => interpreter.graphics.scale_bounds().0,
+                FastZeroArgFunction::Xmax => interpreter.graphics.scale_bounds().1,
+                FastZeroArgFunction::Ymin => interpreter.graphics.scale_bounds().2,
+                FastZeroArgFunction::Ymax => interpreter.graphics.scale_bounds().3,
+                FastZeroArgFunction::Border => interpreter.graphics.scale_border() as f64,
+                FastZeroArgFunction::Xpos => interpreter.graphics.xpos(),
+                FastZeroArgFunction::Ypos => interpreter.graphics.ypos(),
+                FastZeroArgFunction::Hpos => interpreter.graphics.hpos() as f64,
+                FastZeroArgFunction::Vpos => interpreter.graphics.vpos() as f64,
+            }),
             FastNumberExpr::Array1 { name, index } => {
                 let index = eval_fast_index(interpreter, index)?;
                 interpreter.get_array_number(name, &[index])
@@ -823,44 +918,61 @@ impl FastNumberExpr {
             FastNumberExpr::Binary { op, left, right } => {
                 let left = left.eval(interpreter)?;
                 let right = right.eval(interpreter)?;
-                match op {
-                    BinaryOp::Add => checked_number(left + right),
-                    BinaryOp::Sub => checked_number(left - right),
-                    BinaryOp::Mul => checked_number(left * right),
-                    BinaryOp::Div => {
-                        if right == 0.0 {
-                            Err(BasicError::new(ErrorCode::DivisionByZero))
-                        } else {
-                            checked_number(left / right)
-                        }
-                    }
-                    BinaryOp::IntDiv => {
-                        if right == 0.0 {
-                            Err(BasicError::new(ErrorCode::DivisionByZero))
-                        } else {
-                            checked_number((left / right).floor())
-                        }
-                    }
-                    BinaryOp::Mod => {
-                        if right == 0.0 {
-                            Err(BasicError::new(ErrorCode::DivisionByZero))
-                        } else {
-                            checked_number(left % right)
-                        }
-                    }
-                    BinaryOp::Pow => checked_number(left.powf(right)),
-                    BinaryOp::Eq => Ok(if left == right { -1.0 } else { 0.0 }),
-                    BinaryOp::Ne => Ok(if left != right { -1.0 } else { 0.0 }),
-                    BinaryOp::Lt => Ok(if left < right { -1.0 } else { 0.0 }),
-                    BinaryOp::Gt => Ok(if left > right { -1.0 } else { 0.0 }),
-                    BinaryOp::Le => Ok(if left <= right { -1.0 } else { 0.0 }),
-                    BinaryOp::Ge => Ok(if left >= right { -1.0 } else { 0.0 }),
-                    BinaryOp::And => Ok((logical_round(left) & logical_round(right)) as f64),
-                    BinaryOp::Xor => Ok((logical_round(left) ^ logical_round(right)) as f64),
-                    BinaryOp::Or => Ok((logical_round(left) | logical_round(right)) as f64),
+                eval_fast_binary(*op, left, right)
+            }
+            FastNumberExpr::BinaryConst {
+                op,
+                expr,
+                constant,
+                constant_left,
+            } => {
+                let value = expr.eval(interpreter)?;
+                if *constant_left {
+                    eval_fast_binary(*op, *constant, value)
+                } else {
+                    eval_fast_binary(*op, value, *constant)
                 }
             }
         }
+    }
+}
+
+fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
+    match op {
+        BinaryOp::Add => checked_number(left + right),
+        BinaryOp::Sub => checked_number(left - right),
+        BinaryOp::Mul => checked_number(left * right),
+        BinaryOp::Div => {
+            if right == 0.0 {
+                Err(BasicError::new(ErrorCode::DivisionByZero))
+            } else {
+                checked_number(left / right)
+            }
+        }
+        BinaryOp::IntDiv => {
+            if right == 0.0 {
+                Err(BasicError::new(ErrorCode::DivisionByZero))
+            } else {
+                checked_number((left / right).floor())
+            }
+        }
+        BinaryOp::Mod => {
+            if right == 0.0 {
+                Err(BasicError::new(ErrorCode::DivisionByZero))
+            } else {
+                checked_number(left % right)
+            }
+        }
+        BinaryOp::Pow => checked_number(left.powf(right)),
+        BinaryOp::Eq => Ok(if left == right { -1.0 } else { 0.0 }),
+        BinaryOp::Ne => Ok(if left != right { -1.0 } else { 0.0 }),
+        BinaryOp::Lt => Ok(if left < right { -1.0 } else { 0.0 }),
+        BinaryOp::Gt => Ok(if left > right { -1.0 } else { 0.0 }),
+        BinaryOp::Le => Ok(if left <= right { -1.0 } else { 0.0 }),
+        BinaryOp::Ge => Ok(if left >= right { -1.0 } else { 0.0 }),
+        BinaryOp::And => Ok((logical_round(left) & logical_round(right)) as f64),
+        BinaryOp::Xor => Ok((logical_round(left) ^ logical_round(right)) as f64),
+        BinaryOp::Or => Ok((logical_round(left) | logical_round(right)) as f64),
     }
 }
 
@@ -2036,6 +2148,10 @@ impl Interpreter {
             return Ok(());
         }
         self.test_interrupt_requested = false;
+        if self.graphics_window_closed_by_current_run {
+            self.graphics.reset_state();
+            self.graphics_window_dirty = false;
+        }
         console::flush_pending_input();
         self.key_queue.clear();
         self.mouse_event_queue.clear();
@@ -2253,6 +2369,9 @@ impl Interpreter {
             "MODE" => {
                 self.graphics_window_suppressed = false;
                 let width = self.eval_number(command[4..].trim())? as usize;
+                if matches!(width, 640 | 800 | 1024) && width != self.graphics.width {
+                    self.graphics_window = None;
+                }
                 self.graphics.set_mode(width)?;
                 self.present_graphics_window()
             }
@@ -2272,14 +2391,12 @@ impl Interpreter {
             "INK" => {
                 self.ensure_graphics_window()?;
                 let color = self.eval_color_arguments(command[3..].trim())?;
-                self.graphics.set_ink(color);
-                Ok(())
+                self.set_ink_arguments(color)
             }
             "PAPER" => {
                 self.ensure_graphics_window()?;
                 let color = self.eval_color_arguments(command[5..].trim())?;
-                self.graphics.set_paper(color);
-                Ok(())
+                self.set_paper_arguments(color)
             }
             "PLOT" => self.execute_plot(command[4..].trim(), false),
             "PLOTR" => self.execute_plot(command[5..].trim(), true),
@@ -2432,6 +2549,8 @@ impl Interpreter {
             }
             CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
             CachedCommand::Triangle(compiled) => self.execute_compiled_triangle(compiled.as_ref()),
+            CachedCommand::Circle(compiled) => self.execute_compiled_circle(compiled.as_ref()),
+            CachedCommand::Fill(compiled) => self.execute_compiled_fill(compiled.as_ref()),
             CachedCommand::TexturedRect(compiled) => {
                 self.execute_compiled_textured_rect(compiled.as_ref())
             }
@@ -2987,23 +3106,50 @@ impl Interpreter {
     fn eval_compiled_color_arguments(
         &mut self,
         compiled: &CompiledColorArguments,
-    ) -> BasicResult<i32> {
+    ) -> BasicResult<EvaluatedColorArguments> {
         match compiled {
-            CompiledColorArguments::Single(expr) => self.eval_compiled_color(expr),
+            CompiledColorArguments::Single(expr) => {
+                expr.eval(self).map(EvaluatedColorArguments::Single)
+            }
             CompiledColorArguments::Rgb(rgb) => {
                 let red = rgb[0].eval(self).map_err(|e| self.with_current_line(e))? as i32;
                 let green = rgb[1].eval(self).map_err(|e| self.with_current_line(e))? as i32;
                 let blue = rgb[2].eval(self).map_err(|e| self.with_current_line(e))? as i32;
-                rgb_number(red, green, blue).map_err(|e| self.with_current_line(e))
+                Ok(EvaluatedColorArguments::Rgb(red, green, blue))
             }
+        }
+    }
+
+    fn set_ink_arguments(&mut self, color: EvaluatedColorArguments) -> BasicResult<()> {
+        match color {
+            EvaluatedColorArguments::Single(color) => {
+                self.graphics.set_ink(color);
+                Ok(())
+            }
+            EvaluatedColorArguments::Rgb(r, g, b) => self
+                .graphics
+                .set_ink_rgb(r, g, b)
+                .map_err(|e| self.with_current_line(e)),
+        }
+    }
+
+    fn set_paper_arguments(&mut self, color: EvaluatedColorArguments) -> BasicResult<()> {
+        match color {
+            EvaluatedColorArguments::Single(color) => {
+                self.graphics.set_paper(color);
+                Ok(())
+            }
+            EvaluatedColorArguments::Rgb(r, g, b) => self
+                .graphics
+                .set_paper_rgb(r, g, b)
+                .map_err(|e| self.with_current_line(e)),
         }
     }
 
     fn execute_compiled_ink(&mut self, compiled: &CompiledColorArguments) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         let color = self.eval_compiled_color_arguments(compiled)?;
-        self.graphics.set_ink(color);
-        Ok(())
+        self.set_ink_arguments(color)
     }
 
     fn execute_compiled_plot(&mut self, compiled: &CompiledPlot) -> BasicResult<()> {
@@ -3019,7 +3165,7 @@ impl Interpreter {
         let color = compiled
             .color
             .as_ref()
-            .map(|expr| self.eval_compiled_color(expr))
+            .map(|expr| expr.eval(self))
             .transpose()?;
         if compiled.relative {
             self.graphics
@@ -3050,56 +3196,6 @@ impl Interpreter {
     }
 
     fn execute_compiled_rect(&mut self, compiled: &CompiledRect) -> BasicResult<()> {
-        if let Some(fast) = &compiled.fast {
-            return self.execute_compiled_fast_rect(fast, compiled.filled);
-        }
-        let window_blocked = self.graphics_window_blocked();
-        if !window_blocked {
-            self.ensure_graphics_window()?;
-        }
-        let x1 = eval_compiled_number(self, &compiled.x1).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let y1 = eval_compiled_number(self, &compiled.y1).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let x2 = eval_compiled_number(self, &compiled.x2).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let y2 = eval_compiled_number(self, &compiled.y2).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let color = compiled
-            .color
-            .as_ref()
-            .map(|expr| self.eval_compiled_color(expr))
-            .transpose()?;
-        self.graphics
-            .rectangle(x1, y1, x2, y2, color, compiled.filled);
-        if window_blocked {
-            Ok(())
-        } else {
-            self.refresh_graphics_window_after_ensure()
-        }
-    }
-
-    fn execute_compiled_fast_rect(
-        &mut self,
-        compiled: &CompiledFastRect,
-        filled: bool,
-    ) -> BasicResult<()> {
         let window_blocked = self.graphics_window_blocked();
         if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
             self.ensure_graphics_window()?;
@@ -3123,18 +3219,15 @@ impl Interpreter {
         let color = compiled
             .color
             .as_ref()
-            .map(|expr| {
-                expr.eval(self)
-                    .and_then(color_number_from_number)
-                    .map_err(|e| self.with_current_line(e))
-            })
+            .map(|expr| expr.eval(self))
             .transpose()?;
-        if !filled
+        if !compiled.filled
             || !self
                 .graphics
                 .filled_rectangle_unscaled(x1, y1, x2, y2, color)
         {
-            self.graphics.rectangle(x1, y1, x2, y2, color, filled);
+            self.graphics
+                .rectangle(x1, y1, x2, y2, color, compiled.filled);
         }
         if window_blocked {
             Ok(())
@@ -3145,52 +3238,126 @@ impl Interpreter {
 
     fn execute_compiled_triangle(&mut self, compiled: &CompiledTriangle) -> BasicResult<()> {
         let window_blocked = self.graphics_window_blocked();
-        if !window_blocked {
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
             self.ensure_graphics_window()?;
         }
-        let x0 = eval_compiled_number(self, &compiled.x0).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let y0 = eval_compiled_number(self, &compiled.y0).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let x1 = eval_compiled_number(self, &compiled.x1).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let y1 = eval_compiled_number(self, &compiled.y1).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let x2 = eval_compiled_number(self, &compiled.x2).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
-        let y2 = eval_compiled_number(self, &compiled.y2).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })?;
+        let x0 = compiled
+            .x0
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y0 = compiled
+            .y0
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let x1 = compiled
+            .x1
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y1 = compiled
+            .y1
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let x2 = compiled
+            .x2
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y2 = compiled
+            .y2
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
         let color = compiled
             .color
             .as_ref()
-            .map(|expr| self.eval_compiled_color(expr))
+            .map(|expr| expr.eval(self))
             .transpose()?;
         self.graphics
             .triangle(x0, y0, x1, y1, x2, y2, color, compiled.filled);
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_circle(&mut self, compiled: &CompiledCircle) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
+            self.ensure_graphics_window()?;
+        }
+        let x_arg = compiled
+            .x
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let x = if compiled.relative {
+            self.graphics.xpos() + x_arg
+        } else {
+            x_arg
+        };
+        let y_arg = compiled
+            .y
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y = if compiled.relative {
+            self.graphics.ypos() + y_arg
+        } else {
+            y_arg
+        };
+        let radius = compiled
+            .radius
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let color = compiled
+            .color
+            .as_ref()
+            .map(|expr| expr.eval(self))
+            .transpose()?;
+        let mut start = compiled
+            .start
+            .as_ref()
+            .map(|expr| expr.eval(self).map_err(|e| self.with_current_line(e)))
+            .transpose()?;
+        let mut end = compiled
+            .end
+            .as_ref()
+            .map(|expr| expr.eval(self).map_err(|e| self.with_current_line(e)))
+            .transpose()?;
+        let aspect = compiled
+            .aspect
+            .as_ref()
+            .map(|expr| expr.eval(self).map_err(|e| self.with_current_line(e)))
+            .transpose()?
+            .unwrap_or(1.0);
+        if self.angle_degrees {
+            start = start.map(f64::to_radians);
+            end = end.map(f64::to_radians);
+        }
+        self.graphics
+            .circle_arc(x, y, radius, color, compiled.filled, start, end, aspect)?;
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
+    }
+
+    fn execute_compiled_fill(&mut self, compiled: &CompiledFill) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
+            self.ensure_graphics_window()?;
+        }
+        match compiled {
+            CompiledFill::Current { color } => {
+                let color = color.as_ref().map(|expr| expr.eval(self)).transpose()?;
+                self.graphics
+                    .fill(self.graphics.xpos(), self.graphics.ypos(), color);
+            }
+            CompiledFill::Position { x, y, color } => {
+                let x = x.eval(self).map_err(|e| self.with_current_line(e))?;
+                let y = y.eval(self).map_err(|e| self.with_current_line(e))?;
+                let color = color.as_ref().map(|expr| expr.eval(self)).transpose()?;
+                self.graphics.fill(x, y, color);
+            }
+        }
         if window_blocked {
             Ok(())
         } else {
@@ -3339,20 +3506,6 @@ impl Interpreter {
                 e
             })?;
         Texture::from_gscr(&text).map(Rc::new).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })
-    }
-
-    fn eval_compiled_color(&mut self, expr: &Expr) -> BasicResult<i32> {
-        let result = if expr.is_statically_numeric() {
-            eval_compiled_number(self, expr).and_then(color_number_from_number)
-        } else {
-            eval_compiled(self, expr).and_then(color_number_from_value)
-        };
-        result.map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -6289,6 +6442,7 @@ impl Interpreter {
             }
             window.clear_transient_input();
             self.graphics_window = Some(window);
+            self.graphics.clear_damage();
             self.graphics_window_dirty = false;
             self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
@@ -6342,6 +6496,7 @@ impl Interpreter {
             }
             window.clear_transient_input();
             self.graphics_window = Some(window);
+            self.graphics.clear_damage();
             self.graphics_window_dirty = false;
             self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
@@ -6354,6 +6509,7 @@ impl Interpreter {
                 user_closed = true;
             } else {
                 let mouse_state = window.present(&self.graphics)?;
+                self.graphics.clear_damage();
                 user_closed = !window.is_open();
                 self.update_mouse_state(mouse_state);
             }
@@ -6652,7 +6808,9 @@ impl Interpreter {
         let interrupt_current_run = self.current_run_uses_graphics_window();
         self.graphics_window = None;
         self.graphics_window_suppressed = interrupt_current_run;
-        self.graphics.reset_state();
+        if !interrupt_current_run {
+            self.graphics.reset_state();
+        }
         self.graphics_window_dirty = false;
         self.graphics_window_pump_check_skip = 0;
         self.last_frame_command_present = None;
@@ -6675,15 +6833,17 @@ impl Interpreter {
         color_number_from_value(self.eval_value(expr)?)
     }
 
-    fn eval_color_arguments(&mut self, args: &str) -> BasicResult<i32> {
+    fn eval_color_arguments(&mut self, args: &str) -> BasicResult<EvaluatedColorArguments> {
         let parts = split_arguments(args);
         match parts.len() {
-            1 => self.eval_color(&parts[0]),
+            1 => self
+                .eval_color(&parts[0])
+                .map(EvaluatedColorArguments::Single),
             3 => {
                 let r = self.eval_number(&parts[0])? as i32;
                 let g = self.eval_number(&parts[1])? as i32;
                 let b = self.eval_number(&parts[2])? as i32;
-                rgb_number(r, g, b)
+                Ok(EvaluatedColorArguments::Rgb(r, g, b))
             }
             _ => Err(self.err(ErrorCode::ArgumentMismatch)),
         }
@@ -6934,6 +7094,11 @@ impl Interpreter {
 
     fn execute_fill(&mut self, args: &str) -> BasicResult<()> {
         self.ensure_graphics_window()?;
+        if args.trim().is_empty() {
+            self.graphics
+                .fill(self.graphics.xpos(), self.graphics.ypos(), None);
+            return self.refresh_graphics_window();
+        }
         let parts = split_arguments(args);
         match parts.len() {
             0 => self
@@ -7987,6 +8152,21 @@ impl Interpreter {
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "FTRIANGLE" => compile_triangle_statement(trimmed[9..].trim(), true)
                 .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "CIRCLE" => compile_circle_statement(trimmed[6..].trim(), false, false)
+                .map(|compiled| CachedCommand::Circle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "CIRCLER" => compile_circle_statement(trimmed[7..].trim(), true, false)
+                .map(|compiled| CachedCommand::Circle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "FCIRCLE" => compile_circle_statement(trimmed[7..].trim(), false, true)
+                .map(|compiled| CachedCommand::Circle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "FCIRCLER" => compile_circle_statement(trimmed[8..].trim(), true, true)
+                .map(|compiled| CachedCommand::Circle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "FILL" => compile_fill_statement(trimmed[4..].trim())
+                .map(|compiled| CachedCommand::Fill(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "TTRIANGLE" => compile_textured_triangle_statement(trimmed[9..].trim())
                 .map(|compiled| CachedCommand::TexturedTriangle(Rc::new(compiled)))
@@ -9595,7 +9775,10 @@ mod interpreter_tests {
                 r##"10 R=1:G=2:B=3
 20 INK R,G,B
 30 X=4:Y=5:PLOT X,Y
-40 INK "#00FF00":PLOTR 1,2"##,
+40 INK "#00FF00":PLOTR 1,2
+50 R=0:G=0:B=12:INK R,G,B:PLOT 10,10
+60 B=13:INK R,G,B:PLOT 11,10
+70 INK 13:PLOT 12,10"##,
             )
             .unwrap();
 
@@ -9603,8 +9786,74 @@ mod interpreter_tests {
 
         assert_eq!(interp.graphics.test(4.0, 5.0), 0x010203);
         assert_eq!(interp.graphics.test(5.0, 7.0), 0x00ff00);
-        assert_eq!(interp.graphics.xpos(), 5.0);
-        assert_eq!(interp.graphics.ypos(), 7.0);
+        assert_eq!(interp.graphics.test(10.0, 10.0), 0x00000c);
+        assert_eq!(interp.graphics.test(11.0, 10.0), 0x00000d);
+        assert_eq!(interp.graphics.test(12.0, 10.0), 0xadd8e6);
+        assert_eq!(interp.graphics.xpos(), 12.0);
+        assert_eq!(interp.graphics.ypos(), 10.0);
+
+        interp.process_immediate("PAPER 0,0,13").unwrap();
+        interp.process_immediate("CLG").unwrap();
+        assert_eq!(interp.graphics.test(0.0, 0.0), 0x00000d);
+
+        interp.process_immediate("PAPER 13").unwrap();
+        interp.process_immediate("CLG").unwrap();
+        assert_eq!(interp.graphics.test(0.0, 0.0), 0xadd8e6);
+    }
+
+    #[test]
+    fn cached_filled_shapes_match_immediate_execution() {
+        let commands = [
+            "CLG",
+            "C=66051:X=20:Y=20",
+            "FRECTANGLE X,Y,X+40,Y+30,C",
+            r##"FTRIANGLE 80,20,140,25,100,80,"#040506""##,
+            "FCIRCLE 190,45,24,460809,.6",
+            "RANDOMIZE 1234",
+            r##"FRECTANGLE RND*WIDTH,RND*HEIGHT,RND*WIDTH,RND*HEIGHT,"#292A2B""##,
+            r##"FTRIANGLE RND*WIDTH,RND*HEIGHT,RND*WIDTH,RND*HEIGHT,RND*WIDTH,RND*HEIGHT,"#2C2D2E""##,
+            r##"FCIRCLE RND*WIDTH,RND*HEIGHT,8+RND*24,"#2F3031",.5+RND"##,
+            "DEG",
+            r##"FCIRCLE 260,45,28,"#0A0B0C",15,250,1.4"##,
+            "RAD",
+            "MOVE 330,45",
+            r##"FCIRCLER 25,10,18,"#0D0E0F""##,
+            r##"RECTANGLE 390,20,450,80,"#101112""##,
+            r##"FILL 420,50,"#131415""##,
+            r##"RECTANGLE 480,20,540,80,"#161718""##,
+            "MOVE 510,50",
+            r##"FILL "#191A1B""##,
+            r##"INK "#222324":RECTANGLE 560,20,620,80,"#161718":FILL 590,50"##,
+            r##"INK "#252627":RECTANGLE 10,100,60,150,"#161718":MOVE 35,125:FILL"##,
+            "ORIGIN 0,0,30,610,450,30",
+            r##"FRECTANGLE -50,-50,90,90,"#1C1D1E""##,
+            r##"FTRIANGLE 500,400,680,300,560,560,"#1F2021""##,
+            "ORIGIN 0,0",
+        ];
+
+        let mut cached = Interpreter::new();
+        cached.graphics_window_enabled = false;
+        let program = commands
+            .iter()
+            .enumerate()
+            .map(|(index, command)| format!("{} {command}", (index + 1) * 10))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cached.program.load_text(&program).unwrap();
+        cached.run_loaded().unwrap();
+
+        let mut immediate = Interpreter::new();
+        immediate.graphics_window_enabled = false;
+        for command in commands {
+            immediate.process_immediate(command).unwrap();
+        }
+
+        assert_eq!(
+            cached.graphics.capture_screen(),
+            immediate.graphics.capture_screen()
+        );
+        assert_eq!(cached.graphics.xpos(), immediate.graphics.xpos());
+        assert_eq!(cached.graphics.ypos(), immediate.graphics.ypos());
     }
 
     #[test]
@@ -9645,6 +9894,28 @@ mod interpreter_tests {
 
         assert!(interp.test_interrupt_requested);
         assert!(interp.graphics_window_suppressed);
+    }
+
+    #[test]
+    fn closing_graphics_window_preserves_sprites_until_interrupt_is_delivered() {
+        let mut interp = Interpreter::new();
+        interp.current_line = Some(20);
+        interp.graphics_window_used_this_run = true;
+        interp
+            .graphics
+            .draw_sprite("1x1:010203", 0.0, 0.0, None, Some(1), false)
+            .unwrap();
+
+        interp.mark_graphics_window_user_closed();
+
+        assert!(interp.graphics.sprite_move(1, 1.0, 1.0, None).is_ok());
+        assert!(interp
+            .check_user_interrupt(&Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            })
+            .is_err());
+        assert!(interp.graphics.sprite_move(1, 2.0, 2.0, None).is_err());
     }
 
     #[test]
@@ -11536,11 +11807,24 @@ fn compile_mid_assignment_statement(source: &str) -> BasicResult<CompiledMidAssi
     })
 }
 
+fn compile_color_expression(source: &str) -> BasicResult<CompiledColorExpr> {
+    let expr = compile_expression(source)?;
+    let is_numeric = expr.is_statically_numeric();
+    let fast_numeric = is_numeric
+        .then(|| compile_fast_number_expr(&expr, true))
+        .flatten();
+    Ok(CompiledColorExpr {
+        expr,
+        fast_numeric,
+        is_numeric,
+    })
+}
+
 fn compile_color_arguments(source: &str) -> BasicResult<CompiledColorArguments> {
     let args = split_arguments(source);
     match args.as_slice() {
         [color] if !color.trim().is_empty() => Ok(CompiledColorArguments::Single(
-            compile_expression(color.trim())?,
+            compile_color_expression(color.trim())?,
         )),
         [red, green, blue]
             if !red.trim().is_empty() && !green.trim().is_empty() && !blue.trim().is_empty() =>
@@ -11565,7 +11849,7 @@ fn compile_plot_statement(source: &str, relative: bool) -> BasicResult<CompiledP
         y: compile_number_expression(args[1].trim())?,
         color: args
             .get(2)
-            .map(|arg| compile_expression(arg.trim()))
+            .map(|arg| compile_color_expression(arg.trim()))
             .transpose()?,
         relative,
     })
@@ -11587,58 +11871,40 @@ fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRec
     if !(4..=5).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    let x1 = compile_expression(args[0].trim())?;
-    let y1 = compile_expression(args[1].trim())?;
-    let x2 = compile_expression(args[2].trim())?;
-    let y2 = compile_expression(args[3].trim())?;
-    let color = args
-        .get(4)
-        .map(|arg| compile_expression(arg.trim()))
-        .transpose()?;
-    let fast = compile_fast_rect(&x1, &y1, &x2, &y2, color.as_ref());
     Ok(CompiledRect {
-        x1,
-        y1,
-        x2,
-        y2,
-        color,
-        fast,
+        x1: compile_number_expression(args[0].trim())?,
+        y1: compile_number_expression(args[1].trim())?,
+        x2: compile_number_expression(args[2].trim())?,
+        y2: compile_number_expression(args[3].trim())?,
+        color: args
+            .get(4)
+            .map(|arg| compile_color_expression(arg.trim()))
+            .transpose()?,
         filled,
-    })
-}
-
-fn compile_fast_rect(
-    x1: &Expr,
-    y1: &Expr,
-    x2: &Expr,
-    y2: &Expr,
-    color: Option<&Expr>,
-) -> Option<CompiledFastRect> {
-    Some(CompiledFastRect {
-        x1: compile_fast_number_expr(x1, true)?,
-        y1: compile_fast_number_expr(y1, true)?,
-        x2: compile_fast_number_expr(x2, true)?,
-        y2: compile_fast_number_expr(y2, true)?,
-        color: match color {
-            Some(expr) => Some(compile_fast_number_expr(expr, true)?),
-            None => None,
-        },
     })
 }
 
 fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
     match expr {
         Expr::Number(value) => Some(FastNumberExpr::Number(*value)),
-        Expr::Var(name) if is_pi_constant_name(name) => {
-            Some(FastNumberExpr::Number(std::f64::consts::PI))
+        Expr::Var(name) => {
+            if is_pi_constant_name(name) {
+                Some(FastNumberExpr::Number(std::f64::consts::PI))
+            } else if let Some(function) = compile_fast_zero_arg_function(name) {
+                Some(FastNumberExpr::Function0(function))
+            } else if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name)
+            {
+                Some(FastNumberExpr::Var(name.clone()))
+            } else {
+                None
+            }
         }
-        Expr::Var(name)
-            if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name) =>
-        {
-            Some(FastNumberExpr::Var(name.clone()))
-        }
-        Expr::ArrayOrCall { name, args, .. } if args.is_empty() && is_pi_constant_name(name) => {
-            Some(FastNumberExpr::Number(std::f64::consts::PI))
+        Expr::ArrayOrCall { name, args, .. } if args.is_empty() => {
+            if is_pi_constant_name(name) {
+                Some(FastNumberExpr::Number(std::f64::consts::PI))
+            } else {
+                compile_fast_zero_arg_function(name).map(FastNumberExpr::Function0)
+            }
         }
         Expr::ArrayOrCall { name, args, kind }
             if allow_arrays && !name.ends_with('$') && *kind == ArrayOrCallKind::Array =>
@@ -11687,13 +11953,52 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
             op: *op,
             expr: Box::new(compile_fast_number_expr(expr, allow_arrays)?),
         }),
-        Expr::Binary { op, left, right } => Some(FastNumberExpr::Binary {
-            op: *op,
-            left: Box::new(compile_fast_number_expr(left, allow_arrays)?),
-            right: Box::new(compile_fast_number_expr(right, allow_arrays)?),
-        }),
+        Expr::Binary { op, left, right } => {
+            let left = compile_fast_number_expr(left, allow_arrays)?;
+            let right = compile_fast_number_expr(right, allow_arrays)?;
+            Some(match (left, right) {
+                (FastNumberExpr::Number(constant), expr) => FastNumberExpr::BinaryConst {
+                    op: *op,
+                    expr: Box::new(expr),
+                    constant,
+                    constant_left: true,
+                },
+                (expr, FastNumberExpr::Number(constant)) => FastNumberExpr::BinaryConst {
+                    op: *op,
+                    expr: Box::new(expr),
+                    constant,
+                    constant_left: false,
+                },
+                (left, right) => FastNumberExpr::Binary {
+                    op: *op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+            })
+        }
         _ => None,
     }
+}
+
+fn compile_fast_zero_arg_function(name: &str) -> Option<FastZeroArgFunction> {
+    Some(match name {
+        "RND" => FastZeroArgFunction::Rnd,
+        "TIME" => FastZeroArgFunction::Time,
+        "ERR" => FastZeroArgFunction::Err,
+        "ERL" => FastZeroArgFunction::Erl,
+        "WIDTH" => FastZeroArgFunction::Width,
+        "HEIGHT" => FastZeroArgFunction::Height,
+        "XMIN" => FastZeroArgFunction::Xmin,
+        "XMAX" => FastZeroArgFunction::Xmax,
+        "YMIN" => FastZeroArgFunction::Ymin,
+        "YMAX" => FastZeroArgFunction::Ymax,
+        "BORDER" => FastZeroArgFunction::Border,
+        "XPOS" => FastZeroArgFunction::Xpos,
+        "YPOS" => FastZeroArgFunction::Ypos,
+        "HPOS" => FastZeroArgFunction::Hpos,
+        "VPOS" => FastZeroArgFunction::Vpos,
+        _ => return None,
+    })
 }
 
 fn compile_number_expression(source: &str) -> BasicResult<CompiledNumberExpr> {
@@ -11708,18 +12013,85 @@ fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<Compile
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
     Ok(CompiledTriangle {
-        x0: compile_expression(args[0].trim())?,
-        y0: compile_expression(args[1].trim())?,
-        x1: compile_expression(args[2].trim())?,
-        y1: compile_expression(args[3].trim())?,
-        x2: compile_expression(args[4].trim())?,
-        y2: compile_expression(args[5].trim())?,
+        x0: compile_number_expression(args[0].trim())?,
+        y0: compile_number_expression(args[1].trim())?,
+        x1: compile_number_expression(args[2].trim())?,
+        y1: compile_number_expression(args[3].trim())?,
+        x2: compile_number_expression(args[4].trim())?,
+        y2: compile_number_expression(args[5].trim())?,
         color: args
             .get(6)
-            .map(|arg| compile_expression(arg.trim()))
+            .map(|arg| compile_color_expression(arg.trim()))
             .transpose()?,
         filled,
     })
+}
+
+fn compile_circle_statement(
+    source: &str,
+    relative: bool,
+    filled: bool,
+) -> BasicResult<CompiledCircle> {
+    let args = split_arguments(source);
+    if !(3..=7).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    let (start, end, aspect) = if args.len() == 5 {
+        (None, None, Some(compile_number_expression(args[4].trim())?))
+    } else {
+        (
+            args.get(4)
+                .map(|arg| compile_number_expression(arg.trim()))
+                .transpose()?,
+            args.get(5)
+                .map(|arg| compile_number_expression(arg.trim()))
+                .transpose()?,
+            args.get(6)
+                .map(|arg| compile_number_expression(arg.trim()))
+                .transpose()?,
+        )
+    };
+    Ok(CompiledCircle {
+        x: compile_number_expression(args[0].trim())?,
+        y: compile_number_expression(args[1].trim())?,
+        radius: compile_number_expression(args[2].trim())?,
+        color: args
+            .get(3)
+            .map(|arg| compile_color_expression(arg.trim()))
+            .transpose()?,
+        start,
+        end,
+        aspect,
+        relative,
+        filled,
+    })
+}
+
+fn compile_fill_statement(source: &str) -> BasicResult<CompiledFill> {
+    if source.trim().is_empty() {
+        return Ok(CompiledFill::Current { color: None });
+    }
+    let args = split_arguments(source);
+    if args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    match args.as_slice() {
+        [] => Ok(CompiledFill::Current { color: None }),
+        [color] => Ok(CompiledFill::Current {
+            color: Some(compile_color_expression(color.trim())?),
+        }),
+        [x, y] => Ok(CompiledFill::Position {
+            x: compile_number_expression(x.trim())?,
+            y: compile_number_expression(y.trim())?,
+            color: None,
+        }),
+        [x, y, color] => Ok(CompiledFill::Position {
+            x: compile_number_expression(x.trim())?,
+            y: compile_number_expression(y.trim())?,
+            color: Some(compile_color_expression(color.trim())?),
+        }),
+        _ => Err(BasicError::new(ErrorCode::ArgumentMismatch)),
+    }
 }
 
 fn compile_texture_source(source: &str) -> BasicResult<CompiledTextureSource> {

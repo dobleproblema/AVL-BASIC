@@ -2486,6 +2486,23 @@ fn graphics_triangle_axis_and_graph_commands_run() {
 }
 
 #[test]
+fn cached_filled_graphics_commands_preserve_pixels() {
+    let output = run_rust(
+        r#"10 CLG
+20 FRECTANGLE 10,10,30,30,66051
+30 IF TEST(20,20)<>66051 THEN PRINT "BAD RECT":END
+40 FTRIANGLE 40,10,80,10,60,40,263430
+50 IF TEST(60,20)<>263430 THEN PRINT "BAD TRIANGLE":END
+60 FCIRCLE 110,20,12,460809
+70 IF TEST(110,20)<>460809 THEN PRINT "BAD CIRCLE":END
+80 RECTANGLE 140,5,180,35,1:MOVE 160,20:INK 658188:FILL
+90 IF TEST(160,20)<>658188 THEN PRINT "BAD FILL":END
+100 PRINT "OK""#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
 fn mouse_commands_and_functions_are_deterministic_headless() {
     let output = run_rust(
         r#"10 SCREEN

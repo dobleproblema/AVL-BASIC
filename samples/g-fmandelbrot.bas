@@ -23,7 +23,7 @@
 320 PAUSE
 330 REM Zoomed view centered on the pointer coordinates
 340 cx=XPOS : cy=YPOS
-350 MaxIter=MaxIter+20*LOG10(ZoomFactor)
+350 MaxIter=MaxIter+50*LOG10(ZoomFactor)
 360 an=(XMA-XMI)/ZoomFactor : al=an*1.333 'Force a 4:3 aspect ratio
 370 XMI=cx-an/2 : XMA=cx+an/2 : YMI=cy-al/2 : YMA=cy+al/2
 380 GOTO 160

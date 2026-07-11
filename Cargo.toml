@@ -1,6 +1,6 @@
 [package]
 name = "avl-basic"
-version = "1.5.62"
+version = "1.5.63"
 edition = "2021"
 license = "GPL-3.0-or-later"
 build = "build.rs"
@@ -18,6 +18,8 @@ crossterm = "0.27"
 ctrlc = "3"
 minifb = { version = "0.28", default-features = false, features = ["x11"] }
 png = "0.17"
+raw-window-handle = "0.6"
+softbuffer = { version = "0.4.8", default-features = false, features = ["x11", "x11-dlopen"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

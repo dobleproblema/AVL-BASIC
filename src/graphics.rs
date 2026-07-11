@@ -1,9 +1,108 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::fonts::{font_dimensions, glyph_chars, glyph_rows, FontKind};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
+
+const MAX_DAMAGE_RECTS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl DamageRect {
+    fn right(self) -> usize {
+        self.x + self.width
+    }
+
+    fn bottom(self) -> usize {
+        self.y + self.height
+    }
+
+    pub fn area(self) -> usize {
+        self.width * self.height
+    }
+
+    fn union(self, other: Self) -> Self {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = self.right().max(other.right());
+        let bottom = self.bottom().max(other.bottom());
+        Self {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+
+    fn overlaps_or_touches(self, other: Self) -> bool {
+        self.x <= other.right()
+            && other.x <= self.right()
+            && self.y <= other.bottom()
+            && other.y <= self.bottom()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DamageTracker {
+    regions: Vec<DamageRect>,
+}
+
+impl DamageTracker {
+    fn mark(&mut self, rect: DamageRect) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        if self.regions.len() == 1 && self.regions[0].overlaps_or_touches(rect) {
+            self.regions[0] = self.regions[0].union(rect);
+            return;
+        }
+        let mut merged = rect;
+        let mut index = 0;
+        while index < self.regions.len() {
+            if merged.overlaps_or_touches(self.regions[index]) {
+                merged = merged.union(self.regions.swap_remove(index));
+                index = 0;
+            } else {
+                index += 1;
+            }
+        }
+        self.regions.push(merged);
+        while self.regions.len() > MAX_DAMAGE_RECTS {
+            self.merge_cheapest_pair();
+        }
+    }
+
+    fn merge_cheapest_pair(&mut self) {
+        let mut best = (0, 1, usize::MAX);
+        for left in 0..self.regions.len() - 1 {
+            for right in left + 1..self.regions.len() {
+                let a = self.regions[left];
+                let b = self.regions[right];
+                let extra = a
+                    .union(b)
+                    .area()
+                    .saturating_sub(a.area().saturating_add(b.area()));
+                if extra < best.2 {
+                    best = (left, right, extra);
+                }
+            }
+        }
+        let merged = self.regions[best.0].union(self.regions[best.1]);
+        self.regions.swap_remove(best.1);
+        self.regions[best.0] = merged;
+    }
+
+    fn clear(&mut self) {
+        self.regions.clear();
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Graphics {
@@ -44,6 +143,7 @@ pub struct Graphics {
     hit_color_rgb: u32,
     hit_id: i32,
     sprites: HashMap<i32, SpriteMemory>,
+    damage: DamageTracker,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -150,12 +250,24 @@ impl Graphics {
             hit_color_rgb: 0,
             hit_id: 0,
             sprites: HashMap::new(),
+            damage: DamageTracker {
+                regions: vec![DamageRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                }],
+            },
         }
     }
 
     pub fn reset_state(&mut self) {
         let mode = self.width;
+        let mut buffer = std::mem::take(&mut self.buffer);
         *self = Graphics::new(mode);
+        debug_assert_eq!(buffer.len(), self.buffer.len());
+        buffer.fill(self.background_color);
+        self.buffer = buffer;
     }
 
     pub fn reset_window_state_preserving_buffer(&mut self) {
@@ -194,6 +306,8 @@ impl Graphics {
         if !matches!(mode_width, 640 | 800 | 1024) {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
+        let mut reusable_buffer =
+            (mode_width == self.width).then(|| std::mem::take(&mut self.buffer));
         let current_color = self.current_color;
         let background_color = self.background_color;
         let font = self.font;
@@ -203,6 +317,11 @@ impl Graphics {
         self.background_color = background_color;
         self.font = font;
         self.ldir = ldir;
+        if let Some(mut buffer) = reusable_buffer.take() {
+            debug_assert_eq!(buffer.len(), self.buffer.len());
+            buffer.fill(background_color);
+            self.buffer = buffer;
+        }
         self.clg();
         Ok(())
     }
@@ -213,6 +332,12 @@ impl Graphics {
         let top = self.w_top.max(0) as usize;
         let bottom = self.w_bottom.min(self.height as i32 - 1) as usize;
         if left <= right && top <= bottom {
+            self.damage.mark(DamageRect {
+                x: left,
+                y: top,
+                width: right - left + 1,
+                height: bottom - top + 1,
+            });
             for y in top..=bottom {
                 let start = y * self.width + left;
                 let end = y * self.width + right + 1;
@@ -233,8 +358,18 @@ impl Graphics {
         self.current_color = resolve_color_number(color);
     }
 
+    pub fn set_ink_rgb(&mut self, r: i32, g: i32, b: i32) -> BasicResult<()> {
+        self.current_color = rgb_number(r, g, b)? as u32;
+        Ok(())
+    }
+
     pub fn set_paper(&mut self, color: i32) {
         self.background_color = resolve_color_number(color);
+    }
+
+    pub fn set_paper_rgb(&mut self, r: i32, g: i32, b: i32) -> BasicResult<()> {
+        self.background_color = rgb_number(r, g, b)? as u32;
+        Ok(())
     }
 
     pub fn set_pen_width(&mut self, width: i32) -> BasicResult<()> {
@@ -409,6 +544,7 @@ impl Graphics {
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
+        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
         let left = xmin.min(xmax);
         let right = xmin.max(xmax);
         let (axis_start, axis_end) = self.x_axis_canvas_span(y, left, right, border);
@@ -466,6 +602,7 @@ impl Graphics {
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
+        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
         let bottom = ymin.min(ymax);
         let top = ymin.max(ymax);
         let (axis_start, axis_end) = self.y_axis_canvas_span(x, bottom, top, border);
@@ -517,6 +654,17 @@ impl Graphics {
 
     pub fn plot(&mut self, x: f64, y: f64, color: Option<i32>) {
         let (cx, cy) = self.user_to_canvas(x, y);
+        let padding = if self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_canvas_rect(
+            cx.saturating_sub(padding),
+            cy.saturating_sub(padding),
+            cx.saturating_add(padding),
+            cy.saturating_add(padding),
+        );
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -530,6 +678,12 @@ impl Graphics {
     pub fn draw_to(&mut self, x: f64, y: f64, color: Option<i32>) {
         let start = (self.cursor_x, self.logical_y_to_canvas(self.cursor_y));
         let end = self.user_to_canvas(x, y);
+        let padding = if self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_points(&[start, end], padding);
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -543,6 +697,12 @@ impl Graphics {
     pub fn line_between(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, color: Option<i32>) {
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
+        let padding = if self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_points(&[p1, p2], padding);
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -568,6 +728,12 @@ impl Graphics {
         if skip_first_pixel && p1 == p2 {
             return (mask_phase, false);
         }
+        let padding = if self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_points(&[p1, p2], padding);
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -598,6 +764,17 @@ impl Graphics {
         let max_x = ax.max(bx);
         let min_y = ay.min(by);
         let max_y = ay.max(by);
+        let padding = if filled || self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_canvas_rect(
+            min_x.saturating_sub(padding),
+            min_y.saturating_sub(padding),
+            max_x.saturating_add(padding),
+            max_y.saturating_add(padding),
+        );
         if filled {
             self.fill_canvas_rect(min_x, min_y, max_x, max_y, color);
         } else {
@@ -626,6 +803,7 @@ impl Graphics {
         let ay = self.height as i32 - 1 - (y1.round() as i32 + self.origin_y);
         let bx = x2.round() as i32 + self.origin_x;
         let by = self.height as i32 - 1 - (y2.round() as i32 + self.origin_y);
+        self.mark_damage_canvas_rect(ax.min(bx), ay.min(by), ax.max(bx), ay.max(by));
         self.fill_canvas_rect(ax, ay, bx, by, color);
         true
     }
@@ -644,6 +822,14 @@ impl Graphics {
         let p0 = self.user_to_canvas(x0, y0);
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
+        let padding = if filled {
+            1
+        } else if self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_points(&[p0, p1, p2], padding);
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -730,6 +916,7 @@ impl Graphics {
         let p0 = self.user_to_canvas(x0, y0);
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
+        self.mark_damage_points(&[p0, p1, p2], 1);
         let vertices = [
             TexturedVertex {
                 x: p0.0,
@@ -785,6 +972,17 @@ impl Graphics {
         }
         let (cx, cy) = self.user_to_canvas(x, y);
         let (rx, ry) = self.scaled_radii(radius, aspect);
+        let padding = if filled || self.pen_width == 1 {
+            0
+        } else {
+            self.pen_width / 2
+        };
+        self.mark_damage_canvas_rect(
+            cx.saturating_sub(rx.ceil() as i32).saturating_sub(padding),
+            cy.saturating_sub(ry.ceil() as i32).saturating_sub(padding),
+            cx.saturating_add(rx.ceil() as i32).saturating_add(padding),
+            cy.saturating_add(ry.ceil() as i32).saturating_add(padding),
+        );
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -803,28 +1001,67 @@ impl Graphics {
             (start, end)
         };
         if filled {
+            let Some((clip_left, clip_right, clip_top, clip_bottom)) = self.drawable_bounds()
+            else {
+                return Ok(());
+            };
             let y_start = (cy as f64 - ry).trunc() as i32;
             let y_end = (cy as f64 + ry).trunc() as i32;
-            let inv_rx = 1.0 / rx;
+            let draw_top = y_start.max(clip_top);
+            let draw_bottom = y_end.min(clip_bottom);
+            if draw_top > draw_bottom {
+                return Ok(());
+            }
             let inv_ry = 1.0 / ry;
-            for y in y_start..=y_end {
-                let dy = y as f64 - cy as f64;
-                let span = (1.0 - (dy * inv_ry).powi(2)).max(0.0).sqrt() * rx;
-                let x_left = (cx as f64 - span).trunc() as i32;
-                let x_right = (cx as f64 + span).trunc() as i32;
-                if full_circle {
-                    self.fill_scanline(y, x_left as i64, x_right as i64, color);
-                    continue;
-                }
-                let ndy = dy * inv_ry;
-                for x in x_left..=x_right {
-                    let ndx = (x as f64 - cx as f64) * inv_rx;
-                    let mut angle = ndy.atan2(ndx);
-                    if angle < start_angle {
-                        angle += std::f64::consts::TAU;
+            if full_circle {
+                if draw_top <= cy && cy <= draw_bottom {
+                    let max_offset = (cy - draw_top).max(draw_bottom - cy);
+                    for offset in 0..=max_offset {
+                        let dy = offset as f64;
+                        let span = (1.0 - (dy * inv_ry).powi(2)).max(0.0).sqrt() * rx;
+                        let x_left = (cx as f64 - span).trunc() as i32;
+                        let x_right = (cx as f64 + span).trunc() as i32;
+                        let upper = cy - offset;
+                        if upper >= draw_top {
+                            self.fill_scanline_visible(upper, x_left as i64, x_right as i64, color);
+                        }
+                        let lower = cy + offset;
+                        if offset != 0 && lower <= draw_bottom {
+                            self.fill_scanline_visible(lower, x_left as i64, x_right as i64, color);
+                        }
                     }
-                    if angle >= start_angle && angle <= end_angle {
-                        self.set_canvas_pixel(x, y, color);
+                } else {
+                    for y in draw_top..=draw_bottom {
+                        let dy = y as f64 - cy as f64;
+                        let span = (1.0 - (dy * inv_ry).powi(2)).max(0.0).sqrt() * rx;
+                        let x_left = (cx as f64 - span).trunc() as i32;
+                        let x_right = (cx as f64 + span).trunc() as i32;
+                        self.fill_scanline_visible(y, x_left as i64, x_right as i64, color);
+                    }
+                }
+            } else {
+                let inv_rx = 1.0 / rx;
+                for y in draw_top..=draw_bottom {
+                    let dy = y as f64 - cy as f64;
+                    let span = (1.0 - (dy * inv_ry).powi(2)).max(0.0).sqrt() * rx;
+                    let x_left = (cx as f64 - span).trunc() as i32;
+                    let x_right = (cx as f64 + span).trunc() as i32;
+                    let left = x_left.max(clip_left);
+                    let right = x_right.min(clip_right);
+                    if left > right {
+                        continue;
+                    }
+                    let ndy = dy * inv_ry;
+                    let row = y as usize * self.width;
+                    for x in left..=right {
+                        let ndx = (x as f64 - cx as f64) * inv_rx;
+                        let mut angle = ndy.atan2(ndx);
+                        if angle < start_angle {
+                            angle += std::f64::consts::TAU;
+                        }
+                        if angle >= start_angle && angle <= end_angle {
+                            self.buffer[row + x as usize] = color;
+                        }
                     }
                 }
             }
@@ -854,33 +1091,49 @@ impl Graphics {
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
-        if !self.in_drawable_bounds(sx, sy) {
+        let Some((bound_left, bound_right, bound_top, bound_bottom)) = self.drawable_bounds()
+        else {
+            return;
+        };
+        if sx < bound_left || sx > bound_right || sy < bound_top || sy > bound_bottom {
             return;
         }
-        let target = self
-            .get_canvas_pixel(sx, sy)
-            .unwrap_or(self.background_color);
+        let target = self.buffer[sy as usize * self.width + sx as usize];
         if target == color {
             return;
         }
-        let mut queue = VecDeque::new();
-        queue.push_back((sx, sy));
-        while let Some((seed_x, y)) = queue.pop_front() {
-            if !self.fill_target_matches(seed_x, y, target) {
+        let mut changed_left = sx;
+        let mut changed_right = sx;
+        let mut changed_top = sy;
+        let mut changed_bottom = sy;
+        let mut stack = Vec::with_capacity(64);
+        stack.push((sx, sy));
+        while let Some((seed_x, y)) = stack.pop() {
+            let row = y as usize * self.width;
+            if self.buffer[row + seed_x as usize] != target {
                 continue;
             }
             let mut left = seed_x;
-            while self.fill_target_matches(left - 1, y, target) {
+            while left > bound_left && self.buffer[row + left as usize - 1] == target {
                 left -= 1;
             }
             let mut right = seed_x;
-            while self.fill_target_matches(right + 1, y, target) {
+            while right < bound_right && self.buffer[row + right as usize + 1] == target {
                 right += 1;
             }
-            self.fill_scanline(y, left as i64, right as i64, color);
-            self.enqueue_fill_runs(left, right, y - 1, target, &mut queue);
-            self.enqueue_fill_runs(left, right, y + 1, target, &mut queue);
+            self.buffer[row + left as usize..row + right as usize + 1].fill(color);
+            changed_left = changed_left.min(left);
+            changed_right = changed_right.max(right);
+            changed_top = changed_top.min(y);
+            changed_bottom = changed_bottom.max(y);
+            if y > bound_top {
+                self.enqueue_fill_runs(left, right, y - 1, target, &mut stack);
+            }
+            if y < bound_bottom {
+                self.enqueue_fill_runs(left, right, y + 1, target, &mut stack);
+            }
         }
+        self.mark_damage_canvas_rect(changed_left, changed_top, changed_right, changed_bottom);
     }
 
     pub fn locate(&mut self, col: i32, row: i32) {
@@ -909,6 +1162,15 @@ impl Graphics {
         let (cell_w, cell_h) = font_dimensions(self.font);
         let mut x = self.text_col * cell_w;
         let y = self.text_row * cell_h;
+        let char_count = text.chars().count().min(i32::MAX as usize) as i32;
+        if char_count > 0 {
+            self.mark_damage_canvas_rect(
+                x,
+                y,
+                x.saturating_add(char_count.saturating_mul(cell_w)) - 1,
+                y.saturating_add(cell_h) - 1,
+            );
+        }
         for ch in text.chars() {
             self.draw_glyph(x as f64, y as f64, 1.0, 0.0, ch, color, paper, true);
             x += cell_w;
@@ -927,6 +1189,23 @@ impl Graphics {
         let dy = cell_w as f64 * sin_a;
         let mut x = self.cursor_x as f64;
         let mut y = self.logical_y_to_canvas(self.cursor_y) as f64;
+        let char_count = text.chars().count();
+        if char_count > 0 {
+            let (_, cell_h) = font_dimensions(self.font);
+            let text_width = char_count.saturating_mul(cell_w as usize).saturating_sub(1) as f64;
+            let text_height = (cell_h - 1) as f64;
+            let corners = [
+                (x, y),
+                (x + text_width * cos_a, y + text_width * sin_a),
+                (x - text_height * sin_a, y + text_height * cos_a),
+                (
+                    x + text_width * cos_a - text_height * sin_a,
+                    y + text_width * sin_a + text_height * cos_a,
+                ),
+            ];
+            let points = corners.map(|(px, py)| (px.round() as i32, py.round() as i32));
+            self.mark_damage_points(&points, 0);
+        }
         for ch in text.chars() {
             self.draw_glyph(x, y, cos_a, sin_a, ch, color, paper, false);
             x += dx;
@@ -976,8 +1255,9 @@ impl Graphics {
         if w != self.width || h != self.height {
             return Err(BasicError::new(ErrorCode::InvalidValue));
         }
-        self.buffer = pixels;
+        self.buffer.copy_from_slice(&pixels);
         self.owner.fill(0);
+        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
         Ok(())
     }
 
@@ -1037,6 +1317,14 @@ impl Graphics {
         }
         let (left, bottom) = self.user_to_canvas(x, y);
         let top = bottom - h as i32 + 1;
+        if !hittest_only {
+            self.mark_damage_canvas_rect(
+                left,
+                top,
+                left.saturating_add(w as i32).saturating_sub(1),
+                top.saturating_add(h as i32).saturating_sub(1),
+            );
+        }
         let detect_color = matches!(self.collision_mode, 1 | 3);
         let detect_sprite = matches!(self.collision_mode, 2 | 3);
         let mut touched = Vec::new();
@@ -1162,6 +1450,14 @@ impl Graphics {
 
     pub fn buffer(&self) -> &[u32] {
         &self.buffer
+    }
+
+    pub fn damage_regions(&self) -> &[DamageRect] {
+        &self.damage.regions
+    }
+
+    pub fn clear_damage(&mut self) {
+        self.damage.clear();
     }
 
     pub fn xpos(&self) -> f64 {
@@ -1639,16 +1935,22 @@ impl Graphics {
         if y0 == y2 {
             return;
         }
+        let Some((left, right, top, bottom)) = self.drawable_bounds() else {
+            return;
+        };
+        let unclipped = pts
+            .iter()
+            .all(|(x, y)| *x >= left && *x <= right && *y >= top && *y <= bottom);
 
         if y1 == y2 {
-            self.fill_flat_bottom_triangle((x0, y0), (x1, y1), (x2, y2), color);
+            self.fill_flat_bottom_triangle((x0, y0), (x1, y1), (x2, y2), color, unclipped);
         } else if y0 == y1 {
-            self.fill_flat_top_triangle((x0, y0), (x1, y1), (x2, y2), color);
+            self.fill_flat_top_triangle((x0, y0), (x1, y1), (x2, y2), color, unclipped);
         } else {
             let split_x =
                 x0 + floor_div_i64((x2 - x0) as i64 * (y1 - y0) as i64, (y2 - y0) as i64) as i32;
-            self.fill_flat_bottom_triangle((x0, y0), (x1, y1), (split_x, y1), color);
-            self.fill_flat_top_triangle((x1, y1), (split_x, y1), (x2, y2), color);
+            self.fill_flat_bottom_triangle((x0, y0), (x1, y1), (split_x, y1), color, unclipped);
+            self.fill_flat_top_triangle((x1, y1), (split_x, y1), (x2, y2), color, unclipped);
         }
     }
 
@@ -1658,6 +1960,7 @@ impl Graphics {
         b: (i32, i32),
         c: (i32, i32),
         color: u32,
+        unclipped: bool,
     ) {
         let (ax, ay) = a;
         let (bx, by) = b;
@@ -1671,14 +1974,44 @@ impl Graphics {
         let dx2 = floor_div_i64(((cx - ax) as i64) << SHIFT, dy as i64);
         let mut x1_fp = (ax as i64) << SHIFT;
         let mut x2_fp = (ax as i64) << SHIFT;
-        for y in ay..=by {
-            self.fill_scanline(y, x1_fp >> SHIFT, x2_fp >> SHIFT, color);
+        if unclipped {
+            let mut row = ay as usize * self.width;
+            for _ in ay..=by {
+                let left = (x1_fp >> SHIFT).min(x2_fp >> SHIFT) as usize;
+                let right = (x1_fp >> SHIFT).max(x2_fp >> SHIFT) as usize + 1;
+                self.buffer[row + left..row + right].fill(color);
+                row += self.width;
+                x1_fp += dx1;
+                x2_fp += dx2;
+            }
+            return;
+        }
+        let Some((_, _, draw_top, draw_bottom)) = self.drawable_bounds() else {
+            return;
+        };
+        let start_y = ay.max(draw_top);
+        let end_y = by.min(draw_bottom);
+        if start_y > end_y {
+            return;
+        }
+        let skipped = (start_y - ay) as i64;
+        x1_fp += dx1 * skipped;
+        x2_fp += dx2 * skipped;
+        for y in start_y..=end_y {
+            self.fill_scanline_visible(y, x1_fp >> SHIFT, x2_fp >> SHIFT, color);
             x1_fp += dx1;
             x2_fp += dx2;
         }
     }
 
-    fn fill_flat_top_triangle(&mut self, a: (i32, i32), b: (i32, i32), c: (i32, i32), color: u32) {
+    fn fill_flat_top_triangle(
+        &mut self,
+        a: (i32, i32),
+        b: (i32, i32),
+        c: (i32, i32),
+        color: u32,
+        unclipped: bool,
+    ) {
         let (ax, ay) = a;
         let (bx, _) = b;
         let (cx, cy) = c;
@@ -1691,17 +2024,37 @@ impl Graphics {
         let dx2 = floor_div_i64(((cx - bx) as i64) << SHIFT, dy as i64);
         let mut x1_fp = (ax as i64) << SHIFT;
         let mut x2_fp = (bx as i64) << SHIFT;
-        for y in ay..=cy {
-            self.fill_scanline(y, x1_fp >> SHIFT, x2_fp >> SHIFT, color);
+        if unclipped {
+            let mut row = ay as usize * self.width;
+            for _ in ay..=cy {
+                let left = (x1_fp >> SHIFT).min(x2_fp >> SHIFT) as usize;
+                let right = (x1_fp >> SHIFT).max(x2_fp >> SHIFT) as usize + 1;
+                self.buffer[row + left..row + right].fill(color);
+                row += self.width;
+                x1_fp += dx1;
+                x2_fp += dx2;
+            }
+            return;
+        }
+        let Some((_, _, draw_top, draw_bottom)) = self.drawable_bounds() else {
+            return;
+        };
+        let start_y = ay.max(draw_top);
+        let end_y = cy.min(draw_bottom);
+        if start_y > end_y {
+            return;
+        }
+        let skipped = (start_y - ay) as i64;
+        x1_fp += dx1 * skipped;
+        x2_fp += dx2 * skipped;
+        for y in start_y..=end_y {
+            self.fill_scanline_visible(y, x1_fp >> SHIFT, x2_fp >> SHIFT, color);
             x1_fp += dx1;
             x2_fp += dx2;
         }
     }
 
-    fn fill_scanline(&mut self, y: i32, x1: i64, x2: i64, color: u32) {
-        if y < self.w_top || y > self.w_bottom || y < 0 || y >= self.height as i32 {
-            return;
-        }
+    fn fill_scanline_visible(&mut self, y: i32, x1: i64, x2: i64, color: u32) {
         let mut left = x1.min(x2);
         let mut right = x1.max(x2);
         left = left.max(0).max(self.w_left as i64);
@@ -1831,21 +2184,30 @@ impl Graphics {
     ) {
         let width = right - left;
         let height = bottom + 1 - top;
+        if left == 0 && right == self.width {
+            let start = top * self.width;
+            let end = (bottom + 1) * self.width;
+            self.buffer[start..end].fill(color);
+            return;
+        }
         if width <= 4 && height <= 4 {
-            for y in top..=bottom {
-                let mut offset = y * self.width + left;
+            let mut row_start = top * self.width + left;
+            for _ in top..=bottom {
+                let mut offset = row_start;
                 let end = offset + width;
                 while offset < end {
                     self.buffer[offset] = color;
                     offset += 1;
                 }
+                row_start += self.width;
             }
             return;
         }
 
-        for y in top..=bottom {
-            let row = y * self.width;
-            self.buffer[row + left..row + right].fill(color);
+        let mut row_start = top * self.width + left;
+        for _ in top..=bottom {
+            self.buffer[row_start..row_start + width].fill(color);
+            row_start += self.width;
         }
     }
 
@@ -1855,25 +2217,22 @@ impl Graphics {
         right: i32,
         y: i32,
         target: u32,
-        queue: &mut VecDeque<(i32, i32)>,
+        stack: &mut Vec<(i32, i32)>,
     ) {
+        let row = y as usize * self.width;
         let mut x = left;
         while x <= right {
-            while x <= right && !self.fill_target_matches(x, y, target) {
+            while x <= right && self.buffer[row + x as usize] != target {
                 x += 1;
             }
             if x > right {
                 break;
             }
-            queue.push_back((x, y));
-            while x <= right && self.fill_target_matches(x, y, target) {
+            stack.push((x, y));
+            while x <= right && self.buffer[row + x as usize] == target {
                 x += 1;
             }
         }
-    }
-
-    fn fill_target_matches(&self, x: i32, y: i32, target: u32) -> bool {
-        self.in_drawable_bounds(x, y) && self.get_canvas_pixel(x, y) == Some(target)
     }
 
     fn line_canvas(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
@@ -2028,6 +2387,52 @@ impl Graphics {
             && x <= self.w_right
             && y >= self.w_top
             && y <= self.w_bottom
+    }
+
+    fn drawable_bounds(&self) -> Option<(i32, i32, i32, i32)> {
+        let left = self.w_left.max(0);
+        let right = self.w_right.min(self.width as i32 - 1);
+        let top = self.w_top.max(0);
+        let bottom = self.w_bottom.min(self.height as i32 - 1);
+        (left <= right && top <= bottom).then_some((left, right, top, bottom))
+    }
+
+    fn mark_damage_canvas_rect(&mut self, left: i32, top: i32, right: i32, bottom: i32) {
+        let left = left.max(0);
+        let top = top.max(0);
+        let right = right.min(self.width as i32 - 1);
+        let bottom = bottom.min(self.height as i32 - 1);
+        if left > right || top > bottom {
+            return;
+        }
+        self.damage.mark(DamageRect {
+            x: left as usize,
+            y: top as usize,
+            width: (right - left + 1) as usize,
+            height: (bottom - top + 1) as usize,
+        });
+    }
+
+    fn mark_damage_points(&mut self, points: &[(i32, i32)], padding: i32) {
+        let Some(&(first_x, first_y)) = points.first() else {
+            return;
+        };
+        let mut left = first_x;
+        let mut right = first_x;
+        let mut top = first_y;
+        let mut bottom = first_y;
+        for &(x, y) in &points[1..] {
+            left = left.min(x);
+            right = right.max(x);
+            top = top.min(y);
+            bottom = bottom.max(y);
+        }
+        self.mark_damage_canvas_rect(
+            left.saturating_sub(padding),
+            top.saturating_sub(padding),
+            right.saturating_add(padding),
+            bottom.saturating_add(padding),
+        );
     }
 
     fn index(&self, x: i32, y: i32) -> Option<usize> {
@@ -2233,7 +2638,39 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_color_number, Graphics, Texture};
+    use super::{
+        resolve_color_number, DamageRect, DamageTracker, Graphics, Texture, MAX_DAMAGE_RECTS,
+    };
+
+    fn assert_operation_damage(
+        mut graphics: Graphics,
+        label: &str,
+        operation: impl FnOnce(&mut Graphics),
+    ) {
+        graphics.clear_damage();
+        let before = graphics.buffer.clone();
+        operation(&mut graphics);
+        let mut changed = 0;
+        for (index, (old, new)) in before.iter().zip(&graphics.buffer).enumerate() {
+            if old == new {
+                continue;
+            }
+            changed += 1;
+            let x = index % graphics.width;
+            let y = index / graphics.width;
+            assert!(
+                graphics.damage_regions().iter().any(|rect| {
+                    x >= rect.x
+                        && x < rect.x + rect.width
+                        && y >= rect.y
+                        && y < rect.y + rect.height
+                }),
+                "{label}: changed pixel ({x},{y}) is outside {:?}",
+                graphics.damage_regions()
+            );
+        }
+        assert!(changed > 0, "{label}: test operation changed no pixels");
+    }
 
     #[test]
     fn fill_colors_enclosed_area_without_crossing_border() {
@@ -2250,6 +2687,36 @@ mod tests {
             Some(resolve_color_number(2))
         );
         assert_eq!(graphics.get_canvas_pixel(9, 464), Some(0));
+    }
+
+    #[test]
+    fn fill_respects_the_active_viewport() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(0, 0, Some((100, 200, 200, 100)))
+            .unwrap();
+        graphics.fill(150.0, 150.0, Some(0x010203));
+
+        let color = resolve_color_number(0x010203);
+        assert_eq!(graphics.get_canvas_pixel(100, 279), Some(color));
+        assert_eq!(graphics.get_canvas_pixel(200, 379), Some(color));
+        assert_eq!(graphics.get_canvas_pixel(99, 329), Some(0));
+        assert_eq!(graphics.get_canvas_pixel(201, 329), Some(0));
+        assert_eq!(graphics.get_canvas_pixel(150, 278), Some(0));
+        assert_eq!(graphics.get_canvas_pixel(150, 380), Some(0));
+    }
+
+    #[test]
+    fn explicit_rgb_components_do_not_alias_palette_indexes() {
+        let mut graphics = Graphics::new(640);
+
+        graphics.set_ink_rgb(0, 0, 13).unwrap();
+        graphics.plot(10.0, 10.0, None);
+        assert_eq!(graphics.test(10.0, 10.0), 0x00000d);
+
+        graphics.set_ink(13);
+        graphics.plot(11.0, 10.0, None);
+        assert_eq!(graphics.test(11.0, 10.0), resolve_color_number(13) as i32);
     }
 
     #[test]
@@ -2298,5 +2765,110 @@ mod tests {
         assert_eq!(graphics.test(25.0, 15.0), 0xffffff);
         assert_eq!(graphics.test(15.0, 25.0), 0xff0000);
         assert_eq!(graphics.test(25.0, 25.0), 0x00ff00);
+    }
+
+    #[test]
+    fn damage_regions_cover_every_changed_pixel_for_graphics_operations() {
+        assert_operation_damage(Graphics::new(640), "plot", |graphics| {
+            graphics.set_pen_width(4).unwrap();
+            graphics.plot(40.0, 50.0, Some(2));
+        });
+        assert_operation_damage(Graphics::new(640), "line", |graphics| {
+            graphics.set_pen_width(4).unwrap();
+            graphics.line_between(10.0, 20.0, 200.0, 130.0, Some(3));
+        });
+        assert_operation_damage(Graphics::new(640), "filled rectangle", |graphics| {
+            graphics.rectangle(20.0, 30.0, 180.0, 120.0, Some(4), true);
+        });
+        assert_operation_damage(Graphics::new(640), "filled triangle", |graphics| {
+            graphics.triangle(10.0, 10.0, 220.0, 80.0, 90.0, 240.0, Some(5), true);
+        });
+        assert_operation_damage(Graphics::new(640), "filled circle", |graphics| {
+            graphics
+                .circle_arc(200.0, 200.0, 70.0, Some(6), true, Some(0.2), Some(4.0), 1.4)
+                .unwrap();
+        });
+        assert_operation_damage(Graphics::new(640), "text", |graphics| {
+            graphics.locate(3, 4);
+            graphics.disp("Damage", Some(7), Some(0));
+        });
+        assert_operation_damage(Graphics::new(640), "rotated text", |graphics| {
+            graphics.move_to(180.0, 200.0);
+            graphics.set_ldir(37);
+            graphics.gdisp("Rotated", Some(8), Some(-1));
+        });
+        assert_operation_damage(Graphics::new(640), "sprite", |graphics| {
+            graphics
+                .draw_sprite(
+                    "3x2:112233aabbccddeeff445566778899010203",
+                    300.0,
+                    200.0,
+                    None,
+                    None,
+                    false,
+                )
+                .unwrap();
+        });
+        assert_operation_damage(Graphics::new(640), "texture", |graphics| {
+            let texture = Texture::from_gscr("2x2:ff000000ff000000ffffffff").unwrap();
+            graphics
+                .textured_rect(&texture, 250.0, 100.0, 410.0, 270.0, None)
+                .unwrap();
+        });
+
+        let mut enclosed = Graphics::new(640);
+        enclosed.rectangle(20.0, 20.0, 120.0, 120.0, Some(2), false);
+        assert_operation_damage(enclosed, "flood fill", |graphics| {
+            graphics.fill(60.0, 60.0, Some(9));
+        });
+
+        let mut uncleared = Graphics::new(640);
+        uncleared.rectangle(20.0, 20.0, 120.0, 120.0, Some(2), true);
+        assert_operation_damage(uncleared, "clear graphics", Graphics::clg);
+    }
+
+    #[test]
+    fn damage_tracker_caps_regions_without_losing_coverage() {
+        let originals = (0..20)
+            .map(|index| DamageRect {
+                x: index * 25,
+                y: (index % 3) * 40,
+                width: 3,
+                height: 3,
+            })
+            .collect::<Vec<_>>();
+        let mut tracker = DamageTracker::default();
+        for rect in &originals {
+            tracker.mark(*rect);
+        }
+
+        assert!(tracker.regions.len() <= MAX_DAMAGE_RECTS);
+        for original in originals {
+            assert!(tracker.regions.iter().any(|region| {
+                original.x >= region.x
+                    && original.y >= region.y
+                    && original.right() <= region.right()
+                    && original.bottom() <= region.bottom()
+            }));
+        }
+    }
+
+    #[test]
+    fn same_size_resets_preserve_the_presented_buffer_allocation() {
+        let mut graphics = Graphics::new(640);
+        let buffer_address = graphics.buffer.as_ptr();
+        graphics.plot(10.0, 10.0, Some(2));
+
+        graphics.reset_state();
+        assert_eq!(graphics.buffer.as_ptr(), buffer_address);
+        assert!(graphics.buffer.iter().all(|pixel| *pixel == 0));
+
+        graphics.set_paper(3);
+        graphics.set_mode(640).unwrap();
+        assert_eq!(graphics.buffer.as_ptr(), buffer_address);
+        assert!(graphics
+            .buffer
+            .iter()
+            .all(|pixel| *pixel == resolve_color_number(3)));
     }
 }
