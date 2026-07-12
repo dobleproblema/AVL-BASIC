@@ -5,105 +5,6 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
-const MAX_DAMAGE_RECTS: usize = 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DamageRect {
-    pub x: usize,
-    pub y: usize,
-    pub width: usize,
-    pub height: usize,
-}
-
-impl DamageRect {
-    fn right(self) -> usize {
-        self.x + self.width
-    }
-
-    fn bottom(self) -> usize {
-        self.y + self.height
-    }
-
-    pub fn area(self) -> usize {
-        self.width * self.height
-    }
-
-    fn union(self, other: Self) -> Self {
-        let x = self.x.min(other.x);
-        let y = self.y.min(other.y);
-        let right = self.right().max(other.right());
-        let bottom = self.bottom().max(other.bottom());
-        Self {
-            x,
-            y,
-            width: right - x,
-            height: bottom - y,
-        }
-    }
-
-    fn overlaps_or_touches(self, other: Self) -> bool {
-        self.x <= other.right()
-            && other.x <= self.right()
-            && self.y <= other.bottom()
-            && other.y <= self.bottom()
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct DamageTracker {
-    regions: Vec<DamageRect>,
-}
-
-impl DamageTracker {
-    fn mark(&mut self, rect: DamageRect) {
-        if rect.width == 0 || rect.height == 0 {
-            return;
-        }
-        if self.regions.len() == 1 && self.regions[0].overlaps_or_touches(rect) {
-            self.regions[0] = self.regions[0].union(rect);
-            return;
-        }
-        let mut merged = rect;
-        let mut index = 0;
-        while index < self.regions.len() {
-            if merged.overlaps_or_touches(self.regions[index]) {
-                merged = merged.union(self.regions.swap_remove(index));
-                index = 0;
-            } else {
-                index += 1;
-            }
-        }
-        self.regions.push(merged);
-        while self.regions.len() > MAX_DAMAGE_RECTS {
-            self.merge_cheapest_pair();
-        }
-    }
-
-    fn merge_cheapest_pair(&mut self) {
-        let mut best = (0, 1, usize::MAX);
-        for left in 0..self.regions.len() - 1 {
-            for right in left + 1..self.regions.len() {
-                let a = self.regions[left];
-                let b = self.regions[right];
-                let extra = a
-                    .union(b)
-                    .area()
-                    .saturating_sub(a.area().saturating_add(b.area()));
-                if extra < best.2 {
-                    best = (left, right, extra);
-                }
-            }
-        }
-        let merged = self.regions[best.0].union(self.regions[best.1]);
-        self.regions.swap_remove(best.1);
-        self.regions[best.0] = merged;
-    }
-
-    fn clear(&mut self) {
-        self.regions.clear();
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Graphics {
     pub width: usize,
@@ -144,7 +45,7 @@ pub struct Graphics {
     hit_color_rgb: u32,
     hit_id: i32,
     sprites: HashMap<i32, SpriteMemory>,
-    damage: DamageTracker,
+    buffer_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -252,14 +153,7 @@ impl Graphics {
             hit_color_rgb: 0,
             hit_id: 0,
             sprites: HashMap::new(),
-            damage: DamageTracker {
-                regions: vec![DamageRect {
-                    x: 0,
-                    y: 0,
-                    width,
-                    height,
-                }],
-            },
+            buffer_dirty: true,
         }
     }
 
@@ -335,12 +229,7 @@ impl Graphics {
         let top = self.w_top.max(0) as usize;
         let bottom = self.w_bottom.min(self.height as i32 - 1) as usize;
         if left <= right && top <= bottom {
-            self.damage.mark(DamageRect {
-                x: left,
-                y: top,
-                width: right - left + 1,
-                height: bottom - top + 1,
-            });
+            self.buffer_dirty = true;
             for y in top..=bottom {
                 let start = y * self.width + left;
                 let end = y * self.width + right + 1;
@@ -547,7 +436,7 @@ impl Graphics {
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
-        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
+        self.buffer_dirty = true;
         let left = xmin.min(xmax);
         let right = xmin.max(xmax);
         let (axis_start, axis_end) = self.x_axis_canvas_span(y, left, right, border);
@@ -605,7 +494,7 @@ impl Graphics {
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
-        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
+        self.buffer_dirty = true;
         let bottom = ymin.min(ymax);
         let top = ymin.max(ymax);
         let (axis_start, axis_end) = self.y_axis_canvas_span(x, bottom, top, border);
@@ -657,17 +546,7 @@ impl Graphics {
 
     pub fn plot(&mut self, x: f64, y: f64, color: Option<i32>) {
         let (cx, cy) = self.user_to_canvas(x, y);
-        let padding = if self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_canvas_rect(
-            cx.saturating_sub(padding),
-            cy.saturating_sub(padding),
-            cx.saturating_add(padding),
-            cy.saturating_add(padding),
-        );
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -681,12 +560,7 @@ impl Graphics {
     pub fn draw_to(&mut self, x: f64, y: f64, color: Option<i32>) {
         let start = (self.cursor_x, self.logical_y_to_canvas(self.cursor_y));
         let end = self.user_to_canvas(x, y);
-        let padding = if self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_points(&[start, end], padding);
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -700,12 +574,7 @@ impl Graphics {
     pub fn line_between(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, color: Option<i32>) {
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
-        let padding = if self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_points(&[p1, p2], padding);
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -731,12 +600,7 @@ impl Graphics {
         if skip_first_pixel && p1 == p2 {
             return (mask_phase, false);
         }
-        let padding = if self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_points(&[p1, p2], padding);
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -767,17 +631,7 @@ impl Graphics {
         let max_x = ax.max(bx);
         let min_y = ay.min(by);
         let max_y = ay.max(by);
-        let padding = if filled || self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_canvas_rect(
-            min_x.saturating_sub(padding),
-            min_y.saturating_sub(padding),
-            max_x.saturating_add(padding),
-            max_y.saturating_add(padding),
-        );
+        self.buffer_dirty = true;
         if filled {
             self.fill_canvas_rect(min_x, min_y, max_x, max_y, color);
         } else {
@@ -806,7 +660,7 @@ impl Graphics {
         let ay = self.height as i32 - 1 - (y1.round() as i32 + self.origin_y);
         let bx = x2.round() as i32 + self.origin_x;
         let by = self.height as i32 - 1 - (y2.round() as i32 + self.origin_y);
-        self.mark_damage_canvas_rect(ax.min(bx), ay.min(by), ax.max(bx), ay.max(by));
+        self.buffer_dirty = true;
         self.fill_canvas_rect(ax, ay, bx, by, color);
         true
     }
@@ -825,14 +679,7 @@ impl Graphics {
         let p0 = self.user_to_canvas(x0, y0);
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
-        let padding = if filled {
-            1
-        } else if self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_points(&[p0, p1, p2], padding);
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -919,7 +766,7 @@ impl Graphics {
         let p0 = self.user_to_canvas(x0, y0);
         let p1 = self.user_to_canvas(x1, y1);
         let p2 = self.user_to_canvas(x2, y2);
-        self.mark_damage_points(&[p0, p1, p2], 1);
+        self.buffer_dirty = true;
         let vertices = [
             TexturedVertex {
                 x: p0.0,
@@ -975,17 +822,7 @@ impl Graphics {
         }
         let (cx, cy) = self.user_to_canvas(x, y);
         let (rx, ry) = self.scaled_radii(radius, aspect);
-        let padding = if filled || self.pen_width == 1 {
-            0
-        } else {
-            self.pen_width / 2
-        };
-        self.mark_damage_canvas_rect(
-            cx.saturating_sub(rx.ceil() as i32).saturating_sub(padding),
-            cy.saturating_sub(ry.ceil() as i32).saturating_sub(padding),
-            cx.saturating_add(rx.ceil() as i32).saturating_add(padding),
-            cy.saturating_add(ry.ceil() as i32).saturating_add(padding),
-        );
+        self.buffer_dirty = true;
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -1105,10 +942,7 @@ impl Graphics {
         if target == color {
             return;
         }
-        let mut changed_left = sx;
-        let mut changed_right = sx;
-        let mut changed_top = sy;
-        let mut changed_bottom = sy;
+        self.buffer_dirty = true;
         let mut stack = Vec::with_capacity(64);
         stack.push((sx, sy));
         while let Some((seed_x, y)) = stack.pop() {
@@ -1125,10 +959,6 @@ impl Graphics {
                 right += 1;
             }
             self.buffer[row + left as usize..row + right as usize + 1].fill(color);
-            changed_left = changed_left.min(left);
-            changed_right = changed_right.max(right);
-            changed_top = changed_top.min(y);
-            changed_bottom = changed_bottom.max(y);
             if y > bound_top {
                 self.enqueue_fill_runs(left, right, y - 1, target, &mut stack);
             }
@@ -1136,7 +966,6 @@ impl Graphics {
                 self.enqueue_fill_runs(left, right, y + 1, target, &mut stack);
             }
         }
-        self.mark_damage_canvas_rect(changed_left, changed_top, changed_right, changed_bottom);
     }
 
     pub fn locate(&mut self, col: i32, row: i32) {
@@ -1169,14 +998,8 @@ impl Graphics {
         let (cell_w, cell_h) = font_dimensions(self.font);
         let mut x = self.text_col * cell_w;
         let y = self.text_row * cell_h;
-        let char_count = text.chars().count().min(i32::MAX as usize) as i32;
-        if char_count > 0 {
-            self.mark_damage_canvas_rect(
-                x,
-                y,
-                x.saturating_add(char_count.saturating_mul(cell_w)) - 1,
-                y.saturating_add(cell_h) - 1,
-            );
+        if !text.is_empty() {
+            self.buffer_dirty = true;
         }
         for ch in text.chars() {
             self.draw_glyph(x as f64, y as f64, 1.0, 0.0, ch, color, paper, true);
@@ -1196,22 +1019,8 @@ impl Graphics {
         let dy = cell_w as f64 * sin_a;
         let mut x = self.cursor_x as f64;
         let mut y = self.logical_y_to_canvas(self.cursor_y) as f64;
-        let char_count = text.chars().count();
-        if char_count > 0 {
-            let (_, cell_h) = font_dimensions(self.font);
-            let text_width = char_count.saturating_mul(cell_w as usize).saturating_sub(1) as f64;
-            let text_height = (cell_h - 1) as f64;
-            let corners = [
-                (x, y),
-                (x + text_width * cos_a, y + text_width * sin_a),
-                (x - text_height * sin_a, y + text_height * cos_a),
-                (
-                    x + text_width * cos_a - text_height * sin_a,
-                    y + text_width * sin_a + text_height * cos_a,
-                ),
-            ];
-            let points = corners.map(|(px, py)| (px.round() as i32, py.round() as i32));
-            self.mark_damage_points(&points, 0);
+        if !text.is_empty() {
+            self.buffer_dirty = true;
         }
         for ch in text.chars() {
             self.draw_glyph(x, y, cos_a, sin_a, ch, color, paper, false);
@@ -1264,7 +1073,7 @@ impl Graphics {
         }
         self.buffer.copy_from_slice(&pixels);
         self.owner.fill(0);
-        self.mark_damage_canvas_rect(0, 0, self.width as i32 - 1, self.height as i32 - 1);
+        self.buffer_dirty = true;
         Ok(())
     }
 
@@ -1325,12 +1134,7 @@ impl Graphics {
         let (left, bottom) = self.user_to_canvas(x, y);
         let top = bottom - h as i32 + 1;
         if !hittest_only {
-            self.mark_damage_canvas_rect(
-                left,
-                top,
-                left.saturating_add(w as i32).saturating_sub(1),
-                top.saturating_add(h as i32).saturating_sub(1),
-            );
+            self.buffer_dirty = true;
         }
         let detect_color = matches!(self.collision_mode, 1 | 3);
         let detect_sprite = matches!(self.collision_mode, 2 | 3);
@@ -1459,12 +1263,12 @@ impl Graphics {
         &self.buffer
     }
 
-    pub fn damage_regions(&self) -> &[DamageRect] {
-        &self.damage.regions
+    pub(crate) fn buffer_dirty(&self) -> bool {
+        self.buffer_dirty
     }
 
-    pub fn clear_damage(&mut self) {
-        self.damage.clear();
+    pub(crate) fn clear_buffer_dirty(&mut self) {
+        self.buffer_dirty = false;
     }
 
     pub fn xpos(&self) -> f64 {
@@ -2405,44 +2209,6 @@ impl Graphics {
         (left <= right && top <= bottom).then_some((left, right, top, bottom))
     }
 
-    fn mark_damage_canvas_rect(&mut self, left: i32, top: i32, right: i32, bottom: i32) {
-        let left = left.max(0);
-        let top = top.max(0);
-        let right = right.min(self.width as i32 - 1);
-        let bottom = bottom.min(self.height as i32 - 1);
-        if left > right || top > bottom {
-            return;
-        }
-        self.damage.mark(DamageRect {
-            x: left as usize,
-            y: top as usize,
-            width: (right - left + 1) as usize,
-            height: (bottom - top + 1) as usize,
-        });
-    }
-
-    fn mark_damage_points(&mut self, points: &[(i32, i32)], padding: i32) {
-        let Some(&(first_x, first_y)) = points.first() else {
-            return;
-        };
-        let mut left = first_x;
-        let mut right = first_x;
-        let mut top = first_y;
-        let mut bottom = first_y;
-        for &(x, y) in &points[1..] {
-            left = left.min(x);
-            right = right.max(x);
-            top = top.min(y);
-            bottom = bottom.max(y);
-        }
-        self.mark_damage_canvas_rect(
-            left.saturating_sub(padding),
-            top.saturating_sub(padding),
-            right.saturating_add(padding),
-            bottom.saturating_add(padding),
-        );
-    }
-
     fn index(&self, x: i32, y: i32) -> Option<usize> {
         if self.in_bounds(x, y) {
             Some(y as usize * self.width + x as usize)
@@ -2646,38 +2412,26 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        resolve_color_number, DamageRect, DamageTracker, Graphics, Texture, MAX_DAMAGE_RECTS,
-    };
+    use super::{resolve_color_number, Graphics, Texture};
 
-    fn assert_operation_damage(
+    fn assert_operation_marks_buffer_dirty(
         mut graphics: Graphics,
         label: &str,
         operation: impl FnOnce(&mut Graphics),
     ) {
-        graphics.clear_damage();
+        graphics.clear_buffer_dirty();
         let before = graphics.buffer.clone();
         operation(&mut graphics);
-        let mut changed = 0;
-        for (index, (old, new)) in before.iter().zip(&graphics.buffer).enumerate() {
-            if old == new {
-                continue;
-            }
-            changed += 1;
-            let x = index % graphics.width;
-            let y = index / graphics.width;
-            assert!(
-                graphics.damage_regions().iter().any(|rect| {
-                    x >= rect.x
-                        && x < rect.x + rect.width
-                        && y >= rect.y
-                        && y < rect.y + rect.height
-                }),
-                "{label}: changed pixel ({x},{y}) is outside {:?}",
-                graphics.damage_regions()
-            );
-        }
+        let changed = before
+            .iter()
+            .zip(&graphics.buffer)
+            .filter(|(old, new)| old != new)
+            .count();
         assert!(changed > 0, "{label}: test operation changed no pixels");
+        assert!(
+            graphics.buffer_dirty(),
+            "{label}: changed pixels without marking the buffer dirty"
+        );
     }
 
     #[test]
@@ -2776,36 +2530,36 @@ mod tests {
     }
 
     #[test]
-    fn damage_regions_cover_every_changed_pixel_for_graphics_operations() {
-        assert_operation_damage(Graphics::new(640), "plot", |graphics| {
+    fn drawing_operations_mark_the_buffer_dirty() {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "plot", |graphics| {
             graphics.set_pen_width(4).unwrap();
             graphics.plot(40.0, 50.0, Some(2));
         });
-        assert_operation_damage(Graphics::new(640), "line", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "line", |graphics| {
             graphics.set_pen_width(4).unwrap();
             graphics.line_between(10.0, 20.0, 200.0, 130.0, Some(3));
         });
-        assert_operation_damage(Graphics::new(640), "filled rectangle", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "filled rectangle", |graphics| {
             graphics.rectangle(20.0, 30.0, 180.0, 120.0, Some(4), true);
         });
-        assert_operation_damage(Graphics::new(640), "filled triangle", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "filled triangle", |graphics| {
             graphics.triangle(10.0, 10.0, 220.0, 80.0, 90.0, 240.0, Some(5), true);
         });
-        assert_operation_damage(Graphics::new(640), "filled circle", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "filled circle", |graphics| {
             graphics
                 .circle_arc(200.0, 200.0, 70.0, Some(6), true, Some(0.2), Some(4.0), 1.4)
                 .unwrap();
         });
-        assert_operation_damage(Graphics::new(640), "text", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "text", |graphics| {
             graphics.locate(3, 4);
             graphics.disp("Damage", Some(7), Some(0));
         });
-        assert_operation_damage(Graphics::new(640), "rotated text", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "rotated text", |graphics| {
             graphics.move_to(180.0, 200.0);
             graphics.set_ldir(37);
             graphics.gdisp("Rotated", Some(8), Some(-1));
         });
-        assert_operation_damage(Graphics::new(640), "sprite", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "sprite", |graphics| {
             graphics
                 .draw_sprite(
                     "3x2:112233aabbccddeeff445566778899010203",
@@ -2817,7 +2571,7 @@ mod tests {
                 )
                 .unwrap();
         });
-        assert_operation_damage(Graphics::new(640), "texture", |graphics| {
+        assert_operation_marks_buffer_dirty(Graphics::new(640), "texture", |graphics| {
             let texture = Texture::from_gscr("2x2:ff000000ff000000ffffffff").unwrap();
             graphics
                 .textured_rect(&texture, 250.0, 100.0, 410.0, 270.0, None)
@@ -2826,39 +2580,13 @@ mod tests {
 
         let mut enclosed = Graphics::new(640);
         enclosed.rectangle(20.0, 20.0, 120.0, 120.0, Some(2), false);
-        assert_operation_damage(enclosed, "flood fill", |graphics| {
+        assert_operation_marks_buffer_dirty(enclosed, "flood fill", |graphics| {
             graphics.fill(60.0, 60.0, Some(9));
         });
 
         let mut uncleared = Graphics::new(640);
         uncleared.rectangle(20.0, 20.0, 120.0, 120.0, Some(2), true);
-        assert_operation_damage(uncleared, "clear graphics", Graphics::clg);
-    }
-
-    #[test]
-    fn damage_tracker_caps_regions_without_losing_coverage() {
-        let originals = (0..20)
-            .map(|index| DamageRect {
-                x: index * 25,
-                y: (index % 3) * 40,
-                width: 3,
-                height: 3,
-            })
-            .collect::<Vec<_>>();
-        let mut tracker = DamageTracker::default();
-        for rect in &originals {
-            tracker.mark(*rect);
-        }
-
-        assert!(tracker.regions.len() <= MAX_DAMAGE_RECTS);
-        for original in originals {
-            assert!(tracker.regions.iter().any(|region| {
-                original.x >= region.x
-                    && original.y >= region.y
-                    && original.right() <= region.right()
-                    && original.bottom() <= region.bottom()
-            }));
-        }
+        assert_operation_marks_buffer_dirty(uncleared, "clear graphics", Graphics::clg);
     }
 
     #[test]

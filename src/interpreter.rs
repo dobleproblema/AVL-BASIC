@@ -6468,7 +6468,7 @@ impl Interpreter {
             }
             window.clear_transient_input();
             self.graphics_window = Some(window);
-            self.graphics.clear_damage();
+            self.graphics.clear_buffer_dirty();
             self.graphics_window_dirty = false;
             self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
@@ -6522,7 +6522,7 @@ impl Interpreter {
             }
             window.clear_transient_input();
             self.graphics_window = Some(window);
-            self.graphics.clear_damage();
+            self.graphics.clear_buffer_dirty();
             self.graphics_window_dirty = false;
             self.graphics_window_pump_check_skip = 0;
             self.last_graphics_window_pump = Instant::now();
@@ -6535,7 +6535,7 @@ impl Interpreter {
                 user_closed = true;
             } else {
                 let mouse_state = window.present(&self.graphics)?;
-                self.graphics.clear_damage();
+                self.graphics.clear_buffer_dirty();
                 user_closed = !window.is_open();
                 self.update_mouse_state(mouse_state);
             }
