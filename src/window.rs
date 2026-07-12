@@ -80,6 +80,7 @@ impl PartialPresenter {
             buffer.copy_from_slice(graphics.buffer());
             buffer.present()?;
         }
+        synchronize_partial_present();
         Ok(Self {
             surface,
             _context: context,
@@ -116,6 +117,7 @@ impl PartialPresenter {
             })
             .collect::<Vec<_>>();
         buffer.present_with_damage(&softbuffer_damage)?;
+        synchronize_partial_present();
         self.damage_history.push_front(damage.to_vec());
         self.damage_history.truncate(MAX_DAMAGE_HISTORY);
         self.synchronized = true;
@@ -134,6 +136,66 @@ fn copy_damage_rect(target: &mut [u32], source: &[u32], stride: usize, rect: Dam
         target[start..start + rect.width].copy_from_slice(&source[start..start + rect.width]);
     }
 }
+
+#[cfg(any(windows, test))]
+fn coalesce_damage(damage: &[DamageRect]) -> Vec<DamageRect> {
+    let Some(first) = damage.first().copied() else {
+        return Vec::new();
+    };
+    let mut left = first.x;
+    let mut top = first.y;
+    let mut right = first.x + first.width;
+    let mut bottom = first.y + first.height;
+    for rect in &damage[1..] {
+        left = left.min(rect.x);
+        top = top.min(rect.y);
+        right = right.max(rect.x + rect.width);
+        bottom = bottom.max(rect.y + rect.height);
+    }
+    vec![DamageRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }]
+}
+
+fn partial_present_damage(damage: &[DamageRect]) -> Vec<DamageRect> {
+    #[cfg(windows)]
+    {
+        // softbuffer's Win32 backend issues one GDI BitBlt per damage rect.
+        // Present one bounding rect so a frame cannot become visible between
+        // restoring an old sprite position and drawing its new position.
+        coalesce_damage(damage)
+    }
+    #[cfg(not(windows))]
+    {
+        damage.to_vec()
+    }
+}
+
+#[cfg(windows)]
+fn synchronize_partial_present() {
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn GdiFlush() -> i32;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmFlush() -> i32;
+    }
+
+    unsafe {
+        // softbuffer writes directly to a CreateDIBSection. GdiFlush makes
+        // the BitBlt consume those bits before the next frame reuses them;
+        // DwmFlush then waits until DWM has presented the completed update.
+        let _ = GdiFlush();
+        let _ = DwmFlush();
+    }
+}
+
+#[cfg(not(windows))]
+fn synchronize_partial_present() {}
 
 fn should_present_partially(width: usize, height: usize, damage: &[DamageRect]) -> bool {
     if damage.is_empty() || damage.len() > 8 {
@@ -223,10 +285,11 @@ impl GraphicsWindow {
             return Ok(self.mouse.clone());
         }
         let damage = graphics.damage_regions();
+        let partial_damage = partial_present_damage(damage);
         if damage.is_empty() {
             self.window.update();
         } else if self.partial_presenter.is_some()
-            && should_present_partially(graphics.width, graphics.height, damage)
+            && should_present_partially(graphics.width, graphics.height, &partial_damage)
         {
             self.window.update();
             if self.window.is_open() {
@@ -234,7 +297,7 @@ impl GraphicsWindow {
                     .partial_presenter
                     .as_mut()
                     .unwrap()
-                    .present(graphics, damage);
+                    .present(graphics, &partial_damage);
                 if partial_result.is_err() {
                     self.partial_presenter = None;
                     self.window
@@ -669,7 +732,9 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{code_to_key, key_to_code, should_present_partially};
+    #[cfg(windows)]
+    use super::partial_present_damage;
+    use super::{coalesce_damage, code_to_key, key_to_code, should_present_partially};
     use crate::graphics::DamageRect;
     use minifb::Key;
 
@@ -707,5 +772,53 @@ mod tests {
                 height: 100,
             }]
         ));
+    }
+
+    #[test]
+    fn coalesced_damage_covers_all_regions_with_one_transfer() {
+        let damage = coalesce_damage(&[
+            DamageRect {
+                x: 10,
+                y: 20,
+                width: 30,
+                height: 40,
+            },
+            DamageRect {
+                x: 70,
+                y: 5,
+                width: 20,
+                height: 25,
+            },
+        ]);
+        assert_eq!(
+            damage,
+            vec![DamageRect {
+                x: 10,
+                y: 5,
+                width: 80,
+                height: 55,
+            }]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win32_partial_presenter_uses_one_atomic_damage_region() {
+        let damage = partial_present_damage(&[
+            DamageRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+            DamageRect {
+                x: 90,
+                y: 90,
+                width: 10,
+                height: 10,
+            },
+        ]);
+        assert_eq!(damage.len(), 1);
+        assert!(!should_present_partially(100, 100, &damage));
     }
 }
