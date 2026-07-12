@@ -195,6 +195,8 @@ const KEYWORDS: &[&str] = &[
     "SCREEN",
     "CLG",
     "OFFSCREEN",
+    "OPAQUE",
+    "TRANSPARENT",
     "LDIR",
     "MASK",
     "DEG",

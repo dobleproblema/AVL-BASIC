@@ -188,7 +188,7 @@ Notas rápidas (arrays)
 
 Notas de `NEW`
 - Borra el programa en memoria (líneas y DATA) y restablece completamente el estado: variables, arrays, funciones `DEF FN` (incluidas de 0 argumentos), puntero `DATA`, temporizadores/ISR, y el modo trigonométrico (radianes).
-- Restablece también la ventana gráfica y sus ajustes (equivalente a reiniciar el estado por defecto de `SCREEN`).
+- Restablece también la ventana gráfica y sus ajustes (equivalente a reiniciar el estado por defecto de `SCREEN`, incluida `SMALLFONT TRANSPARENT`).
 - Solo válido en modo inmediato; dentro de un programa provoca “Instrucción no permitida en un programa.”
 
 Asignación sobre cadenas
@@ -329,16 +329,20 @@ Notas detalladas (INPUT)
 
 5.1 Entrada / salida de texto en la ventana gráfica
 
-+ LOCATE columna, fila        Mueve cursor de texto.
-+ BIGFONT | SMALLFONT         Fuente 16×16 / 8×16 (filas/columnas escalan con MODE).
-+ DISP txt$[,tinta][,papel]   Imprime en coordenadas texto (ignora ORIGIN).
-+ GDISP txt$[,tinta][,papel]  Imprime en coordenadas gráficas. 
++ LOCATE columna, fila                         Mueve cursor de texto.
++ BIGFONT [TRANSPARENT|OPAQUE]                 Fuente 16×16.
++ SMALLFONT [TRANSPARENT|OPAQUE]               Fuente 8×16.
++ DISP [lista]                                 Equivalente gráfico de PRINT en coordenadas de texto (ignora ORIGIN).
++ GDISP txt$[,tinta][,papel]                   Dibuja una cadena en coordenadas gráficas.
 + c$ = TESTCHR$[(columna,fila)] Lee el carácter reconocible en una celda de texto.
 + LDIR grados                 Orientación del texto de GDISP. LDIR 0 = horizontal.
 
 Notas rápidas
 - `LOCATE` usa filas y columnas de texto; escala con `MODE` y la fuente (BIG/SMALL).
 - `DISP` y `GDISP` usan siempre las fuentes internas embebidas en el intérprete (`SMALLFONT` o `BIGFONT`).
+- El estado inicial es `SMALLFONT TRANSPARENT`. `SCREEN` y `NEW` también lo restauran.
+- `SMALLFONT` y `BIGFONT` sin parámetro cambian solo el tamaño y conservan el modo de fondo actual.
+- En modo `TRANSPARENT` solo se dibujan los píxeles del glifo. En modo `OPAQUE`, cada celda se rellena primero con el `PAPER` actual.
 - `TESTCHR$` no mueve el cursor de texto. Sin argumentos lee en `HPOS,VPOS`; con dos argumentos lee esa columna/fila.
 - `TESTCHR$` lee una celda de la cuadrícula de texto. Está pensado para caracteres emitidos con `DISP` en columnas/filas de texto. Si el carácter se dibuja con `GDISP` en coordenadas gráficas arbitrarias, normalmente no se reconocerá salvo que su esquina superior izquierda coincida exactamente con la celda que se está leyendo.
 - `TESTCHR$` usa la fuente actual (`SMALLFONT` o `BIGFONT`) para reconocer los píxeles. Devuelve `""` si la celda no coincide exactamente con un glifo conocido: por ejemplo, si el carácter está recortado, deformado, sobrescrito o sobre un fondo no uniforme.
@@ -351,34 +355,35 @@ Notas rápidas
 - Importante: en `GDISP`, `MOVE X,Y` ancla en la esquina izquierda-superior del texto.
 - Importante: en `SPRITE`/`SPRITE MOVE`, `X,Y` ancla en la esquina izquierda-inferior del sprite.
 - Conversión útil al mezclar texto y sprites: `Ysprite = Ytexto - (alto - 1)`. Con `BIGFONT` (`alto=16`): `Ysprite = Ytexto - 15`.
-- `DISP` o `GDISP` imprimen el texto con fondo transparente si el parámetro `papel` es negativo.
+- `GDISP` conserva su forma `GDISP txt$[,tinta][,papel]`: un `papel` negativo fuerza transparencia y uno no negativo fuerza ese fondo. Si se omite, usa el modo `TRANSPARENT`/`OPAQUE` actual.
 - El cursor puede situarse fuera del área visible. El texto se recorta (clipping) y puede no verse o verse solo parcialmente. El cursor avanza igualmente como si todo el texto se hubiera emitido.
   • Ejemplo: LOCATE -3,10 : DISP "hermanos" → solo se verá `manos` entrando por el borde izquierdo en la fila 10.
   • Se aplica a los cuatro bordes: los glifos se recortan y el cursor gráfico queda tras el último carácter, sea visible o no.
 
 
 Notas sobre DISP
-- `DISP` imprime en coordenadas de texto, de un modo similar al `PRINT` de la consola, pero en la ventana gráfica. No obstante, el comportamiento es diferente:
-  • `DISP` solo admite la impresión de cadenas. Para imprimir números deben convertirse antes en cadenas con `STR$`.
-  • Con `DISP` no se admiten los separadores `,` y `;`: el texto a imprimir debe ser una única cadena. Se pueden concatenar cadenas con `+` y usar `SPACE$`.
-  • `DISP` deja el cursor de texto tras el último carácter impreso. Equivalente a un `PRINT` con un `;` al final.
-  • `DISP` no afecta al cursor gráfico.
-  • Si queremos situarnos al comenzo de una nueva línea tras `DISP`, debemos hacerlo explícitamente con `LOCATE 0, VPOS+1`.
-  • No se admite `DISP USING`, pero se puede obtener el mismo resultado usando la función `DEC$`, que formatea utilizando el mismo formato que `USING`.
-- Ejemplos de impresiones con PRINT y como reproducirlas con DISP:
-  • PRINT USING "0########## ";B1(A); → DISP DEC$(B1(A), "0########## ")
-  • PRINT "NOMBRE","DIRECCIÓN"; → DISP "NOMBRE"+SPACE$(22)+"DIRECCIÓN" 'SPACE$(22) en lugar de la coma con la zona de impresión por defecto
-  • PRINT "NOMBRE: ";X$ → DISP "NOMBRE: "+X$ : LOCATE 0,VPOS+1 'El LOCATE sitúa el cursor al comienzo de la siguiente línea, igual que un PRINT que no termina en `;`
-  • PRINT 3+4; → DISP STR$(3+4) 
+- `DISP` usa la misma lista de impresión que `PRINT`: admite cadenas, números, elementos vacíos, `;`, `,`, `USING`, `SPC(n)` y `TAB(n)`.
+- `ZONE n` determina también las zonas a las que avanzan las comas de `DISP`.
+- Sin separador final, `DISP` deja `HPOS=0` y avanza a `VPOS+1`. Un `;` final deja el cursor tras el último elemento; una coma final avanza a la siguiente zona. `DISP` sin argumentos avanza una fila.
+- `DISP` no hace ajuste de línea ni scroll automáticos: si el cursor sale de la cuadrícula visible, la salida se recorta y el cursor sigue avanzando.
+- `DISP` no afecta al cursor gráfico.
+- Ejemplos:
+  • `DISP USING "0# ";hora;minuto;segundo`
+  • `DISP "NOMBRE","DIRECCIÓN"`
+  • `DISP "NOMBRE: ";X$`
+  • `DISP 3+4;`
+- La transparencia permite composición: tras volver a la misma posición con `LOCATE`, imprimir `_` o `-` puede subrayar o tachar texto anterior.
+- En modo transparente, los espacios no borran píxeles y reimprimir texto sobre la misma celda puede dejar restos del glifo anterior. Para relojes, marcadores y otros campos reemplazables, usa `SMALLFONT OPAQUE` o `BIGFONT OPAQUE`, o limpia/redibuja la zona.
+- Una celda compuesta por varios glifos deja de coincidir exactamente con un carácter; `TESTCHR$` devuelve `""` en ese caso.
 
 Ejemplo
 10 x=13 : y=8 : m=2 : s$=" *   *   *   *   *   *   * "
-20 MODE 640 : SMALLFONT
+20 MODE 640 : SMALLFONT OPAQUE
 30 FOR i=y TO y+12
-40   LOCATE x,i : DISP SPACE$(53),0,m : m=3-m
-50   IF i<y+7 THEN LOCATE x,i : DISP MID$(s$,m+m-1,23),1,4
+40   PAPER m : INK 0 : LOCATE x,i : DISP SPACE$(53); : m=3-m
+50   IF i<y+7 THEN PAPER 4 : INK 1 : LOCATE x,i : DISP MID$(s$,m+m-1,23);
 60 NEXT i
-70 BIGFONT : LOCATE 17,25 : DISP "U.S.A."
+70 PAPER 0 : INK 1 : BIGFONT OPAQUE : LOCATE 17,25 : DISP "U.S.A."
 80 END
 
 6. Entorno gráfico
@@ -398,7 +403,7 @@ Ejemplo
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
-  • Desactiva ORIGIN · (0,0) en la esquina inferior-izqierda · cursores a 0,0 · MASK 255 · LDIR 0 · SMALLFONT · PAPER 0 · INK 1.
+  • Desactiva ORIGIN · (0,0) en la esquina inferior-izqierda · cursores a 0,0 · MASK 255 · LDIR 0 · SMALLFONT TRANSPARENT · PAPER 0 · INK 1.
 - SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
 - `ORIGIN x,y` traslada el origen; con 6 argumentos define ventana lógica y clipping.
@@ -509,7 +514,7 @@ Notas rápidas (figuras)
 6.4 Colores
 
 + INK c|r,g,b|"r,g,b"|"nombretk"     'Color que se va a usar para dibujar.      
-+ PAPER c|r,g,b|"r,g,b"|"nombretk"   'Color que se va a usar para borrar la pantalla con CLG y como color de fondo para lo impreso por DISP y GDISP.  
++ PAPER c|r,g,b|"r,g,b"|"nombretk"   'Color usado por CLG y, en modo OPAQUE, como fondo de DISP y GDISP.
 
 Donde c puede ser un color en uno de los siguientes formatos:
 - 0-31            Paleta predefinida
@@ -586,7 +591,7 @@ Ejemplo (muestra en pantalla todos los colores de la paleta predefinida)
 50 FOR I=0 TO 7
 55 FOR C=0 TO 24 STEP 8
 60 MOVER 0,-120 : FILL I+C
-65 LOCATE 4+10*I,C+3-C\16 : DISP DEC$(I+C,"0#"),-(I+C=0),-1
+65 INK -(I+C=0) : LOCATE 4+10*I,C+3-C\16 : DISP USING "0#";I+C;
 70 NEXT C
 75 MOVER 80,480
 80 NEXT I
@@ -778,7 +783,7 @@ Ejemplo (captura y transparencia)
 30 INK 4 : FCIRCLE 200,120,30
 40 cara$ = SPRITE$(150,70,250,170)
 50 PAPER 1 : CLG
-60 LOCATE 2,24 : DISP "EJEMPLO DE SPRITE$ + SPRITE CON TRANSPARENCIA",2
+60 INK 2 : BIGFONT OPAQUE : LOCATE 2,24 : DISP "EJEMPLO DE SPRITE$ + SPRITE CON TRANSPARENCIA"
 70 SPRITE cara$,40,40,14 'Gris (14) transparente
 80 SPRITE cara$,140,40,4 'Azul (4) transparente
 90 SPRITE cara$,90,100,0 'Negro (0) transparente

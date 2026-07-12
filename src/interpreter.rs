@@ -75,6 +75,12 @@ pub enum RunOutcome {
     Stop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrintDestination {
+    Console,
+    Graphics,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Cursor {
     line_idx: usize,
@@ -2451,8 +2457,8 @@ impl Interpreter {
                 self.graphics.locate(args[0] as i32, args[1] as i32);
                 Ok(())
             }
-            "DISP" => self.execute_disp(command[4..].trim(), false),
-            "GDISP" => self.execute_disp(command[5..].trim(), true),
+            "DISP" => self.execute_disp(command[4..].trim()),
+            "GDISP" => self.execute_gdisp(command[5..].trim()),
             "FRAME" => self.execute_frame(command[5..].trim(), cursor),
             "MASK" => {
                 self.ensure_graphics_window()?;
@@ -2471,17 +2477,13 @@ impl Interpreter {
             }
             "SMALLFONT" => {
                 self.ensure_graphics_window()?;
-                if !command[9..].trim().is_empty() {
-                    return Err(self.err(ErrorCode::ArgumentMismatch));
-                }
+                self.apply_font_background_mode(command[9..].trim())?;
                 self.graphics.set_font(FontKind::Small);
                 Ok(())
             }
             "BIGFONT" => {
                 self.ensure_graphics_window()?;
-                if !command[7..].trim().is_empty() {
-                    return Err(self.err(ErrorCode::ArgumentMismatch));
-                }
+                self.apply_font_background_mode(command[7..].trim())?;
                 self.graphics.set_font(FontKind::Big);
                 Ok(())
             }
@@ -2762,8 +2764,12 @@ impl Interpreter {
     }
 
     fn execute_print(&mut self, args: &str) -> BasicResult<()> {
+        self.execute_print_to(args, PrintDestination::Console)
+    }
+
+    fn execute_print_to(&mut self, args: &str, destination: PrintDestination) -> BasicResult<()> {
         if args.trim().is_empty() {
-            self.write_line("");
+            self.print_newline(destination);
             return Ok(());
         }
         let mut item = String::new();
@@ -2782,7 +2788,12 @@ impl Interpreter {
                     '(' => depth += 1,
                     ')' => depth -= 1,
                     ';' if depth == 0 => {
-                        self.print_list_item(item.trim(), Some(';'), &mut using_format)?;
+                        self.print_list_item(
+                            item.trim(),
+                            Some(';'),
+                            &mut using_format,
+                            destination,
+                        )?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
@@ -2794,7 +2805,12 @@ impl Interpreter {
                         continue;
                     }
                     ',' if depth == 0 => {
-                        self.print_list_item(item.trim(), Some(','), &mut using_format)?;
+                        self.print_list_item(
+                            item.trim(),
+                            Some(','),
+                            &mut using_format,
+                            destination,
+                        )?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
@@ -2806,7 +2822,7 @@ impl Interpreter {
                         continue;
                     }
                     '\n' if depth == 0 => {
-                        self.print_list_item(item.trim(), None, &mut using_format)?;
+                        self.print_list_item(item.trim(), None, &mut using_format, destination)?;
                         if self.end_requested
                             || self.function_return_requested
                             || self.sub_return_requested
@@ -2827,8 +2843,8 @@ impl Interpreter {
             newline = true;
         }
         if newline {
-            self.write_line("");
-        } else {
+            self.print_newline(destination);
+        } else if destination == PrintDestination::Console {
             self.flush_stream_output();
         }
         Ok(())
@@ -2839,6 +2855,7 @@ impl Interpreter {
         item: &str,
         sep: Option<char>,
         using_format: &mut Option<String>,
+        destination: PrintDestination,
     ) -> BasicResult<()> {
         if let Some(fmt_expr) =
             print_using_format_expr(item).map_err(|()| self.err(ErrorCode::Syntax))?
@@ -2855,13 +2872,13 @@ impl Interpreter {
         }
 
         if let Some(fmt) = using_format.as_deref() {
-            self.print_using_item(item, fmt)?;
-        } else if self.print_item(item)? && sep == Some(';') {
-            self.write(" ");
+            self.print_using_item(item, fmt, destination)?;
+        } else if self.print_item(item, destination)? && sep == Some(';') {
+            self.print_write(destination, " ");
         }
 
         if sep == Some(',') {
-            self.write_print_zone_spacing();
+            self.write_print_zone_spacing_to(destination);
         }
         Ok(())
     }
@@ -2887,20 +2904,24 @@ impl Interpreter {
         Ok(())
     }
 
-    fn print_item(&mut self, item: &str) -> BasicResult<bool> {
+    fn print_item(&mut self, item: &str, destination: PrintDestination) -> BasicResult<bool> {
         if item.is_empty() {
             return Ok(false);
         }
         if let Some(inner) = whole_function_argument(item, "SPC") {
             let count = nonnegative_usize_arg(self.eval_number(inner)?)?;
-            self.write(&" ".repeat(count));
+            self.print_write(destination, &" ".repeat(count));
             return Ok(false);
         }
         if let Some(inner) = whole_function_argument(item, "TAB") {
             let target = nonnegative_usize_arg(self.eval_number(inner)?)?;
-            let target_col = target.saturating_sub(1);
-            if target_col > self.output_col {
-                self.write(&" ".repeat(target_col - self.output_col));
+            let target_col = target.saturating_sub(1) as i64;
+            let current_col = self.print_column(destination);
+            if target_col > current_col {
+                self.print_write(
+                    destination,
+                    &" ".repeat((target_col - current_col) as usize),
+                );
             }
             return Ok(false);
         }
@@ -2910,18 +2931,23 @@ impl Interpreter {
         }
         match value {
             Value::Number(n) => {
-                self.write(&format_basic_number(n));
+                self.print_write(destination, &format_basic_number(n));
                 Ok(true)
             }
             Value::Str(s) => {
-                self.write(&s);
+                self.print_write(destination, &s);
                 Ok(false)
             }
             Value::ArrayRef(_) => Err(self.err(ErrorCode::TypeMismatch)),
         }
     }
 
-    fn print_using_item(&mut self, item: &str, fmt: &str) -> BasicResult<()> {
+    fn print_using_item(
+        &mut self,
+        item: &str,
+        fmt: &str,
+        destination: PrintDestination,
+    ) -> BasicResult<()> {
         if item.is_empty() {
             return Ok(());
         }
@@ -2930,8 +2956,8 @@ impl Interpreter {
             return Ok(());
         }
         match value {
-            Value::Number(n) => self.write(&format_using(n, fmt)),
-            Value::Str(s) => self.write(&s),
+            Value::Number(n) => self.print_write(destination, &format_using(n, fmt)),
+            Value::Str(s) => self.print_write(destination, &s),
             Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
         }
         Ok(())
@@ -7508,20 +7534,37 @@ impl Interpreter {
         )
     }
 
-    fn execute_disp(&mut self, args: &str, graphics_coords: bool) -> BasicResult<()> {
+    fn apply_font_background_mode(&mut self, arg: &str) -> BasicResult<()> {
+        match arg.trim().to_ascii_uppercase().as_str() {
+            "" => Ok(()),
+            "TRANSPARENT" => {
+                self.graphics.set_text_transparent(true);
+                Ok(())
+            }
+            "OPAQUE" => {
+                self.graphics.set_text_transparent(false);
+                Ok(())
+            }
+            _ => Err(self.err(ErrorCode::ArgumentMismatch)),
+        }
+    }
+
+    fn execute_disp(&mut self, args: &str) -> BasicResult<()> {
+        self.ensure_graphics_window()?;
+        self.execute_print_to(args, PrintDestination::Graphics)?;
+        self.refresh_graphics_window()
+    }
+
+    fn execute_gdisp(&mut self, args: &str) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
-        if parts.is_empty() {
+        if !(1..=3).contains(&parts.len()) {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let text = self.eval_value(&parts[0])?.into_string()?;
         let ink = parts.get(1).map(|s| self.eval_color(s)).transpose()?;
         let paper = self.eval_optional_paper_color(&parts, 2)?;
-        if graphics_coords {
-            self.graphics.gdisp(&text, ink, paper);
-        } else {
-            self.graphics.disp(&text, ink, paper);
-        }
+        self.graphics.gdisp(&text, ink, paper);
         self.refresh_graphics_window()
     }
 
@@ -8488,9 +8531,35 @@ impl Interpreter {
         self.output_col = 0;
     }
 
-    fn write_print_zone_spacing(&mut self) {
-        let spaces = self.print_zone - (self.output_col % self.print_zone);
-        self.write(&" ".repeat(spaces));
+    fn print_column(&self, destination: PrintDestination) -> i64 {
+        match destination {
+            PrintDestination::Console => self.output_col as i64,
+            PrintDestination::Graphics => self.graphics.hpos() as i64,
+        }
+    }
+
+    fn print_write(&mut self, destination: PrintDestination, text: &str) {
+        match destination {
+            PrintDestination::Console => self.write(text),
+            PrintDestination::Graphics => self.graphics.disp(text, None, None),
+        }
+    }
+
+    fn print_newline(&mut self, destination: PrintDestination) {
+        match destination {
+            PrintDestination::Console => self.write_line(""),
+            PrintDestination::Graphics => {
+                let next_row = self.graphics.vpos().saturating_add(1);
+                self.graphics.locate(0, next_row);
+            }
+        }
+    }
+
+    fn write_print_zone_spacing_to(&mut self, destination: PrintDestination) {
+        let zone = self.print_zone as i64;
+        let column = self.print_column(destination);
+        let spaces = zone - column.rem_euclid(zone);
+        self.print_write(destination, &" ".repeat(spaces as usize));
     }
 
     fn flush_stream_output(&self) {

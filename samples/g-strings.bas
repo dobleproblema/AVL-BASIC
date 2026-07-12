@@ -6,10 +6,10 @@
 60 MOVE WIDTH\2,YPOS-16
 70 INK "cyan" : PAPER "green"
 80 GDISP ":DDDDD"
-90 BIGFONT
-100 DISP "hello","red","green"
-110 DISP "adios", "yellow", "blue"
-120 LOCATE 0,VPOS+1
+90 BIGFONT OPAQUE
+100 INK "red" : PAPER "green" : DISP "hello";
+110 INK "yellow" : PAPER "blue" : DISP "adios";
+120 DISP
 130 INK "cyan" : PAPER "green"
 140 DISP ":DDDDD"
 150 INK 1 : PAPER 0

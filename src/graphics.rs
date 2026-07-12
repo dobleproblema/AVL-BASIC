@@ -125,6 +125,7 @@ pub struct Graphics {
     text_col: i32,
     text_row: i32,
     font: FontKind,
+    text_transparent: bool,
     ldir: i32,
     pen_width: i32,
     mask: u8,
@@ -232,6 +233,7 @@ impl Graphics {
             text_col: 0,
             text_row: 0,
             font: FontKind::Small,
+            text_transparent: true,
             ldir: 0,
             pen_width: 1,
             mask: 255,
@@ -283,6 +285,7 @@ impl Graphics {
         self.text_col = 0;
         self.text_row = 0;
         self.font = FontKind::Small;
+        self.text_transparent = true;
         self.ldir = 0;
         self.pen_width = 1;
         self.mask = 255;
@@ -1150,6 +1153,10 @@ impl Graphics {
             self.text_col = ((self.text_col as f64) / 2.0).ceil() as i32;
         }
         self.font = font;
+    }
+
+    pub fn set_text_transparent(&mut self, transparent: bool) {
+        self.text_transparent = transparent;
     }
 
     pub fn set_ldir(&mut self, angle: i32) {
@@ -2373,6 +2380,7 @@ impl Graphics {
         match paper {
             Some(color) if color < 0 => None,
             Some(color) => Some(resolve_color_number(color)),
+            None if self.text_transparent => None,
             None => Some(self.background_color),
         }
     }

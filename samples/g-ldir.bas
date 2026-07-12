@@ -2,10 +2,10 @@
 20 BIGFONT
 30 LDIR 0
 40 MOVE WIDTH\2,HEIGHT\2
-50 DISP "hello "
+50 DISP "hello ";
 55 GDISP "hello"
 60 LDIR 90
-70 DISP "hello "
+70 DISP "hello ";
 75 GDISP "hello "
 80 LDIR 0
 95 GDISP "hello "

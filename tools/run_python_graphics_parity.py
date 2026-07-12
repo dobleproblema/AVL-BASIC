@@ -172,28 +172,28 @@ GRAPHICS_SMOKE_CASES = [
         name="embedded_small_font",
         description="embedded small bitmap font including extended glyphs",
         program=r"""
-10 SCREEN : MODE 640 : PAPER 0 : CLG : SMALLFONT
-20 LOCATE 0,0 : DISP "AÑá€",1,0
+10 SCREEN : MODE 640 : PAPER 0 : CLG : SMALLFONT OPAQUE : INK 1
+20 LOCATE 0,0 : DISP "AÑá€";
 30 PRINT "__AVL_GRAPHICS_SPRITE__=font="+SPRITE$(0,HEIGHT-16,31,HEIGHT-1)
 40 END
 """,
     ),
     GraphicsCase(
         name="embedded_big_font_transparent",
-        description="embedded big font and transparent negative paper",
+        description="embedded big font with transparent text background",
         program=r"""
-10 SCREEN : MODE 640 : PAPER 4 : CLG : BIGFONT
-20 LOCATE 0,0 : DISP "A",1,-1
+10 SCREEN : MODE 640 : PAPER 4 : CLG : BIGFONT TRANSPARENT : INK 1
+20 LOCATE 0,0 : DISP "A";
 30 PRINT "__AVL_GRAPHICS_SPRITE__=font="+SPRITE$(0,HEIGHT-16,15,HEIGHT-1)
 40 END
 """,
     ),
     GraphicsCase(
         name="mode_preserves_big_font",
-        description="MODE preserves BIGFONT selected before the resize",
+        description="MODE preserves BIGFONT and OPAQUE selected before the resize",
         program=r"""
-10 SCREEN : PAPER 0 : BIGFONT : MODE 640
-20 LOCATE 0,0 : DISP "A",1,0
+10 SCREEN : PAPER 0 : BIGFONT OPAQUE : INK 1 : MODE 640
+20 LOCATE 0,0 : DISP "A";
 30 PRINT "__AVL_GRAPHICS_SPRITE__=font="+SPRITE$(0,HEIGHT-16,15,HEIGHT-1)
 40 END
 """,
