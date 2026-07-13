@@ -1615,6 +1615,14 @@ fn console_normalization_completes_file_quotes_and_bas_extension() {
         console::normalize_code("20 smallfont opaque:bigfont transparent"),
         "20 SMALLFONT OPAQUE : BIGFONT TRANSPARENT"
     );
+    assert_eq!(
+        console::normalize_code("10 gprint\"hola\""),
+        "10 GPRINT \"hola\""
+    );
+    assert_eq!(
+        console::normalize_code("20 label\"rótulo\""),
+        "20 LABEL \"rótulo\""
+    );
     assert_eq!(console::normalize_code("10 print 1:"), "10 PRINT 1 :");
 }
 
@@ -2341,7 +2349,7 @@ fn graphics_screen_string_baseline() {
 fn testchr_reads_recognizable_text_cells_without_moving_cursor() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
-20 LOCATE 5,7 : DISP "Z";
+20 LOCATE 5,7 : GPRINT "Z";
 30 PRINT TESTCHR$(5,7)
 40 PRINT HPOS;VPOS
 50 LOCATE 5,7
@@ -2353,16 +2361,16 @@ fn testchr_reads_recognizable_text_cells_without_moving_cursor() {
 }
 
 #[test]
-fn disp_uses_print_lists_using_zones_and_graphics_newlines() {
+fn gprint_uses_print_lists_using_zones_and_graphics_newlines() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG : ZONE 22
-20 LOCATE 3,4 : DISP USING "0#";7;
+20 LOCATE 3,4 : GPRINT USING "0#";7;
 30 PRINT HPOS;VPOS
-40 LOCATE 0,5 : DISP "A","B";
+40 LOCATE 0,5 : GPRINT "A","B";
 50 PRINT HPOS;VPOS
-60 DISP
+60 GPRINT
 70 PRINT HPOS;VPOS
-80 LOCATE -2,7 : DISP TAB(4);"X";
+80 LOCATE -2,7 : GPRINT TAB(4);"X";
 90 PRINT HPOS;VPOS
 100 END"#,
     );
@@ -2370,16 +2378,25 @@ fn disp_uses_print_lists_using_zones_and_graphics_newlines() {
 }
 
 #[test]
+fn removed_disp_commands_report_syntax_error() {
+    let mut interp = Interpreter::new();
+    for statement in [r#"DISP "old""#, r#"GDISP "old""#] {
+        let err = interp.process_immediate(statement).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Syntax, "{statement}");
+    }
+}
+
+#[test]
 fn text_background_defaults_to_transparent_and_font_modes_persist() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
-20 PLOT 0,479,2 : LOCATE 0,0 : DISP " ";
+20 PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 30 PRINT TEST(0,479)
-40 BIGFONT OPAQUE : SMALLFONT : PLOT 0,479,2 : LOCATE 0,0 : DISP " ";
+40 BIGFONT OPAQUE : SMALLFONT : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 50 PRINT TEST(0,479)
-60 BIGFONT TRANSPARENT : SMALLFONT : PLOT 0,479,2 : LOCATE 0,0 : DISP " ";
+60 BIGFONT TRANSPARENT : SMALLFONT : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 70 PRINT TEST(0,479)
-80 BIGFONT OPAQUE : SCREEN : PLOT 0,479,2 : LOCATE 0,0 : DISP " ";
+80 BIGFONT OPAQUE : SCREEN : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 90 PRINT TEST(0,479)
 100 END"#,
     );
@@ -2387,11 +2404,11 @@ fn text_background_defaults_to_transparent_and_font_modes_persist() {
 }
 
 #[test]
-fn transparent_disp_composes_glyphs_in_the_same_text_cell() {
+fn transparent_gprint_composes_glyphs_in_the_same_text_cell() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
-20 LOCATE 0,0 : DISP "A";
-30 LOCATE 0,0 : DISP "_";
+20 LOCATE 0,0 : GPRINT "A";
+30 LOCATE 0,0 : GPRINT "_";
 40 PRINT "["+TESTCHR$(0,0)+"]"
 50 END"#,
     );
@@ -2405,7 +2422,7 @@ fn new_restores_smallfont_transparent() {
     interp.process_immediate("NEW").unwrap();
     interp.process_immediate("PLOT 0,479,2").unwrap();
     interp.process_immediate("LOCATE 0,0").unwrap();
-    interp.process_immediate("DISP \" \";").unwrap();
+    interp.process_immediate("GPRINT \" \";").unwrap();
     interp.process_immediate("PRINT TEST(0,479)").unwrap();
     assert_eq!(interp.take_output(), " 16711680\n");
 }
@@ -2414,7 +2431,7 @@ fn new_restores_smallfont_transparent() {
 fn testchr_reads_pixels_after_screen_restore() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
-20 DISP "Extremo superior izquierdo"
+20 GPRINT "Extremo superior izquierdo"
 30 A$=SCREEN$
 40 SCREEN
 50 SCREEN A$
@@ -2428,7 +2445,7 @@ fn testchr_reads_pixels_after_screen_restore() {
 fn testchr_returns_empty_for_modified_cell() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
-20 DISP "E"
+20 GPRINT "E"
 30 PLOT 0,479,2
 40 PRINT "["+TESTCHR$(0,0)+"]"
 50 END"#,

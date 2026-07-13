@@ -9,6 +9,6 @@
 50 DRAW r*COS(t),r*SIN(t)
 55 NEXT t
 60 INK 1 : MOVE -2.75,-1.5
-65 GDISP "r=1-cosØ"
+65 LABEL "r=1-cosØ"
 70 END
 

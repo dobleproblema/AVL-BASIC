@@ -1,13 +1,13 @@
-10 DISP "hello";
+10 GPRINT "hello";
 20 BIGFONT
-30 DISP "adios";
+30 GPRINT "adios";
 40 SMALLFONT
-50 DISP "hello";
+50 GPRINT "hello";
 60 BIGFONT
-70 MOVE WIDTH\2, HEIGHT\2 : GDISP "hello"
+70 MOVE WIDTH\2, HEIGHT\2 : LABEL "hello"
 80 LOCATE 0,1
 90 SMALLFONT
-100 DISP "hello";
+100 GPRINT "hello";
 110 LOCATE -2,2
-120 DISP "hello";
+120 GPRINT "hello";
 

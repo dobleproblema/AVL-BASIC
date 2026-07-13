@@ -12,7 +12,7 @@ use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, logical_round, round_half_away, Value};
-use crate::window::{focus_console_window, GraphicsWindow, MouseSnapshot};
+use crate::window::{focus_console_window, GraphicsInputEvent, GraphicsWindow, MouseSnapshot};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -79,6 +79,71 @@ pub enum RunOutcome {
 enum PrintDestination {
     Console,
     Graphics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputDestination {
+    Console,
+    Graphics,
+}
+
+#[derive(Debug, Default)]
+struct GraphicsLineEditor {
+    characters: Vec<char>,
+    cursor: usize,
+}
+
+impl GraphicsLineEditor {
+    fn apply(&mut self, event: GraphicsInputEvent) -> bool {
+        match event {
+            GraphicsInputEvent::Character(ch) => {
+                self.characters.insert(self.cursor, ch);
+                self.cursor += 1;
+            }
+            GraphicsInputEvent::Enter => return true,
+            GraphicsInputEvent::Escape => {
+                self.characters.clear();
+                self.cursor = 0;
+            }
+            GraphicsInputEvent::Backspace => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                    self.characters.remove(self.cursor);
+                }
+            }
+            GraphicsInputEvent::Delete => {
+                if self.cursor < self.characters.len() {
+                    self.characters.remove(self.cursor);
+                }
+            }
+            GraphicsInputEvent::Left => {
+                self.cursor = self.cursor.saturating_sub(1);
+            }
+            GraphicsInputEvent::Right => {
+                self.cursor = (self.cursor + 1).min(self.characters.len());
+            }
+            GraphicsInputEvent::Home => self.cursor = 0,
+            GraphicsInputEvent::End => self.cursor = self.characters.len(),
+        }
+        false
+    }
+
+    fn viewport(&self, width: usize, show_cursor: bool) -> (String, usize) {
+        let width = width.max(1);
+        let required = self.cursor + usize::from(show_cursor);
+        let start = required.saturating_sub(width);
+        let text = self
+            .characters
+            .iter()
+            .skip(start)
+            .take(width)
+            .collect::<String>();
+        (text, self.cursor - start)
+    }
+
+    fn into_string(self) -> String {
+        self.characters.into_iter().collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2239,7 +2304,12 @@ impl Interpreter {
             "REM" | "DATA" => Ok(()),
             "PRINT" | "?" => self.execute_print(command[first.len()..].trim()),
             "ZONE" => self.execute_zone(command[4..].trim()),
-            "INPUT" => self.execute_input(command[5..].trim(), cursor),
+            "INPUT" => {
+                self.execute_input_to(command[5..].trim(), cursor, InputDestination::Console)
+            }
+            "GINPUT" => {
+                self.execute_input_to(command[6..].trim(), cursor, InputDestination::Graphics)
+            }
             "LINE" if upper.starts_with("LINE INPUT") => {
                 self.execute_line_input(command[10..].trim(), cursor)
             }
@@ -2457,8 +2527,8 @@ impl Interpreter {
                 self.graphics.locate(args[0] as i32, args[1] as i32);
                 Ok(())
             }
-            "DISP" => self.execute_disp(command[4..].trim()),
-            "GDISP" => self.execute_gdisp(command[5..].trim()),
+            "GPRINT" => self.execute_gprint(command[6..].trim()),
+            "LABEL" => self.execute_label(command[5..].trim()),
             "FRAME" => self.execute_frame(command[5..].trim(), cursor),
             "MASK" => {
                 self.ensure_graphics_window()?;
@@ -3652,40 +3722,54 @@ impl Interpreter {
         Ok(compiled)
     }
 
-    fn execute_input(&mut self, args: &str, cursor: &Cursor) -> BasicResult<()> {
+    fn execute_input_to(
+        &mut self,
+        args: &str,
+        cursor: &Cursor,
+        destination: InputDestination,
+    ) -> BasicResult<()> {
         let mut body = args.trim();
+        let mut prompt = String::new();
         if body.starts_with('"') {
             let Some(end) = body[1..].find('"') else {
                 return Err(self.err(ErrorCode::Syntax));
             };
-            let prompt = &body[1..end + 1];
-            self.write(prompt);
+            prompt.push_str(&body[1..end + 1]);
             body = body[end + 2..].trim_start();
             if body.starts_with(';') {
-                self.write("? ");
+                prompt.push_str("? ");
                 body = body[1..].trim_start();
             } else if body.starts_with(',') {
                 body = body[1..].trim_start();
             }
         } else {
-            self.write("? ");
+            prompt.push_str("? ");
         }
-        print!("{}", self.take_output());
-        let _ = io::stdout().flush();
-        let mut line = String::new();
-        {
-            let _runtime_raw_suspend = console::suspend_runtime_raw_mode().ok();
-            if let Err(err) = io::stdin().read_line(&mut line) {
-                if err.kind() == io::ErrorKind::Interrupted {
-                    return self.check_user_interrupt(cursor);
+
+        let line = match destination {
+            InputDestination::Console => {
+                self.write(&prompt);
+                print!("{}", self.take_output());
+                let _ = io::stdout().flush();
+                let mut line = String::new();
+                {
+                    let _runtime_raw_suspend = console::suspend_runtime_raw_mode().ok();
+                    if let Err(err) = io::stdin().read_line(&mut line) {
+                        if err.kind() == io::ErrorKind::Interrupted {
+                            return self.check_user_interrupt(cursor);
+                        }
+                        return Err(self
+                            .err(ErrorCode::InvalidValue)
+                            .with_detail(err.to_string()));
+                    }
                 }
-                return Err(self
-                    .err(ErrorCode::InvalidValue)
-                    .with_detail(err.to_string()));
+                self.check_user_interrupt(cursor)?;
+                line.trim_end_matches(&['\r', '\n'][..]).to_string()
             }
-        }
-        self.check_user_interrupt(cursor)?;
-        let values = split_top_level(line.trim_end_matches(&['\r', '\n'][..]), &[',']);
+            InputDestination::Graphics => self.read_graphics_input_line(&prompt, cursor)?,
+        };
+
+        let values = split_top_level(&line, &[',']);
         let targets = split_arguments(body);
         if values.len() < targets.len() {
             return Err(self.err(ErrorCode::VarNumberMismatch));
@@ -3707,6 +3791,89 @@ impl Interpreter {
             self.assign(&target, value)?;
         }
         Ok(())
+    }
+
+    fn read_graphics_input_line(&mut self, prompt: &str, cursor: &Cursor) -> BasicResult<String> {
+        self.ensure_graphics_window()?;
+        if self.graphics_window.is_none() {
+            return Err(self.err(ErrorCode::Unsupported));
+        }
+
+        self.graphics.gprint(prompt, None, None);
+        let row = self.graphics.vpos();
+        let columns = self.graphics.text_columns();
+        let field_col = self.graphics.hpos().clamp(0, columns - 1);
+        let field_width = (columns - field_col).max(1) as usize;
+        self.graphics.locate(field_col, row);
+        self.graphics_window_dirty = true;
+        self.present_graphics_window()?;
+
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.focus();
+            window.clear_transient_input();
+        }
+
+        let mut editor = GraphicsLineEditor::default();
+        self.render_graphics_input_field(&editor, field_col, row, field_width, true)?;
+
+        loop {
+            let event = loop {
+                if let Some(event) = self
+                    .graphics_window
+                    .as_mut()
+                    .and_then(GraphicsWindow::take_input_event)
+                {
+                    break event;
+                }
+                self.pump_graphics_window_now()?;
+                self.check_user_interrupt(cursor)?;
+                if self.graphics_window.is_none() {
+                    return Err(self.err(ErrorCode::KeyboardInterrupt));
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            };
+
+            if editor.apply(event) {
+                self.render_graphics_input_field(&editor, field_col, row, field_width, false)?;
+                self.graphics.locate(0, row + 1);
+                self.graphics_window_dirty = true;
+                self.present_graphics_window()?;
+                if let Some(window) = self.graphics_window.as_mut() {
+                    window.clear_transient_input();
+                }
+                return Ok(editor.into_string());
+            }
+            self.render_graphics_input_field(&editor, field_col, row, field_width, true)?;
+        }
+    }
+
+    fn render_graphics_input_field(
+        &mut self,
+        editor: &GraphicsLineEditor,
+        field_col: i32,
+        row: i32,
+        field_width: usize,
+        show_cursor: bool,
+    ) -> BasicResult<()> {
+        let (visible, caret_col) = editor.viewport(field_width, show_cursor);
+        let saved_transparent = self.graphics.text_transparent();
+
+        self.graphics.set_text_transparent(false);
+        self.graphics.locate(field_col, row);
+        self.graphics.gprint(&" ".repeat(field_width), None, None);
+        self.graphics.locate(field_col, row);
+        self.graphics.gprint(&visible, None, None);
+
+        if show_cursor {
+            self.graphics.set_text_transparent(true);
+            self.graphics.locate(field_col + caret_col as i32, row);
+            self.graphics.gprint("_", None, None);
+        }
+
+        self.graphics.set_text_transparent(saved_transparent);
+        self.graphics.locate(field_col + caret_col as i32, row);
+        self.graphics_window_dirty = true;
+        self.present_graphics_window()
     }
 
     fn execute_line_input(&mut self, args: &str, cursor: &Cursor) -> BasicResult<()> {
@@ -7549,13 +7716,13 @@ impl Interpreter {
         }
     }
 
-    fn execute_disp(&mut self, args: &str) -> BasicResult<()> {
+    fn execute_gprint(&mut self, args: &str) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         self.execute_print_to(args, PrintDestination::Graphics)?;
         self.refresh_graphics_window()
     }
 
-    fn execute_gdisp(&mut self, args: &str) -> BasicResult<()> {
+    fn execute_label(&mut self, args: &str) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if !(1..=3).contains(&parts.len()) {
@@ -7564,7 +7731,7 @@ impl Interpreter {
         let text = self.eval_value(&parts[0])?.into_string()?;
         let ink = parts.get(1).map(|s| self.eval_color(s)).transpose()?;
         let paper = self.eval_optional_paper_color(&parts, 2)?;
-        self.graphics.gdisp(&text, ink, paper);
+        self.graphics.label(&text, ink, paper);
         self.refresh_graphics_window()
     }
 
@@ -8541,7 +8708,7 @@ impl Interpreter {
     fn print_write(&mut self, destination: PrintDestination, text: &str) {
         match destination {
             PrintDestination::Console => self.write(text),
-            PrintDestination::Graphics => self.graphics.disp(text, None, None),
+            PrintDestination::Graphics => self.graphics.gprint(text, None, None),
         }
     }
 
@@ -9674,6 +9841,37 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn graphical_line_editor_supports_unicode_navigation_and_deletion() {
+        let mut editor = GraphicsLineEditor::default();
+        for event in [
+            GraphicsInputEvent::Character('a'),
+            GraphicsInputEvent::Character('ñ'),
+            GraphicsInputEvent::Character('o'),
+            GraphicsInputEvent::Left,
+            GraphicsInputEvent::Character('i'),
+            GraphicsInputEvent::Home,
+            GraphicsInputEvent::Delete,
+            GraphicsInputEvent::End,
+            GraphicsInputEvent::Backspace,
+        ] {
+            assert!(!editor.apply(event));
+        }
+
+        assert_eq!(editor.into_string(), "ñi");
+    }
+
+    #[test]
+    fn graphical_line_editor_scrolls_only_its_viewport() {
+        let mut editor = GraphicsLineEditor::default();
+        for ch in "abcdef".chars() {
+            editor.apply(GraphicsInputEvent::Character(ch));
+        }
+
+        assert_eq!(editor.viewport(5, true), ("cdef".to_string(), 4));
+        assert_eq!(editor.viewport(5, false), ("bcdef".to_string(), 5));
+    }
 
     #[test]
     fn clear_input_buffer_clears_pending_keys_without_clearing_variables() {

@@ -332,58 +332,68 @@ Notas detalladas (INPUT)
 + LOCATE columna, fila                         Mueve cursor de texto.
 + BIGFONT [TRANSPARENT|OPAQUE]                 Fuente 16×16.
 + SMALLFONT [TRANSPARENT|OPAQUE]               Fuente 8×16.
-+ DISP [lista]                                 Equivalente gráfico de PRINT en coordenadas de texto (ignora ORIGIN).
-+ GDISP txt$[,tinta][,papel]                   Dibuja una cadena en coordenadas gráficas.
++ GPRINT [lista]                                 Equivalente gráfico de PRINT en coordenadas de texto (ignora ORIGIN).
++ GINPUT ["prompt"][,|;] var1[,var2…]          Equivalente gráfico de INPUT en coordenadas de texto.
++ LABEL txt$[,tinta][,papel]                   Dibuja una cadena en coordenadas gráficas.
 + c$ = TESTCHR$[(columna,fila)] Lee el carácter reconocible en una celda de texto.
-+ LDIR grados                 Orientación del texto de GDISP. LDIR 0 = horizontal.
++ LDIR grados                 Orientación del texto de LABEL. LDIR 0 = horizontal.
 
 Notas rápidas
 - `LOCATE` usa filas y columnas de texto; escala con `MODE` y la fuente (BIG/SMALL).
-- `DISP` y `GDISP` usan siempre las fuentes internas embebidas en el intérprete (`SMALLFONT` o `BIGFONT`).
+- `GPRINT`, `GINPUT` y `LABEL` usan siempre las fuentes internas embebidas en el intérprete (`SMALLFONT` o `BIGFONT`).
 - El estado inicial es `SMALLFONT TRANSPARENT`. `SCREEN` y `NEW` también lo restauran.
 - `SMALLFONT` y `BIGFONT` sin parámetro cambian solo el tamaño y conservan el modo de fondo actual.
 - En modo `TRANSPARENT` solo se dibujan los píxeles del glifo. En modo `OPAQUE`, cada celda se rellena primero con el `PAPER` actual.
 - `TESTCHR$` no mueve el cursor de texto. Sin argumentos lee en `HPOS,VPOS`; con dos argumentos lee esa columna/fila.
-- `TESTCHR$` lee una celda de la cuadrícula de texto. Está pensado para caracteres emitidos con `DISP` en columnas/filas de texto. Si el carácter se dibuja con `GDISP` en coordenadas gráficas arbitrarias, normalmente no se reconocerá salvo que su esquina superior izquierda coincida exactamente con la celda que se está leyendo.
+- `TESTCHR$` lee una celda de la cuadrícula de texto. Está pensado para caracteres emitidos con `GPRINT` en columnas/filas de texto. Si el carácter se dibuja con `LABEL` en coordenadas gráficas arbitrarias, normalmente no se reconocerá salvo que su esquina superior izquierda coincida exactamente con la celda que se está leyendo.
 - `TESTCHR$` usa la fuente actual (`SMALLFONT` o `BIGFONT`) para reconocer los píxeles. Devuelve `""` si la celda no coincide exactamente con un glifo conocido: por ejemplo, si el carácter está recortado, deformado, sobrescrito o sobre un fondo no uniforme.
 - Si un carácter no está definido en la fuente, se muestra `□` (cuadro de sustitución).
-- Igual para los caracteres de control, que no son soportados por DISP/GDISP. Por ejemplo: `DISP CHR$(13)` → □
-- La orientación de LDIR está en grados; se redondea al entero más cercano y se normaliza módulo 360. Los ángulos positivos giran en sentido horario. Solo afecta a GDISP (en DISP se ignora).
-- `DISP` imprime texto en coordenadas de texto y no respeta `ORIGIN`.
-- `GDISP` imprime en coordenadas gráficas y respeta `LDIR` para orientar el texto. El cursor gráfico queda en el final del texto, según la orientación actual.
-- Al imprimir con `GDISP`, es la esquina superior izquierda del carácter la que ocupa la posición del cursor gráfico. 
-- Importante: en `GDISP`, `MOVE X,Y` ancla en la esquina izquierda-superior del texto.
+- Igual para los caracteres de control, que no son soportados por GPRINT/LABEL. Por ejemplo: `GPRINT CHR$(13)` → □
+- La orientación de LDIR está en grados; se redondea al entero más cercano y se normaliza módulo 360. Los ángulos positivos giran en sentido horario. Solo afecta a LABEL (en GPRINT se ignora).
+- `GPRINT` imprime texto en coordenadas de texto y no respeta `ORIGIN`.
+- `LABEL` imprime en coordenadas gráficas y respeta `LDIR` para orientar el texto. El cursor gráfico queda en el final del texto, según la orientación actual.
+- Al imprimir con `LABEL`, es la esquina superior izquierda del carácter la que ocupa la posición del cursor gráfico.
+- Importante: en `LABEL`, `MOVE X,Y` ancla en la esquina izquierda-superior del texto.
 - Importante: en `SPRITE`/`SPRITE MOVE`, `X,Y` ancla en la esquina izquierda-inferior del sprite.
 - Conversión útil al mezclar texto y sprites: `Ysprite = Ytexto - (alto - 1)`. Con `BIGFONT` (`alto=16`): `Ysprite = Ytexto - 15`.
-- `GDISP` conserva su forma `GDISP txt$[,tinta][,papel]`: un `papel` negativo fuerza transparencia y uno no negativo fuerza ese fondo. Si se omite, usa el modo `TRANSPARENT`/`OPAQUE` actual.
+- `LABEL` conserva su forma `LABEL txt$[,tinta][,papel]`: un `papel` negativo fuerza transparencia y uno no negativo fuerza ese fondo. Si se omite, usa el modo `TRANSPARENT`/`OPAQUE` actual.
 - El cursor puede situarse fuera del área visible. El texto se recorta (clipping) y puede no verse o verse solo parcialmente. El cursor avanza igualmente como si todo el texto se hubiera emitido.
-  • Ejemplo: LOCATE -3,10 : DISP "hermanos" → solo se verá `manos` entrando por el borde izquierdo en la fila 10.
+  • Ejemplo: LOCATE -3,10 : GPRINT "hermanos" → solo se verá `manos` entrando por el borde izquierdo en la fila 10.
   • Se aplica a los cuatro bordes: los glifos se recortan y el cursor gráfico queda tras el último carácter, sea visible o no.
 
 
-Notas sobre DISP
-- `DISP` usa la misma lista de impresión que `PRINT`: admite cadenas, números, elementos vacíos, `;`, `,`, `USING`, `SPC(n)` y `TAB(n)`.
-- `ZONE n` determina también las zonas a las que avanzan las comas de `DISP`.
-- Sin separador final, `DISP` deja `HPOS=0` y avanza a `VPOS+1`. Un `;` final deja el cursor tras el último elemento; una coma final avanza a la siguiente zona. `DISP` sin argumentos avanza una fila.
-- `DISP` no hace ajuste de línea ni scroll automáticos: si el cursor sale de la cuadrícula visible, la salida se recorta y el cursor sigue avanzando.
-- `DISP` no afecta al cursor gráfico.
+Notas sobre GPRINT
+- `GPRINT` usa la misma lista de impresión que `PRINT`: admite cadenas, números, elementos vacíos, `;`, `,`, `USING`, `SPC(n)` y `TAB(n)`.
+- `ZONE n` determina también las zonas a las que avanzan las comas de `GPRINT`.
+- Sin separador final, `GPRINT` deja `HPOS=0` y avanza a `VPOS+1`. Un `;` final deja el cursor tras el último elemento; una coma final avanza a la siguiente zona. `GPRINT` sin argumentos avanza una fila.
+- `GPRINT` no hace ajuste de línea ni scroll automáticos: si el cursor sale de la cuadrícula visible, la salida se recorta y el cursor sigue avanzando.
+- `GPRINT` no afecta al cursor gráfico.
 - Ejemplos:
-  • `DISP USING "0# ";hora;minuto;segundo`
-  • `DISP "NOMBRE","DIRECCIÓN"`
-  • `DISP "NOMBRE: ";X$`
-  • `DISP 3+4;`
+  • `GPRINT USING "0# ";hora;minuto;segundo`
+  • `GPRINT "NOMBRE","DIRECCIÓN"`
+  • `GPRINT "NOMBRE: ";X$`
+  • `GPRINT 3+4;`
 - La transparencia permite composición: tras volver a la misma posición con `LOCATE`, imprimir `_` o `-` puede subrayar o tachar texto anterior.
 - En modo transparente, los espacios no borran píxeles y reimprimir texto sobre la misma celda puede dejar restos del glifo anterior. Para relojes, marcadores y otros campos reemplazables, usa `SMALLFONT OPAQUE` o `BIGFONT OPAQUE`, o limpia/redibuja la zona.
 - Una celda compuesta por varios glifos deja de coincidir exactamente con un carácter; `TESTCHR$` devuelve `""` en ese caso.
+
+Notas sobre GINPUT
+- `GINPUT` usa la misma sintaxis, separación por comas, asignación, tipos y tratamiento del prompt que `INPUT`. `INPUT` continúa leyendo en la consola.
+- El prompt se dibuja desde `HPOS,VPOS` con el modo `TRANSPARENT`/`OPAQUE` actual. El campo editable comienza justo después del prompt y ocupa el resto de esa fila.
+- El campo editable se repinta siempre en modo opaco con el `PAPER` actual, incluido el cursor. Esta opacidad es local a la edición y no cambia el modo persistente de `SMALLFONT`/`BIGFONT`.
+- Si la entrada es más larga que el campo, solo se desplaza horizontalmente el contenido editable para mantener visible el cursor; el prompt permanece fijo y no hay salto automático de fila.
+- Edición: `←`/`→`, `Home`, `End`, `BackSpace` y `Delete`. `Escape` borra la línea actual. `Enter` acepta los valores, deja `HPOS=0` y avanza a `VPOS+1`.
+- `GINPUT` da el foco a la ventana gráfica y acepta los caracteres proporcionados por la distribución de teclado del sistema.
+- `LINE INPUT` y `MAT INPUT` siguen siendo órdenes de consola; no existen `GLINE INPUT` ni `MAT GINPUT`.
 
 Ejemplo
 10 x=13 : y=8 : m=2 : s$=" *   *   *   *   *   *   * "
 20 MODE 640 : SMALLFONT OPAQUE
 30 FOR i=y TO y+12
-40   PAPER m : INK 0 : LOCATE x,i : DISP SPACE$(53); : m=3-m
-50   IF i<y+7 THEN PAPER 4 : INK 1 : LOCATE x,i : DISP MID$(s$,m+m-1,23);
+40   PAPER m : INK 0 : LOCATE x,i : GPRINT SPACE$(53); : m=3-m
+50   IF i<y+7 THEN PAPER 4 : INK 1 : LOCATE x,i : GPRINT MID$(s$,m+m-1,23);
 60 NEXT i
-70 PAPER 0 : INK 1 : BIGFONT OPAQUE : LOCATE 17,25 : DISP "U.S.A."
+70 PAPER 0 : INK 1 : BIGFONT OPAQUE : LOCATE 17,25 : GPRINT "U.S.A."
 80 END
 
 6. Entorno gráfico
@@ -421,7 +431,7 @@ Notas rápidas
   en esos bucles: borra el buffer y deja la actualización visible para el
   siguiente `FRAME`.
 - `CLG` y `CLG OFFSCREEN` también devuelven el cursor gráfico y el cursor de
-  texto a `(0,0)`. Por tanto, un `DISP` posterior vuelve a empezar en la
+  texto a `(0,0)`. Por tanto, un `GPRINT` posterior vuelve a empezar en la
   columna/fila 0 salvo que se use `LOCATE`.
 - `FRAME fps` conserva la semántica de `FRAME` sin argumentos, pero limita las
   siguientes llamadas explícitas a `FRAME` al máximo de FPS indicado. El primer
@@ -514,7 +524,7 @@ Notas rápidas (figuras)
 6.4 Colores
 
 + INK c|r,g,b|"r,g,b"|"nombretk"     'Color que se va a usar para dibujar.      
-+ PAPER c|r,g,b|"r,g,b"|"nombretk"   'Color usado por CLG y, en modo OPAQUE, como fondo de DISP y GDISP.
++ PAPER c|r,g,b|"r,g,b"|"nombretk"   'Color usado por CLG y, en modo OPAQUE, como fondo de GPRINT y LABEL.
 
 Donde c puede ser un color en uno de los siguientes formatos:
 - 0-31            Paleta predefinida
@@ -546,12 +556,12 @@ Ejemplo
 15 PAPER 0 : INK 5 'INK "1,1,1" para que sea 'invisible' el texto base
 20 SMALLFONT : CLG
 25 MOVE 0,15
-30 FOR C=0 TO 9 : READ Char$(C) : GDISP Char$(C) : NEXT
+30 FOR C=0 TO 9 : READ Char$(C) : LABEL Char$(C) : NEXT
 35 PAPER 2 : INK 5
 40 BIGFONT
 45 FOR y=0 TO 15
 50 FOR x=0 TO 79
-55 IF TEST(x,y)<>RGB("black") THEN LOCATE x MOD 40,15*(x\40+1)-y:DISP Char$(x\8)
+55 IF TEST(x,y)<>RGB("black") THEN LOCATE x MOD 40,15*(x\40+1)-y:GPRINT Char$(x\8)
 60 NEXT x
 65 NEXT y
 70 SCREEN
@@ -591,7 +601,7 @@ Ejemplo (muestra en pantalla todos los colores de la paleta predefinida)
 50 FOR I=0 TO 7
 55 FOR C=0 TO 24 STEP 8
 60 MOVER 0,-120 : FILL I+C
-65 INK -(I+C=0) : LOCATE 4+10*I,C+3-C\16 : DISP USING "0#";I+C;
+65 INK -(I+C=0) : LOCATE 4+10*I,C+3-C\16 : GPRINT USING "0#";I+C;
 70 NEXT C
 75 MOVER 80,480
 80 NEXT I
@@ -694,7 +704,7 @@ Notas generales
 - Los sprites usan el mismo formato que `SCREEN$` y los ficheros guardados con `BSAVE`: `ancho x alto:datoshex`. Puedes almacenarlos en variables o ficheros para reutilizarlos.
 - `SPRITE$` aplica `ORIGIN` y la ventana lógica. Si la captura se sale de la pantalla, mantiene el tamaño solicitado rellenando con negro las zonas fuera de los límites físicos.
 - `SPRITE` respeta `ORIGIN`, la ventana gráfica y el clipping del canvas. No fuerza refresco; llama a `FRAME` cuando quieras mostrar el resultado.
-- Recuerda el anclaje: `SPRITE ... ,X,Y` usa `Y` como borde inferior. Si vienes de un `GDISP` con `MOVE X,Y` (borde superior), convierte `Y` con `Ysprite = Ytexto - (alto - 1)`.
+- Recuerda el anclaje: `SPRITE ... ,X,Y` usa `Y` como borde inferior. Si vienes de un `LABEL` con `MOVE X,Y` (borde superior), convierte `Y` con `Ysprite = Ytexto - (alto - 1)`.
 - `SPRITE HITTEST` usa exactamente las mismas reglas de clipping y transparencia que `SPRITE`, pero no altera ni el buffer gráfico ni el mapa de propietarios.
 - El parámetro `t` acepta cualquier formato de color (`INK`, `RGB`, índices de paleta). Los píxeles de ese color se dejan intactos.
 - Si no pasas `id`, la detección sprite-sprite usa un identificador interno según el orden de dibujo del frame (`CLG/COLRESET` reinician ese mapa).
@@ -783,7 +793,7 @@ Ejemplo (captura y transparencia)
 30 INK 4 : FCIRCLE 200,120,30
 40 cara$ = SPRITE$(150,70,250,170)
 50 PAPER 1 : CLG
-60 INK 2 : BIGFONT OPAQUE : LOCATE 2,24 : DISP "EJEMPLO DE SPRITE$ + SPRITE CON TRANSPARENCIA"
+60 INK 2 : BIGFONT OPAQUE : LOCATE 2,24 : GPRINT "EJEMPLO DE SPRITE$ + SPRITE CON TRANSPARENCIA"
 70 SPRITE cara$,40,40,14 'Gris (14) transparente
 80 SPRITE cara$,140,40,4 'Azul (4) transparente
 90 SPRITE cara$,90,100,0 'Negro (0) transparente
@@ -827,7 +837,7 @@ Ejemplo (colisiones por color + sprite-sprite con id explícito)
 350     ENDIF
 360   ENDIF
 370 NEXT I
-380 IF TMSG>0 THEN MOVE TX,TY : GDISP MSG$,15,-1 : TMSG=TMSG-1
+380 IF TMSG>0 THEN MOVE TX,TY : LABEL MSG$,15,-1 : TMSG=TMSG-1
 490 ENDIF
 400 FRAME : PAUSE 10 : GOTO 100
 

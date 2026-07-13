@@ -988,11 +988,20 @@ impl Graphics {
         self.text_transparent = transparent;
     }
 
+    pub fn text_transparent(&self) -> bool {
+        self.text_transparent
+    }
+
+    pub fn text_columns(&self) -> i32 {
+        let (cell_w, _) = font_dimensions(self.font);
+        (self.width as i32 / cell_w).max(1)
+    }
+
     pub fn set_ldir(&mut self, angle: i32) {
         self.ldir = angle;
     }
 
-    pub fn disp(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
+    pub fn gprint(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
         let color = ink.map(resolve_color_number).unwrap_or(self.current_color);
         let paper = self.text_background_color(paper);
         let (cell_w, cell_h) = font_dimensions(self.font);
@@ -1008,7 +1017,7 @@ impl Graphics {
         }
     }
 
-    pub fn gdisp(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
+    pub fn label(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
         let color = ink.map(resolve_color_number).unwrap_or(self.current_color);
         let paper = self.text_background_color(paper);
         let (cell_w, _) = font_dimensions(self.font);
@@ -2552,12 +2561,12 @@ mod tests {
         });
         assert_operation_marks_buffer_dirty(Graphics::new(640), "text", |graphics| {
             graphics.locate(3, 4);
-            graphics.disp("Damage", Some(7), Some(0));
+            graphics.gprint("Damage", Some(7), Some(0));
         });
         assert_operation_marks_buffer_dirty(Graphics::new(640), "rotated text", |graphics| {
             graphics.move_to(180.0, 200.0);
             graphics.set_ldir(37);
-            graphics.gdisp("Rotated", Some(8), Some(-1));
+            graphics.label("Rotated", Some(8), Some(-1));
         });
         assert_operation_marks_buffer_dirty(Graphics::new(640), "sprite", |graphics| {
             graphics

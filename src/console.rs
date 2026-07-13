@@ -124,6 +124,7 @@ const KEYWORDS: &[&str] = &[
     "BASE",
     "USING",
     "INPUT",
+    "GINPUT",
     "LINE",
     "RANDOMIZE",
     "ERROR",
@@ -208,8 +209,8 @@ const KEYWORDS: &[&str] = &[
     "BIGFONT",
     "SMALLFONT",
     "LOCATE",
-    "DISP",
-    "GDISP",
+    "GPRINT",
+    "LABEL",
     "XAXIS",
     "YAXIS",
     "CROSSAT",
@@ -2931,7 +2932,17 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                 out.push_str(&upper);
                 if matches!(
                     upper.as_str(),
-                    "LOAD" | "SAVE" | "RUN" | "CHAIN" | "MERGE" | "CAT" | "FILES" | "CD" | "USING"
+                    "LOAD"
+                        | "SAVE"
+                        | "RUN"
+                        | "CHAIN"
+                        | "MERGE"
+                        | "CAT"
+                        | "FILES"
+                        | "CD"
+                        | "USING"
+                        | "GPRINT"
+                        | "LABEL"
                 ) {
                     let mut probe = i;
                     while probe < chars.len() && chars[probe] == ' ' {

@@ -248,7 +248,7 @@ fn closing_dirty_no_frame_program_does_not_reopen_window() {
     wait_for_line(&rx, "Ready", Duration::from_secs(5));
     stdin
         .write_all(
-            b"10 CLG : DISP \"escalera\"\n\
+            b"10 CLG : GPRINT \"escalera\"\n\
 20 MOVE 0,400 : FOR n=1 TO 8\n\
 30 DRAWR 50,0\n\
 40 DRAWR 0,-50\n\

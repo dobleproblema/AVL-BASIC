@@ -1,11 +1,76 @@
 use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::graphics::Graphics;
-use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::fmt;
+use std::rc::Rc;
+
+const INPUT_EVENT_QUEUE_LIMIT: usize = 4096;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicsInputEvent {
+    Character(char),
+    Enter,
+    Escape,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+}
+
+type InputEventQueue = Rc<RefCell<VecDeque<GraphicsInputEvent>>>;
+
+struct GraphicsInputCallback {
+    events: InputEventQueue,
+}
+
+impl GraphicsInputCallback {
+    fn push(&self, event: GraphicsInputEvent) {
+        let mut events = self.events.borrow_mut();
+        if events.len() >= INPUT_EVENT_QUEUE_LIMIT {
+            events.pop_front();
+        }
+        events.push_back(event);
+    }
+}
+
+impl InputCallback for GraphicsInputCallback {
+    fn add_char(&mut self, codepoint: u32) {
+        if let Some(ch) = char::from_u32(codepoint) {
+            if matches!(ch, '\r' | '\n') {
+                self.push(GraphicsInputEvent::Enter);
+                return;
+            }
+            if !ch.is_control() {
+                self.push(GraphicsInputEvent::Character(ch));
+            }
+        }
+    }
+
+    fn set_key_state(&mut self, key: Key, pressed: bool) {
+        if !pressed {
+            return;
+        }
+        let event = match key {
+            Key::Enter | Key::NumPadEnter => GraphicsInputEvent::Enter,
+            Key::Escape => GraphicsInputEvent::Escape,
+            Key::Backspace => GraphicsInputEvent::Backspace,
+            Key::Delete => GraphicsInputEvent::Delete,
+            Key::Left => GraphicsInputEvent::Left,
+            Key::Right => GraphicsInputEvent::Right,
+            Key::Home => GraphicsInputEvent::Home,
+            Key::End => GraphicsInputEvent::End,
+            _ => return,
+        };
+        self.push(event);
+    }
+}
 
 pub struct GraphicsWindow {
     window: Window,
@@ -13,6 +78,7 @@ pub struct GraphicsWindow {
     height: usize,
     mouse: MouseSnapshot,
     key_queue: VecDeque<u8>,
+    input_events: InputEventQueue,
     ctrl_c_down: bool,
 }
 
@@ -55,12 +121,17 @@ impl GraphicsWindow {
         // immediate mode). A minifb-side FPS cap here would sleep on every
         // event/buffer update and make PLOT-heavy programs unusably slow.
         window.set_target_fps(0);
+        let input_events = InputEventQueue::default();
+        window.set_input_callback(Box::new(GraphicsInputCallback {
+            events: input_events.clone(),
+        }));
         let mut graphics_window = Self {
             window,
             width: graphics.width,
             height: graphics.height,
             mouse: MouseSnapshot::default(),
             key_queue: VecDeque::new(),
+            input_events,
             ctrl_c_down: false,
         };
         graphics_window
@@ -119,19 +190,26 @@ impl GraphicsWindow {
 
     pub fn clear_key_queue(&mut self) {
         self.key_queue.clear();
+        self.input_events.borrow_mut().clear();
     }
 
     pub fn clear_transient_input(&mut self) {
         self.key_queue.clear();
+        self.input_events.borrow_mut().clear();
         if self.window.is_open() {
             self.window.update();
             let _ = self.window.get_keys_pressed(KeyRepeat::No);
             self.ctrl_c_down = self.ctrl_c_state().down;
         }
+        self.input_events.borrow_mut().clear();
     }
 
     pub fn take_key_code(&mut self) -> Option<u8> {
         self.key_queue.pop_front()
+    }
+
+    pub fn take_input_event(&mut self) -> Option<GraphicsInputEvent> {
+        self.input_events.borrow_mut().pop_front()
     }
 
     pub fn key_down_code(&self, code: u8) -> bool {
@@ -177,6 +255,7 @@ impl GraphicsWindow {
     fn update_keyboard(&mut self) {
         if self.update_ctrl_c_state() {
             self.key_queue.clear();
+            self.input_events.borrow_mut().clear();
             return;
         }
         let ctrl_down = self.ctrl_down();
@@ -503,8 +582,10 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{code_to_key, key_to_code};
-    use minifb::Key;
+    use super::{
+        code_to_key, key_to_code, GraphicsInputCallback, GraphicsInputEvent, InputEventQueue,
+    };
+    use minifb::{InputCallback, Key};
 
     #[test]
     fn gui_arrow_codes_match_python_keydown_values() {
@@ -516,5 +597,28 @@ mod tests {
         assert_eq!(code_to_key(29), Some(Key::Right));
         assert_eq!(code_to_key(30), Some(Key::Up));
         assert_eq!(code_to_key(31), Some(Key::Down));
+    }
+
+    #[test]
+    fn graphical_input_callback_preserves_unicode_and_edit_event_order() {
+        let events = InputEventQueue::default();
+        let mut callback = GraphicsInputCallback {
+            events: events.clone(),
+        };
+
+        callback.add_char('ñ' as u32);
+        callback.set_key_state(Key::Left, true);
+        callback.add_char('á' as u32);
+        callback.set_key_state(Key::Enter, true);
+
+        assert_eq!(
+            events.borrow().iter().copied().collect::<Vec<_>>(),
+            vec![
+                GraphicsInputEvent::Character('ñ'),
+                GraphicsInputEvent::Left,
+                GraphicsInputEvent::Character('á'),
+                GraphicsInputEvent::Enter,
+            ]
+        );
     }
 }
