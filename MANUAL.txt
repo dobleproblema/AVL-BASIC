@@ -378,6 +378,18 @@ Notes on GPRINT
 - In transparent mode, spaces do not erase pixels and reprinting text over the same cell may leave parts of the previous glyph. For clocks, scoreboards, and other replaceable fields, use `SMALLFONT OPAQUE` or `BIGFONT OPAQUE`, or clear/redraw the area.
 - A cell composed from multiple glyphs no longer exactly matches one character; `TESTCHR$` returns `""` in that case.
 
+Notes on LABEL and PRINT equivalents
+- `LABEL` is deliberately more elementary than `GPRINT`: it draws a single string from the graphics cursor, using the `LDIR` orientation and the optional ink and paper arguments.
+- It only accepts a string. Numbers must be converted with `STR$`; to give them the same format as `PRINT USING`, use `DEC$`, which accepts the same masks as `USING`.
+- It does not accept print lists, `;`, `,`, `USING`, `SPC(n)`, `TAB(n)`, or `ZONE`. Build one string by concatenating with `+` and, when needed, `SPACE$`.
+- After printing, `LABEL` leaves the graphics cursor at the end of the string according to the current orientation; it does not change `HPOS` or `VPOS` and does not perform an implicit newline.
+- To begin another line, reposition the cursor explicitly with `MOVE`. With `LDIR 0`, the physical scale, and either font (both are 16 pixels high), for example: `X0=40:Y0=400:MOVE X0,Y0:LABEL A$:MOVE X0,Y0-16`.
+- Examples of `PRINT` output and how to reproduce it with `LABEL`:
+  * `PRINT USING "0########## ";B1(A);` -> `LABEL DEC$(B1(A),"0########## ")`
+  * `PRINT "NAME","ADDRESS";` -> `LABEL "NAME"+SPACE$(22-LEN("NAME"))+"ADDRESS"` (from the start of a zone and with the default width of 22)
+  * `PRINT "NAME: ";X$` -> `MOVE X0,Y0:LABEL "NAME: "+X$:MOVE X0,Y0-16` (the second `MOVE` simulates the final newline)
+  * `PRINT 3+4;` -> `LABEL STR$(3+4)`
+
 Notes on GINPUT
 - `GINPUT` uses the same syntax, comma-separated fields, assignment, types, and prompt rules as `INPUT`. `INPUT` continues to read from the console.
 - The prompt is drawn from `HPOS,VPOS` using the current `TRANSPARENT`/`OPAQUE` mode. The editable field begins immediately after the prompt and occupies the rest of that row.

@@ -377,6 +377,18 @@ Notas sobre GPRINT
 - En modo transparente, los espacios no borran píxeles y reimprimir texto sobre la misma celda puede dejar restos del glifo anterior. Para relojes, marcadores y otros campos reemplazables, usa `SMALLFONT OPAQUE` o `BIGFONT OPAQUE`, o limpia/redibuja la zona.
 - Una celda compuesta por varios glifos deja de coincidir exactamente con un carácter; `TESTCHR$` devuelve `""` en ese caso.
 
+Notas sobre LABEL y equivalencias con PRINT
+- `LABEL` es deliberadamente más elemental que `GPRINT`: dibuja una única cadena desde el cursor gráfico, con la orientación de `LDIR` y los parámetros opcionales de tinta y papel.
+- Solo admite una cadena. Para incluir números hay que convertirlos con `STR$`; para darles el mismo formato que `PRINT USING`, usa `DEC$`, que acepta las mismas máscaras que `USING`.
+- No admite listas de impresión, `;`, `,`, `USING`, `SPC(n)`, `TAB(n)` ni `ZONE`. Hay que construir una sola cadena mediante concatenación con `+` y, cuando sea necesario, `SPACE$`.
+- Tras imprimir, `LABEL` deja el cursor gráfico al final de la cadena según la orientación actual; no modifica `HPOS` ni `VPOS` y no hace un salto de línea implícito.
+- Para comenzar otra línea hay que reposicionar explícitamente el cursor con `MOVE`. Con `LDIR 0`, escala física y cualquiera de las dos fuentes (ambas tienen 16 píxeles de alto), por ejemplo: `X0=40:Y0=400:MOVE X0,Y0:LABEL A$:MOVE X0,Y0-16`.
+- Ejemplos de impresiones con `PRINT` y cómo reproducirlas con `LABEL`:
+  • `PRINT USING "0########## ";B1(A);` → `LABEL DEC$(B1(A),"0########## ")`
+  • `PRINT "NOMBRE","DIRECCIÓN";` → `LABEL "NOMBRE"+SPACE$(22-LEN("NOMBRE"))+"DIRECCIÓN"` (desde el comienzo de una zona y con el ancho predeterminado de 22)
+  • `PRINT "NOMBRE: ";X$` → `MOVE X0,Y0:LABEL "NOMBRE: "+X$:MOVE X0,Y0-16` (el segundo `MOVE` simula el salto de línea final)
+  • `PRINT 3+4;` → `LABEL STR$(3+4)`
+
 Notas sobre GINPUT
 - `GINPUT` usa la misma sintaxis, separación por comas, asignación, tipos y tratamiento del prompt que `INPUT`. `INPUT` continúa leyendo en la consola.
 - El prompt se dibuja desde `HPOS,VPOS` con el modo `TRANSPARENT`/`OPAQUE` actual. El campo editable comienza justo después del prompt y ocupa el resto de esa fila.
