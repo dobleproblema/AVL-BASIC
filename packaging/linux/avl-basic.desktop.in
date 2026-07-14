@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AVL BASIC
+GenericName=BASIC Interpreter
+GenericName[es]=Intérprete BASIC
+Comment=Interactive BASIC interpreter with native graphics
+Comment[es]=Intérprete BASIC interactivo con gráficos nativos
+Exec=@EXEC@
+Icon=avl-basic
+Terminal=true
+Categories=Development;
+Keywords=BASIC;Programming;Interpreter;Graphics;
+StartupNotify=false

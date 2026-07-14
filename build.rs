@@ -17,6 +17,7 @@ struct FontSource {
 fn main() {
     println!("cargo:rerun-if-changed=windows.rc");
     println!("cargo:rerun-if-changed=assets/avl-basic.ico");
+    println!("cargo:rerun-if-changed=assets/linux/hicolor");
     println!("cargo:rerun-if-changed=assets/fonts/avl-basic-fonts.txt");
     println!("cargo:rerun-if-changed=samples");
 

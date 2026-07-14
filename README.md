@@ -74,6 +74,22 @@ The compiled executable is created at:
 - Windows: `target/release/avl-basic.exe`
 - Linux/macOS: `target/release/avl-basic`
 
+On Linux, the application icon is embedded in the executable and assigned to
+the graphics window under X11. A standalone ELF executable still has the
+generic executable icon in file managers, as is normal on Linux. To install
+the compiled interpreter, standard `hicolor` application icons, and an AVL
+BASIC launcher in your user desktop menu, run:
+
+```bash
+sh packaging/install_linux_desktop.sh
+```
+
+The script uses `target/release/avl-basic` by default. You may pass another
+compiled executable as its first argument. It installs files under
+`~/.local/bin` and `${XDG_DATA_HOME:-~/.local/share}` without requiring root
+permissions. The launcher opens a terminal because AVL BASIC remains a
+console-first interpreter.
+
 For source builds, `cargo build` creates a `target/release/samples` directory
 link to the repository examples. If your working directory is `target/release`,
 `CD "samples"` works by normal path resolution.

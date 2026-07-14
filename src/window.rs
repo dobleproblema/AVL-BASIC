@@ -1,12 +1,16 @@
 use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::graphics::Graphics;
+#[cfg(target_os = "linux")]
+use minifb::Icon;
 use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::fmt;
+#[cfg(target_os = "linux")]
+use std::io::Cursor;
 use std::rc::Rc;
 
 const INPUT_EVENT_QUEUE_LIMIT: usize = 4096;
@@ -389,7 +393,90 @@ fn set_embedded_window_icon(window: &mut Window) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn set_embedded_window_icon(window: &mut Window) {
+    let Some(argb) = embedded_linux_window_icon_argb() else {
+        return;
+    };
+    if let Ok(icon) = Icon::try_from(argb.as_slice()) {
+        window.set_icon(icon);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn embedded_linux_window_icon_argb() -> Option<Vec<u64>> {
+    const ICONS: [&[u8]; 3] = [
+        include_bytes!("../assets/linux/hicolor/32x32/apps/avl-basic.png"),
+        include_bytes!("../assets/linux/hicolor/64x64/apps/avl-basic.png"),
+        include_bytes!("../assets/linux/hicolor/128x128/apps/avl-basic.png"),
+    ];
+    let mut argb = Vec::new();
+    for icon in ICONS {
+        argb.extend(png_window_icon_argb(icon)?);
+    }
+    Some(argb)
+}
+
+#[cfg(target_os = "linux")]
+fn png_window_icon_argb(png_bytes: &[u8]) -> Option<Vec<u64>> {
+    let mut decoder = png::Decoder::new(Cursor::new(png_bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut decoded = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut decoded).ok()?;
+    let pixels = &decoded[..info.buffer_size()];
+    let width = usize::try_from(info.width).ok()?;
+    let height = usize::try_from(info.height).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let pixel_count = width.checked_mul(height)?;
+    let mut argb = Vec::with_capacity(pixel_count.checked_add(2)?);
+    argb.push(width as u64);
+    argb.push(height as u64);
+    for index in 0..pixel_count {
+        argb.push(png_pixel_to_argb(pixels, info.color_type, index)?);
+    }
+    Some(argb)
+}
+
+#[cfg(target_os = "linux")]
+fn png_pixel_to_argb(pixels: &[u8], color_type: png::ColorType, index: usize) -> Option<u64> {
+    let (red, green, blue, alpha) = match color_type {
+        png::ColorType::Rgba => {
+            let start = index.checked_mul(4)?;
+            (
+                *pixels.get(start)?,
+                *pixels.get(start + 1)?,
+                *pixels.get(start + 2)?,
+                *pixels.get(start + 3)?,
+            )
+        }
+        png::ColorType::Rgb => {
+            let start = index.checked_mul(3)?;
+            (
+                *pixels.get(start)?,
+                *pixels.get(start + 1)?,
+                *pixels.get(start + 2)?,
+                255,
+            )
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let start = index.checked_mul(2)?;
+            let gray = *pixels.get(start)?;
+            (gray, gray, gray, *pixels.get(start + 1)?)
+        }
+        png::ColorType::Grayscale => {
+            let gray = *pixels.get(index)?;
+            (gray, gray, gray, 255)
+        }
+        png::ColorType::Indexed => return None,
+    };
+    Some(((alpha as u64) << 24) | ((red as u64) << 16) | ((green as u64) << 8) | blue as u64)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn set_embedded_window_icon(_window: &mut Window) {}
 
 fn key_to_code(key: Key, shifted: bool) -> Option<u8> {
@@ -587,6 +674,9 @@ mod tests {
     };
     use minifb::{InputCallback, Key};
 
+    #[cfg(target_os = "linux")]
+    use super::embedded_linux_window_icon_argb;
+
     #[test]
     fn gui_arrow_codes_match_python_keydown_values() {
         assert_eq!(key_to_code(Key::Left, false), Some(28));
@@ -620,5 +710,20 @@ mod tests {
                 GraphicsInputEvent::Enter,
             ]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn embedded_linux_icon_contains_all_x11_sizes() {
+        let argb = embedded_linux_window_icon_argb()
+            .expect("the embedded Linux icons must be valid PNG files");
+        let mut offset = 0;
+        for size in [32usize, 64, 128] {
+            assert_eq!(&argb[offset..offset + 2], &[size as u64, size as u64]);
+            let pixels = &argb[offset + 2..offset + 2 + size * size];
+            assert!(pixels.iter().any(|pixel| pixel >> 24 != 0));
+            offset += 2 + size * size;
+        }
+        assert_eq!(offset, argb.len());
     }
 }

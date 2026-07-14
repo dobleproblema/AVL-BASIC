@@ -47,6 +47,7 @@ Requisitos
 Instalación por sistema
 - Windows: descarga el último `avl-basic-*-windows-x64.zip` de GitHub Releases, extráelo y ejecuta `avl-basic.exe`.
 - Linux/macOS: compila desde el código fuente con `cargo build --release` hasta que se publiquen paquetes precompilados para esas plataformas.
+- Integración con el escritorio Linux: después de compilar, ejecuta `sh packaging/install_linux_desktop.sh`. Esto instala el ejecutable, el icono de la aplicación y un lanzador de AVL BASIC para el usuario actual, sin necesitar permisos de administrador. La ventana gráfica también recibe el mismo icono embebido bajo X11.
 
 Verificación rápida
 - Paquete Windows: ejecuta `avl-basic.exe`.
