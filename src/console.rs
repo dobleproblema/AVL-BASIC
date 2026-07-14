@@ -731,9 +731,9 @@ where
             Event::Key(event) => match event.code {
                 _ if event.kind == KeyEventKind::Release => {}
                 KeyCode::Enter => {
+                    let result = finish_editing_buffer(&mut buffer, &mut cursor);
                     disable_raw_mode()?;
                     println!();
-                    let result: String = buffer.iter().collect();
                     if use_history {
                         remember_history(&result);
                     }
@@ -2654,6 +2654,11 @@ fn accept_editing_buffer_virtual_quote(buffer: &mut Vec<char>, cursor: &mut usiz
     true
 }
 
+fn finish_editing_buffer(buffer: &mut Vec<char>, cursor: &mut usize) -> String {
+    accept_editing_buffer_virtual_quote(buffer, cursor);
+    buffer.iter().collect()
+}
+
 fn cursor_on_virtual_closing_quote(line: &[char], cursor: usize) -> bool {
     cursor == line.len() && line.iter().filter(|ch| **ch == '"').count() % 2 == 1
 }
@@ -2891,15 +2896,17 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
         if ch == '"' {
             out.push(ch);
             i += 1;
+            let mut closed = false;
             while i < chars.len() {
                 out.push(chars[i]);
                 if chars[i] == '"' {
                     i += 1;
+                    closed = true;
                     break;
                 }
                 i += 1;
             }
-            if !out.ends_with('"') {
+            if !closed {
                 out.push('"');
             }
             continue;
@@ -2940,6 +2947,7 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                         | "CAT"
                         | "FILES"
                         | "CD"
+                        | "PRINT"
                         | "USING"
                         | "GPRINT"
                         | "LABEL"
@@ -3767,6 +3775,42 @@ mod tests {
         assert!(accept_editing_buffer_virtual_quote(&mut open, &mut cursor));
         assert_eq!(open.iter().collect::<String>(), r#"10 PRINT "A""#);
         assert_eq!(cursor, open.len());
+    }
+
+    #[test]
+    fn enter_materializes_virtual_closing_quote() {
+        let mut empty: Vec<char> = "10 PRINT \"".chars().collect();
+        let mut cursor = empty.len();
+        assert_eq!(
+            finish_editing_buffer(&mut empty, &mut cursor),
+            "10 PRINT \"\""
+        );
+        assert_eq!(cursor, empty.len());
+
+        let mut text: Vec<char> = "10 PRINT \"A".chars().collect();
+        let mut cursor = text.len();
+        assert_eq!(
+            finish_editing_buffer(&mut text, &mut cursor),
+            "10 PRINT \"A\""
+        );
+        assert_eq!(cursor, text.len());
+
+        let mut closed: Vec<char> = "10 PRINT \"\"".chars().collect();
+        let mut cursor = closed.len();
+        assert_eq!(
+            finish_editing_buffer(&mut closed, &mut cursor),
+            "10 PRINT \"\""
+        );
+        assert_eq!(cursor, closed.len());
+    }
+
+    #[test]
+    fn normalization_closes_empty_unfinished_string() {
+        assert_eq!(normalize_code("10 print\""), "10 PRINT \"\"");
+        assert_eq!(
+            normalize_code_for_editing("10 print\"", "10 print\"".chars().count()),
+            "10 PRINT \"\""
+        );
     }
 
     #[test]
