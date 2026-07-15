@@ -2416,6 +2416,14 @@ impl Interpreter {
             }
             "STOP" => {
                 self.finish_output_line();
+                let text = match self
+                    .current_line
+                    .or_else(|| self.line_numbers_cache.get(cursor.line_idx).copied())
+                {
+                    Some(line) => format!("Line {line}. Program stopped."),
+                    None => "Program stopped.".to_string(),
+                };
+                self.write_line(&console::error_text(self.ansi_output, &text));
                 self.stopped_cursor = Some(Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
@@ -9841,6 +9849,25 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn stop_notice_uses_error_style_without_becoming_an_error() {
+        let mut interp = Interpreter::new();
+        interp.ansi_output = true;
+        interp.process_immediate("10 STOP").unwrap();
+
+        interp.process_immediate("RUN").unwrap();
+
+        assert_eq!(
+            interp.take_output(),
+            format!(
+                "{}\n",
+                console::error_text(true, "Line 10. Program stopped.")
+            )
+        );
+        assert!(interp.stopped_cursor.is_some());
+        assert!(interp.last_error.is_none());
+    }
 
     #[test]
     fn graphical_line_editor_supports_unicode_navigation_and_deletion() {

@@ -483,7 +483,7 @@ fn immediate_goto_after_stop_resumes_at_target_preserving_runtime() {
     interp.process_immediate("40 PRINT A").unwrap();
 
     interp.process_immediate("RUN").unwrap();
-    assert_eq!(interp.take_output(), "");
+    assert_eq!(interp.take_output(), "Line 20. Program stopped.\n");
 
     interp.process_immediate("GOTO 30").unwrap();
     assert_eq!(interp.take_output(), " 2\n");
@@ -503,7 +503,7 @@ fn immediate_end_cancels_stopped_program_and_does_not_poison_next_immediate_line
     );
 
     interp.process_immediate("PRINT 1:PRINT 2").unwrap();
-    assert_eq!(interp.take_output(), " 1\n 2\n");
+    assert_eq!(interp.take_output(), "Line 10. Program stopped.\n 1\n 2\n");
 }
 
 #[test]
@@ -513,7 +513,7 @@ fn immediate_colon_commands_run_after_stopped_program_without_losing_cont() {
     interp.process_immediate("20 PRINT \"CONT\"").unwrap();
 
     interp.process_immediate("RUN").unwrap();
-    assert_eq!(interp.take_output(), "");
+    assert_eq!(interp.take_output(), "Line 10. Program stopped.\n");
 
     interp
         .process_immediate("MAT BASE 1:DIM tester(3,3)")
@@ -535,7 +535,7 @@ fn editing_program_after_stop_invalidates_cont_with_standard_error() {
     interp.process_immediate("30 PRINT \"B\"").unwrap();
 
     interp.process_immediate("RUN").unwrap();
-    assert_eq!(interp.take_output(), "A\n");
+    assert_eq!(interp.take_output(), "A\nLine 20. Program stopped.\n");
 
     interp.process_immediate("30 PRINT \"C\"").unwrap();
     let err = interp.process_immediate("CONT").unwrap_err();
@@ -557,7 +557,7 @@ fn immediate_assignment_after_stop_keeps_cont_available() {
     interp.process_immediate("A=7").unwrap();
     interp.process_immediate("CONT").unwrap();
 
-    assert_eq!(interp.take_output(), " 7\n");
+    assert_eq!(interp.take_output(), "Line 20. Program stopped.\n 7\n");
 }
 
 #[test]
@@ -1542,7 +1542,7 @@ fn program_error_state_is_cleared_only_when_program_ends() {
     }
 
     interp.process_immediate("RUN").unwrap();
-    assert_eq!(interp.take_output(), " 12  20\n");
+    assert_eq!(interp.take_output(), " 12  20\nLine 40. Program stopped.\n");
     interp.process_immediate("PRINT ERR").unwrap();
     assert_eq!(interp.take_output(), " 12\n");
     interp.process_immediate("PRINT ERL").unwrap();
