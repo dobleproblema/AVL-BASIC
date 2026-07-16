@@ -311,7 +311,17 @@ impl Graphics {
 
     pub fn set_scale(&mut self, args: Option<(f64, f64, f64, f64, i32)>) -> BasicResult<()> {
         if let Some((xmin, xmax, ymin, ymax, border)) = args {
-            if xmin == xmax || ymin == ymax || border < 0 {
+            let double_border = border.saturating_mul(2);
+            if !xmin.is_finite()
+                || !xmax.is_finite()
+                || !ymin.is_finite()
+                || !ymax.is_finite()
+                || xmax <= xmin
+                || ymax <= ymin
+                || border < 0
+                || double_border >= self.width.saturating_sub(1) as i32
+                || double_border >= self.height.saturating_sub(1) as i32
+            {
                 return Err(BasicError::new(ErrorCode::InvalidArgument));
             }
             self.origin_x = 0;
@@ -2441,6 +2451,27 @@ mod tests {
             graphics.buffer_dirty(),
             "{label}: changed pixels without marking the buffer dirty"
         );
+    }
+
+    #[test]
+    fn scale_rejects_non_ascending_or_unusable_ranges() {
+        let mut graphics = Graphics::new(640);
+
+        for scale in [
+            (0.0, 639.0, 479.0, 0.0, 0),
+            (639.0, 0.0, 0.0, 479.0, 0),
+            (0.0, 0.0, 0.0, 479.0, 0),
+            (0.0, 639.0, 1.0, 1.0, 0),
+            (f64::NAN, 639.0, 0.0, 479.0, 0),
+            (0.0, f64::INFINITY, 0.0, 479.0, 0),
+            (0.0, 639.0, 0.0, 479.0, 240),
+        ] {
+            assert!(graphics.set_scale(Some(scale)).is_err(), "scale={scale:?}");
+        }
+
+        graphics
+            .set_scale(Some((0.0, 639.0, 0.0, 479.0, 0)))
+            .unwrap();
     }
 
     #[test]
