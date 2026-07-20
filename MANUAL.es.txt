@@ -189,7 +189,7 @@ Notas rápidas (arrays)
 
 Notas de `NEW`
 - Borra el programa en memoria (líneas y DATA) y restablece completamente el estado: variables, arrays, funciones `DEF FN` (incluidas de 0 argumentos), puntero `DATA`, temporizadores/ISR, y el modo trigonométrico (radianes).
-- Restablece también la ventana gráfica y sus ajustes (equivalente a reiniciar el estado por defecto de `SCREEN`, incluida `SMALLFONT TRANSPARENT`).
+- Restablece también la ventana gráfica y sus ajustes (equivalente a reiniciar el estado por defecto de `SCREEN`, incluida `SMALLFONT OPAQUE`).
 - Solo válido en modo inmediato; dentro de un programa provoca “Instrucción no permitida en un programa.”
 
 Asignación sobre cadenas
@@ -342,7 +342,7 @@ Notas detalladas (INPUT)
 Notas rápidas
 - `LOCATE` usa filas y columnas de texto; escala con `MODE` y la fuente (BIG/SMALL).
 - `GPRINT`, `GINPUT` y `LABEL` usan siempre las fuentes internas embebidas en el intérprete (`SMALLFONT` o `BIGFONT`).
-- El estado inicial es `SMALLFONT TRANSPARENT`. `SCREEN` y `NEW` también lo restauran.
+- El estado inicial es `SMALLFONT OPAQUE`. `SCREEN` y `NEW` también lo restauran.
 - `SMALLFONT` y `BIGFONT` sin parámetro cambian solo el tamaño y conservan el modo de fondo actual.
 - En modo `TRANSPARENT` solo se dibujan los píxeles del glifo. En modo `OPAQUE`, cada celda se rellena primero con el `PAPER` actual.
 - `TESTCHR$` no mueve el cursor de texto. Sin argumentos lee en `HPOS,VPOS`; con dos argumentos lee esa columna/fila.
@@ -375,7 +375,7 @@ Notas sobre GPRINT
   • `GPRINT "NOMBRE: ";X$`
   • `GPRINT 3+4;`
 - La transparencia permite composición: tras volver a la misma posición con `LOCATE`, imprimir `_` o `-` puede subrayar o tachar texto anterior.
-- En modo transparente, los espacios no borran píxeles y reimprimir texto sobre la misma celda puede dejar restos del glifo anterior. Para relojes, marcadores y otros campos reemplazables, usa `SMALLFONT OPAQUE` o `BIGFONT OPAQUE`, o limpia/redibuja la zona.
+- En el modo inicial `OPAQUE`, cada celda se rellena primero con `PAPER`: un carácter sustituye completamente al anterior y los espacios borran la celda. En modo `TRANSPARENT`, los espacios no borran píxeles y reimprimir sobre la misma celda compone ambos glifos; úsalo expresamente para superponer texto sobre gráficos, subrayar o tachar.
 - Una celda compuesta por varios glifos deja de coincidir exactamente con un carácter; `TESTCHR$` devuelve `""` en ese caso.
 
 Notas sobre LABEL y equivalencias con PRINT
@@ -426,7 +426,7 @@ Ejemplo
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
-  • Desactiva ORIGIN · (0,0) en la esquina inferior-izqierda · cursores a 0,0 · MASK 255 · LDIR 0 · SMALLFONT TRANSPARENT · PAPER 0 · INK 1.
+  • Desactiva ORIGIN · (0,0) en la esquina inferior-izqierda · cursores a 0,0 · MASK 255 · LDIR 0 · SMALLFONT OPAQUE · PAPER 0 · INK 1.
 - SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
 - `ORIGIN x,y` traslada el origen; con 6 argumentos define ventana lógica y clipping.
@@ -603,7 +603,7 @@ Notas rápidas
 - Los nombres de color predefinidos son los nombres históricos de X11/Tk, que coinciden en gran parte con los nombres HTML/CSS. No se distinguen mayúsculas/minúsculas.
 
 Ejemplo (muestra en pantalla todos los colores de la paleta predefinida)
-10 SCREEN : MODE 640 : SMALLFONT
+10 SCREEN : MODE 640 : SMALLFONT TRANSPARENT
 15 MOVE 0,120 : DRAW 640,120
 20 MOVE 0,240 : DRAW 640,240
 25 MOVE 0,360 : DRAW 640,360

@@ -2387,7 +2387,7 @@ fn removed_disp_commands_report_syntax_error() {
 }
 
 #[test]
-fn text_background_defaults_to_transparent_and_font_modes_persist() {
+fn text_background_defaults_to_opaque_and_font_modes_persist() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
 20 PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
@@ -2396,17 +2396,17 @@ fn text_background_defaults_to_transparent_and_font_modes_persist() {
 50 PRINT TEST(0,479)
 60 BIGFONT TRANSPARENT : SMALLFONT : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 70 PRINT TEST(0,479)
-80 BIGFONT OPAQUE : SCREEN : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
+80 BIGFONT TRANSPARENT : SCREEN : PLOT 0,479,2 : LOCATE 0,0 : GPRINT " ";
 90 PRINT TEST(0,479)
 100 END"#,
     );
-    assert_eq!(output, " 16711680\n 0\n 16711680\n 16711680\n");
+    assert_eq!(output, " 0\n 0\n 16711680\n 0\n");
 }
 
 #[test]
 fn transparent_gprint_composes_glyphs_in_the_same_text_cell() {
     let output = run_rust(
-        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
+        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG : SMALLFONT TRANSPARENT
 20 LOCATE 0,0 : GPRINT "A";
 30 LOCATE 0,0 : GPRINT "_";
 40 PRINT "["+TESTCHR$(0,0)+"]"
@@ -2416,15 +2416,15 @@ fn transparent_gprint_composes_glyphs_in_the_same_text_cell() {
 }
 
 #[test]
-fn new_restores_smallfont_transparent() {
+fn new_restores_smallfont_opaque() {
     let mut interp = Interpreter::new();
-    interp.process_immediate("BIGFONT OPAQUE").unwrap();
+    interp.process_immediate("BIGFONT TRANSPARENT").unwrap();
     interp.process_immediate("NEW").unwrap();
     interp.process_immediate("PLOT 0,479,2").unwrap();
     interp.process_immediate("LOCATE 0,0").unwrap();
     interp.process_immediate("GPRINT \" \";").unwrap();
     interp.process_immediate("PRINT TEST(0,479)").unwrap();
-    assert_eq!(interp.take_output(), " 16711680\n");
+    assert_eq!(interp.take_output(), " 0\n");
 }
 
 #[test]

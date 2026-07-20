@@ -134,7 +134,7 @@ impl Graphics {
             text_col: 0,
             text_row: 0,
             font: FontKind::Small,
-            text_transparent: true,
+            text_transparent: false,
             ldir: 0,
             pen_width: 1,
             mask: 255,
@@ -179,7 +179,7 @@ impl Graphics {
         self.text_col = 0;
         self.text_row = 0;
         self.font = FontKind::Small;
-        self.text_transparent = true;
+        self.text_transparent = false;
         self.ldir = 0;
         self.pen_width = 1;
         self.mask = 255;

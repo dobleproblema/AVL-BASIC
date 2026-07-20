@@ -190,7 +190,7 @@ Quick notes (arrays)
 
 Notes on `NEW`
 - It clears the program in memory (lines and DATA) and fully resets the state: variables, arrays, `DEF FN` functions (including 0-argument ones), the `DATA` pointer, timers/ISR, and trigonometric mode (radians).
-- It also resets the graphics window and its settings (equivalent to resetting `SCREEN` to its default state, including `SMALLFONT TRANSPARENT`).
+- It also resets the graphics window and its settings (equivalent to resetting `SCREEN` to its default state, including `SMALLFONT OPAQUE`).
 - Valid only in immediate mode; inside a program it raises "Instruction not allowed in a program."
 
 Assignment to strings
@@ -343,7 +343,7 @@ Detailed notes (INPUT)
 Quick notes
 - `LOCATE` uses text rows and columns; it scales with `MODE` and the current font (BIG/SMALL).
 - `GPRINT`, `GINPUT`, and `LABEL` always use the interpreter's embedded internal fonts (`SMALLFONT` or `BIGFONT`).
-- The initial state is `SMALLFONT TRANSPARENT`. `SCREEN` and `NEW` restore it as well.
+- The initial state is `SMALLFONT OPAQUE`. `SCREEN` and `NEW` restore it as well.
 - `SMALLFONT` and `BIGFONT` without an argument change only the size and preserve the current background mode.
 - In `TRANSPARENT` mode only glyph pixels are drawn. In `OPAQUE` mode each cell is first filled with the current `PAPER` color.
 - `TESTCHR$` does not move the text cursor. With no arguments it reads `HPOS,VPOS`; with two arguments it reads that column/row.
@@ -376,7 +376,7 @@ Notes on GPRINT
   * `GPRINT "NAME: ";X$`
   * `GPRINT 3+4;`
 - Transparency enables composition: after returning to the same position with `LOCATE`, printing `_` or `-` can underline or strike through existing text.
-- In transparent mode, spaces do not erase pixels and reprinting text over the same cell may leave parts of the previous glyph. For clocks, scoreboards, and other replaceable fields, use `SMALLFONT OPAQUE` or `BIGFONT OPAQUE`, or clear/redraw the area.
+- In the initial `OPAQUE` mode, each cell is filled with `PAPER` first: a character fully replaces the previous one and spaces erase the cell. In `TRANSPARENT` mode, spaces do not erase pixels and reprinting in the same cell composes both glyphs; select it explicitly to overlay text on graphics, underline, or strike through.
 - A cell composed from multiple glyphs no longer exactly matches one character; `TESTCHR$` returns `""` in that case.
 
 Notes on LABEL and PRINT equivalents
@@ -427,7 +427,7 @@ Example
 
 Quick notes
 - `SCREEN` with no arguments restores the default graphics state:
-  * Disables ORIGIN . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `LDIR 0` . `SMALLFONT TRANSPARENT` . `PAPER 0` . `INK 1`.
+  * Disables ORIGIN . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `LDIR 0` . `SMALLFONT OPAQUE` . `PAPER 0` . `INK 1`.
 - `SCREEN CLOSE` closes the window and also restores the default graphics state, like `SCREEN`.
 - By default, (0,0) is at the lower-left corner.
 - `ORIGIN x,y` shifts the origin; with 6 arguments it defines a logical window and clipping.
@@ -602,7 +602,7 @@ Quick notes
 - The predefined color names are the historical X11/Tk names, which largely match the HTML/CSS names. They are case-insensitive.
 
 Example (show all colors from the predefined palette on screen)
-10 SCREEN : MODE 640 : SMALLFONT
+10 SCREEN : MODE 640 : SMALLFONT TRANSPARENT
 15 MOVE 0,120 : DRAW 640,120
 20 MOVE 0,240 : DRAW 640,240
 25 MOVE 0,360 : DRAW 640,360
