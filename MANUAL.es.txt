@@ -426,7 +426,7 @@ Ejemplo
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
-  • Desactiva ORIGIN · (0,0) en la esquina inferior-izqierda · cursores a 0,0 · MASK 255 · LDIR 0 · SMALLFONT OPAQUE · PAPER 0 · INK 1.
+  • Desactiva ORIGIN · escala física (`SCALE`) · (0,0) en la esquina inferior-izquierda · cursores a 0,0 · `MASK 255` · `PENWIDTH 1` · `LDIR 0` · `SMALLFONT OPAQUE` · `PAPER 0` · `INK 1`.
 - SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
 - `ORIGIN x,y` traslada el origen; con 6 argumentos define ventana lógica y clipping.

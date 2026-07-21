@@ -310,6 +310,8 @@ impl Graphics {
     }
 
     pub fn set_scale(&mut self, args: Option<(f64, f64, f64, f64, i32)>) -> BasicResult<()> {
+        let saved_canvas_x = self.cursor_x;
+        let saved_canvas_y = self.logical_y_to_canvas(self.cursor_y);
         if let Some((xmin, xmax, ymin, ymax, border)) = args {
             let double_border = border.saturating_mul(2);
             if !xmin.is_finite()
@@ -339,6 +341,7 @@ impl Graphics {
             self.reset_viewport();
         }
         self.reset_graph_ranges();
+        self.set_cursor_from_canvas(saved_canvas_x, saved_canvas_y);
         Ok(())
     }
 

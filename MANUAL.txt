@@ -427,7 +427,7 @@ Example
 
 Quick notes
 - `SCREEN` with no arguments restores the default graphics state:
-  * Disables ORIGIN . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `LDIR 0` . `SMALLFONT OPAQUE` . `PAPER 0` . `INK 1`.
+  * Disables ORIGIN . physical scale (`SCALE`) . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `PENWIDTH 1` . `LDIR 0` . `SMALLFONT OPAQUE` . `PAPER 0` . `INK 1`.
 - `SCREEN CLOSE` closes the window and also restores the default graphics state, like `SCREEN`.
 - By default, (0,0) is at the lower-left corner.
 - `ORIGIN x,y` shifts the origin; with 6 arguments it defines a logical window and clipping.

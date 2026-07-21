@@ -2534,6 +2534,35 @@ fn scale_parameter_functions_report_active_scale() {
 }
 
 #[test]
+fn scale_changes_reexpress_cursor_without_moving_its_physical_position() {
+    let output = run_rust(
+        r#"10 MODE 1024 : SCREEN : PLOT 512,384
+20 SCALE 0,1,0,1
+30 IF ROUND(XPOS,6)<>0.500489 THEN PRINT "BAD SCALED X";XPOS:END
+40 IF ROUND(YPOS,6)<>0.500652 THEN PRINT "BAD SCALED Y";YPOS:END
+50 SCALE
+60 IF XPOS<>512 OR YPOS<>384 THEN PRINT "BAD PHYSICAL CURSOR";XPOS;YPOS:END
+70 PRINT "OK"
+80 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn screen_restores_physical_scale_and_pen_width_one() {
+    let output = run_rust(
+        r#"10 MODE 640 : SCALE -1,1,-1,1 : PENWIDTH 4
+20 SCREEN : PLOT 10,10,2
+30 IF XMIN<>0 OR XMAX<>WIDTH-1 OR YMIN<>0 OR YMAX<>HEIGHT-1 THEN PRINT "BAD SCALE":END
+40 IF BORDER<>0 THEN PRINT "BAD BORDER":END
+50 IF TEST(11,10)<>0 THEN PRINT "BAD PENWIDTH":END
+60 PRINT "OK"
+70 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
 fn degree_radian_conversion_functions_are_angle_mode_independent() {
     let output = run_rust(
         r#"10 IF ROUND(RTD(PI),6)<>180 THEN PRINT "BAD RTD":END
