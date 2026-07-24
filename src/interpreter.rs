@@ -894,6 +894,7 @@ impl CompiledColorExpr {
 }
 
 impl FastNumberExpr {
+    #[inline(always)]
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
         match self {
             FastNumberExpr::Number(value) => Ok(*value),
@@ -1008,6 +1009,7 @@ impl FastNumberExpr {
     }
 }
 
+#[inline(always)]
 fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
     match op {
         BinaryOp::Add => checked_number(left + right),
@@ -1047,6 +1049,7 @@ fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
     }
 }
 
+#[inline(always)]
 fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastNumberExpr) -> BasicResult<i32> {
     let value = expr.eval(interpreter)?;
     if value.fract() != 0.0 {
@@ -2504,6 +2507,9 @@ impl Interpreter {
             "ORIGIN" => {
                 self.ensure_graphics_window()?;
                 let args = self.eval_numbers(command[6..].trim())?;
+                if args.is_empty() {
+                    return self.graphics.set_origin(0, 0, None);
+                }
                 if !matches!(args.len(), 2 | 6) {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
@@ -9116,11 +9122,19 @@ impl EvalContext for Interpreter {
             "VPOS" if args.is_empty() => Ok(Value::number(self.graphics.vpos() as f64)),
             "MOUSEX" if args.is_empty() => {
                 self.prepare_mouse_read()?;
-                Ok(Value::number(self.mouse_state.x as f64))
+                Ok(Value::number(
+                    self.graphics
+                        .logical_screen_to_user(self.mouse_state.x, self.mouse_state.y)
+                        .0,
+                ))
             }
             "MOUSEY" if args.is_empty() => {
                 self.prepare_mouse_read()?;
-                Ok(Value::number(self.mouse_state.y as f64))
+                Ok(Value::number(
+                    self.graphics
+                        .logical_screen_to_user(self.mouse_state.x, self.mouse_state.y)
+                        .1,
+                ))
             }
             "MOUSELEFT" if args.is_empty() => {
                 self.prepare_mouse_read()?;
@@ -10358,6 +10372,31 @@ mod interpreter_tests {
         interp.prepare_mouse_read().unwrap();
 
         assert!(!interp.graphics_window_used_this_run);
+    }
+
+    #[test]
+    fn mouse_reads_follow_active_scale_and_restore_physical_origin() {
+        let mut interp = Interpreter::new();
+        interp
+            .graphics
+            .set_origin(91, 73, Some((40, 240, 300, 100)))
+            .unwrap();
+        interp
+            .graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 10)))
+            .unwrap();
+        interp.mouse_state = MouseSnapshot {
+            x: 140,
+            y: 200,
+            ..MouseSnapshot::default()
+        };
+
+        assert_eq!(interp.eval_number("MOUSEX").unwrap(), 0.0);
+        assert_eq!(interp.eval_number("MOUSEY").unwrap(), 0.0);
+
+        interp.graphics.set_scale(None).unwrap();
+        assert_eq!(interp.eval_number("MOUSEX").unwrap(), 49.0);
+        assert_eq!(interp.eval_number("MOUSEY").unwrap(), 127.0);
     }
 }
 

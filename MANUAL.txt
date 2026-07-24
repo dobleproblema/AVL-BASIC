@@ -415,31 +415,44 @@ Example
 6.1 Window and coordinates
 
 + MODE 640|800|1024          640x480 (default), 800x600, 1024x768
-+ ORIGIN x,y                 Repositions (0,0) - default is lower-left corner (physical scale only)
-+ ORIGIN x,y,l,r,t,b         Logical window + clipping (physical scale only)
-+ SCALE xmin,xmax,ymin,ymax[,border]  Global scaling of graphics coordinates
-+ SCALE                      Restores physical scale (0..WIDTH-1, 0..HEIGHT-1)
++ ORIGIN                     Restores (0,0) and the full-screen physical viewport
++ ORIGIN x,y                 Repositions the stored physical origin (parameters are always physical)
++ ORIGIN x,y,l,r,t,b         Physical window + clipping (parameters are always physical)
++ SCALE xmin,xmax,ymin,ymax[,border]  User scale inside the active window
++ SCALE                      Disables the user scale and returns to physical coordinates
 + SCREEN                     Restores state (see below)
 + SCREEN CLOSE               Closes the graphics window and restores state
-+ CLG                        Clears the graphics window with the current PAPER color
-+ CLG OFFSCREEN              Clears the graphics buffer with the current PAPER color; shown on the next FRAME
++ CLG                        Clears the active viewport with the current PAPER color
++ CLG OFFSCREEN              Clears the active viewport in the graphics buffer; shown on the next FRAME
 + FRAME [fps]                Immediate refresh; optional FPS limiter
 
 Quick notes
 - `SCREEN` with no arguments restores the default graphics state:
   * Disables ORIGIN . physical scale (`SCALE`) . (0,0) at the lower-left corner . cursors at 0,0 . `MASK 255` . `PENWIDTH 1` . `LDIR 0` . `SMALLFONT OPAQUE` . `PAPER 0` . `INK 1`.
+- `SCREEN` does not clear the existing graphics contents by itself.
 - `SCREEN CLOSE` closes the window and also restores the default graphics state, like `SCREEN`.
 - By default, (0,0) is at the lower-left corner.
-- `ORIGIN x,y` shifts the origin; with 6 arguments it defines a logical window and clipping.
+- Bare `ORIGIN` is exactly equivalent to `ORIGIN 0,0,0,WIDTH-1,HEIGHT-1,0`: it restores the physical origin and full-screen viewport without changing an active `SCALE`, `PAPER`, `INK`, font, `PENWIDTH`, `MASK`, or `LDIR`.
+- All `ORIGIN` arguments are always physical screen coordinates, even while a user `SCALE` is active. `ORIGIN x,y` shifts the stored physical origin; with 6 arguments it also defines a physical viewport and clipping.
 - `SCALE` remaps the user coordinates used by `PLOT/DRAW/CIRCLE/FILL/SPRITE/TEST/XPOS/YPOS`.
 - `SCALE` does not reposition the graphics cursor: it keeps the same physical point. Therefore, after changing the scale, `XPOS/YPOS` may become different values in user units.
-- When `SCALE xmin,xmax,ymin,ymax[,border]` is enabled, `ORIGIN` and clipping are implicitly reset to physical coordinates (`ORIGIN 0,0` + full window).
-- With `SCALE` active (non-physical), `ORIGIN` raises an error.
-- After `SCALE` with no arguments (physical scale), `ORIGIN` becomes available again.
-- `border` (optional) sets a physical margin in pixels: `xmin/xmax/ymin/ymax` fall at that distance from the edges.
+- Enabling `SCALE xmin,xmax,ymin,ymax[,border]` preserves the current `ORIGIN` and clipping window. The scale fills that physical window; without a six-argument `ORIGIN`, it fills the whole screen.
+- While `SCALE` is active, the `x,y` values of `ORIGIN` are preserved but do not take part in the transformation. The `l,r,t,b` limits still define the viewport and clipping.
+- `ORIGIN` may be used while `SCALE` is active: the existing `xmin/xmax/ymin/ymax/border` values are preserved and remapped into the new viewport, and the graphics cursor is placed at user coordinate (0,0).
+- IMPORTANT — `BORDER` and a new `ORIGIN`:
+  * The active `SCALE` border must also fit the new viewport. Both `2*BORDER < r-l` and `2*BORDER < t-b` must hold, using the physical limits after they have been clamped to the screen.
+  * Otherwise, the `ORIGIN` statement raises `Invalid argument`. Although the error is reported at `ORIGIN`, its cause is the preserved `BORDER` from the previous `SCALE`.
+  * The error changes nothing: the previous origin, viewport, `SCALE`, and cursor are all preserved.
+  * Example: after `SCALE -1,1,-1,1,50`, `ORIGIN 0,0,100,200,200,100` raises an error because `2*50` is not less than `200-100`. Use a smaller border or a larger viewport.
+- Bare `SCALE` disables the user scale without changing `ORIGIN` or clipping; the preserved physical origin becomes effective again.
+- `border` (optional) sets a physical pixel margin inside the active viewport: `xmin/xmax/ymin/ymax` fall at that distance from its edges. It must fit that window, not merely the whole screen.
+- `CLG` and `CLG OFFSCREEN` honor the active viewport and clipping. To clear the whole screen:
+  * `SCREEN : CLG` first restores the complete graphics state, including `PAPER 0`.
+  * `ORIGIN : CLG` preserves the other graphics settings and any active `SCALE`, and resets only the origin and viewport before clearing. Use `SCALE : ORIGIN : CLG` if you also want to return to physical coordinates.
+  * `SCREEN : ORIGIN : CLG` is also valid; after `SCREEN`, bare `ORIGIN` is idempotent.
 - `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
   * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
-- `CLG` clears and presents the graphics window immediately. In animation loops
+- `CLG` clears and presents the active viewport immediately. In animation loops
   that draw a complete frame before `FRAME`, this may show a mid-frame clear
   (flicker/tearing in the Rust backend). Use `CLG OFFSCREEN` in those loops:
   it clears the buffer and leaves the visible update to the next `FRAME`.
@@ -461,6 +474,8 @@ Example (`SCALE` with border and axes in user units)
 60 YAXIS 30,0,200
 65 PENWIDTH 4 : INK 2
 80 PLOT 1975,90
+
+Sample `samples/g-origin-scale.bas` draws four graphics examples, each with its own scale, in four `ORIGIN` viewports without clearing the earlier ones.
 
 6.2 Basic plotting
 

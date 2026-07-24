@@ -236,6 +236,51 @@ GRAPHICS_SMOKE_CASES = [
 """,
     ),
     GraphicsCase(
+        name="origin_scale_two_viewports",
+        description="two ORIGIN viewports keep independent SCALE, AXIS, and GRAPH output",
+        program=r"""
+10 DEF FNREC(X)=1/X
+20 SCREEN : MODE 640 : PAPER 0 : CLG : SMALLFONT TRANSPARENT
+30 ORIGIN 17,23,20,300,450,250
+40 SCALE -PI,PI,-1.25,1.25,16
+50 XAXIS PI/2,-PI,PI,0,0,2
+60 YAXIS 0.5,-1,1,0,2
+70 INK 2 : GRAPH "SIN(X)",0.02
+80 SCALE
+90 ORIGIN -31,47,340,620,220,20
+100 SCALE -8,8,-4,4,16
+110 XAXIS 2,-7,7,0,0,2
+120 YAXIS 1,-3,3,0,2
+130 INK 7 : GRAPH FNREC(X),0.02
+140 SCALE
+150 PRINT "__AVL_GRAPHICS_SCREEN__=panels="+SCREEN$
+160 END
+""",
+    ),
+    GraphicsCase(
+        name="origin_remaps_active_scale",
+        description="ORIGIN remaps a preserved active SCALE into successive physical viewports",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-1,1,10
+30 ORIGIN 17,23,100,300,300,100
+40 PLOT -1,-1,66051 : PLOT 1,1,263430
+50 ORIGIN 31,47,340,540,380,180
+60 PLOT -1,-1,329223 : PLOT 1,1,394758
+70 ORIGIN
+80 PLOT -1,-1,460293 : PLOT 1,1,525828
+90 PRINT "__AVL_GRAPHICS_VALUE__=scale=";XMIN;XMAX;YMIN;YMAX;BORDER;XPOS;YPOS
+100 SCALE
+110 PRINT "__AVL_GRAPHICS_SPRITE__=first_min="+SPRITE$(108,108,112,112)
+120 PRINT "__AVL_GRAPHICS_SPRITE__=first_max="+SPRITE$(288,288,292,292)
+130 PRINT "__AVL_GRAPHICS_SPRITE__=second_min="+SPRITE$(348,188,352,192)
+140 PRINT "__AVL_GRAPHICS_SPRITE__=second_max="+SPRITE$(528,368,532,372)
+150 PRINT "__AVL_GRAPHICS_SPRITE__=full_min="+SPRITE$(8,8,12,12)
+160 PRINT "__AVL_GRAPHICS_SPRITE__=full_max="+SPRITE$(627,467,631,471)
+170 END
+""",
+    ),
+    GraphicsCase(
         name="axis_tick_pixel_length",
         description="XAXIS major and subdivision ticks use fixed pixel lengths",
         program=r"""

@@ -2549,6 +2549,69 @@ fn scale_changes_reexpress_cursor_without_moving_its_physical_position() {
 }
 
 #[test]
+fn scale_uses_origin_viewport_and_reset_restores_physical_origin() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 ORIGIN 37,53,100,399,379,180
+30 SCALE -1,1,-1,1,20
+40 PLOT -1,-1,66051 : PLOT 1,1,263430
+50 SCALE
+60 IF TEST(83,147)<>66051 THEN PRINT "BAD LOWER CORNER":END
+70 IF TEST(342,306)<>263430 THEN PRINT "BAD UPPER CORNER":END
+80 IF XPOS<>342 OR YPOS<>306 THEN PRINT "BAD RESTORED CURSOR";XPOS;YPOS:END
+90 PRINT "OK"
+100 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn origin_remaps_an_active_scale_and_bare_origin_keeps_it() {
+    let output = run_rust(
+        r#"10 MODE 640 : SCREEN : PAPER 0 : CLG
+20 SCALE -1,1,-1,1,10
+30 ORIGIN 17,23,100,300,300,100
+40 IF XMIN<>-1 OR XMAX<>1 OR YMIN<>-1 OR YMAX<>1 OR BORDER<>10 THEN PRINT "BAD SCALE 1":END
+50 IF XPOS<>0 OR YPOS<>0 THEN PRINT "BAD CURSOR 1":END
+60 PLOT -1,-1,66051 : PLOT 1,1,263430
+70 ORIGIN 31,47,340,540,380,180
+80 IF XMIN<>-1 OR XMAX<>1 OR YMIN<>-1 OR YMAX<>1 OR BORDER<>10 THEN PRINT "BAD SCALE 2":END
+90 IF XPOS<>0 OR YPOS<>0 THEN PRINT "BAD CURSOR 2":END
+100 PLOT -1,-1,329223 : PLOT 1,1,394758
+110 ORIGIN
+120 IF XMIN<>-1 OR XMAX<>1 OR YMIN<>-1 OR YMAX<>1 OR BORDER<>10 THEN PRINT "BAD SCALE 3":END
+130 IF XPOS<>0 OR YPOS<>0 THEN PRINT "BAD CURSOR 3":END
+140 PLOT -1,-1,460293 : PLOT 1,1,525828
+150 SCALE
+160 IF TEST(110,110)<>66051 OR TEST(290,290)<>263430 THEN PRINT "BAD VIEWPORT 1":END
+170 IF TEST(350,190)<>329223 OR TEST(530,370)<>394758 THEN PRINT "BAD VIEWPORT 2":END
+180 IF TEST(10,10)<>460293 OR TEST(629,469)<>525828 THEN PRINT "BAD FULL VIEWPORT":END
+190 PRINT "OK"
+200 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn bare_origin_restores_full_viewport_and_preserves_scale_and_graphics_style() {
+    let output = run_rust(
+        r#"10 MODE 640 : SCREEN : PAPER 66051 : CLG
+20 INK 263430 : PENWIDTH 4 : PLOT 10,10
+30 ORIGIN 0,0,100,500,400,80
+40 SCALE -1,1,-1,1,5
+50 ORIGIN : CLG
+60 IF XMIN<>-1 OR XMAX<>1 OR YMIN<>-1 OR YMAX<>1 OR BORDER<>5 THEN PRINT "BAD SCALE":END
+70 PLOT 0,0
+80 SCALE
+90 IF TEST(10,10)<>66051 OR TEST(630,470)<>66051 THEN PRINT "BAD FULL CLEAR":END
+100 IF TEST(320,239)<>263430 OR TEST(321,239)<>263430 THEN PRINT "BAD STYLE":END
+110 PRINT "OK"
+120 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
 fn screen_restores_physical_scale_and_pen_width_one() {
     let output = run_rust(
         r#"10 MODE 640 : SCALE -1,1,-1,1 : PENWIDTH 4

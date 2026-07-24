@@ -414,31 +414,44 @@ Ejemplo
 6.1 Ventana y coordenadas
 
 + MODE 640|800|1024          640×480 (def), 800×600, 1024×768
-+ ORIGIN x,y                 Reubica (0,0) — por defecto esquina inferior izquierda (solo escala física)
-+ ORIGIN x,y,l,r,t,b         Ventana lógica + clipping (solo escala física)
-+ SCALE xmin,xmax,ymin,ymax[,borde]  Escala global de coordenadas gráficas
-+ SCALE                     Restablece escala física (0..WIDTH-1, 0..HEIGHT-1)
++ ORIGIN                     Restablece (0,0) y el viewport físico a pantalla completa
++ ORIGIN x,y                 Reubica el origen físico almacenado (parámetros siempre físicos)
++ ORIGIN x,y,l,r,t,b         Ventana física + clipping (parámetros siempre físicos)
++ SCALE xmin,xmax,ymin,ymax[,borde]  Escala de usuario dentro de la ventana activa
++ SCALE                     Desactiva la escala de usuario y vuelve a coordenadas físicas
 + SCREEN                     Restaura estado (ver abajo)
 + SCREEN CLOSE               Cierra la ventana gráfica y restaura estado
-+ CLG                        Borra la ventana gráfica con el PAPER actual
-+ CLG OFFSCREEN              Borra el buffer gráfico con el PAPER actual; se muestra en el próximo FRAME
++ CLG                        Borra el viewport activo con el PAPER actual
++ CLG OFFSCREEN              Borra el viewport activo en el buffer gráfico; se muestra en el próximo FRAME
 + FRAME [fps]                Refresco inmediato; limitador FPS opcional
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
   • Desactiva ORIGIN · escala física (`SCALE`) · (0,0) en la esquina inferior-izquierda · cursores a 0,0 · `MASK 255` · `PENWIDTH 1` · `LDIR 0` · `SMALLFONT OPAQUE` · `PAPER 0` · `INK 1`.
+- `SCREEN` no borra por sí solo el contenido gráfico existente.
 - SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
-- `ORIGIN x,y` traslada el origen; con 6 argumentos define ventana lógica y clipping.
+- `ORIGIN` sin argumentos equivale exactamente a `ORIGIN 0,0,0,WIDTH-1,HEIGHT-1,0`: restablece el origen físico y el viewport a pantalla completa sin modificar un `SCALE` activo, `PAPER`, `INK`, fuente, `PENWIDTH`, `MASK` ni `LDIR`.
+- Todos los argumentos de `ORIGIN` son siempre coordenadas físicas de pantalla, incluso mientras haya un `SCALE` de usuario activo. `ORIGIN x,y` traslada el origen físico almacenado; con 6 argumentos define además un viewport físico y clipping.
 - `SCALE` remapea las coordenadas de usuario usadas por `PLOT/DRAW/CIRCLE/FILL/SPRITE/TEST/XPOS/YPOS`.
 - `SCALE` no reposiciona el cursor gráfico: conserva el mismo punto físico. Por eso, tras cambiar la escala, `XPOS/YPOS` pueden pasar a otros valores en unidades de usuario.
-- Al activar `SCALE xmin,xmax,ymin,ymax[,borde]`, `ORIGIN` y clipping se restauran implícitamente a físico (`ORIGIN 0,0` + ventana completa).
-- Con `SCALE` activo (no físico), `ORIGIN` da error.
-- Tras `SCALE` sin argumentos (escala física), `ORIGIN` vuelve a estar disponible.
-- `borde` (opcional) fija un margen físico en píxeles: `xmin/xmax/ymin/ymax` caen a esa distancia de los bordes.
+- Al activar `SCALE xmin,xmax,ymin,ymax[,borde]`, se conservan el `ORIGIN` y la ventana de clipping actuales. La escala ocupa esa ventana física; sin un `ORIGIN` de 6 argumentos, ocupa la pantalla completa.
+- Mientras `SCALE` está activo, los valores `x,y` de `ORIGIN` se conservan pero no intervienen en la transformación. Los límites `l,r,t,b` siguen definiendo el viewport y el clipping.
+- Se puede usar `ORIGIN` mientras `SCALE` está activo: se conservan los valores `xmin/xmax/ymin/ymax/borde`, que se remapean dentro del nuevo viewport, y el cursor gráfico se sitúa en la coordenada de usuario (0,0).
+- IMPORTANTE — `BORDER` y un nuevo `ORIGIN`:
+  • El `borde` del `SCALE` activo debe caber también en el nuevo viewport. Deben cumplirse `2*BORDER < r-l` y `2*BORDER < t-b`, usando los límites físicos después de ajustarlos a la pantalla.
+  • Si no se cumple, la instrucción `ORIGIN` da `Invalid argument`. Aunque el error se señale en `ORIGIN`, su causa es el `BORDER` conservado del `SCALE` anterior.
+  • El error no modifica nada: se conservan el origen, el viewport, el `SCALE` y el cursor anteriores.
+  • Ejemplo: después de `SCALE -1,1,-1,1,50`, `ORIGIN 0,0,100,200,200,100` da error porque `2*50` no es menor que `200-100`. Debe usarse un borde menor o un viewport mayor.
+- `SCALE` sin argumentos desactiva la escala de usuario sin modificar `ORIGIN` ni el clipping; el origen físico conservado vuelve a tener efecto.
+- `borde` (opcional) fija un margen físico en píxeles dentro del viewport activo: `xmin/xmax/ymin/ymax` caen a esa distancia de sus bordes. Debe caber en esa ventana, no solo en la pantalla.
+- `CLG` y `CLG OFFSCREEN` respetan el viewport y el clipping activos. Para borrar toda la pantalla:
+  • `SCREEN : CLG` restablece primero todo el estado gráfico, incluido `PAPER 0`.
+  • `ORIGIN : CLG` conserva los demás ajustes gráficos y cualquier `SCALE` activo, y restablece únicamente el origen y el viewport antes de borrar. Usa `SCALE : ORIGIN : CLG` si además quieres volver a coordenadas físicas.
+  • `SCREEN : ORIGIN : CLG` también es válido; tras `SCREEN`, el `ORIGIN` sin argumentos es idempotente.
 - FRAME refresca la pantalla inmediatamente. Por defecto solo se refresca al terminar el programa.
   • Es decir, deberemos usar FRAME cada vez que queramos que el resultado de una instrucción gráfica se muestre en pantalla inmediatamente.
-- `CLG` borra y presenta la ventana gráfica inmediatamente. En bucles de
+- `CLG` borra y presenta inmediatamente el viewport activo. En bucles de
   animación que dibujan un frame completo antes de `FRAME`, esto puede mostrar
   un borrado a mitad de frame (parpadeo/tearing en Rust). Usa `CLG OFFSCREEN`
   en esos bucles: borra el buffer y deja la actualización visible para el
@@ -462,6 +475,8 @@ Ejemplo (SCALE con borde y ejes en unidades de usuario)
 60 YAXIS 30,0,200
 65 PENWIDTH 4 : INK 2
 80 PLOT 1975,90
+
+El ejemplo `samples/g-origin-scale.bas` dibuja cuatro ejemplos gráficos, cada uno con su propia escala, en cuatro viewports `ORIGIN` sin borrar los anteriores.
 
 6.2 Trazado básico
 

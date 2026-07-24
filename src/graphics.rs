@@ -281,17 +281,15 @@ impl Graphics {
         Ok(())
     }
 
+    /// Sets the physical origin and optional bottom-left viewport.  An explicit
+    /// SCALE maps into the saved viewport and ignores the origin translation
+    /// until the user scale is disabled.
     pub fn set_origin(
         &mut self,
         x: i32,
         y: i32,
         viewport: Option<(i32, i32, i32, i32)>,
     ) -> BasicResult<()> {
-        if self.scale.is_some() {
-            return Err(BasicError::new(ErrorCode::InvalidArgument));
-        }
-        self.origin_x = x;
-        self.origin_y = y;
         let (left, right, top, bottom) =
             viewport.unwrap_or((0, self.width as i32 - 1, self.height as i32 - 1, 0));
         let left = left.clamp(0, self.width as i32 - 1);
@@ -301,10 +299,21 @@ impl Graphics {
         if left >= right || bottom >= top {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
+        if let Some(scale) = self.scale {
+            let double_border = scale.border.saturating_mul(2);
+            let viewport_width = right - left;
+            let viewport_height = top - bottom;
+            if double_border >= viewport_width || double_border >= viewport_height {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+        }
+        self.origin_x = x;
+        self.origin_y = y;
         self.w_left = left;
         self.w_right = right;
         self.w_top = self.height as i32 - 1 - top;
         self.w_bottom = self.height as i32 - 1 - bottom;
+        self.reset_graph_ranges();
         self.move_to(0.0, 0.0);
         Ok(())
     }
@@ -314,6 +323,8 @@ impl Graphics {
         let saved_canvas_y = self.logical_y_to_canvas(self.cursor_y);
         if let Some((xmin, xmax, ymin, ymax, border)) = args {
             let double_border = border.saturating_mul(2);
+            let viewport_width = self.w_right - self.w_left;
+            let viewport_height = self.w_bottom - self.w_top;
             if !xmin.is_finite()
                 || !xmax.is_finite()
                 || !ymin.is_finite()
@@ -321,14 +332,11 @@ impl Graphics {
                 || xmax <= xmin
                 || ymax <= ymin
                 || border < 0
-                || double_border >= self.width.saturating_sub(1) as i32
-                || double_border >= self.height.saturating_sub(1) as i32
+                || double_border >= viewport_width
+                || double_border >= viewport_height
             {
                 return Err(BasicError::new(ErrorCode::InvalidArgument));
             }
-            self.origin_x = 0;
-            self.origin_y = 0;
-            self.reset_viewport();
             self.scale = Some(Scale {
                 xmin,
                 xmax,
@@ -338,7 +346,6 @@ impl Graphics {
             });
         } else {
             self.scale = None;
-            self.reset_viewport();
         }
         self.reset_graph_ranges();
         self.set_cursor_from_canvas(saved_canvas_x, saved_canvas_y);
@@ -437,13 +444,14 @@ impl Graphics {
     ) -> BasicResult<()> {
         let y = self.cross_at_y.unwrap_or(0.0);
         let border = self.scale_border();
+        let viewport_width = self.w_right - self.w_left + 1;
         if !self.has_explicit_scale()
             || !tic.is_finite()
             || !xmin.is_finite()
             || !xmax.is_finite()
             || xmin == xmax
             || border < 0
-            || border * 2 >= self.width as i32
+            || border * 2 >= viewport_width
             || !matches!(orientation, 0 | 1)
             || subdivisions < 1
         {
@@ -496,13 +504,14 @@ impl Graphics {
     ) -> BasicResult<()> {
         let x = self.cross_at_x.unwrap_or(0.0);
         let border = self.scale_border();
+        let viewport_height = self.w_bottom - self.w_top + 1;
         if !self.has_explicit_scale()
             || !tic.is_finite()
             || !ymin.is_finite()
             || !ymax.is_finite()
             || ymin == ymax
             || border < 0
-            || border * 2 >= self.height as i32
+            || border * 2 >= viewport_height
             || subdivisions < 1
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
@@ -555,6 +564,11 @@ impl Graphics {
     pub fn set_cursor_from_logical_screen(&mut self, x: i32, y: i32) {
         let canvas_y = self.height as i32 - 1 - y;
         self.set_cursor_from_canvas(x, canvas_y);
+    }
+
+    pub fn logical_screen_to_user(&self, x: i32, y: i32) -> (f64, f64) {
+        let canvas_y = self.height as i32 - 1 - y;
+        self.canvas_to_user(x, canvas_y)
     }
 
     pub fn plot(&mut self, x: f64, y: f64, color: Option<i32>) {
@@ -1361,11 +1375,10 @@ impl Graphics {
 
     fn user_to_canvas(&self, x: f64, y: f64) -> (i32, i32) {
         if let Some(scale) = self.scale {
-            let sx = (self.width as i32 - 1 - 2 * scale.border) as f64 / (scale.xmax - scale.xmin);
-            let sy = (self.height as i32 - 1 - 2 * scale.border) as f64 / (scale.ymax - scale.ymin);
-            let cx = scale.border as f64 + (x - scale.xmin) * sx;
-            let cy = self.height as f64 - 1.0 - scale.border as f64 - (y - scale.ymin) * sy;
-            (cx.round() as i32, cy.round() as i32)
+            let (left, bottom, sx, sy) = self.scale_canvas_geometry(scale);
+            let cx = left + (x - scale.xmin) * sx;
+            let cy = bottom - (y - scale.ymin) * sy;
+            (round_scaled_canvas_coord(cx), round_scaled_canvas_coord(cy))
         } else {
             let cx = x.round() as i32 + self.origin_x;
             let cy = self.height as i32 - 1 - (y.round() as i32 + self.origin_y);
@@ -1376,35 +1389,45 @@ impl Graphics {
     fn set_cursor_from_canvas(&mut self, canvas_x: i32, canvas_y: i32) {
         self.cursor_x = canvas_x;
         self.cursor_y = self.canvas_y_to_logical(canvas_y);
-        let logical_x = canvas_x - self.origin_x;
-        let logical_y = self.height as i32 - 1 - canvas_y - self.origin_y;
-        let (user_x, user_y) = if let Some(scale) = self.scale {
-            let sx = (self.width as i32 - 1 - 2 * scale.border) as f64 / (scale.xmax - scale.xmin);
-            let sy = (self.height as i32 - 1 - 2 * scale.border) as f64 / (scale.ymax - scale.ymin);
-            (
-                normalize_user_coord(scale.xmin + (logical_x as f64 - scale.border as f64) / sx),
-                normalize_user_coord(scale.ymin + (logical_y as f64 - scale.border as f64) / sy),
-            )
-        } else {
-            (
-                normalize_user_coord(logical_x as f64),
-                normalize_user_coord(logical_y as f64),
-            )
-        };
+        let (user_x, user_y) = self.canvas_to_user(canvas_x, canvas_y);
         self.cursor_user_x = user_x;
         self.cursor_user_y = user_y;
     }
 
+    fn canvas_to_user(&self, canvas_x: i32, canvas_y: i32) -> (f64, f64) {
+        if let Some(scale) = self.scale {
+            let (left, bottom, sx, sy) = self.scale_canvas_geometry(scale);
+            (
+                normalize_user_coord(scale.xmin + (canvas_x as f64 - left) / sx),
+                normalize_user_coord(scale.ymin + (bottom - canvas_y as f64) / sy),
+            )
+        } else {
+            let logical_x = canvas_x - self.origin_x;
+            let logical_y = self.height as i32 - 1 - canvas_y - self.origin_y;
+            (
+                normalize_user_coord(logical_x as f64),
+                normalize_user_coord(logical_y as f64),
+            )
+        }
+    }
+
     fn scaled_radii(&self, radius: f64, aspect: f64) -> (f64, f64) {
         if let Some(scale) = self.scale {
-            let sx =
-                (self.width as i32 - 1 - 2 * scale.border) as f64 / (scale.xmax - scale.xmin).abs();
-            let sy = (self.height as i32 - 1 - 2 * scale.border) as f64
-                / (scale.ymax - scale.ymin).abs();
+            let (_, _, sx, sy) = self.scale_canvas_geometry(scale);
             (radius * aspect * sx, radius * sy)
         } else {
             (radius * aspect, radius)
         }
+    }
+
+    fn scale_canvas_geometry(&self, scale: Scale) -> (f64, f64, f64, f64) {
+        let usable_width = self.w_right - self.w_left - 2 * scale.border;
+        let usable_height = self.w_bottom - self.w_top - 2 * scale.border;
+        let left = (self.w_left + scale.border) as f64;
+        let bottom = (self.w_bottom - scale.border) as f64;
+        let sx = usable_width as f64 / (scale.xmax - scale.xmin);
+        let sy = usable_height as f64 / (scale.ymax - scale.ymin);
+        (left, bottom, sx, sy)
     }
 
     fn reset_graph_ranges(&mut self) {
@@ -1635,34 +1658,34 @@ impl Graphics {
     }
 
     fn x_axis_canvas_span(&self, y: f64, xmin: f64, xmax: f64, border: i32) -> (i32, i32) {
+        let left = self.w_left + border;
+        let right = self.w_right - border;
         if self.is_physical_scale() {
-            return (border, self.width as i32 - border - 1);
+            return (left, right);
         }
         let (x0, _) = self.user_to_canvas(xmin, y);
         let (x1, _) = self.user_to_canvas(xmax, y);
-        (
-            x0.min(x1).max(border),
-            x0.max(x1).min(self.width as i32 - border - 1),
-        )
+        (x0.min(x1).max(left), x0.max(x1).min(right))
     }
 
     fn y_axis_canvas_span(&self, x: f64, ymin: f64, ymax: f64, border: i32) -> (i32, i32) {
+        let top = self.w_top + border;
+        let bottom = self.w_bottom - border;
         if self.is_physical_scale() {
-            return (border, self.height as i32 - border - 1);
+            return (top, bottom);
         }
         let (_, y0) = self.user_to_canvas(x, ymin);
         let (_, y1) = self.user_to_canvas(x, ymax);
-        (
-            y0.min(y1).max(border),
-            y0.max(y1).min(self.height as i32 - border - 1),
-        )
+        (y0.min(y1).max(top), y0.max(y1).min(bottom))
     }
 
     fn axis_x_tick_pixel(&self, x: f64, y: f64, xmin: f64, xmax: f64) -> i32 {
         if self.is_physical_scale() {
             let border = self.scale_border();
-            let effective_width = self.width as i32 - 2 * border;
-            return border + ((x - xmin) * effective_width as f64 / (xmax - xmin)).round() as i32;
+            let left = self.w_left + border;
+            let right = self.w_right - border;
+            return left
+                + round_scaled_canvas_coord((x - xmin) * (right - left) as f64 / (xmax - xmin));
         }
         self.user_to_canvas(x, y).0
     }
@@ -1670,10 +1693,10 @@ impl Graphics {
     fn axis_y_tick_pixel(&self, y: f64, x: f64, ymin: f64, ymax: f64) -> i32 {
         if self.is_physical_scale() {
             let border = self.scale_border();
-            let effective_height = self.height as i32 - 2 * border;
-            return self.height as i32
-                - border
-                - ((y - ymin) * effective_height as f64 / (ymax - ymin)).round() as i32;
+            let top = self.w_top + border;
+            let bottom = self.w_bottom - border;
+            return bottom
+                - round_scaled_canvas_coord((y - ymin) * (bottom - top) as f64 / (ymax - ymin));
         }
         self.user_to_canvas(x, y).1
     }
@@ -2366,6 +2389,12 @@ fn build_axis_ticks(
     ticks
 }
 
+// Python's round() uses ties-to-even. Scaled coordinates must use the same
+// rule so exact half-pixels land on the same inclusive canvas pixel.
+fn round_scaled_canvas_coord(value: f64) -> i32 {
+    value.round_ties_even() as i32
+}
+
 fn normalize_user_coord(value: f64) -> f64 {
     let rounded = value.round();
     if (value - rounded).abs() < 1e-9 {
@@ -2475,6 +2504,264 @@ mod tests {
         graphics
             .set_scale(Some((0.0, 639.0, 0.0, 479.0, 0)))
             .unwrap();
+    }
+
+    #[test]
+    fn scale_maps_inside_the_active_viewport_and_ignores_origin() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(37, 53, Some((100, 399, 379, 180)))
+            .unwrap();
+
+        graphics
+            .set_scale(Some((
+                -std::f64::consts::PI,
+                std::f64::consts::PI,
+                -1.0,
+                1.0,
+                20,
+            )))
+            .unwrap();
+
+        assert_eq!((graphics.origin_x, graphics.origin_y), (37, 53));
+        assert_eq!(
+            (
+                graphics.w_left,
+                graphics.w_right,
+                graphics.w_top,
+                graphics.w_bottom,
+            ),
+            (100, 399, 100, 299)
+        );
+        assert_eq!(
+            graphics.user_to_canvas(-std::f64::consts::PI, -1.0),
+            (120, 279)
+        );
+        assert_eq!(
+            graphics.user_to_canvas(std::f64::consts::PI, 1.0),
+            (379, 120)
+        );
+        assert_eq!(graphics.user_to_canvas(0.0, 0.0), (250, 200));
+        assert_eq!(graphics.scale_border(), 20);
+
+        graphics
+            .set_graph_range(Some((-1.0, 1.0, -0.5, 0.5)))
+            .unwrap();
+        graphics
+            .set_origin(11, 13, Some((20, 220, 300, 100)))
+            .unwrap();
+
+        assert!(graphics.has_explicit_scale());
+        assert_eq!(
+            graphics.scale_bounds(),
+            (-std::f64::consts::PI, std::f64::consts::PI, -1.0, 1.0)
+        );
+        assert_eq!(graphics.scale_border(), 20);
+        assert_eq!((graphics.origin_x, graphics.origin_y), (11, 13));
+        assert_eq!(
+            (
+                graphics.w_left,
+                graphics.w_right,
+                graphics.w_top,
+                graphics.w_bottom,
+            ),
+            (20, 220, 179, 379)
+        );
+        assert_eq!(
+            graphics.user_to_canvas(-std::f64::consts::PI, -1.0),
+            (40, 359)
+        );
+        assert_eq!(
+            graphics.user_to_canvas(std::f64::consts::PI, 1.0),
+            (200, 199)
+        );
+        assert_eq!(graphics.user_to_canvas(0.0, 0.0), (120, 279));
+        assert_eq!((graphics.xpos(), graphics.ypos()), (0.0, 0.0));
+        assert_eq!(
+            graphics.graph_plot_bounds().unwrap(),
+            (-std::f64::consts::PI, std::f64::consts::PI, -1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn scale_mapping_rounds_exact_half_pixels_to_even_like_python() {
+        let mut graphics = Graphics::new(640);
+        graphics.set_origin(99, -77, Some((10, 15, 9, 4))).unwrap();
+        graphics.set_scale(Some((0.0, 10.0, 0.0, 10.0, 0))).unwrap();
+
+        assert_eq!(graphics.user_to_canvas(1.0, 1.0), (10, 474));
+        assert_eq!(graphics.user_to_canvas(3.0, 3.0), (12, 474));
+        assert_eq!(graphics.user_to_canvas(5.0, 5.0), (12, 472));
+    }
+
+    #[test]
+    fn scale_reset_restores_the_saved_origin_and_viewport() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(37, 53, Some((100, 399, 379, 180)))
+            .unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+            .unwrap();
+        graphics.move_to(0.0, 0.0);
+        let saved_canvas = (
+            graphics.cursor_x,
+            graphics.logical_y_to_canvas(graphics.cursor_y),
+        );
+
+        graphics.set_scale(None).unwrap();
+
+        assert!(!graphics.has_explicit_scale());
+        assert_eq!((graphics.origin_x, graphics.origin_y), (37, 53));
+        assert_eq!(
+            (
+                graphics.w_left,
+                graphics.w_right,
+                graphics.w_top,
+                graphics.w_bottom,
+            ),
+            (100, 399, 100, 299)
+        );
+        assert_eq!(
+            (
+                graphics.cursor_x,
+                graphics.logical_y_to_canvas(graphics.cursor_y),
+            ),
+            saved_canvas
+        );
+        assert_eq!((graphics.xpos(), graphics.ypos()), (213.0, 226.0));
+        assert_eq!(graphics.user_to_canvas(213.0, 226.0), saved_canvas);
+    }
+
+    #[test]
+    fn scale_border_is_validated_against_the_active_viewport() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(0, 0, Some((100, 200, 200, 120)))
+            .unwrap();
+
+        assert!(graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 40)))
+            .is_err());
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 39)))
+            .unwrap();
+    }
+
+    #[test]
+    fn origin_rejects_viewport_too_small_for_scale_without_changing_state() {
+        let mut graphics = Graphics::new(640);
+        graphics.set_origin(7, 9, Some((20, 600, 450, 10))).unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 30)))
+            .unwrap();
+        graphics.move_to(0.5, -0.5);
+        let saved_state = (
+            graphics.origin_x,
+            graphics.origin_y,
+            graphics.w_left,
+            graphics.w_right,
+            graphics.w_top,
+            graphics.w_bottom,
+            graphics.cursor_x,
+            graphics.cursor_y,
+            graphics.xpos(),
+            graphics.ypos(),
+            graphics.user_to_canvas(-1.0, -1.0),
+            graphics.user_to_canvas(1.0, 1.0),
+        );
+
+        assert!(graphics
+            .set_origin(99, 88, Some((100, 160, 160, 100)))
+            .is_err());
+
+        assert_eq!(
+            (
+                graphics.origin_x,
+                graphics.origin_y,
+                graphics.w_left,
+                graphics.w_right,
+                graphics.w_top,
+                graphics.w_bottom,
+                graphics.cursor_x,
+                graphics.cursor_y,
+                graphics.xpos(),
+                graphics.ypos(),
+                graphics.user_to_canvas(-1.0, -1.0),
+                graphics.user_to_canvas(1.0, 1.0),
+            ),
+            saved_state
+        );
+        assert_eq!(graphics.scale_bounds(), (-1.0, 1.0, -1.0, 1.0));
+        assert_eq!(graphics.scale_border(), 30);
+    }
+
+    #[test]
+    fn viewport_scale_drives_cursor_inverse_radii_graph_width_and_axes() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(91, 73, Some((40, 240, 300, 100)))
+            .unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 10)))
+            .unwrap();
+
+        assert_eq!(graphics.logical_screen_to_user(140, 200), (0.0, 0.0));
+        graphics.set_cursor_from_logical_screen(140, 200);
+        assert_eq!((graphics.xpos(), graphics.ypos()), (0.0, 0.0));
+        assert_eq!(graphics.scaled_radii(0.5, 2.0), (90.0, 45.0));
+        assert_eq!(graphics.graph_effective_pixel_width(-1.0, 1.0, 0.0), 180);
+        assert_eq!(graphics.x_axis_canvas_span(0.0, -1.0, 1.0, 10), (50, 230));
+        assert_eq!(graphics.y_axis_canvas_span(0.0, -1.0, 1.0, 10), (189, 369));
+        assert_eq!(graphics.axis_x_tick_pixel(-1.0, 0.0, -1.0, 1.0), 50);
+        assert_eq!(graphics.axis_x_tick_pixel(1.0, 0.0, -1.0, 1.0), 230);
+        assert_eq!(graphics.axis_y_tick_pixel(-1.0, 0.0, -1.0, 1.0), 369);
+        assert_eq!(graphics.axis_y_tick_pixel(1.0, 0.0, -1.0, 1.0), 189);
+    }
+
+    #[test]
+    fn explicit_physical_scale_axes_stay_inside_the_active_viewport() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(0, 0, Some((40, 240, 300, 100)))
+            .unwrap();
+        graphics
+            .set_scale(Some((0.0, 639.0, 0.0, 479.0, 0)))
+            .unwrap();
+
+        assert_eq!(graphics.x_axis_canvas_span(0.0, -5.0, 5.0, 0), (40, 240));
+        assert_eq!(graphics.y_axis_canvas_span(0.0, -5.0, 5.0, 0), (179, 379));
+        assert_eq!(graphics.axis_x_tick_pixel(-5.0, 0.0, -5.0, 5.0), 40);
+        assert_eq!(graphics.axis_x_tick_pixel(5.0, 0.0, -5.0, 5.0), 240);
+        assert_eq!(graphics.axis_y_tick_pixel(-5.0, 0.0, -5.0, 5.0), 379);
+        assert_eq!(graphics.axis_y_tick_pixel(5.0, 0.0, -5.0, 5.0), 179);
+    }
+
+    #[test]
+    fn screen_state_reset_clears_composed_origin_viewport_and_scale() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(37, 53, Some((100, 399, 379, 180)))
+            .unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+            .unwrap();
+
+        graphics.reset_window_state_preserving_buffer();
+
+        assert!(!graphics.has_explicit_scale());
+        assert_eq!((graphics.origin_x, graphics.origin_y), (0, 0));
+        assert_eq!(
+            (
+                graphics.w_left,
+                graphics.w_right,
+                graphics.w_top,
+                graphics.w_bottom,
+            ),
+            (0, 639, 0, 479)
+        );
+        assert_eq!(graphics.scale_bounds(), (0.0, 639.0, 0.0, 479.0));
+        assert_eq!(graphics.scale_border(), 0);
     }
 
     #[test]
