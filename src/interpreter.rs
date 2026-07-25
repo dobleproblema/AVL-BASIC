@@ -489,6 +489,7 @@ struct ActiveFunctionFrame {
 
 #[derive(Debug, Clone)]
 struct UserSub {
+    name: Rc<str>,
     params: Vec<String>,
     local_specs: Vec<LocalSpec>,
     start: Cursor,
@@ -497,7 +498,62 @@ struct UserSub {
 
 #[derive(Debug, Clone)]
 struct ActiveSubFrame {
-    name: String,
+    name: Rc<str>,
+}
+
+#[derive(Debug)]
+enum SavedSubName {
+    Numeric(Option<f64>),
+    String(Option<String>),
+}
+
+#[derive(Debug)]
+struct SavedSubBindings<'a> {
+    name: &'a str,
+    name_value: SavedSubName,
+    numeric: Vec<(&'a str, Option<f64>)>,
+    string: Vec<(&'a str, Option<String>)>,
+    arrays: Vec<(&'a str, Option<ArrayValue>)>,
+    aliases: Vec<(&'a str, Option<String>)>,
+}
+
+impl<'a> SavedSubBindings<'a> {
+    fn new(interpreter: &Interpreter, name: &'a str) -> Self {
+        let name_value = if name.ends_with('$') {
+            SavedSubName::String(interpreter.string_variables.get(name).cloned())
+        } else {
+            SavedSubName::Numeric(interpreter.numeric_variables.get(name).copied())
+        };
+        Self {
+            name,
+            name_value,
+            numeric: Vec::new(),
+            string: Vec::new(),
+            arrays: Vec::new(),
+            aliases: Vec::new(),
+        }
+    }
+
+    fn restore(self, interpreter: &mut Interpreter) {
+        restore_numeric_bindings_ref(&mut interpreter.numeric_variables, self.numeric);
+        restore_string_bindings_ref(&mut interpreter.string_variables, self.string);
+        restore_array_bindings_ref(&mut interpreter.arrays, self.arrays);
+        restore_array_alias_bindings_ref(&mut interpreter.array_aliases, self.aliases);
+        match self.name_value {
+            SavedSubName::Numeric(Some(value)) => {
+                set_numeric_binding_ref(&mut interpreter.numeric_variables, self.name, value);
+            }
+            SavedSubName::Numeric(None) => {
+                interpreter.numeric_variables.remove(self.name);
+            }
+            SavedSubName::String(Some(value)) => {
+                set_string_binding_ref(&mut interpreter.string_variables, self.name, value);
+            }
+            SavedSubName::String(None) => {
+                interpreter.string_variables.remove(self.name);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -605,6 +661,43 @@ struct CompiledPlot {
     y: CompiledNumberExpr,
     color: Option<CompiledColorExpr>,
     relative: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledMove {
+    x: CompiledNumberExpr,
+    y: CompiledNumberExpr,
+    relative: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledCall {
+    name: Rc<str>,
+    args: Box<[CompiledSubCallArgument]>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledSubCallArgument {
+    array_candidate: Option<Rc<str>>,
+    expr: Expr,
+    fast_numeric: Option<FastNumberExpr>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledDraw {
+    To {
+        x: CompiledNumberExpr,
+        y: CompiledNumberExpr,
+        color: Option<CompiledColorExpr>,
+        relative: bool,
+    },
+    Between {
+        x1: CompiledNumberExpr,
+        y1: CompiledNumberExpr,
+        x2: CompiledNumberExpr,
+        y2: CompiledNumberExpr,
+        color: Option<CompiledColorExpr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -804,10 +897,8 @@ enum CachedCommand {
     },
     Ink(Rc<CompiledColorArguments>),
     Plot(Rc<CompiledPlot>),
-    DrawRelative2 {
-        x: Rc<Expr>,
-        y: Rc<Expr>,
-    },
+    Move(Rc<CompiledMove>),
+    Draw(Rc<CompiledDraw>),
     Rect(Rc<CompiledRect>),
     Triangle(Rc<CompiledTriangle>),
     Circle(Rc<CompiledCircle>),
@@ -841,10 +932,7 @@ enum CachedCommand {
         line: i32,
         target: Option<Cursor>,
     },
-    Call {
-        name: String,
-        args: Vec<String>,
-    },
+    Call(Rc<CompiledCall>),
     Return,
     FnEnd,
     FnExit,
@@ -1083,9 +1171,9 @@ pub struct Interpreter {
     data_line_starts: HashMap<i32, usize>,
     data_pointer: usize,
     functions: HashMap<String, UserFunction>,
-    subs: HashMap<String, UserSub>,
+    subs: HashMap<String, Rc<UserSub>>,
     function_call_stack: Vec<Rc<str>>,
-    sub_call_stack: Vec<String>,
+    sub_call_stack: Vec<Rc<str>>,
     active_functions: Vec<ActiveFunctionFrame>,
     active_subs: Vec<ActiveSubFrame>,
     fn_line_owner: HashMap<i32, String>,
@@ -2630,9 +2718,8 @@ impl Interpreter {
             } => self.execute_string_char_assignment(target, source, index.as_ref()),
             CachedCommand::Ink(compiled) => self.execute_compiled_ink(compiled.as_ref()),
             CachedCommand::Plot(compiled) => self.execute_compiled_plot(compiled.as_ref()),
-            CachedCommand::DrawRelative2 { x, y } => {
-                self.execute_compiled_draw_relative2(x.as_ref(), y.as_ref())
-            }
+            CachedCommand::Move(compiled) => self.execute_compiled_move(compiled.as_ref()),
+            CachedCommand::Draw(compiled) => self.execute_compiled_draw(compiled.as_ref()),
             CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
             CachedCommand::Triangle(compiled) => self.execute_compiled_triangle(compiled.as_ref()),
             CachedCommand::Circle(compiled) => self.execute_compiled_circle(compiled.as_ref()),
@@ -2681,7 +2768,7 @@ impl Interpreter {
                 });
                 self.jump_to_cached_line_checked(*line, target.as_ref(), cursor, true)
             }
-            CachedCommand::Call { name, args } => self.execute_cached_call(name, args),
+            CachedCommand::Call(compiled) => self.execute_compiled_call(compiled.as_ref()),
             CachedCommand::Return => self.execute_return(cursor),
             CachedCommand::FnEnd => self.execute_fnend(),
             CachedCommand::FnExit => self.execute_fnexit(),
@@ -3263,7 +3350,10 @@ impl Interpreter {
     }
 
     fn execute_compiled_plot(&mut self, compiled: &CompiledPlot) -> BasicResult<()> {
-        self.ensure_graphics_window()?;
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
+            self.ensure_graphics_window()?;
+        }
         let x = compiled
             .x
             .eval(self)
@@ -3283,26 +3373,83 @@ impl Interpreter {
         } else {
             self.graphics.plot(x, y, color);
         }
-        self.refresh_graphics_window()
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
     }
 
-    fn execute_compiled_draw_relative2(&mut self, x: &Expr, y: &Expr) -> BasicResult<()> {
-        self.ensure_graphics_window()?;
-        let x = eval_compiled_number(self, x).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
+    fn execute_compiled_move(&mut self, compiled: &CompiledMove) -> BasicResult<()> {
+        if !self.graphics_window_blocked() {
+            if self.graphics_window_ready_for_program_drawing() {
+                self.pump_graphics_window_if_due()?;
+            } else {
+                self.ensure_graphics_window()?;
             }
-            e
-        })?;
-        let y = eval_compiled_number(self, y).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
+        }
+        let x = compiled
+            .x
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        let y = compiled
+            .y
+            .eval(self)
+            .map_err(|e| self.with_current_line(e))?;
+        if compiled.relative {
+            self.graphics
+                .move_to(self.graphics.xpos() + x, self.graphics.ypos() + y);
+        } else {
+            self.graphics.move_to(x, y);
+        }
+        Ok(())
+    }
+
+    fn execute_compiled_draw(&mut self, compiled: &CompiledDraw) -> BasicResult<()> {
+        let window_blocked = self.graphics_window_blocked();
+        if !window_blocked && !self.graphics_window_ready_for_program_drawing() {
+            self.ensure_graphics_window()?;
+        }
+        match compiled {
+            CompiledDraw::To {
+                x,
+                y,
+                color,
+                relative,
+            } => {
+                let x = x.eval(self).map_err(|e| self.with_current_line(e))?;
+                let y = y.eval(self).map_err(|e| self.with_current_line(e))?;
+                let color = color.as_ref().map(|expr| expr.eval(self)).transpose()?;
+                if *relative {
+                    self.graphics.draw_to(
+                        self.graphics.xpos() + x,
+                        self.graphics.ypos() + y,
+                        color,
+                    );
+                } else {
+                    self.graphics.draw_to(x, y, color);
+                }
             }
-            e
-        })?;
-        self.graphics
-            .draw_to(self.graphics.xpos() + x, self.graphics.ypos() + y, None);
-        self.refresh_graphics_window_after_ensure()
+            CompiledDraw::Between {
+                x1,
+                y1,
+                x2,
+                y2,
+                color,
+            } => {
+                let x1 = x1.eval(self).map_err(|e| self.with_current_line(e))?;
+                let y1 = y1.eval(self).map_err(|e| self.with_current_line(e))?;
+                let x2 = x2.eval(self).map_err(|e| self.with_current_line(e))?;
+                let y2 = y2.eval(self).map_err(|e| self.with_current_line(e))?;
+                let color = color.as_ref().map(|expr| expr.eval(self)).transpose()?;
+                self.graphics.line_between(x1, y1, x2, y2, color);
+            }
+        }
+        if window_blocked {
+            Ok(())
+        } else {
+            self.refresh_graphics_window_after_ensure()
+        }
     }
 
     fn execute_compiled_rect(&mut self, compiled: &CompiledRect) -> BasicResult<()> {
@@ -6363,14 +6510,16 @@ impl Interpreter {
                 self.sub_line_owner.insert(line, name.clone());
             }
         }
+        let sub_name = Rc::<str>::from(name.as_str());
         self.subs.insert(
             name,
-            UserSub {
+            Rc::new(UserSub {
+                name: sub_name,
                 params,
                 local_specs,
                 start,
                 end: end.clone(),
-            },
+            }),
         );
         *cursor = self.cursor_after_cached_command(Cursor {
             line_idx: end.line_idx,
@@ -6540,10 +6689,10 @@ impl Interpreter {
     }
 
     fn detach_multiline_sub(&mut self, name: &str) {
-        let Some(UserSub { start, end, .. }) = self.subs.get(name).cloned() else {
+        let Some(sub) = self.subs.get(name).cloned() else {
             return;
         };
-        for idx in start.line_idx..=end.line_idx {
+        for idx in sub.start.line_idx..=sub.end.line_idx {
             if let Some(line) = self.program.line_numbers().get(idx).copied() {
                 self.sub_line_owner.remove(&line);
             }
@@ -6569,7 +6718,7 @@ impl Interpreter {
     }
 
     fn active_sub_name(&self) -> Option<&str> {
-        self.active_subs.last().map(|frame| frame.name.as_str())
+        self.active_subs.last().map(|frame| frame.name.as_ref())
     }
 
     fn function_for_line(&self, line: i32) -> Option<&str> {
@@ -8330,8 +8479,8 @@ impl Interpreter {
                     target: self.cursor_for_line(line),
                 })
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
-            "CALL" => parse_call_statement(trimmed[4..].trim())
-                .map(|(name, args)| CachedCommand::Call { name, args })
+            "CALL" => compile_call_statement(trimmed[4..].trim())
+                .map(|compiled| CachedCommand::Call(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "NEXT" => {
                 let arg = trimmed[4..].trim();
@@ -8356,11 +8505,17 @@ impl Interpreter {
             "PLOTR" => compile_plot_statement(trimmed[5..].trim(), true)
                 .map(|compiled| CachedCommand::Plot(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
-            "DRAWR" => compile_draw_relative2(trimmed[5..].trim())
-                .map(|(x, y)| CachedCommand::DrawRelative2 {
-                    x: Rc::new(x),
-                    y: Rc::new(y),
-                })
+            "MOVE" => compile_move_statement(trimmed[4..].trim(), false)
+                .map(|compiled| CachedCommand::Move(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "MOVER" => compile_move_statement(trimmed[5..].trim(), true)
+                .map(|compiled| CachedCommand::Move(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "DRAW" => compile_draw_statement(trimmed[4..].trim(), false)
+                .map(|compiled| CachedCommand::Draw(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "DRAWR" => compile_draw_statement(trimmed[5..].trim(), true)
+                .map(|compiled| CachedCommand::Draw(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "RECTANGLE" => compile_rect_statement(trimmed[9..].trim(), false)
                 .map(|compiled| CachedCommand::Rect(Rc::new(compiled)))
@@ -9615,18 +9770,46 @@ impl Interpreter {
         for expr in arg_exprs {
             values.push(self.eval_sub_call_argument(&expr)?);
         }
-        self.call_multiline_sub(name, values)
+        self.call_multiline_sub(&name, &mut values.into_iter())
     }
 
-    fn execute_cached_call(&mut self, name: &str, arg_exprs: &[String]) -> BasicResult<()> {
+    fn execute_compiled_call(&mut self, compiled: &CompiledCall) -> BasicResult<()> {
         if self.inside_multiline_function() {
             return Err(self.err(ErrorCode::FunctionForbidden));
         }
-        let mut values = Vec::with_capacity(arg_exprs.len());
-        for expr in arg_exprs {
-            values.push(self.eval_sub_call_argument(expr)?);
+        let name = compiled.name.as_ref();
+        match compiled.args.as_ref() {
+            [] => self.call_multiline_sub(name, &mut std::iter::empty()),
+            [arg0] => {
+                let value0 = self.eval_compiled_sub_call_argument(arg0)?;
+                self.call_multiline_sub(name, &mut [value0].into_iter())
+            }
+            [arg0, arg1] => {
+                let value0 = self.eval_compiled_sub_call_argument(arg0)?;
+                let value1 = self.eval_compiled_sub_call_argument(arg1)?;
+                self.call_multiline_sub(name, &mut [value0, value1].into_iter())
+            }
+            [arg0, arg1, arg2] => {
+                let value0 = self.eval_compiled_sub_call_argument(arg0)?;
+                let value1 = self.eval_compiled_sub_call_argument(arg1)?;
+                let value2 = self.eval_compiled_sub_call_argument(arg2)?;
+                self.call_multiline_sub(name, &mut [value0, value1, value2].into_iter())
+            }
+            [arg0, arg1, arg2, arg3] => {
+                let value0 = self.eval_compiled_sub_call_argument(arg0)?;
+                let value1 = self.eval_compiled_sub_call_argument(arg1)?;
+                let value2 = self.eval_compiled_sub_call_argument(arg2)?;
+                let value3 = self.eval_compiled_sub_call_argument(arg3)?;
+                self.call_multiline_sub(name, &mut [value0, value1, value2, value3].into_iter())
+            }
+            args => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_compiled_sub_call_argument(arg)?);
+                }
+                self.call_multiline_sub(name, &mut values.into_iter())
+            }
         }
-        self.call_multiline_sub(name.to_string(), values)
     }
 
     fn eval_sub_call_argument(&mut self, expr: &str) -> BasicResult<Value> {
@@ -9642,74 +9825,80 @@ impl Interpreter {
         self.eval_value(trimmed)
     }
 
-    fn call_multiline_sub(&mut self, name: String, args: Vec<Value>) -> BasicResult<()> {
-        let Some(sub) = self.subs.get(&name).cloned() else {
+    fn eval_compiled_sub_call_argument(
+        &mut self,
+        compiled: &CompiledSubCallArgument,
+    ) -> BasicResult<Value> {
+        if let Some(name) = &compiled.array_candidate {
+            if self.array_exists(name)
+                && !self.numeric_variables.contains_key(name.as_ref())
+                && !self.string_variables.contains_key(name.as_ref())
+            {
+                return Ok(Value::ArrayRef(
+                    self.array_lookup_key(name.as_ref()).into_owned(),
+                ));
+            }
+        }
+        let result = if let Some(fast) = &compiled.fast_numeric {
+            fast.eval(self).map(Value::number)
+        } else {
+            eval_compiled(self, &compiled.expr)
+        };
+        result.map_err(|e| self.with_current_line(e))
+    }
+
+    fn call_multiline_sub(
+        &mut self,
+        name: &str,
+        args: &mut dyn ExactSizeIterator<Item = Value>,
+    ) -> BasicResult<()> {
+        let Some(sub) = self.subs.get(name).cloned() else {
             return Err(self.err(ErrorCode::Undefined));
         };
-        if self.sub_call_stack.iter().any(|active| active == &name) {
+        if self
+            .sub_call_stack
+            .iter()
+            .any(|active| active.as_ref() == sub.name.as_ref())
+        {
             return Err(self.err(ErrorCode::SubEndWithoutDef));
         }
         if sub.params.len() != args.len() {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
 
-        let mut saved_numeric: Vec<(&str, Option<f64>)> = Vec::with_capacity(sub.params.len() + 1);
-        let mut saved_string: Vec<(&str, Option<String>)> =
-            Vec::with_capacity(sub.params.len() + 1);
-        let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
-            Vec::with_capacity(sub.params.len() + 1);
-        let mut saved_aliases: Vec<(&str, Option<String>)> =
-            Vec::with_capacity(sub.params.len() + 1);
+        let mut saved = SavedSubBindings::new(self, sub.name.as_ref());
 
-        if name.ends_with('$') {
-            save_string_binding_ref(&self.string_variables, &mut saved_string, &name);
-        } else {
-            save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, &name);
-        }
-
-        for (param, value) in sub.params.iter().zip(args.into_iter()) {
+        for (param, value) in sub.params.iter().zip(args) {
             match value {
                 Value::Number(n) => {
                     if param.ends_with('$') {
-                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
-                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+                        saved.restore(self);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
+                    save_numeric_binding_ref(&self.numeric_variables, &mut saved.numeric, param);
                     set_numeric_binding_ref(&mut self.numeric_variables, param, n);
                 }
                 Value::Str(s) => {
                     if !param.ends_with('$') {
-                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
-                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+                        saved.restore(self);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    save_string_binding_ref(&self.string_variables, &mut saved_string, param);
+                    save_string_binding_ref(&self.string_variables, &mut saved.string, param);
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
                     let source_key = self.array_lookup_key(&source);
                     let Some(array) = self.arrays.get(source_key.as_ref()) else {
-                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
-                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+                        saved.restore(self);
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
-                        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-                        restore_string_bindings_ref(&mut self.string_variables, saved_string);
-                        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-                        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+                        saved.restore(self);
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
-                    save_string_binding_ref(&self.string_variables, &mut saved_string, param);
-                    save_array_alias_binding_ref(&self.array_aliases, &mut saved_aliases, param);
+                    save_numeric_binding_ref(&self.numeric_variables, &mut saved.numeric, param);
+                    save_string_binding_ref(&self.string_variables, &mut saved.string, param);
+                    save_array_alias_binding_ref(&self.array_aliases, &mut saved.aliases, param);
                     self.numeric_variables.remove(param);
                     self.string_variables.remove(param);
                     self.array_aliases
@@ -9720,15 +9909,12 @@ impl Interpreter {
 
         if let Err(err) = self.bind_local_specs_vec(
             &sub.local_specs,
-            &mut saved_numeric,
-            &mut saved_string,
-            &mut saved_arrays,
-            &mut saved_aliases,
+            &mut saved.numeric,
+            &mut saved.string,
+            &mut saved.arrays,
+            &mut saved.aliases,
         ) {
-            restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-            restore_string_bindings_ref(&mut self.string_variables, saved_string);
-            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+            saved.restore(self);
             return Err(err);
         }
 
@@ -9740,8 +9926,10 @@ impl Interpreter {
         let saved_pending_if = self.pending_if_branch.take();
         let previous_sub_return = self.sub_return_requested;
         self.sub_return_requested = false;
-        self.sub_call_stack.push(name.clone());
-        self.active_subs.push(ActiveSubFrame { name: name.clone() });
+        self.sub_call_stack.push(sub.name.clone());
+        self.active_subs.push(ActiveSubFrame {
+            name: sub.name.clone(),
+        });
 
         let run_result = self.run_from(sub.start);
         self.active_subs.pop();
@@ -9754,10 +9942,7 @@ impl Interpreter {
         self.pending_if_branch = saved_pending_if;
         self.current_line = saved_current_line;
         self.sub_return_requested = previous_sub_return;
-        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
-        restore_string_bindings_ref(&mut self.string_variables, saved_string);
-        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+        saved.restore(self);
 
         run_result?;
         Ok(())
@@ -10107,6 +10292,331 @@ mod interpreter_tests {
         interp.process_immediate("PAPER 13").unwrap();
         interp.process_immediate("CLG").unwrap();
         assert_eq!(interp.graphics.test(0.0, 0.0), 0xadd8e6);
+    }
+
+    #[test]
+    fn move_and_draw_cache_covers_every_supported_form_and_falls_back_to_raw() {
+        let mut interp = Interpreter::new();
+
+        for command in ["MOVE X,Y", "MOVER X,Y"] {
+            assert!(
+                matches!(
+                    interp.compile_cached_command(command),
+                    CachedCommand::Move(_)
+                ),
+                "{command}"
+            );
+        }
+        for command in [
+            "DRAW X,Y",
+            "DRAW X,Y,C",
+            "DRAW X1,Y1,X2,Y2",
+            "DRAW X1,Y1,X2,Y2,C",
+            "DRAWR X,Y",
+            "DRAWR X,Y,C",
+        ] {
+            assert!(
+                matches!(
+                    interp.compile_cached_command(command),
+                    CachedCommand::Draw(_)
+                ),
+                "{command}"
+            );
+        }
+        for command in [
+            "MOVE X",
+            "MOVER X,,Y",
+            "DRAW X",
+            "DRAW X,Y,,Z",
+            "DRAW X1,Y1,X2,Y2,C,Z",
+            "DRAWR X,Y,C,Z",
+        ] {
+            assert!(
+                matches!(
+                    interp.compile_cached_command(command),
+                    CachedCommand::Raw(_)
+                ),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn call_cache_precompiles_arguments_and_falls_back_to_raw() {
+        let mut interp = Interpreter::new();
+
+        let CachedCommand::Call(compiled) =
+            interp.compile_cached_command(r#"CALL WORK(A+1,T$+"!",Z)"#)
+        else {
+            panic!("valid CALL should use the compiled cache");
+        };
+        assert_eq!(compiled.name.as_ref(), "WORK");
+        assert_eq!(compiled.args.len(), 3);
+        assert!(compiled.args[0].fast_numeric.is_some());
+        assert!(compiled.args[1].fast_numeric.is_none());
+        assert_eq!(compiled.args[2].array_candidate.as_deref(), Some("Z"));
+
+        assert!(matches!(
+            interp.compile_cached_command("CALL EMPTY"),
+            CachedCommand::Call(_)
+        ));
+        for command in ["CALL", "CALL WORK((1)", "CALL WORK(1,)"] {
+            assert!(
+                matches!(
+                    interp.compile_cached_command(command),
+                    CachedCommand::Raw(_)
+                ),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_call_preserves_parameters_locals_aliases_and_exit_sub() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DIM Z(1),Z$(1),Q(1),Q$(1)
+20 Z(0)=1:Z(1)=2:Z$(0)="a":Z$(1)="b":Q(0)=41:Q$(0)="global"
+30 N=44:T$="persist":G=11:G$="outer":OUTER=77
+40 DEF SUB INNER(B,B$)
+50 B(0)=B(0)+10:B$(1)=B$(1)+"!"
+60 SUBEND
+70 DEF SUB OUTER(N,T$,A,A$)
+80 LOCAL G,G$,Q(1),Q$(1)
+90 G=100:G$="local":Q(0)=3:Q$(0)="q":OUTER=999
+100 A(1)=N:A$(0)=T$
+110 CALL INNER(A,A$)
+120 EXIT SUB
+130 A(1)=999
+140 SUBEND
+150 DEF SUB FIVE(A,B,C,D,E)
+160 TOTAL=A+B+C+D+E
+170 SUBEND
+180 CALL OUTER(5,"hi",Z,Z$)
+190 CALL FIVE(1,2,3,4,5)"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("N"), Some(&44.0));
+        assert_eq!(
+            interp.string_variables.get("T$").map(String::as_str),
+            Some("persist")
+        );
+        assert_eq!(interp.numeric_variables.get("G"), Some(&11.0));
+        assert_eq!(
+            interp.string_variables.get("G$").map(String::as_str),
+            Some("outer")
+        );
+        assert_eq!(interp.numeric_variables.get("OUTER"), Some(&77.0));
+        assert_eq!(interp.numeric_variables.get("TOTAL"), Some(&15.0));
+        assert_eq!(
+            interp.array_ref("Z").unwrap().get_number(&[0]).unwrap(),
+            11.0
+        );
+        assert_eq!(
+            interp.array_ref("Z").unwrap().get_number(&[1]).unwrap(),
+            5.0
+        );
+        assert!(matches!(
+            interp.array_ref("Z$").unwrap().get(&[0]).unwrap(),
+            Value::Str(value) if value == "hi"
+        ));
+        assert!(matches!(
+            interp.array_ref("Z$").unwrap().get(&[1]).unwrap(),
+            Value::Str(value) if value == "b!"
+        ));
+        assert_eq!(
+            interp.array_ref("Q").unwrap().get_number(&[0]).unwrap(),
+            41.0
+        );
+        assert!(matches!(
+            interp.array_ref("Q$").unwrap().get(&[0]).unwrap(),
+            Value::Str(value) if value == "global"
+        ));
+    }
+
+    #[test]
+    fn compiled_call_errors_match_the_raw_call_path() {
+        fn interpreter_with_work_sub() -> Interpreter {
+            let mut interp = Interpreter::new();
+            interp
+                .program
+                .load_text("10 DEF SUB WORK(X)\n20 SUBEND")
+                .unwrap();
+            interp.run_loaded().unwrap();
+            interp.current_line = Some(900);
+            interp
+        }
+
+        for call in ["WORK(1/0)", r#"WORK("X")"#, "WORK(1,2)", "MISSING(1)"] {
+            let mut raw = interpreter_with_work_sub();
+            let raw_error = raw.execute_call(call).expect_err(call);
+
+            let mut compiled = interpreter_with_work_sub();
+            let compiled_call = compile_call_statement(call).unwrap();
+            let compiled_error = compiled
+                .execute_compiled_call(&compiled_call)
+                .expect_err(call);
+
+            assert_eq!(compiled_error.code, raw_error.code, "{call}");
+            assert_eq!(compiled_error.detail, raw_error.detail, "{call}");
+            assert_eq!(compiled_error.line, raw_error.line, "{call}");
+        }
+    }
+
+    #[test]
+    fn cached_call_preserves_on_error_trace_and_recursion_rules() {
+        let mut handled = Interpreter::new();
+        handled.ansi_output = false;
+        handled
+            .program
+            .load_text(
+                r#"10 DEF SUB FAIL(X)
+20 LOCAL L
+30 L=X
+40 ERROR 5
+50 SUBEND
+60 ON ERROR GOTO 100
+70 TRON
+80 CALL FAIL(7)
+90 END
+100 TROFF
+110 PRINT ERR;ERL
+120 END"#,
+            )
+            .unwrap();
+        handled.run_loaded().unwrap();
+        assert_eq!(handled.take_output(), "[80][20][30][40][100] 5  40\n");
+
+        let mut recursive = Interpreter::new();
+        recursive
+            .program
+            .load_text(
+                r#"10 DEF SUB AGAIN
+20 CALL AGAIN
+30 SUBEND
+40 CALL AGAIN"#,
+            )
+            .unwrap();
+        let error = recursive
+            .run_loaded()
+            .expect_err("recursive CALL must fail");
+        assert_eq!(error.code, ErrorCode::SubEndWithoutDef);
+        assert_eq!(error.line, Some(20));
+
+        let mut in_function = Interpreter::new();
+        in_function
+            .program
+            .load_text(
+                r#"10 DEF SUB WORK
+20 SUBEND
+30 DEF FNTRY()
+40 CALL WORK
+50 FNTRY=1
+60 FNEND
+70 PRINT FNTRY()"#,
+            )
+            .unwrap();
+        let error = in_function
+            .run_loaded()
+            .expect_err("CALL inside multiline DEF FN must stay forbidden");
+        assert_eq!(error.code, ErrorCode::FunctionForbidden);
+        assert_eq!(error.line, Some(40));
+    }
+
+    #[test]
+    fn timers_continue_to_fire_while_a_cached_call_is_running() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DEF SUB WAIT
+20 PAUSE 50
+30 SUBEND
+40 AFTER 1,1 GOSUB 100
+50 CALL WAIT
+60 END
+100 FIRED=FIRED+1
+110 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("FIRED"), Some(&1.0));
+    }
+
+    #[test]
+    fn cached_move_and_draw_forms_match_immediate_execution_exactly() {
+        let commands = [
+            "CLG",
+            r##"INK "#010203""##,
+            "X=12:Y=14:MOVE X,Y",
+            "DRAW X+18,Y,66051",
+            "MOVER 3,5",
+            r##"DRAWR 7,9,"#040506""##,
+            "DRAW 70,20",
+            r##"DRAW 75,25,"#070809""##,
+            "DRAW 90,10,110,30",
+            r##"DRAW 115,10,135,30,"#0A0B0C""##,
+            "PLOT 140,20,855567",
+            r##"PLOTR 2,3,"#101112""##,
+            "MOVER 1,,2",
+        ];
+
+        let mut cached = Interpreter::new();
+        cached.graphics_window_enabled = false;
+        let program = commands
+            .iter()
+            .enumerate()
+            .map(|(index, command)| format!("{} {command}", (index + 1) * 10))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cached.program.load_text(&program).unwrap();
+        cached.run_loaded().unwrap();
+
+        let mut immediate = Interpreter::new();
+        immediate.graphics_window_enabled = false;
+        for command in commands {
+            immediate.process_immediate(command).unwrap();
+        }
+
+        assert_eq!(
+            cached.graphics.capture_screen(),
+            immediate.graphics.capture_screen()
+        );
+        assert_eq!(cached.graphics.xpos(), immediate.graphics.xpos());
+        assert_eq!(cached.graphics.ypos(), immediate.graphics.ypos());
+    }
+
+    #[test]
+    fn cached_move_and_draw_errors_match_immediate_execution() {
+        for command in [
+            "MOVE 1",
+            "DRAW 1,2,3,4,5,6",
+            "DRAWR 1,2,3,4",
+            "MOVE 1/0,2",
+            r#"MOVER "X",2"#,
+            "DRAW 1,2,1/0",
+            r#"DRAWR 1,2,"not-a-color""#,
+        ] {
+            let mut immediate = Interpreter::new();
+            immediate.graphics_window_enabled = false;
+            let immediate_error = immediate.process_immediate(command).expect_err(command);
+
+            let mut cached = Interpreter::new();
+            cached.graphics_window_enabled = false;
+            cached.program.load_text(&format!("10 {command}")).unwrap();
+            let cached_error = cached.run_loaded().expect_err(command);
+
+            assert_eq!(cached_error.code, immediate_error.code, "{command}");
+            assert_eq!(cached_error.detail, immediate_error.detail, "{command}");
+            assert_eq!(cached_error.line, Some(10), "{command}");
+        }
     }
 
     #[test]
@@ -12140,6 +12650,30 @@ fn compile_mid_assignment_statement(source: &str) -> BasicResult<CompiledMidAssi
     })
 }
 
+fn compile_call_statement(source: &str) -> BasicResult<CompiledCall> {
+    let (name, args) = parse_call_statement(source)?;
+    let args = args
+        .into_iter()
+        .map(|source| {
+            let trimmed = source.trim();
+            let upper = trimmed.to_ascii_uppercase();
+            let expr = compile_expression(trimmed)?;
+            let fast_numeric = compile_fast_number_expr(&expr, true);
+            Ok(CompiledSubCallArgument {
+                array_candidate: is_basic_identifier(&upper)
+                    .then(|| Rc::<str>::from(upper.as_str())),
+                expr,
+                fast_numeric,
+            })
+        })
+        .collect::<BasicResult<Vec<_>>>()?
+        .into_boxed_slice();
+    Ok(CompiledCall {
+        name: Rc::<str>::from(name.as_str()),
+        args,
+    })
+}
+
 fn compile_color_expression(source: &str) -> BasicResult<CompiledColorExpr> {
     let expr = compile_expression(source)?;
     let is_numeric = expr.is_statically_numeric();
@@ -12188,15 +12722,45 @@ fn compile_plot_statement(source: &str, relative: bool) -> BasicResult<CompiledP
     })
 }
 
-fn compile_draw_relative2(source: &str) -> BasicResult<(Expr, Expr)> {
+fn compile_move_statement(source: &str, relative: bool) -> BasicResult<CompiledMove> {
     let args = split_arguments(source);
     if args.len() != 2 || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    Ok((
-        compile_expression(args[0].trim())?,
-        compile_expression(args[1].trim())?,
-    ))
+    Ok(CompiledMove {
+        x: compile_number_expression(args[0].trim())?,
+        y: compile_number_expression(args[1].trim())?,
+        relative,
+    })
+}
+
+fn compile_draw_statement(source: &str, relative: bool) -> BasicResult<CompiledDraw> {
+    let args = split_arguments(source);
+    if args.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
+    match (relative, args.len()) {
+        (_, 2 | 3) => Ok(CompiledDraw::To {
+            x: compile_number_expression(args[0].trim())?,
+            y: compile_number_expression(args[1].trim())?,
+            color: args
+                .get(2)
+                .map(|arg| compile_color_expression(arg.trim()))
+                .transpose()?,
+            relative,
+        }),
+        (false, 4 | 5) => Ok(CompiledDraw::Between {
+            x1: compile_number_expression(args[0].trim())?,
+            y1: compile_number_expression(args[1].trim())?,
+            x2: compile_number_expression(args[2].trim())?,
+            y2: compile_number_expression(args[3].trim())?,
+            color: args
+                .get(4)
+                .map(|arg| compile_color_expression(arg.trim()))
+                .transpose()?,
+        }),
+        _ => Err(BasicError::new(ErrorCode::ArgumentMismatch)),
+    }
 }
 
 fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRect> {
