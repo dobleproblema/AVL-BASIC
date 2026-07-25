@@ -59,6 +59,8 @@ impl Hasher for FastHasher {
 
 const UNRESOLVED_NUMERIC_SLOT: usize = usize::MAX;
 static NEXT_NUMERIC_TABLE_ID: AtomicU64 = AtomicU64::new(1);
+const UNRESOLVED_ARRAY_SLOT: usize = usize::MAX;
+static NEXT_ARRAY_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 struct CachedNumericSlot {
@@ -193,6 +195,121 @@ impl NumericVariables {
 
     fn clear(&mut self) {
         self.table_id = NEXT_NUMERIC_TABLE_ID.fetch_add(1, Ordering::Relaxed);
+        self.names.clear();
+        self.slots.clear();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedArraySlot {
+    table_id: Cell<u64>,
+    index: Cell<usize>,
+}
+
+impl Default for CachedArraySlot {
+    fn default() -> Self {
+        Self {
+            table_id: Cell::new(0),
+            index: Cell::new(UNRESOLVED_ARRAY_SLOT),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ArrayVariables {
+    table_id: u64,
+    names: FastHashMap<String, usize>,
+    slots: Vec<Option<ArrayValue>>,
+}
+
+impl Default for ArrayVariables {
+    fn default() -> Self {
+        Self {
+            table_id: NEXT_ARRAY_TABLE_ID.fetch_add(1, Ordering::Relaxed),
+            names: FastHashMap::default(),
+            slots: Vec::new(),
+        }
+    }
+}
+
+impl ArrayVariables {
+    #[inline]
+    fn slot_for_name(&mut self, name: &str) -> usize {
+        if let Some(index) = self.names.get(name).copied() {
+            return index;
+        }
+        let index = self.slots.len();
+        self.names.insert(name.to_string(), index);
+        self.slots.push(None);
+        index
+    }
+
+    #[inline(always)]
+    fn resolve_cached_slot(&mut self, name: &str, cache: &CachedArraySlot) -> usize {
+        if cache.table_id.get() == self.table_id {
+            let index = cache.index.get();
+            if index != UNRESOLVED_ARRAY_SLOT {
+                return index;
+            }
+        }
+        let index = self.slot_for_name(name);
+        cache.table_id.set(self.table_id);
+        cache.index.set(index);
+        index
+    }
+
+    #[inline(always)]
+    fn get_cached(&mut self, name: &str, cache: &CachedArraySlot) -> Option<&ArrayValue> {
+        let index = self.resolve_cached_slot(name, cache);
+        self.slots[index].as_ref()
+    }
+
+    #[inline(always)]
+    fn get_cached_mut(&mut self, name: &str, cache: &CachedArraySlot) -> Option<&mut ArrayValue> {
+        let index = self.resolve_cached_slot(name, cache);
+        self.slots[index].as_mut()
+    }
+
+    #[inline(always)]
+    fn insert_cached(
+        &mut self,
+        name: &str,
+        cache: &CachedArraySlot,
+        value: ArrayValue,
+    ) -> Option<ArrayValue> {
+        let index = self.resolve_cached_slot(name, cache);
+        self.slots[index].replace(value)
+    }
+
+    #[inline]
+    fn get(&self, name: &str) -> Option<&ArrayValue> {
+        let index = self.names.get(name).copied()?;
+        self.slots[index].as_ref()
+    }
+
+    #[inline]
+    fn get_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
+        let index = self.names.get(name).copied()?;
+        self.slots[index].as_mut()
+    }
+
+    #[inline]
+    fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    fn insert(&mut self, name: String, value: ArrayValue) -> Option<ArrayValue> {
+        let index = self.slot_for_name(&name);
+        self.slots[index].replace(value)
+    }
+
+    fn remove(&mut self, name: &str) -> Option<ArrayValue> {
+        let index = self.names.get(name).copied()?;
+        self.slots[index].take()
+    }
+
+    fn clear(&mut self) {
+        self.table_id = NEXT_ARRAY_TABLE_ID.fetch_add(1, Ordering::Relaxed);
         self.names.clear();
         self.slots.clear();
     }
@@ -493,6 +610,47 @@ impl ArrayValue {
         let idx = self.flat_index_direct_2d(index0, index1)?;
         match &self.data {
             ArrayData::Number(values) => Ok(values[idx]),
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn set_number(&mut self, indexes: &[i32], value: f64) -> BasicResult<()> {
+        if indexes.len() == 2 && self.dims.len() == 2 {
+            return self.set_number_direct_2d(indexes[0], indexes[1], value);
+        }
+        let idx = self.flat_index(indexes)?;
+        match &mut self.data {
+            ArrayData::Number(values) => {
+                values[idx] = value;
+                Ok(())
+            }
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn set_number_direct_1d(&mut self, index: i32, value: f64) -> BasicResult<()> {
+        if self.dims.len() != 1 {
+            return Err(BasicError::new(ErrorCode::InvalidIndex));
+        }
+        if index < 0 || index as usize > self.dims[0] {
+            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+        }
+        match &mut self.data {
+            ArrayData::Number(values) => {
+                values[index as usize] = value;
+                Ok(())
+            }
+            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        }
+    }
+
+    fn set_number_direct_2d(&mut self, index0: i32, index1: i32, value: f64) -> BasicResult<()> {
+        let idx = self.flat_index_direct_2d(index0, index1)?;
+        match &mut self.data {
+            ArrayData::Number(values) => {
+                values[idx] = value;
+                Ok(())
+            }
             ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
         }
     }
@@ -870,10 +1028,12 @@ enum FastNumberExpr {
     Function0(FastZeroArgFunction),
     Array1 {
         name: String,
+        slot: CachedArraySlot,
         index: Box<FastNumberExpr>,
     },
     Array2 {
         name: String,
+        slot: CachedArraySlot,
         index0: Box<FastNumberExpr>,
         index1: Box<FastNumberExpr>,
     },
@@ -1030,6 +1190,7 @@ enum CompiledLValue {
         name: String,
         indexes: Vec<CompiledNumberExpr>,
         is_string: bool,
+        array_slot: CachedArraySlot,
     },
 }
 
@@ -1162,12 +1323,13 @@ impl FastNumberExpr {
                 FastZeroArgFunction::Hpos => interpreter.graphics.hpos() as f64,
                 FastZeroArgFunction::Vpos => interpreter.graphics.vpos() as f64,
             }),
-            FastNumberExpr::Array1 { name, index } => {
+            FastNumberExpr::Array1 { name, slot, index } => {
                 let index = eval_fast_index(interpreter, index)?;
-                interpreter.get_array_number(name, &[index])
+                interpreter.get_array_number_cached(name, slot, &[index])
             }
             FastNumberExpr::Array2 {
                 name,
+                slot,
                 index0,
                 index1,
             } => {
@@ -1175,7 +1337,7 @@ impl FastNumberExpr {
                     eval_fast_index(interpreter, index0)?,
                     eval_fast_index(interpreter, index1)?,
                 ];
-                interpreter.get_array_number(name, &indexes)
+                interpreter.get_array_number_cached(name, slot, &indexes)
             }
             FastNumberExpr::Function1 { function, arg } => {
                 let mut arg = arg.eval(interpreter)?;
@@ -1314,7 +1476,7 @@ pub struct Interpreter {
     string_variables: FastHashMap<String, String>,
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
-    arrays: FastHashMap<String, ArrayValue>,
+    arrays: ArrayVariables,
     array_aliases: FastHashMap<String, String>,
     data: Vec<Value>,
     data_line_starts: HashMap<i32, usize>,
@@ -1414,7 +1576,7 @@ impl Interpreter {
             string_variables: FastHashMap::default(),
             texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
-            arrays: FastHashMap::default(),
+            arrays: ArrayVariables::default(),
             array_aliases: FastHashMap::default(),
             data: Vec::new(),
             data_line_starts: HashMap::new(),
@@ -3312,6 +3474,15 @@ impl Interpreter {
                 } = target
                 {
                     self.assign_numeric_scalar_target(name, numeric_slot, value);
+                } else if let CompiledLValue::Array {
+                    name,
+                    indexes,
+                    is_string: false,
+                    array_slot,
+                } = target
+                {
+                    self.assign_compiled_numeric_array_target(name, indexes, array_slot, value)?;
+                    self.return_number_value_for_active_function(target.name(), value);
                 } else {
                     let value = Value::number(value);
                     self.assign_compiled_lvalue(target, value.clone())?;
@@ -3367,6 +3538,114 @@ impl Interpreter {
             self.return_value_for_active_function(target.name(), &value);
         }
         Ok(())
+    }
+
+    fn assign_compiled_numeric_array_target(
+        &mut self,
+        name: &str,
+        indexes: &[CompiledNumberExpr],
+        array_slot: &CachedArraySlot,
+        value: f64,
+    ) -> BasicResult<()> {
+        match indexes.len() {
+            1 => {
+                let raw = [indexes[0].eval(self)? as i32];
+                self.assign_compiled_numeric_array_value(name, array_slot, &raw, value)
+            }
+            2 => {
+                let raw = [indexes[0].eval(self)? as i32, indexes[1].eval(self)? as i32];
+                self.assign_compiled_numeric_array_value(name, array_slot, &raw, value)
+            }
+            _ => {
+                let raw = indexes
+                    .iter()
+                    .map(|expr| expr.eval(self).map(|n| n as i32))
+                    .collect::<BasicResult<Vec<_>>>()?;
+                self.assign_compiled_numeric_array_value(name, array_slot, &raw, value)
+            }
+        }
+    }
+
+    fn assign_compiled_numeric_array_value(
+        &mut self,
+        name: &str,
+        array_slot: &CachedArraySlot,
+        raw_indexes: &[i32],
+        value: f64,
+    ) -> BasicResult<()> {
+        let current_line = self.current_line;
+        if self.array_aliases.is_empty() {
+            if let Some(array) = self.arrays.get_cached_mut(name, array_slot) {
+                if array.dims.len() == raw_indexes.len() {
+                    if array.is_string() {
+                        return Err(self.err(ErrorCode::TypeMismatch));
+                    }
+                    let result = if raw_indexes.len() == 1 {
+                        array.set_number_direct_1d(raw_indexes[0], value)
+                    } else {
+                        array.set_number(raw_indexes, value)
+                    };
+                    return result.map_err(|mut e| {
+                        if e.line.is_none() {
+                            e.line = current_line;
+                        }
+                        e
+                    });
+                }
+            }
+            let indexes = self.normalize_array_indexes_for_name(name, raw_indexes.to_vec())?;
+            if self.arrays.get_cached(name, array_slot).is_none() {
+                let dims = vec![10; indexes.len()];
+                self.arrays
+                    .insert_cached(name, array_slot, ArrayValue::new(name, dims));
+            }
+            let array = self.arrays.get_cached_mut(name, array_slot).unwrap();
+            if array.is_string() {
+                return Err(self.err(ErrorCode::TypeMismatch));
+            }
+            return array.set_number(&indexes, value).map_err(|mut e| {
+                if e.line.is_none() {
+                    e.line = current_line;
+                }
+                e
+            });
+        }
+
+        let key = self.array_lookup_key(name);
+        if let Some(array) = self.arrays.get_mut(key.as_ref()) {
+            if array.dims.len() == raw_indexes.len() {
+                if array.is_string() {
+                    return Err(self.err(ErrorCode::TypeMismatch));
+                }
+                let result = if raw_indexes.len() == 1 {
+                    array.set_number_direct_1d(raw_indexes[0], value)
+                } else {
+                    array.set_number(raw_indexes, value)
+                };
+                return result.map_err(|mut e| {
+                    if e.line.is_none() {
+                        e.line = current_line;
+                    }
+                    e
+                });
+            }
+        }
+        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
+        if !self.arrays.contains_key(key.as_ref()) {
+            let dims = vec![10; indexes.len()];
+            self.arrays
+                .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
+        }
+        let array = self.arrays.get_mut(key.as_ref()).unwrap();
+        if array.is_string() {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        }
+        array.set_number(&indexes, value).map_err(|mut e| {
+            if e.line.is_none() {
+                e.line = current_line;
+            }
+            e
+        })
     }
 
     fn assign_numeric_scalar_target(&mut self, name: &str, slot: &CachedNumericSlot, value: f64) {
@@ -4328,6 +4607,7 @@ impl Interpreter {
                 name,
                 indexes,
                 is_string,
+                ..
             } => match indexes.len() {
                 1 => {
                     let raw = [indexes[0].eval(self)? as i32];
@@ -4598,6 +4878,34 @@ impl Interpreter {
     fn array_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
         let key = self.array_lookup_key(name);
         self.arrays.get_mut(key.as_ref())
+    }
+
+    fn get_array_number_cached(
+        &mut self,
+        name: &str,
+        slot: &CachedArraySlot,
+        indexes: &[i32],
+    ) -> BasicResult<f64> {
+        if !self.array_aliases.is_empty() {
+            return self.get_array_number(name, indexes);
+        }
+        if let Some(array) = self.arrays.get_cached(name, slot) {
+            if array.dims.len() == indexes.len() {
+                if indexes.len() == 1 {
+                    return array.get_number_direct_1d(indexes[0]);
+                }
+                return array.get_number(indexes);
+            }
+        }
+        let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+        if self.arrays.get_cached(name, slot).is_none() {
+            self.arrays
+                .insert_cached(name, slot, ArrayValue::new(name, vec![10; indexes.len()]));
+        }
+        self.arrays
+            .get_cached(name, slot)
+            .unwrap()
+            .get_number(&indexes)
     }
 
     fn execute_if(
@@ -6880,6 +7188,15 @@ impl Interpreter {
         };
         if lhs.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
             frame.return_value = Some(value.clone());
+        }
+    }
+
+    fn return_number_value_for_active_function(&mut self, lhs: &str, value: f64) {
+        let Some(frame) = self.active_functions.last_mut() else {
+            return;
+        };
+        if lhs.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
+            frame.return_value = Some(Value::number(value));
         }
     }
 
@@ -10194,6 +10511,36 @@ impl Interpreter {
 mod interpreter_tests {
     use super::*;
 
+    fn assert_fast_array_read_is_compiled(interp: &mut Interpreter, command: &str) {
+        let CachedCommand::Assignment(compiled) = interp.compile_cached_command(command) else {
+            panic!("{command} should compile as an assignment");
+        };
+        assert!(
+            matches!(
+                compiled.fast_numeric_rhs.as_ref(),
+                Some(FastNumberExpr::Array1 { .. }) | Some(FastNumberExpr::Array2 { .. })
+            ),
+            "{command} should use a fast array read"
+        );
+    }
+
+    fn assert_fast_numeric_array_write_is_compiled(interp: &mut Interpreter, command: &str) {
+        let CachedCommand::Assignment(compiled) = interp.compile_cached_command(command) else {
+            panic!("{command} should compile as an assignment");
+        };
+        assert!(compiled.fast_numeric_rhs.is_some(), "{command}");
+        assert!(
+            matches!(
+                compiled.targets.as_slice(),
+                [CompiledLValue::Array {
+                    is_string: false,
+                    ..
+                }]
+            ),
+            "{command} should use a compiled numeric array target"
+        );
+    }
+
     #[test]
     fn stop_notice_uses_error_style_without_becoming_an_error() {
         let mut interp = Interpreter::new();
@@ -11082,6 +11429,52 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn array_slots_preserve_presence_clear_remove_and_table_identity() {
+        let cache = CachedArraySlot::default();
+        let mut first = ArrayVariables::default();
+        let make_array = |name: &str, value: f64| {
+            let mut array = ArrayValue::new(name, vec![2]);
+            array.set_number_direct_1d(1, value).unwrap();
+            array
+        };
+
+        assert!(first.get_cached("A", &cache).is_none());
+        assert!(!first.contains_key("A"));
+        first.insert_cached("A", &cache, make_array("A", 7.0));
+        assert_eq!(
+            first
+                .get_cached("A", &cache)
+                .unwrap()
+                .get_number_direct_1d(1)
+                .unwrap(),
+            7.0
+        );
+        assert!(first.remove("A").is_some());
+        assert!(first.remove("A").is_none());
+        first.insert_cached("A", &cache, make_array("A", 8.0));
+        let first_table_id = first.table_id;
+        first.clear();
+        assert_ne!(first.table_id, first_table_id);
+        assert!(first.names.is_empty());
+        assert!(first.slots.is_empty());
+        assert!(first.get_cached("A", &cache).is_none());
+
+        let shared_cache = cache.clone();
+        let mut second = ArrayVariables::default();
+        second.insert("B".to_string(), make_array("B", 1.0));
+        second.insert("A".to_string(), make_array("A", 9.0));
+        assert_eq!(
+            second
+                .get_cached("A", &shared_cache)
+                .unwrap()
+                .get_number_direct_1d(1)
+                .unwrap(),
+            9.0
+        );
+        assert!(first.get_cached("A", &cache).is_none());
+    }
+
+    #[test]
     fn cached_numeric_slots_survive_run_reset_locals_and_scalar_array_names() {
         let mut interp = Interpreter::new();
         interp
@@ -11122,6 +11515,323 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn cached_array_slots_survive_redim_clear_locals_aliases_and_run_reset() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(1),Z(1),W(1),D(1)
+20 A=3:A(1)=2:Z(1)=1:W(1)=2:D(1)=4
+30 GOSUB 300
+35 PRINT A
+40 REDIM A(2):A(1.9)=7:GOSUB 300
+50 DEF SUB BUMP(P)
+60 P(1)=P(1)+10
+70 PRINT P(1)
+80 SUBEND
+90 CALL BUMP(Z):CALL BUMP(W)
+100 DEF SUB HIDE()
+110 LOCAL D(1)
+120 D(1)=9:PRINT D(1)
+130 SUBEND
+140 CALL HIDE
+150 PRINT D(1)
+160 CLEAR
+170 A(1)=5
+180 GOSUB 300
+190 END
+300 PRINT A(1)
+310 RETURN"#,
+            )
+            .unwrap();
+
+        let expected = " 2\n 3\n 7\n 11\n 12\n 9\n 4\n 5\n";
+        for _ in 0..2 {
+            interp.run_loaded().unwrap();
+            assert_eq!(interp.take_output(), expected);
+        }
+    }
+
+    #[test]
+    fn cached_array_slots_follow_mat_replacement_and_clear_inside_alias() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 MAT BASE 1
+20 DIM A(2,2),Z(1)
+30 A(1,1)=2:Z(1)=4
+40 GOSUB 300
+50 MAT A=CON:GOSUB 300
+60 MAT A=ZER:GOSUB 300
+70 DEF SUB RESET(P)
+80 PRINT P(1)
+90 CLEAR
+100 P(1)=9
+110 PRINT P(1)
+120 SUBEND
+130 CALL RESET(Z)
+140 PRINT Z(1)
+150 END
+300 PRINT A(1,1)
+310 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+        assert_eq!(interp.take_output(), " 2\n 1\n 0\n 4\n 9\n 9\n");
+    }
+
+    #[test]
+    fn array_bindings_follow_existing_subroutine_error_unwind() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DIM Z(1),Q(1)
+20 Z(0)=5:Q(0)=8
+30 DEF SUB FAIL(P)
+40 LOCAL Q(1)
+50 Q(0)=99:P(0)=7
+60 ERROR 5
+70 SUBEND
+80 ON ERROR GOTO 120
+90 CALL FAIL(Z)
+100 END
+120 P(0)=1
+130 PRINT Z(0);Q(0);P(0)"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+        assert_eq!(interp.take_output(), " 1  99  1\n");
+    }
+
+    #[test]
+    fn cached_array_slots_preserve_numeric_arrays_across_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.bas");
+        let second = dir.path().join("second.bas");
+        fs::write(
+            &first,
+            "10 DIM A(2)\n20 A(1)=7\n30 GOSUB 100\n40 CHAIN \"second.bas\"\n100 PRINT A(1)\n110 RETURN\n",
+        )
+        .unwrap();
+        fs::write(
+            &second,
+            "10 A(1)=A(1)+1\n20 GOSUB 100\n30 END\n100 PRINT A(1)\n110 RETURN\n",
+        )
+        .unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.root_dir = dir.path().to_path_buf();
+        interp.current_dir = dir.path().to_path_buf();
+        interp.load_file(&first).unwrap();
+        interp.run_loaded().unwrap();
+        assert_eq!(interp.take_output(), " 7\n 8\n");
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_preserves_index_and_type_errors() {
+        let mut fractional_lhs = Interpreter::new();
+        fractional_lhs
+            .program
+            .load_text("10 DIM A(2)\n20 A(1.9)=4\n30 PRINT A(1)")
+            .unwrap();
+        fractional_lhs.run_loaded().unwrap();
+        assert_eq!(fractional_lhs.take_output(), " 4\n");
+
+        for (source, code, line) in [
+            ("10 DIM A(2)\n20 X=A(1.9)", ErrorCode::InvalidIndex, 20),
+            ("10 DIM A(2)\n20 A(1,1)=1", ErrorCode::InvalidIndex, 20),
+            ("10 DIM A(2)\n20 A(3)=1", ErrorCode::IndexOutOfRange, 20),
+            (
+                "10 DIM S$(1)\n20 DEF SUB WORK(A)\n30 A(9)=1\n40 SUBEND\n50 CALL WORK(S$)",
+                ErrorCode::TypeMismatch,
+                50,
+            ),
+        ] {
+            let mut interp = Interpreter::new();
+            interp.program.load_text(source).unwrap();
+            let error = interp.run_loaded().expect_err(source);
+            assert_eq!(error.code, code, "{source}");
+            assert_eq!(error.line, Some(line), "{source}");
+        }
+    }
+
+    #[test]
+    fn fast_array_errors_preserve_on_error_resume_and_resume_next() {
+        let mut retry = Interpreter::new();
+        assert_fast_array_read_is_compiled(&mut retry, "X=A(I)");
+        let CachedCommand::Assignment(err_assignment) = retry.compile_cached_command("SEENERR=ERR")
+        else {
+            panic!("ERR assignment should compile");
+        };
+        assert!(matches!(
+            err_assignment.fast_numeric_rhs.as_ref(),
+            Some(FastNumberExpr::Function0(FastZeroArgFunction::Err))
+        ));
+        let CachedCommand::Assignment(erl_assignment) = retry.compile_cached_command("SEENERL=ERL")
+        else {
+            panic!("ERL assignment should compile");
+        };
+        assert!(matches!(
+            erl_assignment.fast_numeric_rhs.as_ref(),
+            Some(FastNumberExpr::Function0(FastZeroArgFunction::Erl))
+        ));
+        retry
+            .program
+            .load_text(
+                r#"10 DIM A(1)
+20 A(0)=7:I=2
+30 ON ERROR GOTO 100
+40 X=A(I)
+50 RESULT=X:AFTERERR=ERR:AFTERERL=ERL
+60 END
+100 SEENERR=ERR:SEENERL=ERL:I=0
+110 RESUME"#,
+            )
+            .unwrap();
+        retry.run_loaded().unwrap();
+
+        assert_eq!(retry.numeric_variables.get("SEENERR"), Some(&34.0));
+        assert_eq!(retry.numeric_variables.get("SEENERL"), Some(&40.0));
+        assert_eq!(retry.numeric_variables.get("RESULT"), Some(&7.0));
+        assert_eq!(retry.numeric_variables.get("AFTERERR"), Some(&0.0));
+        assert_eq!(retry.numeric_variables.get("AFTERERL"), Some(&0.0));
+
+        let mut skip = Interpreter::new();
+        assert_fast_numeric_array_write_is_compiled(&mut skip, "A(2)=9");
+        assert_fast_numeric_array_write_is_compiled(&mut skip, "A(0)=A(0)+1");
+        skip.program
+            .load_text(
+                r#"10 DIM A(1)
+20 A(0)=4
+30 ON ERROR GOTO 100
+40 A(2)=9
+50 A(0)=A(0)+1
+60 RESULT=A(0):AFTERERR=ERR:AFTERERL=ERL
+70 END
+100 SEENERR=ERR:SEENERL=ERL
+110 RESUME NEXT"#,
+            )
+            .unwrap();
+        skip.run_loaded().unwrap();
+
+        assert_eq!(skip.numeric_variables.get("SEENERR"), Some(&34.0));
+        assert_eq!(skip.numeric_variables.get("SEENERL"), Some(&40.0));
+        assert_eq!(skip.numeric_variables.get("RESULT"), Some(&5.0));
+        assert_eq!(skip.numeric_variables.get("AFTERERR"), Some(&0.0));
+        assert_eq!(skip.numeric_variables.get("AFTERERL"), Some(&0.0));
+    }
+
+    #[test]
+    fn cached_array_slots_follow_deferred_timer_redim_and_mat() {
+        let mut interp = Interpreter::new();
+        assert_fast_array_read_is_compiled(&mut interp, "VALUE=A(0)");
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(1):A(0)=3
+20 GOSUB 100
+30 DI
+40 AFTER 0,1 GOSUB 200
+45 BEFOREEI=A(0)
+50 EI
+60 GOSUB 100
+70 END
+100 VALUE=A(0)
+110 READBACK=READBACK*10+VALUE
+120 RETURN
+200 REDIM A(2)
+210 MAT A=CON
+220 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("BEFOREEI"), Some(&3.0));
+        assert_eq!(interp.numeric_variables.get("READBACK"), Some(&31.0));
+        let array = interp.array_ref("A").unwrap();
+        assert_eq!(array.dims, vec![2]);
+        assert_eq!(array.get_number(&[0]).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn cached_array_aliases_follow_timer_interrupt_during_compiled_call() {
+        let mut interp = Interpreter::new();
+        assert_fast_array_read_is_compiled(&mut interp, "VALUE=P(0)");
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(0)=P(0)+1");
+        assert!(matches!(
+            interp.compile_cached_command("CALL WAIT(Z)"),
+            CachedCommand::Call(_)
+        ));
+        interp
+            .program
+            .load_text(
+                r#"10 DIM Z(1):Z(0)=1
+20 DEF SUB WAIT(P)
+30 FOR J=1 TO 2
+40 VALUE=P(0)
+50 IF J=1 THEN BEFORE=VALUE:PAUSE 250 ELSE AFTERVALUE=VALUE
+60 NEXT J
+70 P(0)=P(0)+1
+80 SUBEND
+90 AFTER 5,1 GOSUB 200
+100 CALL WAIT(Z)
+110 RESULT=Z(0)
+120 END
+200 Z(0)=9
+210 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("BEFORE"), Some(&1.0));
+        assert_eq!(interp.numeric_variables.get("AFTERVALUE"), Some(&9.0));
+        assert_eq!(interp.numeric_variables.get("RESULT"), Some(&10.0));
+    }
+
+    #[test]
+    fn cached_array_slots_survive_nested_timer_priorities() {
+        let mut interp = Interpreter::new();
+        assert_fast_array_read_is_compiled(&mut interp, "VALUE=A(0)");
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(1):A(0)=2
+20 AFTER 0,1 GOSUB 100
+30 END
+100 STAGE=1:GOSUB 300
+110 AFTER 0,0 GOSUB 400
+120 AFTER 0,3 GOSUB 200
+130 PAUSE 1
+140 STAGE=2:GOSUB 300
+150 RETURN
+200 REDIM A(2)
+210 MAT A=CON
+220 A(0)=7
+230 RETURN
+300 VALUE=A(0)
+310 READBACK=READBACK*10+VALUE
+320 RETURN
+400 LOWSEEN=STAGE
+410 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("READBACK"), Some(&27.0));
+        assert_eq!(interp.numeric_variables.get("LOWSEEN"), Some(&2.0));
+        let array = interp.array_ref("A").unwrap();
+        assert_eq!(array.dims, vec![2]);
+        assert_eq!(array.get_number(&[0]).unwrap(), 7.0);
+    }
+
+    #[test]
     fn compiled_numeric_slots_rebind_when_an_expression_changes_interpreter() {
         let expr = compile_number_expression("A+B*2").unwrap();
         let mut first = Interpreter::new();
@@ -11135,6 +11845,33 @@ mod interpreter_tests {
         second.numeric_variables.insert("A".to_string(), 10.0);
         assert_eq!(expr.eval(&mut second).unwrap(), 50.0);
         assert_eq!(expr.eval(&mut first).unwrap(), 5.0);
+    }
+
+    #[test]
+    fn compiled_array_slots_rebind_between_interpreters_and_after_clear() {
+        let expr = compile_number_expression("A(1)+B(1)*2").unwrap();
+        let make_array = |name: &str, value: f64| {
+            let mut array = ArrayValue::new(name, vec![2]);
+            array.set_number_direct_1d(1, value).unwrap();
+            array
+        };
+
+        let mut first = Interpreter::new();
+        first.arrays.insert("A".to_string(), make_array("A", 1.0));
+        first.arrays.insert("B".to_string(), make_array("B", 2.0));
+        assert_eq!(expr.eval(&mut first).unwrap(), 5.0);
+
+        let mut second = Interpreter::new();
+        second.arrays.insert("B".to_string(), make_array("B", 20.0));
+        second.arrays.insert("X".to_string(), make_array("X", 99.0));
+        second.arrays.insert("A".to_string(), make_array("A", 10.0));
+        assert_eq!(expr.eval(&mut second).unwrap(), 50.0);
+
+        first.arrays.clear();
+        first.arrays.insert("B".to_string(), make_array("B", 3.0));
+        first.arrays.insert("A".to_string(), make_array("A", 4.0));
+        assert_eq!(expr.eval(&mut first).unwrap(), 10.0);
+        assert_eq!(expr.eval(&mut second).unwrap(), 50.0);
     }
 
     #[test]
@@ -12012,11 +12749,7 @@ fn set_string_binding_ref(variables: &mut FastHashMap<String, String>, name: &st
     }
 }
 
-fn set_array_binding_ref(
-    arrays: &mut FastHashMap<String, ArrayValue>,
-    name: &str,
-    value: ArrayValue,
-) {
+fn set_array_binding_ref(arrays: &mut ArrayVariables, name: &str, value: ArrayValue) {
     if let Some(slot) = arrays.get_mut(name) {
         *slot = value;
     } else {
@@ -12047,7 +12780,7 @@ fn save_string_binding_ref<'a>(
 }
 
 fn save_array_binding_ref<'a>(
-    arrays: &FastHashMap<String, ArrayValue>,
+    arrays: &ArrayVariables,
     saved: &mut Vec<(&'a str, Option<ArrayValue>)>,
     name: &'a str,
 ) {
@@ -12091,10 +12824,7 @@ fn restore_string_bindings_ref(
     }
 }
 
-fn restore_array_bindings_ref(
-    arrays: &mut FastHashMap<String, ArrayValue>,
-    saved: Vec<(&str, Option<ArrayValue>)>,
-) {
+fn restore_array_bindings_ref(arrays: &mut ArrayVariables, saved: Vec<(&str, Option<ArrayValue>)>) {
     for (name, value) in saved {
         if let Some(value) = value {
             set_array_binding_ref(arrays, name, value);
@@ -12541,7 +13271,7 @@ fn looks_like_non_fn_function_call(source: &str) -> bool {
         && !name.to_ascii_uppercase().starts_with("FN")
 }
 
-fn mat_expr_mentions_array(source: &str, arrays: &FastHashMap<String, ArrayValue>) -> bool {
+fn mat_expr_mentions_array(source: &str, arrays: &ArrayVariables) -> bool {
     let mut token = String::new();
     let mut in_string = false;
     for ch in source.chars().chain(std::iter::once(' ')) {
@@ -12565,10 +13295,7 @@ fn mat_expr_mentions_array(source: &str, arrays: &FastHashMap<String, ArrayValue
     false
 }
 
-fn mat_expr_has_array_before_function(
-    source: &str,
-    arrays: &FastHashMap<String, ArrayValue>,
-) -> bool {
+fn mat_expr_has_array_before_function(source: &str, arrays: &ArrayVariables) -> bool {
     let mut seen_array = false;
     let mut token = String::new();
     let mut in_string = false;
@@ -12607,7 +13334,7 @@ fn mat_expr_has_array_before_function(
     false
 }
 
-fn scalar_times_matrix_div_scalar(source: &str, arrays: &FastHashMap<String, ArrayValue>) -> bool {
+fn scalar_times_matrix_div_scalar(source: &str, arrays: &ArrayVariables) -> bool {
     let Some((mul_pos, '*')) = find_top_level_mat_operator(source, &['*']) else {
         return false;
     };
@@ -13057,10 +13784,12 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
             match args.as_slice() {
                 [index] => Some(FastNumberExpr::Array1 {
                     name: name.clone(),
+                    slot: CachedArraySlot::default(),
                     index: Box::new(compile_fast_number_expr(index, allow_arrays)?),
                 }),
                 [index0, index1] => Some(FastNumberExpr::Array2 {
                     name: name.clone(),
+                    slot: CachedArraySlot::default(),
                     index0: Box::new(compile_fast_number_expr(index0, allow_arrays)?),
                     index1: Box::new(compile_fast_number_expr(index1, allow_arrays)?),
                 }),
@@ -13436,6 +14165,7 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
             is_string: name.ends_with('$'),
             name,
             indexes,
+            array_slot: CachedArraySlot::default(),
         });
     }
     if is_reserved_identifier_name(&lhs) {
