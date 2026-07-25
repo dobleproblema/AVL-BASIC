@@ -14,12 +14,14 @@ use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, logical_round, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsInputEvent, GraphicsWindow, MouseSnapshot};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type FastHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FastHasher>>;
@@ -52,6 +54,147 @@ impl Hasher for FastHasher {
 
     fn finish(&self) -> u64 {
         self.0
+    }
+}
+
+const UNRESOLVED_NUMERIC_SLOT: usize = usize::MAX;
+static NEXT_NUMERIC_TABLE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone)]
+struct CachedNumericSlot {
+    table_id: Cell<u64>,
+    index: Cell<usize>,
+}
+
+impl Default for CachedNumericSlot {
+    fn default() -> Self {
+        Self {
+            table_id: Cell::new(0),
+            index: Cell::new(UNRESOLVED_NUMERIC_SLOT),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NumericSlot {
+    value: f64,
+    present: bool,
+}
+
+#[derive(Debug)]
+struct NumericVariables {
+    table_id: u64,
+    names: FastHashMap<String, usize>,
+    slots: Vec<NumericSlot>,
+}
+
+impl Default for NumericVariables {
+    fn default() -> Self {
+        Self {
+            table_id: NEXT_NUMERIC_TABLE_ID.fetch_add(1, Ordering::Relaxed),
+            names: FastHashMap::default(),
+            slots: Vec::new(),
+        }
+    }
+}
+
+impl NumericVariables {
+    #[inline]
+    fn slot_for_name(&mut self, name: &str) -> usize {
+        if let Some(index) = self.names.get(name).copied() {
+            return index;
+        }
+        let index = self.slots.len();
+        self.names.insert(name.to_string(), index);
+        self.slots.push(NumericSlot {
+            value: 0.0,
+            present: false,
+        });
+        index
+    }
+
+    #[inline(always)]
+    fn resolve_cached_slot(&mut self, name: &str, cache: &CachedNumericSlot) -> usize {
+        if cache.table_id.get() == self.table_id {
+            let index = cache.index.get();
+            if index != UNRESOLVED_NUMERIC_SLOT {
+                return index;
+            }
+        }
+        let index = self.slot_for_name(name);
+        cache.table_id.set(self.table_id);
+        cache.index.set(index);
+        index
+    }
+
+    #[inline(always)]
+    fn get_cached(&mut self, name: &str, cache: &CachedNumericSlot) -> Option<f64> {
+        let index = self.resolve_cached_slot(name, cache);
+        let slot = &self.slots[index];
+        slot.present.then_some(slot.value)
+    }
+
+    #[inline(always)]
+    fn insert_cached(&mut self, name: &str, cache: &CachedNumericSlot, value: f64) -> usize {
+        let index = self.resolve_cached_slot(name, cache);
+        let slot = &mut self.slots[index];
+        slot.value = value;
+        slot.present = true;
+        index
+    }
+
+    #[inline(always)]
+    fn add_to_slot(&mut self, index: usize, delta: f64) -> f64 {
+        let slot = &mut self.slots[index];
+        if slot.present {
+            slot.value += delta;
+        } else {
+            slot.value = delta;
+            slot.present = true;
+        }
+        slot.value
+    }
+
+    #[inline]
+    fn get(&self, name: &str) -> Option<&f64> {
+        let index = self.names.get(name).copied()?;
+        let slot = &self.slots[index];
+        slot.present.then_some(&slot.value)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, name: &str) -> Option<&mut f64> {
+        let index = self.names.get(name).copied()?;
+        let slot = &mut self.slots[index];
+        slot.present.then_some(&mut slot.value)
+    }
+
+    #[inline]
+    fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    fn insert(&mut self, name: String, value: f64) -> Option<f64> {
+        let index = self.slot_for_name(&name);
+        let slot = &mut self.slots[index];
+        let previous = slot.present.then_some(slot.value);
+        slot.value = value;
+        slot.present = true;
+        previous
+    }
+
+    fn remove(&mut self, name: &str) -> Option<f64> {
+        let index = self.names.get(name).copied()?;
+        let slot = &mut self.slots[index];
+        let previous = slot.present.then_some(slot.value);
+        slot.present = false;
+        previous
+    }
+
+    fn clear(&mut self) {
+        self.table_id = NEXT_NUMERIC_TABLE_ID.fetch_add(1, Ordering::Relaxed);
+        self.names.clear();
+        self.slots.clear();
     }
 }
 
@@ -155,6 +298,7 @@ struct Cursor {
 #[derive(Debug, Clone)]
 struct ForFrame {
     var: String,
+    var_slot: usize,
     end: f64,
     step: f64,
     resume: Cursor,
@@ -170,9 +314,10 @@ struct WhileFrame {
 #[derive(Debug, Clone)]
 struct CompiledFor {
     var: String,
-    start: Expr,
-    end: Expr,
-    step: Option<Expr>,
+    var_slot: CachedNumericSlot,
+    start: CompiledNumberExpr,
+    end: CompiledNumberExpr,
+    step: Option<CompiledNumberExpr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -718,7 +863,10 @@ struct CachedTexture {
 #[derive(Debug, Clone)]
 enum FastNumberExpr {
     Number(f64),
-    Var(String),
+    Var {
+        name: String,
+        slot: CachedNumericSlot,
+    },
     Function0(FastZeroArgFunction),
     Array1 {
         name: String,
@@ -876,10 +1024,11 @@ enum CompiledLValue {
     Scalar {
         name: String,
         is_string: bool,
+        numeric_slot: CachedNumericSlot,
     },
     Array {
         name: String,
-        indexes: Vec<Expr>,
+        indexes: Vec<CompiledNumberExpr>,
         is_string: bool,
     },
 }
@@ -986,7 +1135,7 @@ impl FastNumberExpr {
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
         match self {
             FastNumberExpr::Number(value) => Ok(*value),
-            FastNumberExpr::Var(name) => interpreter.get_fast_number_variable(name),
+            FastNumberExpr::Var { name, slot } => interpreter.get_fast_number_variable(name, slot),
             FastNumberExpr::Function0(function) => Ok(match function {
                 FastZeroArgFunction::Rnd => interpreter.rng.next_f64(),
                 FastZeroArgFunction::Time => SystemTime::now()
@@ -1161,7 +1310,7 @@ pub struct Interpreter {
     pub root_dir: PathBuf,
     pub current_dir: PathBuf,
     pub program_dir: Option<PathBuf>,
-    numeric_variables: FastHashMap<String, f64>,
+    numeric_variables: NumericVariables,
     string_variables: FastHashMap<String, String>,
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
@@ -1261,7 +1410,7 @@ impl Interpreter {
             root_dir: root_dir.clone(),
             current_dir: root_dir,
             program_dir: None,
-            numeric_variables: FastHashMap::default(),
+            numeric_variables: NumericVariables::default(),
             string_variables: FastHashMap::default(),
             texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
@@ -3159,9 +3308,10 @@ impl Interpreter {
                 if let CompiledLValue::Scalar {
                     name,
                     is_string: false,
+                    numeric_slot,
                 } = target
                 {
-                    self.assign_numeric_scalar_target(name, value);
+                    self.assign_numeric_scalar_target(name, numeric_slot, value);
                 } else {
                     let value = Value::number(value);
                     self.assign_compiled_lvalue(target, value.clone())?;
@@ -3172,6 +3322,7 @@ impl Interpreter {
             if let CompiledLValue::Scalar {
                 name,
                 is_string: false,
+                numeric_slot,
             } = target
             {
                 let value = eval_compiled_number(self, &compiled.rhs).map_err(|mut e| {
@@ -3180,7 +3331,7 @@ impl Interpreter {
                     }
                     e
                 })?;
-                self.assign_numeric_scalar_target(name, value);
+                self.assign_numeric_scalar_target(name, numeric_slot, value);
                 return Ok(());
             }
         }
@@ -3218,9 +3369,9 @@ impl Interpreter {
         Ok(())
     }
 
-    fn assign_numeric_scalar_target(&mut self, name: &str, value: f64) {
+    fn assign_numeric_scalar_target(&mut self, name: &str, slot: &CachedNumericSlot, value: f64) {
         if self.active_functions.is_empty() {
-            self.set_numeric_variable(name, value);
+            self.numeric_variables.insert_cached(name, slot, value);
             return;
         }
         if self
@@ -3233,7 +3384,11 @@ impl Interpreter {
         }
     }
 
-    fn get_fast_number_variable(&mut self, name: &str) -> BasicResult<f64> {
+    fn get_fast_number_variable(
+        &mut self,
+        name: &str,
+        slot: &CachedNumericSlot,
+    ) -> BasicResult<f64> {
         if self.active_functions.is_empty() && self.function_call_stack.is_empty() {
             if name.ends_with('$') {
                 return Err(BasicError::new(ErrorCode::TypeMismatch));
@@ -3241,7 +3396,7 @@ impl Interpreter {
             if name == "INF" {
                 return Ok(f64::INFINITY);
             }
-            return Ok(self.numeric_variables.get(name).copied().unwrap_or(0.0));
+            return Ok(self.numeric_variables.get_cached(name, slot).unwrap_or(0.0));
         }
         self.get_number_variable(name)
     }
@@ -4145,17 +4300,17 @@ impl Interpreter {
 
     fn assign_compiled_lvalue(&mut self, target: &CompiledLValue, value: Value) -> BasicResult<()> {
         match target {
-            CompiledLValue::Scalar { name, is_string } => {
+            CompiledLValue::Scalar {
+                name,
+                is_string,
+                numeric_slot,
+            } => {
                 if *is_string != matches!(value, Value::Str(_)) {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
                 match value {
                     Value::Number(n) => {
-                        if let Some(slot) = self.numeric_variables.get_mut(name) {
-                            *slot = n;
-                        } else {
-                            self.numeric_variables.insert(name.clone(), n);
-                        }
+                        self.numeric_variables.insert_cached(name, numeric_slot, n);
                     }
                     Value::Str(s) => {
                         self.invalidate_texture_cache_for(name);
@@ -4175,20 +4330,17 @@ impl Interpreter {
                 is_string,
             } => match indexes.len() {
                 1 => {
-                    let raw = [eval_compiled_number(self, &indexes[0])? as i32];
+                    let raw = [indexes[0].eval(self)? as i32];
                     self.assign_compiled_array_value(name, &raw, *is_string, value)
                 }
                 2 => {
-                    let raw = [
-                        eval_compiled_number(self, &indexes[0])? as i32,
-                        eval_compiled_number(self, &indexes[1])? as i32,
-                    ];
+                    let raw = [indexes[0].eval(self)? as i32, indexes[1].eval(self)? as i32];
                     self.assign_compiled_array_value(name, &raw, *is_string, value)
                 }
                 _ => {
                     let raw = indexes
                         .iter()
-                        .map(|expr| eval_compiled_number(self, expr).map(|n| n as i32))
+                        .map(|expr| expr.eval(self).map(|n| n as i32))
                         .collect::<BasicResult<Vec<_>>>()?;
                     self.assign_compiled_array_value(name, &raw, *is_string, value)
                 }
@@ -4860,20 +5012,20 @@ impl Interpreter {
         compiled: &CompiledFor,
         cursor: &mut Cursor,
     ) -> BasicResult<()> {
-        let start = eval_compiled_number(self, &compiled.start).map_err(|mut e| {
+        let start = compiled.start.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
             e
         })?;
-        let end = eval_compiled_number(self, &compiled.end).map_err(|mut e| {
+        let end = compiled.end.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
             e
         })?;
         let step = if let Some(step) = &compiled.step {
-            eval_compiled_number(self, step).map_err(|mut e| {
+            step.eval(self).map_err(|mut e| {
                 if e.line.is_none() {
                     e.line = self.current_line;
                 }
@@ -4882,7 +5034,9 @@ impl Interpreter {
         } else {
             1.0
         };
-        self.numeric_variables.insert(compiled.var.clone(), start);
+        let var_slot =
+            self.numeric_variables
+                .insert_cached(&compiled.var, &compiled.var_slot, start);
         let enters = if step >= 0.0 {
             start <= end
         } else {
@@ -4894,6 +5048,7 @@ impl Interpreter {
         }
         self.for_stack.push(ForFrame {
             var: compiled.var.clone(),
+            var_slot,
             end,
             step,
             resume: Cursor {
@@ -4959,14 +5114,9 @@ impl Interpreter {
         let Some(frame) = self.for_stack.last() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = if let Some(slot) = self.numeric_variables.get_mut(&frame.var) {
-            *slot += frame.step;
-            *slot
-        } else {
-            let current = frame.step;
-            self.numeric_variables.insert(frame.var.clone(), current);
-            current
-        };
+        let current = self
+            .numeric_variables
+            .add_to_slot(frame.var_slot, frame.step);
         let keep = if frame.step >= 0.0 {
             current <= frame.end
         } else {
@@ -5002,14 +5152,9 @@ impl Interpreter {
         let Some(frame) = self.for_stack.last() else {
             return Err(self.err(ErrorCode::NextWithoutFor));
         };
-        let current = if let Some(slot) = self.numeric_variables.get_mut(&frame.var) {
-            *slot += frame.step;
-            *slot
-        } else {
-            let current = frame.step;
-            self.numeric_variables.insert(frame.var.clone(), current);
-            current
-        };
+        let current = self
+            .numeric_variables
+            .add_to_slot(frame.var_slot, frame.step);
         let keep = if frame.step >= 0.0 {
             current <= frame.end
         } else {
@@ -10908,6 +11053,111 @@ mod interpreter_tests {
         assert_eq!(interp.eval_number("MOUSEX").unwrap(), 49.0);
         assert_eq!(interp.eval_number("MOUSEY").unwrap(), 127.0);
     }
+
+    #[test]
+    fn numeric_slots_preserve_presence_clear_remove_and_table_identity() {
+        let cache = CachedNumericSlot::default();
+        let mut first = NumericVariables::default();
+
+        assert_eq!(first.get_cached("A", &cache), None);
+        assert!(!first.contains_key("A"));
+        first.insert_cached("A", &cache, 7.0);
+        assert_eq!(first.get_cached("A", &cache), Some(7.0));
+        assert_eq!(first.remove("A"), Some(7.0));
+        assert_eq!(first.remove("A"), None);
+        first.insert_cached("A", &cache, 8.0);
+        let first_table_id = first.table_id;
+        first.clear();
+        assert_ne!(first.table_id, first_table_id);
+        assert!(first.names.is_empty());
+        assert!(first.slots.is_empty());
+        assert_eq!(first.get_cached("A", &cache), None);
+
+        let shared_cache = cache.clone();
+        let mut second = NumericVariables::default();
+        second.insert("B".to_string(), 1.0);
+        second.insert("A".to_string(), 9.0);
+        assert_eq!(second.get_cached("A", &shared_cache), Some(9.0));
+        assert_eq!(first.get_cached("A", &cache), None);
+    }
+
+    #[test]
+    fn cached_numeric_slots_survive_run_reset_locals_and_scalar_array_names() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(2)
+20 A=3:A(1.9)=4
+30 X=UNDEF+A+A(1)
+35 DEF FNINC(V)=V+1
+40 DEF SUB WORK(P)
+50 LOCAL L
+60 L=P+1
+70 P=L+1
+80 SEEN=P
+90 SUBEND
+100 CALL WORK(5)
+105 F=FNINC(X)
+110 Z=P+1"#,
+            )
+            .unwrap();
+
+        for _ in 0..2 {
+            interp.run_loaded().unwrap();
+            assert_eq!(interp.numeric_variables.get("UNDEF"), None);
+            assert_eq!(interp.numeric_variables.get("A"), Some(&3.0));
+            assert_eq!(interp.numeric_variables.get("X"), Some(&7.0));
+            assert_eq!(interp.numeric_variables.get("SEEN"), Some(&7.0));
+            assert_eq!(interp.numeric_variables.get("P"), None);
+            assert_eq!(interp.numeric_variables.get("L"), None);
+            assert_eq!(interp.numeric_variables.get("V"), None);
+            assert_eq!(interp.numeric_variables.get("F"), Some(&8.0));
+            assert_eq!(interp.numeric_variables.get("Z"), Some(&1.0));
+            assert_eq!(
+                interp.array_ref("A").unwrap().get_number(&[1]).unwrap(),
+                4.0
+            );
+        }
+    }
+
+    #[test]
+    fn compiled_numeric_slots_rebind_when_an_expression_changes_interpreter() {
+        let expr = compile_number_expression("A+B*2").unwrap();
+        let mut first = Interpreter::new();
+        first.numeric_variables.insert("A".to_string(), 1.0);
+        first.numeric_variables.insert("B".to_string(), 2.0);
+        assert_eq!(expr.eval(&mut first).unwrap(), 5.0);
+
+        let mut second = Interpreter::new();
+        second.numeric_variables.insert("B".to_string(), 20.0);
+        second.numeric_variables.insert("X".to_string(), 99.0);
+        second.numeric_variables.insert("A".to_string(), 10.0);
+        assert_eq!(expr.eval(&mut second).unwrap(), 50.0);
+        assert_eq!(expr.eval(&mut first).unwrap(), 5.0);
+    }
+
+    #[test]
+    fn compiled_numeric_slots_rebind_after_clear_and_drive_for_next() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 A=99
+20 CLEAR
+30 A=A+2
+40 FOR I=1 TO 3
+50 A=A+I
+60 NEXT I"#,
+            )
+            .unwrap();
+
+        for _ in 0..2 {
+            interp.run_loaded().unwrap();
+            assert_eq!(interp.numeric_variables.get("A"), Some(&8.0));
+            assert_eq!(interp.numeric_variables.get("I"), Some(&4.0));
+        }
+    }
 }
 
 fn graphics_window_enabled() -> bool {
@@ -11723,10 +11973,7 @@ fn cursor_in_exited_block(cursor: &Cursor, start: &Cursor, target: &Cursor) -> b
     (cursor == start || cursor_after(cursor, start)) && cursor_before(cursor, target)
 }
 
-fn restore_numeric_bindings(
-    variables: &mut FastHashMap<String, f64>,
-    saved: HashMap<String, Option<f64>>,
-) {
+fn restore_numeric_bindings(variables: &mut NumericVariables, saved: HashMap<String, Option<f64>>) {
     for (name, value) in saved {
         if let Some(value) = value {
             variables.insert(name, value);
@@ -11749,7 +11996,7 @@ fn restore_string_bindings(
     }
 }
 
-fn set_numeric_binding_ref(variables: &mut FastHashMap<String, f64>, name: &str, value: f64) {
+fn set_numeric_binding_ref(variables: &mut NumericVariables, name: &str, value: f64) {
     if let Some(slot) = variables.get_mut(name) {
         *slot = value;
     } else {
@@ -11778,7 +12025,7 @@ fn set_array_binding_ref(
 }
 
 fn save_numeric_binding_ref<'a>(
-    variables: &FastHashMap<String, f64>,
+    variables: &NumericVariables,
     saved: &mut Vec<(&'a str, Option<f64>)>,
     name: &'a str,
 ) {
@@ -11821,10 +12068,7 @@ fn save_array_alias_binding_ref<'a>(
     saved.push((name, aliases.get(name).cloned()));
 }
 
-fn restore_numeric_bindings_ref(
-    variables: &mut FastHashMap<String, f64>,
-    saved: Vec<(&str, Option<f64>)>,
-) {
+fn restore_numeric_bindings_ref(variables: &mut NumericVariables, saved: Vec<(&str, Option<f64>)>) {
     for (name, value) in saved {
         if let Some(value) = value {
             set_numeric_binding_ref(variables, name, value);
@@ -12619,9 +12863,10 @@ fn compile_for_statement(source: &str) -> BasicResult<CompiledFor> {
     };
     Ok(CompiledFor {
         var,
-        start: compile_expression(start_expr)?,
-        end: compile_expression(end_expr.trim())?,
-        step: step_expr.map(compile_expression).transpose()?,
+        var_slot: CachedNumericSlot::default(),
+        start: compile_number_expression(start_expr)?,
+        end: compile_number_expression(end_expr.trim())?,
+        step: step_expr.map(compile_number_expression).transpose()?,
     })
 }
 
@@ -12791,7 +13036,10 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
                 Some(FastNumberExpr::Function0(function))
             } else if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name)
             {
-                Some(FastNumberExpr::Var(name.clone()))
+                Some(FastNumberExpr::Var {
+                    name: name.clone(),
+                    slot: CachedNumericSlot::default(),
+                })
             } else {
                 None
             }
@@ -13082,6 +13330,7 @@ fn compiled_string_char_assignment(
     let CompiledLValue::Scalar {
         name: target,
         is_string: true,
+        ..
     } = &compiled.targets[0]
     else {
         return None;
@@ -13181,7 +13430,7 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
         }
         let indexes = split_arguments(&lhs[open + 1..close])
             .into_iter()
-            .map(|arg| compile_expression(&arg))
+            .map(|arg| compile_number_expression(&arg))
             .collect::<BasicResult<Vec<_>>>()?;
         return Ok(CompiledLValue::Array {
             is_string: name.ends_with('$'),
@@ -13198,6 +13447,7 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
     Ok(CompiledLValue::Scalar {
         is_string: lhs.ends_with('$'),
         name: lhs,
+        numeric_slot: CachedNumericSlot::default(),
     })
 }
 
