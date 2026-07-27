@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use crate::keyboard::TerminalInputDecoder;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
@@ -432,6 +434,7 @@ pub fn clear_interrupt_requested() {
 
 pub fn flush_pending_input() {
     clear_interrupt_requested();
+    runtime_raw::clear_pending_input();
     flush_platform_input();
 }
 
@@ -2690,13 +2693,13 @@ fn visible_width(text: &str) -> usize {
 
 #[cfg(unix)]
 mod runtime_raw {
-    use super::{RuntimeRawModeGuard, RuntimeRawModeSuspendGuard};
+    use super::{RuntimeRawModeGuard, RuntimeRawModeSuspendGuard, TerminalInputDecoder};
     use std::io::{self, IsTerminal};
     use std::mem;
     use std::ptr;
     use std::sync::{Mutex, OnceLock};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const STDIN_FD: libc::c_int = 0;
 
@@ -2705,6 +2708,7 @@ mod runtime_raw {
         depth: usize,
         suspend_depth: usize,
         original: Option<libc::termios>,
+        input_decoder: TerminalInputDecoder,
     }
 
     fn state() -> &'static Mutex<RawState> {
@@ -2748,6 +2752,7 @@ mod runtime_raw {
             }
             state.original = None;
             state.suspend_depth = 0;
+            state.input_decoder.clear();
         }
         Ok(())
     }
@@ -2791,6 +2796,7 @@ mod runtime_raw {
             return None;
         }
 
+        let mut state = state().lock().ok()?;
         let mut ready = false;
         unsafe {
             let mut readfds: libc::fd_set = mem::zeroed();
@@ -2817,12 +2823,26 @@ mod runtime_raw {
             let read =
                 unsafe { libc::read(STDIN_FD, (&mut byte as *mut u8).cast::<libc::c_void>(), 1) };
             if read == 1 {
-                return Some(byte);
+                state.input_decoder.push(byte);
+                if let Some(code) = state.input_decoder.next_code(Instant::now()) {
+                    return Some(code);
+                }
             }
         }
 
+        if let Some(code) = state.input_decoder.next_code(Instant::now()) {
+            return Some(code);
+        }
+
+        drop(state);
         thread::sleep(Duration::from_micros(500));
         None
+    }
+
+    pub(super) fn clear_pending_input() {
+        if let Ok(mut state) = state().lock() {
+            state.input_decoder.clear();
+        }
     }
 
     fn get_attrs() -> io::Result<libc::termios> {
@@ -2877,6 +2897,8 @@ mod runtime_raw {
     pub(super) fn read_key_code() -> Option<u8> {
         None
     }
+
+    pub(super) fn clear_pending_input() {}
 }
 
 fn normalize_main_code(code: &str) -> String {

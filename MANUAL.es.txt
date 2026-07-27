@@ -1251,17 +1251,19 @@ Sistema
 
 - ERR: código numérico del último error en ejecución (0 si no hay ninguno activo).
 - ERL: número de línea donde se produjo el último error (0 si no hay ninguno activo).
-- `INKEY$`: con ventana gráfica activa atiende eventos de teclado; en consola lee el teclado estándar.
-- En GUI, `INKEY$` devuelve 1 carácter. Para teclas especiales sin carácter visible usa `ASC(INKEY$)`.
+- `INKEY$`: atiende una pulsación discreta desde la ventana gráfica activa o desde el teclado de la consola.
+- `INKEY$` devuelve 1 carácter. Las teclas especiales se normalizan al mismo código en consola y en GUI; usa `ASC(INKEY$)` para obtenerlo.
 - `KEYDOWN(código)`: devuelve `-1` si la tecla está actualmente pulsada y `0` si no.
 - `KEYDOWN` está pensado para juegos (estado continuo). `INKEY$` sigue siendo útil para pulsaciones discretas.
 - En modo gráfico, `INKEY$` y `KEYDOWN` requieren que la ventana tenga el foco de teclado.
 - Si acabas de abrir la ventana gráfica, haz clic dentro de ella una vez para darle foco.
-- Códigos GUI de teclas especiales:
+- En terminales POSIX, las secuencias ANSI reconocidas se entregan como una sola tecla; las secuencias especiales desconocidas se descartan completas.
+- Códigos de teclas especiales en consola y GUI:
 - `28` izquierda, `29` derecha, `30` arriba, `31` abajo.
 - `1` Home, `4` End, `11` PageUp, `12` PageDown.
 - `22` Insert, `127` Delete, `8` BackSpace, `9` Tab.
 - `13` Enter y `27` Escape.
+- `128` a `139`: F1 a F12, respectivamente.
 
 Ejemplo (mover con cursores o A/D)
 10 K$=INKEY$

@@ -650,7 +650,11 @@ impl Graphics {
         filled: bool,
     ) {
         let (ax, ay) = self.user_to_canvas(x1, y1);
-        let (bx, by) = self.user_to_canvas(x2, y2);
+        let (bx, by) = if filled && x1 == x2 && y1 == y2 {
+            (ax, ay)
+        } else {
+            self.user_to_canvas(x2, y2)
+        };
         let color = color
             .map(resolve_color_number)
             .unwrap_or(self.current_color);
@@ -685,8 +689,14 @@ impl Graphics {
             .unwrap_or(self.current_color);
         let ax = x1.round() as i32 + self.origin_x;
         let ay = self.height as i32 - 1 - (y1.round() as i32 + self.origin_y);
-        let bx = x2.round() as i32 + self.origin_x;
-        let by = self.height as i32 - 1 - (y2.round() as i32 + self.origin_y);
+        let (bx, by) = if x1 == x2 && y1 == y2 {
+            (ax, ay)
+        } else {
+            (
+                x2.round() as i32 + self.origin_x,
+                self.height as i32 - 1 - (y2.round() as i32 + self.origin_y),
+            )
+        };
         self.buffer_dirty = true;
         self.fill_canvas_rect(ax, ay, bx, by, color);
         true
@@ -1988,6 +1998,10 @@ impl Graphics {
     }
 
     fn fill_canvas_rect(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
+        if x1 == x2 && y1 == y2 {
+            self.set_canvas_pixel(x1, y1, color);
+            return;
+        }
         let left = x1.min(x2);
         let right = x1.max(x2);
         let top = y1.min(y2);
@@ -2796,6 +2810,57 @@ mod tests {
         assert_eq!(graphics.get_canvas_pixel(201, 329), Some(0));
         assert_eq!(graphics.get_canvas_pixel(150, 278), Some(0));
         assert_eq!(graphics.get_canvas_pixel(150, 380), Some(0));
+    }
+
+    #[test]
+    fn unit_filled_rect_respects_origin_viewport_scale_color_and_cursor() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(7, 9, Some((100, 200, 200, 100)))
+            .unwrap();
+        graphics.move_to(12.0, 34.0);
+        let cursor = (graphics.xpos(), graphics.ypos());
+        let explicit_color = resolve_color_number(0x010203);
+
+        graphics.clear_buffer_dirty();
+        assert!(graphics.filled_rectangle_unscaled(143.1, 141.1, 143.4, 141.4, Some(0x010203)));
+        assert_eq!(graphics.get_canvas_pixel(150, 329), Some(explicit_color));
+        assert!(graphics.buffer_dirty());
+        assert_eq!((graphics.xpos(), graphics.ypos()), cursor);
+
+        graphics.set_ink(6);
+        graphics.set_mask(Some(0)).unwrap();
+        graphics.set_pen_width(4).unwrap();
+        graphics.clear_buffer_dirty();
+        assert!(graphics.filled_rectangle_unscaled(160.0, 150.0, 160.0, 150.0, None));
+        let implicit_color = resolve_color_number(6);
+        let point = (167, 320);
+        assert_eq!(
+            graphics.get_canvas_pixel(point.0, point.1),
+            Some(implicit_color)
+        );
+        for py in (point.1 - 1)..=(point.1 + 1) {
+            for px in (point.0 - 1)..=(point.0 + 1) {
+                if (px, py) != point {
+                    assert_eq!(graphics.get_canvas_pixel(px, py), Some(0));
+                }
+            }
+        }
+        assert!(graphics.buffer_dirty());
+        assert_eq!((graphics.xpos(), graphics.ypos()), cursor);
+
+        graphics.clear_buffer_dirty();
+        assert!(graphics.filled_rectangle_unscaled(0.0, 0.0, 0.0, 0.0, Some(4)));
+        assert_eq!(graphics.get_canvas_pixel(7, 470), Some(0));
+        assert!(graphics.buffer_dirty());
+        assert_eq!((graphics.xpos(), graphics.ypos()), cursor);
+
+        graphics.set_scale(Some((0.0, 10.0, 0.0, 10.0, 0))).unwrap();
+        let scaled_cursor = (graphics.xpos(), graphics.ypos());
+        assert!(!graphics.filled_rectangle_unscaled(5.0, 5.0, 5.0, 5.0, Some(5)));
+        graphics.rectangle(5.0, 5.0, 5.0, 5.0, Some(5), true);
+        assert_eq!(graphics.test(5.0, 5.0), resolve_color_number(5) as i32);
+        assert_eq!((graphics.xpos(), graphics.ypos()), scaled_cursor);
     }
 
     #[test]

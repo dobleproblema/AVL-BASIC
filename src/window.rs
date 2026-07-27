@@ -1,6 +1,10 @@
 use crate::console;
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::graphics::Graphics;
+use crate::keyboard::{
+    function_key_code, BACKSPACE, DELETE, DOWN, END, ENTER, ESCAPE, F1, F12, HOME, INSERT, LEFT,
+    PAGE_DOWN, PAGE_UP, RIGHT, TAB, UP,
+};
 #[cfg(target_os = "linux")]
 use minifb::Icon;
 use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
@@ -518,20 +522,32 @@ fn key_to_code(key: Key, shifted: bool) -> Option<u8> {
         Key::Key8 | Key::NumPad8 => Some(b'8'),
         Key::Key9 | Key::NumPad9 => Some(b'9'),
         Key::Space => Some(b' '),
-        Key::Enter | Key::NumPadEnter => Some(13),
-        Key::Left => Some(28),
-        Key::Right => Some(29),
-        Key::Up => Some(30),
-        Key::Down => Some(31),
-        Key::Home => Some(1),
-        Key::End => Some(4),
-        Key::PageUp => Some(11),
-        Key::PageDown => Some(12),
-        Key::Insert => Some(22),
-        Key::Delete => Some(127),
-        Key::Tab => Some(9),
-        Key::Backspace => Some(8),
-        Key::Escape => Some(27),
+        Key::Enter | Key::NumPadEnter => Some(ENTER),
+        Key::Left => Some(LEFT),
+        Key::Right => Some(RIGHT),
+        Key::Up => Some(UP),
+        Key::Down => Some(DOWN),
+        Key::Home => Some(HOME),
+        Key::End => Some(END),
+        Key::PageUp => Some(PAGE_UP),
+        Key::PageDown => Some(PAGE_DOWN),
+        Key::Insert => Some(INSERT),
+        Key::Delete => Some(DELETE),
+        Key::Tab => Some(TAB),
+        Key::Backspace => Some(BACKSPACE),
+        Key::Escape => Some(ESCAPE),
+        Key::F1 => function_key_code(1),
+        Key::F2 => function_key_code(2),
+        Key::F3 => function_key_code(3),
+        Key::F4 => function_key_code(4),
+        Key::F5 => function_key_code(5),
+        Key::F6 => function_key_code(6),
+        Key::F7 => function_key_code(7),
+        Key::F8 => function_key_code(8),
+        Key::F9 => function_key_code(9),
+        Key::F10 => function_key_code(10),
+        Key::F11 => function_key_code(11),
+        Key::F12 => function_key_code(12),
         Key::Comma => Some(b','),
         Key::Period | Key::NumPadDot => Some(b'.'),
         Key::Minus | Key::NumPadMinus => Some(b'-'),
@@ -585,20 +601,35 @@ fn code_to_key(code: u8) -> Option<Key> {
         b'8' => Some(Key::Key8),
         b'9' => Some(Key::Key9),
         b' ' => Some(Key::Space),
-        13 => Some(Key::Enter),
-        28 => Some(Key::Left),
-        29 => Some(Key::Right),
-        30 => Some(Key::Up),
-        31 => Some(Key::Down),
-        1 => Some(Key::Home),
-        4 => Some(Key::End),
-        11 => Some(Key::PageUp),
-        12 => Some(Key::PageDown),
-        22 => Some(Key::Insert),
-        127 => Some(Key::Delete),
-        9 => Some(Key::Tab),
-        8 => Some(Key::Backspace),
-        27 => Some(Key::Escape),
+        ENTER => Some(Key::Enter),
+        LEFT => Some(Key::Left),
+        RIGHT => Some(Key::Right),
+        UP => Some(Key::Up),
+        DOWN => Some(Key::Down),
+        HOME => Some(Key::Home),
+        END => Some(Key::End),
+        PAGE_UP => Some(Key::PageUp),
+        PAGE_DOWN => Some(Key::PageDown),
+        INSERT => Some(Key::Insert),
+        DELETE => Some(Key::Delete),
+        TAB => Some(Key::Tab),
+        BACKSPACE => Some(Key::Backspace),
+        ESCAPE => Some(Key::Escape),
+        F1 => Some(Key::F1),
+        code @ F1..=F12 => match code - F1 + 1 {
+            2 => Some(Key::F2),
+            3 => Some(Key::F3),
+            4 => Some(Key::F4),
+            5 => Some(Key::F5),
+            6 => Some(Key::F6),
+            7 => Some(Key::F7),
+            8 => Some(Key::F8),
+            9 => Some(Key::F9),
+            10 => Some(Key::F10),
+            11 => Some(Key::F11),
+            12 => Some(Key::F12),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -683,10 +714,14 @@ mod tests {
         assert_eq!(key_to_code(Key::Right, false), Some(29));
         assert_eq!(key_to_code(Key::Up, false), Some(30));
         assert_eq!(key_to_code(Key::Down, false), Some(31));
+        assert_eq!(key_to_code(Key::F1, false), Some(128));
+        assert_eq!(key_to_code(Key::F12, false), Some(139));
         assert_eq!(code_to_key(28), Some(Key::Left));
         assert_eq!(code_to_key(29), Some(Key::Right));
         assert_eq!(code_to_key(30), Some(Key::Up));
         assert_eq!(code_to_key(31), Some(Key::Down));
+        assert_eq!(code_to_key(128), Some(Key::F1));
+        assert_eq!(code_to_key(139), Some(Key::F12));
     }
 
     #[test]

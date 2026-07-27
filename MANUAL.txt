@@ -1249,17 +1249,19 @@ System
 
 - `ERR`: numeric code of the last runtime error (0 if none is active).
 - `ERL`: line number where the last error occurred (0 if none is active).
-- `INKEY$`: with an active graphics window, it handles keyboard events; in the console, it reads the standard keyboard.
-- In the GUI, `INKEY$` returns 1 character. For special keys without a visible character, use `ASC(INKEY$)`.
+- `INKEY$`: handles one discrete key press from the active graphics window or from the console keyboard.
+- `INKEY$` returns 1 character. Special keys are normalized to the same code in the console and GUI; use `ASC(INKEY$)` to obtain it.
 - `KEYDOWN(code)`: returns `-1` if the key is currently pressed and `0` otherwise.
 - `KEYDOWN` is intended for games (continuous state). `INKEY$` is still useful for discrete key presses.
 - In graphics mode, `INKEY$` and `KEYDOWN` require the window to have keyboard focus.
 - If you have just opened the graphics window, click once inside it to give it focus.
-- GUI codes for special keys:
+- On POSIX terminals, recognized ANSI sequences are delivered as one key; unknown special sequences are discarded as a whole.
+- Special-key codes in the console and GUI:
 - `28` left, `29` right, `30` up, `31` down.
 - `1` Home, `4` End, `11` PageUp, `12` PageDown.
 - `22` Insert, `127` Delete, `8` BackSpace, `9` Tab.
 - `13` Enter and `27` Escape.
+- `128` through `139`: F1 through F12, respectively.
 
 Example (move with arrows or A/D)
 10 K$=INKEY$

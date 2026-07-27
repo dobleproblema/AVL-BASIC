@@ -4,6 +4,7 @@ pub mod expr;
 pub mod fonts;
 pub mod graphics;
 pub mod interpreter;
+mod keyboard;
 pub mod lexer;
 pub mod program;
 mod reserved;

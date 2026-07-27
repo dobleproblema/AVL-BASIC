@@ -11167,6 +11167,45 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn unit_frectangle_preserves_coordinate_evaluation_and_drawing_state() {
+        let mut rectangle = Interpreter::new();
+        rectangle.graphics_window_enabled = false;
+        rectangle
+            .program
+            .load_text(
+                r#"10 RANDOMIZE 1234
+20 SCREEN
+30 PENWIDTH 4:MASK 0:MOVE 12,34
+40 FRECTANGLE RND*0,RND*0,RND*0,RND*0,7
+50 NEXTVALUE=RND"#,
+            )
+            .unwrap();
+        rectangle.run_loaded().unwrap();
+
+        let mut reference = Interpreter::new();
+        reference.graphics_window_enabled = false;
+        reference
+            .program
+            .load_text(
+                r#"10 RANDOMIZE 1234
+20 A=RND:B=RND:C=RND:D=RND
+30 NEXTVALUE=RND"#,
+            )
+            .unwrap();
+        reference.run_loaded().unwrap();
+
+        assert_eq!(
+            rectangle.numeric_variables.get("NEXTVALUE"),
+            reference.numeric_variables.get("NEXTVALUE")
+        );
+        assert_ne!(rectangle.graphics.test(0.0, 0.0), 0);
+        assert_eq!(rectangle.graphics.test(1.0, 0.0), 0);
+        assert_eq!(rectangle.graphics.test(0.0, 1.0), 0);
+        assert_eq!(rectangle.graphics.xpos(), 12.0);
+        assert_eq!(rectangle.graphics.ypos(), 34.0);
+    }
+
+    #[test]
     fn python_reserved_words_are_rejected_as_assignment_names() {
         for source in [
             "SUB=6",
@@ -12888,7 +12927,10 @@ fn console_read_key_code() -> Option<u8> {
         let first = _getch();
         if first == 0 || first == 224 {
             let second = _getch();
-            return (0..=255).contains(&second).then_some(second as u8);
+            return (0..=255)
+                .contains(&second)
+                .then_some(second as u8)
+                .and_then(crate::keyboard::windows_extended_key_code);
         }
         (0..=255).contains(&first).then_some(first as u8)
     }

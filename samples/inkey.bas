@@ -3,7 +3,7 @@
 30 IF a$="" THEN 20
 40 'FRAME
 44 a=ASC(a$)
-45 IF a>31 THEN PRINT a$; ELSE PRINT " ";
+45 IF a>=32 AND a<=126 THEN PRINT a$; ELSE PRINT " ";
 50 PRINT " [";STR$(a);"]"
 60 GOTO 20
 
