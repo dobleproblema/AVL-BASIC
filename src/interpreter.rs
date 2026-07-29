@@ -146,6 +146,23 @@ impl NumericVariables {
     }
 
     #[inline(always)]
+    fn get_resolved_or_zero(&self, index: usize) -> f64 {
+        let slot = &self.slots[index];
+        if slot.present {
+            slot.value
+        } else {
+            0.0
+        }
+    }
+
+    #[inline(always)]
+    fn insert_resolved(&mut self, index: usize, value: f64) {
+        let slot = &mut self.slots[index];
+        slot.value = value;
+        slot.present = true;
+    }
+
+    #[inline(always)]
     fn add_to_slot(&mut self, index: usize, delta: f64) -> f64 {
         let slot = &mut self.slots[index];
         if slot.present {
@@ -245,13 +262,18 @@ impl ArrayVariables {
     }
 
     #[inline(always)]
-    fn resolve_cached_slot(&mut self, name: &str, cache: &CachedArraySlot) -> usize {
+    fn cached_slot_index(&self, cache: &CachedArraySlot) -> Option<usize> {
         if cache.table_id.get() == self.table_id {
             let index = cache.index.get();
             if index != UNRESOLVED_ARRAY_SLOT {
-                return index;
+                return Some(index);
             }
         }
+        None
+    }
+
+    #[inline(always)]
+    fn bind_cached_slot(&mut self, name: &str, cache: &CachedArraySlot) -> usize {
         let index = self.slot_for_name(name);
         cache.table_id.set(self.table_id);
         cache.index.set(index);
@@ -259,17 +281,22 @@ impl ArrayVariables {
     }
 
     #[inline(always)]
+    fn resolve_cached_slot(&mut self, name: &str, cache: &CachedArraySlot) -> usize {
+        if let Some(index) = self.cached_slot_index(cache) {
+            index
+        } else {
+            self.bind_cached_slot(name, cache)
+        }
+    }
+
+    #[cfg(test)]
+    #[inline(always)]
     fn get_cached(&mut self, name: &str, cache: &CachedArraySlot) -> Option<&ArrayValue> {
         let index = self.resolve_cached_slot(name, cache);
         self.slots[index].as_ref()
     }
 
-    #[inline(always)]
-    fn get_cached_mut(&mut self, name: &str, cache: &CachedArraySlot) -> Option<&mut ArrayValue> {
-        let index = self.resolve_cached_slot(name, cache);
-        self.slots[index].as_mut()
-    }
-
+    #[cfg(test)]
     #[inline(always)]
     fn insert_cached(
         &mut self,
@@ -278,6 +305,21 @@ impl ArrayVariables {
         value: ArrayValue,
     ) -> Option<ArrayValue> {
         let index = self.resolve_cached_slot(name, cache);
+        self.slots[index].replace(value)
+    }
+
+    #[inline(always)]
+    fn get_resolved(&self, index: usize) -> Option<&ArrayValue> {
+        self.slots[index].as_ref()
+    }
+
+    #[inline(always)]
+    fn get_resolved_mut(&mut self, index: usize) -> Option<&mut ArrayValue> {
+        self.slots[index].as_mut()
+    }
+
+    #[inline(always)]
+    fn insert_resolved(&mut self, index: usize, value: ArrayValue) -> Option<ArrayValue> {
         self.slots[index].replace(value)
     }
 
@@ -312,6 +354,11 @@ impl ArrayVariables {
         self.table_id = NEXT_ARRAY_TABLE_ID.fetch_add(1, Ordering::Relaxed);
         self.names.clear();
         self.slots.clear();
+    }
+
+    fn invalidate_cached_slots(&mut self) {
+        // Alias changes can make a source name point at a different existing slot.
+        self.table_id = NEXT_ARRAY_TABLE_ID.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -414,7 +461,7 @@ struct Cursor {
 
 #[derive(Debug, Clone)]
 struct ForFrame {
-    var: String,
+    var: Rc<str>,
     var_slot: usize,
     end: f64,
     step: f64,
@@ -430,7 +477,7 @@ struct WhileFrame {
 
 #[derive(Debug, Clone)]
 struct CompiledFor {
-    var: String,
+    var: Rc<str>,
     var_slot: CachedNumericSlot,
     start: CompiledNumberExpr,
     end: CompiledNumberExpr,
@@ -784,6 +831,17 @@ enum UserFunction {
     },
 }
 
+#[derive(Debug)]
+struct CompiledSingleLineFunctionBody {
+    expr: Expr,
+    fast_numeric: Option<FastNumberExpr>,
+}
+
+enum SingleLineFunctionBody {
+    Source(String),
+    Compiled(Rc<CompiledSingleLineFunctionBody>),
+}
+
 #[derive(Debug, Clone)]
 struct ActiveFunctionFrame {
     name: Rc<str>,
@@ -841,7 +899,7 @@ impl<'a> SavedSubBindings<'a> {
         restore_numeric_bindings_ref(&mut interpreter.numeric_variables, self.numeric);
         restore_string_bindings_ref(&mut interpreter.string_variables, self.string);
         restore_array_bindings_ref(&mut interpreter.arrays, self.arrays);
-        restore_array_alias_bindings_ref(&mut interpreter.array_aliases, self.aliases);
+        interpreter.restore_array_alias_bindings(self.aliases);
         match self.name_value {
             SavedSubName::Numeric(Some(value)) => {
                 set_numeric_binding_ref(&mut interpreter.numeric_variables, self.name, value);
@@ -923,6 +981,63 @@ struct CompiledAssignment {
     rhs: Expr,
     rhs_is_string: bool,
     fast_numeric_rhs: Option<FastNumberExpr>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledNumericAssignment {
+    Scalar {
+        target: String,
+        target_slot: CachedNumericSlot,
+        rhs: FastNumericScalarRhs,
+        fallback: Rc<CompiledAssignment>,
+    },
+    Array {
+        target: String,
+        indexes: Vec<CompiledNumberExpr>,
+        array_slot: CachedArraySlot,
+        rhs: FastNumberExpr,
+        fallback: Rc<CompiledAssignment>,
+    },
+}
+
+impl CompiledNumericAssignment {
+    fn fallback(&self) -> &CompiledAssignment {
+        match self {
+            CompiledNumericAssignment::Scalar { fallback, .. }
+            | CompiledNumericAssignment::Array { fallback, .. } => fallback.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum FastNumericScalarRhs {
+    Expr(FastNumberExpr),
+    SelfUpdate(FastNumericScalarUpdate),
+}
+
+#[derive(Debug, Clone)]
+enum FastNumericScalarUpdate {
+    Constant {
+        op: BinaryOp,
+        right: f64,
+    },
+    Expr {
+        op: BinaryOp,
+        right: Box<FastNumberExpr>,
+    },
+}
+
+impl FastNumericScalarUpdate {
+    #[inline(always)]
+    fn eval_after_left(&self, interpreter: &mut Interpreter, left: f64) -> BasicResult<f64> {
+        match self {
+            FastNumericScalarUpdate::Constant { op, right } => eval_fast_binary(*op, left, *right),
+            FastNumericScalarUpdate::Expr { op, right } => {
+                let right = right.eval(interpreter)?;
+                eval_fast_binary(*op, left, right)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1067,6 +1182,20 @@ enum FastNumberFunction {
     Sqr,
     Sin,
     Cos,
+    Fix,
+    Sgn,
+    Frac,
+    Log,
+    Log10,
+    Exp,
+    Tan,
+    Asn,
+    Acs,
+    Atn,
+    Cot,
+    Rtd,
+    Dtr,
+    Round,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1252,6 +1381,7 @@ enum CachedCommand {
     Next(Option<String>),
     While(Rc<CompiledNumberExpr>),
     Wend,
+    NumericAssignment(Rc<CompiledNumericAssignment>),
 }
 
 #[derive(Debug, Clone)]
@@ -1362,6 +1492,13 @@ impl FastNumberExpr {
                         }
                         arg.cos()
                     }
+                    function => {
+                        return eval_extended_fast_number_function(
+                            *function,
+                            arg,
+                            interpreter.angle_degrees,
+                        );
+                    }
                 })
             }
             FastNumberExpr::Unary { op, expr } => {
@@ -1406,6 +1543,100 @@ impl FastNumberExpr {
             }
         }
     }
+}
+
+#[inline(never)]
+fn eval_extended_fast_number_function(
+    function: FastNumberFunction,
+    mut arg: f64,
+    angle_degrees: bool,
+) -> BasicResult<f64> {
+    Ok(match function {
+        FastNumberFunction::Fix => {
+            if arg >= 0.0 {
+                arg.floor()
+            } else {
+                arg.ceil()
+            }
+        }
+        FastNumberFunction::Sgn => {
+            if arg > 0.0 {
+                1.0
+            } else if arg < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+        FastNumberFunction::Frac => arg.fract(),
+        FastNumberFunction::Log => {
+            if arg <= 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            arg.ln()
+        }
+        FastNumberFunction::Log10 => {
+            if arg <= 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            arg.log10()
+        }
+        FastNumberFunction::Exp => checked_number(arg.exp())?,
+        FastNumberFunction::Tan => {
+            if angle_degrees {
+                arg = arg.to_radians();
+            }
+            arg.tan()
+        }
+        FastNumberFunction::Asn => {
+            if !(-1.0..=1.0).contains(&arg) {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            let value = arg.asin();
+            if angle_degrees {
+                value.to_degrees()
+            } else {
+                value
+            }
+        }
+        FastNumberFunction::Acs => {
+            if !(-1.0..=1.0).contains(&arg) {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            let value = arg.acos();
+            if angle_degrees {
+                value.to_degrees()
+            } else {
+                value
+            }
+        }
+        FastNumberFunction::Atn => {
+            let value = arg.atan();
+            if angle_degrees {
+                value.to_degrees()
+            } else {
+                value
+            }
+        }
+        FastNumberFunction::Cot => {
+            if angle_degrees {
+                arg = arg.to_radians();
+            }
+            let tangent = arg.tan();
+            if tangent == 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            1.0 / tangent
+        }
+        FastNumberFunction::Rtd => arg.to_degrees(),
+        FastNumberFunction::Dtr => arg.to_radians(),
+        FastNumberFunction::Round => round_half_away(arg, 0),
+        FastNumberFunction::Abs
+        | FastNumberFunction::Int
+        | FastNumberFunction::Sqr
+        | FastNumberFunction::Sin
+        | FastNumberFunction::Cos => unreachable!(),
+    })
 }
 
 #[inline(always)]
@@ -1477,11 +1708,13 @@ pub struct Interpreter {
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
     arrays: ArrayVariables,
+    // Except for prepare_run after arrays.clear(), mutate through the binding helpers below.
     array_aliases: FastHashMap<String, String>,
     data: Vec<Value>,
     data_line_starts: HashMap<i32, usize>,
     data_pointer: usize,
     functions: HashMap<String, UserFunction>,
+    single_line_function_cache: FastHashMap<Rc<str>, Rc<CompiledSingleLineFunctionBody>>,
     subs: HashMap<String, Rc<UserSub>>,
     function_call_stack: Vec<Rc<str>>,
     sub_call_stack: Vec<Rc<str>>,
@@ -1582,6 +1815,7 @@ impl Interpreter {
             data_line_starts: HashMap::new(),
             data_pointer: 0,
             functions: HashMap::new(),
+            single_line_function_cache: FastHashMap::default(),
             subs: HashMap::new(),
             function_call_stack: Vec::new(),
             sub_call_stack: Vec::new(),
@@ -2417,6 +2651,7 @@ impl Interpreter {
     fn clear_runtime(&mut self) {
         self.prepare_run();
         self.functions.clear();
+        self.single_line_function_cache.clear();
         self.subs.clear();
         self.function_call_stack.clear();
         self.sub_call_stack.clear();
@@ -3091,7 +3326,63 @@ impl Interpreter {
                 self.execute_compiled_while(condition.clone(), cursor)
             }
             CachedCommand::Wend => self.execute_wend(cursor),
+            CachedCommand::NumericAssignment(compiled) => match compiled.as_ref() {
+                CompiledNumericAssignment::Scalar {
+                    target,
+                    target_slot,
+                    rhs,
+                    ..
+                } => match rhs {
+                    FastNumericScalarRhs::Expr(rhs) => {
+                        let value = rhs.eval(self).map_err(|e| self.with_current_line(e))?;
+                        self.assign_numeric_scalar_target(target, target_slot, value);
+                        Ok(())
+                    }
+                    FastNumericScalarRhs::SelfUpdate(update) => {
+                        if self.array_aliases.is_empty()
+                            && self.active_functions.is_empty()
+                            && self.function_call_stack.is_empty()
+                        {
+                            self.execute_cached_numeric_scalar_update(target, target_slot, update)
+                        } else {
+                            self.execute_compiled_assignment(compiled.fallback())
+                        }
+                    }
+                },
+                CompiledNumericAssignment::Array {
+                    target,
+                    indexes,
+                    array_slot,
+                    rhs,
+                    ..
+                } => {
+                    let value = rhs.eval(self).map_err(|e| self.with_current_line(e))?;
+                    self.assign_compiled_numeric_array_target(target, indexes, array_slot, value)?;
+                    self.return_number_value_for_active_function(target, value);
+                    Ok(())
+                }
+            },
         }
+    }
+
+    #[inline(never)]
+    fn execute_cached_numeric_scalar_update(
+        &mut self,
+        target: &str,
+        target_slot: &CachedNumericSlot,
+        update: &FastNumericScalarUpdate,
+    ) -> BasicResult<()> {
+        // Resolve the target once, read it before the right operand, and only
+        // publish the result after the complete expression succeeds.
+        let index = self
+            .numeric_variables
+            .resolve_cached_slot(target, target_slot);
+        let left = self.numeric_variables.get_resolved_or_zero(index);
+        let value = update
+            .eval_after_left(self, left)
+            .map_err(|e| self.with_current_line(e))?;
+        self.numeric_variables.insert_resolved(index, value);
+        Ok(())
     }
 
     fn execute_return(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
@@ -3574,45 +3865,12 @@ impl Interpreter {
         value: f64,
     ) -> BasicResult<()> {
         let current_line = self.current_line;
-        if self.array_aliases.is_empty() {
-            if let Some(array) = self.arrays.get_cached_mut(name, array_slot) {
-                if array.dims.len() == raw_indexes.len() {
-                    if array.is_string() {
-                        return Err(self.err(ErrorCode::TypeMismatch));
-                    }
-                    let result = if raw_indexes.len() == 1 {
-                        array.set_number_direct_1d(raw_indexes[0], value)
-                    } else {
-                        array.set_number(raw_indexes, value)
-                    };
-                    return result.map_err(|mut e| {
-                        if e.line.is_none() {
-                            e.line = current_line;
-                        }
-                        e
-                    });
-                }
-            }
-            let indexes = self.normalize_array_indexes_for_name(name, raw_indexes.to_vec())?;
-            if self.arrays.get_cached(name, array_slot).is_none() {
-                let dims = vec![10; indexes.len()];
-                self.arrays
-                    .insert_cached(name, array_slot, ArrayValue::new(name, dims));
-            }
-            let array = self.arrays.get_cached_mut(name, array_slot).unwrap();
-            if array.is_string() {
-                return Err(self.err(ErrorCode::TypeMismatch));
-            }
-            return array.set_number(&indexes, value).map_err(|mut e| {
-                if e.line.is_none() {
-                    e.line = current_line;
-                }
-                e
-            });
-        }
-
-        let key = self.array_lookup_key(name);
-        if let Some(array) = self.arrays.get_mut(key.as_ref()) {
+        let resolved = if self.array_aliases.is_empty() {
+            self.arrays.resolve_cached_slot(name, array_slot)
+        } else {
+            self.resolve_cached_array_slot(name, array_slot)
+        };
+        if let Some(array) = self.arrays.get_resolved_mut(resolved) {
             if array.dims.len() == raw_indexes.len() {
                 if array.is_string() {
                     return Err(self.err(ErrorCode::TypeMismatch));
@@ -3630,13 +3888,14 @@ impl Interpreter {
                 });
             }
         }
+        let key = self.array_lookup_key(name);
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
-        if !self.arrays.contains_key(key.as_ref()) {
+        if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
             self.arrays
-                .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
+                .insert_resolved(resolved, ArrayValue::new(key.as_ref(), dims));
         }
-        let array = self.arrays.get_mut(key.as_ref()).unwrap();
+        let array = self.arrays.get_resolved_mut(resolved).unwrap();
         if array.is_string() {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
@@ -3668,13 +3927,8 @@ impl Interpreter {
         name: &str,
         slot: &CachedNumericSlot,
     ) -> BasicResult<f64> {
-        if self.active_functions.is_empty() && self.function_call_stack.is_empty() {
-            if name.ends_with('$') {
-                return Err(BasicError::new(ErrorCode::TypeMismatch));
-            }
-            if name == "INF" {
-                return Ok(f64::INFINITY);
-            }
+        debug_assert!(self.active_functions.is_empty() || !self.function_call_stack.is_empty());
+        if self.function_call_stack.is_empty() {
             return Ok(self.numeric_variables.get_cached(name, slot).unwrap_or(0.0));
         }
         self.get_number_variable(name)
@@ -4168,7 +4422,8 @@ impl Interpreter {
         source: &CompiledTextureSource,
     ) -> BasicResult<Rc<Texture>> {
         if let Some(name) = &source.var_name {
-            if self.active_functions.is_empty() && self.function_call_stack.is_empty() {
+            debug_assert!(self.active_functions.is_empty() || !self.function_call_stack.is_empty());
+            if self.function_call_stack.is_empty() {
                 if let Some(cached) = self.texture_cache.get(name) {
                     return Ok(cached.texture.clone());
                 }
@@ -4607,22 +4862,22 @@ impl Interpreter {
                 name,
                 indexes,
                 is_string,
-                ..
+                array_slot,
             } => match indexes.len() {
                 1 => {
                     let raw = [indexes[0].eval(self)? as i32];
-                    self.assign_compiled_array_value(name, &raw, *is_string, value)
+                    self.assign_compiled_array_value(name, array_slot, &raw, *is_string, value)
                 }
                 2 => {
                     let raw = [indexes[0].eval(self)? as i32, indexes[1].eval(self)? as i32];
-                    self.assign_compiled_array_value(name, &raw, *is_string, value)
+                    self.assign_compiled_array_value(name, array_slot, &raw, *is_string, value)
                 }
                 _ => {
                     let raw = indexes
                         .iter()
                         .map(|expr| expr.eval(self).map(|n| n as i32))
                         .collect::<BasicResult<Vec<_>>>()?;
-                    self.assign_compiled_array_value(name, &raw, *is_string, value)
+                    self.assign_compiled_array_value(name, array_slot, &raw, *is_string, value)
                 }
             },
         }
@@ -4631,60 +4886,22 @@ impl Interpreter {
     fn assign_compiled_array_value(
         &mut self,
         name: &str,
+        array_slot: &CachedArraySlot,
         raw_indexes: &[i32],
         is_string: bool,
         value: Value,
     ) -> BasicResult<()> {
-        if self.array_aliases.is_empty() {
-            if self
-                .arrays
-                .get(name)
-                .is_some_and(|array| array.dims.len() == raw_indexes.len())
-            {
-                let array = self.arrays.get_mut(name).unwrap();
-                if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
-                    return Err(self.err(ErrorCode::TypeMismatch));
-                }
-                if raw_indexes.len() == 1 {
-                    return array.set_direct_1d(raw_indexes[0], value).map_err(|mut e| {
-                        if e.line.is_none() {
-                            e.line = self.current_line;
-                        }
-                        e
-                    });
-                }
-                return array.set(raw_indexes, value).map_err(|mut e| {
-                    if e.line.is_none() {
-                        e.line = self.current_line;
-                    }
-                    e
-                });
-            }
-            let indexes = self.normalize_array_indexes_for_name(name, raw_indexes.to_vec())?;
-            if !self.arrays.contains_key(name) {
-                let dims = vec![10; indexes.len()];
-                self.arrays
-                    .insert(name.to_string(), ArrayValue::new(name, dims));
-            }
-            let array = self.arrays.get_mut(name).unwrap();
-            if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
-                return Err(self.err(ErrorCode::TypeMismatch));
-            }
-            return array.set(&indexes, value).map_err(|mut e| {
-                if e.line.is_none() {
-                    e.line = self.current_line;
-                }
-                e
-            });
-        }
-
-        let key = self.array_lookup_key(name);
+        let resolved = if self.array_aliases.is_empty() {
+            self.arrays.resolve_cached_slot(name, array_slot)
+        } else {
+            self.resolve_cached_array_slot(name, array_slot)
+        };
         if self
             .arrays
-            .get(key.as_ref())
+            .get_resolved(resolved)
             .is_some_and(|array| array.dims.len() == raw_indexes.len())
         {
-            let array = self.arrays.get_mut(key.as_ref()).unwrap();
+            let array = self.arrays.get_resolved_mut(resolved).unwrap();
             if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
                 return Err(self.err(ErrorCode::TypeMismatch));
             }
@@ -4703,13 +4920,14 @@ impl Interpreter {
                 e
             });
         }
+        let key = self.array_lookup_key(name);
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
-        if !self.arrays.contains_key(key.as_ref()) {
+        if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
             self.arrays
-                .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
+                .insert_resolved(resolved, ArrayValue::new(key.as_ref(), dims));
         }
-        let array = self.arrays.get_mut(key.as_ref()).unwrap();
+        let array = self.arrays.get_resolved_mut(resolved).unwrap();
         if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
@@ -4852,6 +5070,50 @@ impl Interpreter {
         Ok(indexes)
     }
 
+    #[inline(always)]
+    fn resolve_cached_array_slot(&mut self, name: &str, slot: &CachedArraySlot) -> usize {
+        if let Some(index) = self.arrays.cached_slot_index(slot) {
+            return index;
+        }
+        let key = self
+            .array_aliases
+            .get(name)
+            .map(String::as_str)
+            .unwrap_or(name);
+        self.arrays.bind_cached_slot(key, slot)
+    }
+
+    fn set_array_alias_binding(&mut self, name: &str, key: String) {
+        if self.array_aliases.get(name) == Some(&key) {
+            return;
+        }
+        self.array_aliases.insert(name.to_string(), key);
+        self.arrays.invalidate_cached_slots();
+    }
+
+    fn remove_array_alias_binding(&mut self, name: &str) {
+        if self.array_aliases.remove(name).is_some() {
+            self.arrays.invalidate_cached_slots();
+        }
+    }
+
+    fn restore_array_alias_bindings(&mut self, saved: Vec<(&str, Option<String>)>) {
+        let mut changed = false;
+        for (name, value) in saved {
+            if let Some(value) = value {
+                if self.array_aliases.get(name) != Some(&value) {
+                    self.array_aliases.insert(name.to_string(), value);
+                    changed = true;
+                }
+            } else if self.array_aliases.remove(name).is_some() {
+                changed = true;
+            }
+        }
+        if changed {
+            self.arrays.invalidate_cached_slots();
+        }
+    }
+
     fn array_lookup_key<'a>(&self, name: &'a str) -> Cow<'a, str> {
         if self.array_aliases.is_empty() {
             return Cow::Borrowed(name);
@@ -4886,10 +5148,12 @@ impl Interpreter {
         slot: &CachedArraySlot,
         indexes: &[i32],
     ) -> BasicResult<f64> {
-        if !self.array_aliases.is_empty() {
-            return self.get_array_number(name, indexes);
-        }
-        if let Some(array) = self.arrays.get_cached(name, slot) {
+        let resolved = if self.array_aliases.is_empty() {
+            self.arrays.resolve_cached_slot(name, slot)
+        } else {
+            self.resolve_cached_array_slot(name, slot)
+        };
+        if let Some(array) = self.arrays.get_resolved(resolved) {
             if array.dims.len() == indexes.len() {
                 if indexes.len() == 1 {
                     return array.get_number_direct_1d(indexes[0]);
@@ -4897,13 +5161,16 @@ impl Interpreter {
                 return array.get_number(indexes);
             }
         }
-        let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
-        if self.arrays.get_cached(name, slot).is_none() {
-            self.arrays
-                .insert_cached(name, slot, ArrayValue::new(name, vec![10; indexes.len()]));
+        let key = self.array_lookup_key(name);
+        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        if self.arrays.get_resolved(resolved).is_none() {
+            self.arrays.insert_resolved(
+                resolved,
+                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
+            );
         }
         self.arrays
-            .get_cached(name, slot)
+            .get_resolved(resolved)
             .unwrap()
             .get_number(&indexes)
     }
@@ -5411,7 +5678,7 @@ impl Interpreter {
         } else {
             self.for_stack
                 .iter()
-                .rposition(|frame| frame.var == requested)
+                .rposition(|frame| frame.var.as_ref() == requested)
         };
         let Some(frame_index) = frame_index else {
             return Err(self.err(ErrorCode::NextWithoutFor));
@@ -5449,7 +5716,10 @@ impl Interpreter {
     ) -> BasicResult<()> {
         let frame_index = match requested.filter(|name| !name.is_empty()) {
             None => self.for_stack.len().checked_sub(1),
-            Some(name) => self.for_stack.iter().rposition(|frame| frame.var == name),
+            Some(name) => self
+                .for_stack
+                .iter()
+                .rposition(|frame| frame.var.as_ref() == name),
         };
         let Some(frame_index) = frame_index else {
             return Err(self.err(ErrorCode::NextWithoutFor));
@@ -6903,6 +7173,7 @@ impl Interpreter {
         let (name, params) = parse_function_header(header)?;
         if let Some(expr) = expr {
             self.detach_multiline_function(&name);
+            self.single_line_function_cache.remove(name.as_str());
             let fn_name = Rc::<str>::from(name.as_str());
             self.functions.insert(
                 name,
@@ -6929,6 +7200,7 @@ impl Interpreter {
             }
         }
         let fn_name = Rc::<str>::from(name.as_str());
+        self.single_line_function_cache.remove(name.as_str());
         self.functions.insert(
             name,
             UserFunction::Multi {
@@ -8525,6 +8797,7 @@ impl Interpreter {
         self.program_dir = path.parent().map(Path::to_path_buf);
         self.refresh_identifier_case_from_program();
         self.functions.clear();
+        self.single_line_function_cache.clear();
         self.subs.clear();
         self.fn_line_owner.clear();
         self.sub_line_owner.clear();
@@ -9116,6 +9389,9 @@ impl Interpreter {
                     index: Rc::new(index),
                 });
             }
+            if let Some(assignment) = compile_cached_numeric_assignment(compiled.clone()) {
+                return Some(CachedCommand::NumericAssignment(Rc::new(assignment)));
+            }
             return Some(CachedCommand::Assignment(compiled.clone()));
         }
         let compiled = Rc::new(compile_assignment_statement(key).ok()?);
@@ -9126,9 +9402,11 @@ impl Interpreter {
                 index: Rc::new(index),
             });
         }
+        let numeric_assignment = compile_cached_numeric_assignment(compiled.clone())
+            .map(|assignment| CachedCommand::NumericAssignment(Rc::new(assignment)));
         self.assignment_cache
             .insert(key.to_string(), compiled.clone());
-        Some(CachedCommand::Assignment(compiled))
+        Some(numeric_assignment.unwrap_or_else(|| CachedCommand::Assignment(compiled)))
     }
 
     fn line_index(&self, line: i32) -> Option<usize> {
@@ -10059,10 +10337,10 @@ impl Interpreter {
     }
 
     fn call_user_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value> {
-        let Some(fun) = self.functions.get(name).cloned() else {
+        let Some(fun) = self.functions.get(name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
-        let call_name = match &fun {
+        let call_name = match fun {
             UserFunction::Single { name, .. } | UserFunction::Multi { name, .. } => name.clone(),
         };
         if args.is_empty() {
@@ -10079,39 +10357,15 @@ impl Interpreter {
         }
         match fun {
             UserFunction::Single { params, expr, .. } => {
-                if params.len() != args.len() {
-                    return Err(self.err(ErrorCode::ArgumentMismatch));
-                }
-                if args.iter().any(|arg| matches!(arg, Value::ArrayRef(_))) {
-                    return Err(self.err(ErrorCode::TypeMismatch));
-                }
-                let mut saved_numeric = HashMap::new();
-                let mut saved_string = HashMap::new();
-                for param in params.iter() {
-                    if param.ends_with('$') {
-                        saved_string
-                            .entry(param.clone())
-                            .or_insert_with(|| self.string_variables.get(param).cloned());
-                    } else {
-                        saved_numeric
-                            .entry(param.clone())
-                            .or_insert_with(|| self.numeric_variables.get(param).copied());
-                    }
-                }
-                self.function_call_stack.push(call_name.clone());
-                let bind_result = self.bind_function_args(&params, args);
-                let result = if bind_result.is_ok() {
-                    self.eval_value(&expr)
+                let params = params.clone();
+                let body = if let Some(compiled) =
+                    self.single_line_function_cache.get(call_name.as_ref())
+                {
+                    SingleLineFunctionBody::Compiled(compiled.clone())
                 } else {
-                    Err(bind_result.err().unwrap())
+                    SingleLineFunctionBody::Source(expr.clone())
                 };
-                self.function_call_stack.pop();
-                restore_numeric_bindings(&mut self.numeric_variables, saved_numeric);
-                restore_string_bindings(&mut self.string_variables, saved_string);
-                if matches!(result, Ok(Value::ArrayRef(_))) {
-                    return Err(self.err(ErrorCode::TypeMismatch));
-                }
-                result
+                self.call_single_line_function(call_name, &params, body, args)
             }
             UserFunction::Multi {
                 params,
@@ -10119,12 +10373,80 @@ impl Interpreter {
                 start,
                 ..
             } => {
+                let params = params.clone();
+                let local_specs = local_specs.clone();
+                let start = start.clone();
                 if params.len() != args.len() {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
                 self.call_multiline_function(call_name, &params, &local_specs, args, start)
             }
         }
+    }
+
+    #[inline(never)]
+    fn call_single_line_function(
+        &mut self,
+        call_name: Rc<str>,
+        params: &[String],
+        body: SingleLineFunctionBody,
+        args: Vec<Value>,
+    ) -> BasicResult<Value> {
+        if params.len() != args.len() {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        if args.iter().any(|arg| matches!(arg, Value::ArrayRef(_))) {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        }
+
+        let mut saved_numeric: Vec<(&str, Option<f64>)> = Vec::with_capacity(params.len());
+        let mut saved_string: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len());
+        for param in params {
+            if param.ends_with('$') {
+                save_string_binding_ref(&self.string_variables, &mut saved_string, param);
+            } else {
+                save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
+            }
+        }
+
+        self.function_call_stack.push(call_name.clone());
+        let result = match self.bind_function_args(params, args) {
+            Ok(()) => self.eval_single_line_function_body(call_name, body),
+            Err(err) => Err(err),
+        };
+        self.function_call_stack.pop();
+        restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
+        restore_string_bindings_ref(&mut self.string_variables, saved_string);
+
+        if matches!(result, Ok(Value::ArrayRef(_))) {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        }
+        result
+    }
+
+    fn eval_single_line_function_body(
+        &mut self,
+        call_name: Rc<str>,
+        body: SingleLineFunctionBody,
+    ) -> BasicResult<Value> {
+        let compiled = match body {
+            SingleLineFunctionBody::Compiled(compiled) => compiled,
+            SingleLineFunctionBody::Source(source) => {
+                let expr =
+                    compile_expression(source.trim()).map_err(|err| self.with_current_line(err))?;
+                let fast_numeric = compile_fast_number_expr(&expr, true);
+                let compiled = Rc::new(CompiledSingleLineFunctionBody { expr, fast_numeric });
+                self.single_line_function_cache
+                    .insert(call_name, compiled.clone());
+                compiled
+            }
+        };
+        let result = if let Some(fast) = &compiled.fast_numeric {
+            fast.eval(self).map(Value::number)
+        } else {
+            eval_compiled(self, &compiled.expr)
+        };
+        result.map_err(|err| self.with_current_line(err))
     }
 
     fn bind_function_args(&mut self, params: &[String], args: Vec<Value>) -> BasicResult<()> {
@@ -10214,7 +10536,7 @@ impl Interpreter {
                         evaluated.push(value as usize);
                     }
                     save_array_alias_binding_ref(&self.array_aliases, saved_aliases, name);
-                    self.array_aliases.remove(name);
+                    self.remove_array_alias_binding(name);
                     save_array_binding_ref(&self.arrays, saved_arrays, name);
                     set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
                 }
@@ -10363,8 +10685,7 @@ impl Interpreter {
                     save_array_alias_binding_ref(&self.array_aliases, &mut saved.aliases, param);
                     self.numeric_variables.remove(param);
                     self.string_variables.remove(param);
-                    self.array_aliases
-                        .insert(param.to_string(), source_key.into_owned());
+                    self.set_array_alias_binding(param, source_key.into_owned());
                 }
             }
         }
@@ -10444,7 +10765,7 @@ impl Interpreter {
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
             restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+            self.restore_array_alias_bindings(saved_aliases);
             return Err(err);
         }
         if let Err(err) = self.bind_local_specs_vec(
@@ -10458,7 +10779,7 @@ impl Interpreter {
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
             restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-            restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+            self.restore_array_alias_bindings(saved_aliases);
             return Err(err);
         }
 
@@ -10495,7 +10816,7 @@ impl Interpreter {
         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
         restore_string_bindings_ref(&mut self.string_variables, saved_string);
         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
-        restore_array_alias_bindings_ref(&mut self.array_aliases, saved_aliases);
+        self.restore_array_alias_bindings(saved_aliases);
         if let Some(array) = return_array {
             let array_name = name.to_string();
             self.arrays.insert(array_name.clone(), array);
@@ -10511,34 +10832,408 @@ impl Interpreter {
 mod interpreter_tests {
     use super::*;
 
+    fn assert_number_results_match(
+        source: &str,
+        fast: BasicResult<f64>,
+        generic: BasicResult<f64>,
+    ) {
+        match (fast, generic) {
+            (Ok(fast), Ok(generic)) => {
+                assert_eq!(
+                    fast.to_bits(),
+                    generic.to_bits(),
+                    "{source}: fast={fast:?}, generic={generic:?}"
+                );
+            }
+            (Err(fast), Err(generic)) => {
+                assert_eq!(fast.code, generic.code, "{source}");
+                assert_eq!(fast.line, generic.line, "{source}");
+                assert_eq!(fast.detail, generic.detail, "{source}");
+            }
+            (fast, generic) => {
+                panic!("{source}: fast={fast:?}, generic={generic:?}");
+            }
+        }
+    }
+
+    fn assert_fast_number_matches_generic(source: &str, angle_degrees: bool) {
+        let expr = compile_expression(source).unwrap();
+        let fast =
+            compile_fast_number_expr(&expr, true).unwrap_or_else(|| panic!("{source} not fast"));
+        let mut fast_interpreter = Interpreter::new();
+        fast_interpreter.angle_degrees = angle_degrees;
+        let mut generic_interpreter = Interpreter::new();
+        generic_interpreter.angle_degrees = angle_degrees;
+
+        let fast_result = fast.eval(&mut fast_interpreter);
+        let generic_result = eval_compiled_number(&mut generic_interpreter, &expr);
+        assert_number_results_match(source, fast_result, generic_result);
+        assert_eq!(
+            fast_interpreter.rng.next_f64().to_bits(),
+            generic_interpreter.rng.next_f64().to_bits(),
+            "{source}: RND consumption differs"
+        );
+    }
+
+    fn compile_numeric_assignment_pair(
+        source: &str,
+    ) -> (CompiledNumericAssignment, Rc<CompiledAssignment>) {
+        let reference = Rc::new(compile_assignment_statement(source).unwrap());
+        let optimized = compile_cached_numeric_assignment(reference.clone())
+            .unwrap_or_else(|| panic!("{source} should compile as a numeric assignment"));
+        (optimized, reference)
+    }
+
+    fn compile_numeric_update_pair(
+        source: &str,
+    ) -> (CompiledNumericAssignment, Rc<CompiledAssignment>) {
+        let pair = compile_numeric_assignment_pair(source);
+        assert!(
+            matches!(
+                &pair.0,
+                CompiledNumericAssignment::Scalar {
+                    rhs: FastNumericScalarRhs::SelfUpdate(_),
+                    ..
+                }
+            ),
+            "{source} should compile as a scalar numeric self-update"
+        );
+        pair
+    }
+
+    fn compile_numeric_array_assignment_pair(
+        source: &str,
+    ) -> (CompiledNumericAssignment, Rc<CompiledAssignment>) {
+        let pair = compile_numeric_assignment_pair(source);
+        assert!(
+            matches!(&pair.0, CompiledNumericAssignment::Array { .. }),
+            "{source} should compile as a numeric array assignment"
+        );
+        pair
+    }
+
+    fn execute_numeric_assignment_candidate(
+        interp: &mut Interpreter,
+        compiled: &CompiledNumericAssignment,
+    ) -> BasicResult<()> {
+        interp.execute_cached_command(
+            &CachedCommand::NumericAssignment(Rc::new(compiled.clone())),
+            &mut Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            },
+            &[],
+        )
+    }
+
     fn assert_fast_array_read_is_compiled(interp: &mut Interpreter, command: &str) {
-        let CachedCommand::Assignment(compiled) = interp.compile_cached_command(command) else {
-            panic!("{command} should compile as an assignment");
+        let CachedCommand::NumericAssignment(compiled) = interp.compile_cached_command(command)
+        else {
+            panic!("{command} should compile as a numeric scalar assignment");
+        };
+        let CompiledNumericAssignment::Scalar {
+            rhs: FastNumericScalarRhs::Expr(rhs),
+            ..
+        } = compiled.as_ref()
+        else {
+            panic!("{command} should compile as an ordinary numeric expression");
         };
         assert!(
             matches!(
-                compiled.fast_numeric_rhs.as_ref(),
-                Some(FastNumberExpr::Array1 { .. }) | Some(FastNumberExpr::Array2 { .. })
+                rhs,
+                FastNumberExpr::Array1 { .. } | FastNumberExpr::Array2 { .. }
             ),
             "{command} should use a fast array read"
         );
     }
 
     fn assert_fast_numeric_array_write_is_compiled(interp: &mut Interpreter, command: &str) {
-        let CachedCommand::Assignment(compiled) = interp.compile_cached_command(command) else {
-            panic!("{command} should compile as an assignment");
+        let CachedCommand::NumericAssignment(compiled) = interp.compile_cached_command(command)
+        else {
+            panic!("{command} should compile as a numeric assignment");
         };
-        assert!(compiled.fast_numeric_rhs.is_some(), "{command}");
         assert!(
-            matches!(
-                compiled.targets.as_slice(),
-                [CompiledLValue::Array {
-                    is_string: false,
-                    ..
-                }]
-            ),
+            matches!(compiled.as_ref(), CompiledNumericAssignment::Array { .. }),
             "{command} should use a compiled numeric array target"
         );
+    }
+
+    fn cached_single_line_body(
+        interp: &Interpreter,
+        name: &str,
+    ) -> Option<Rc<CompiledSingleLineFunctionBody>> {
+        interp.single_line_function_cache.get(name).cloned()
+    }
+
+    #[test]
+    fn single_line_function_body_cache_stays_lazy_through_earlier_errors() {
+        let mut uncalled = Interpreter::new();
+        uncalled
+            .program
+            .load_text("5 X=9\n10 DEF FNBAD(X)=X+\n20 MARK=1")
+            .unwrap();
+        uncalled.run_loaded().unwrap();
+        assert_eq!(uncalled.numeric_variables.get("MARK"), Some(&1.0));
+        assert!(cached_single_line_body(&uncalled, "FNBAD").is_none());
+
+        let arity_error = uncalled
+            .call_user_function("FNBAD", Vec::new())
+            .expect_err("arity must be checked before compiling the body");
+        assert_eq!(arity_error.code, ErrorCode::ArgumentMismatch);
+        let array_error = uncalled
+            .call_user_function("FNBAD", vec![Value::ArrayRef("A".to_string())])
+            .expect_err("array arguments must be rejected before compiling the body");
+        assert_eq!(array_error.code, ErrorCode::TypeMismatch);
+        let bind_error = uncalled
+            .call_user_function("FNBAD", vec![Value::string("NO")])
+            .expect_err("argument binding must happen before compiling the body");
+        assert_eq!(bind_error.code, ErrorCode::TypeMismatch);
+        assert_eq!(uncalled.numeric_variables.get("X"), Some(&9.0));
+        assert!(uncalled.function_call_stack.is_empty());
+        assert!(cached_single_line_body(&uncalled, "FNBAD").is_none());
+
+        let mut called = Interpreter::new();
+        called
+            .program
+            .load_text("10 X=9\n20 DEF FNBAD(X)=X+\n30 RESULT=FNBAD(1)")
+            .unwrap();
+        let error = called
+            .run_loaded()
+            .expect_err("the invalid body must fail only when called");
+        assert_eq!(error.code, ErrorCode::Syntax);
+        assert_eq!(error.line, Some(30));
+        assert_eq!(called.numeric_variables.get("X"), Some(&9.0));
+        assert!(called.function_call_stack.is_empty());
+        assert!(cached_single_line_body(&called, "FNBAD").is_none());
+    }
+
+    #[test]
+    fn single_line_function_body_cache_preserves_dynamic_value_rules() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 G=2:DIM A(1),B(1):A=5
+20 DEF FNN(X)=X*G
+30 DEF FNJOIN$(S$)=S$+"!"
+40 DEF FNSTRING(X)="VALUE"
+50 DEF FNNUMBER$(X)=X+1
+60 DEF FNPICK()=A
+70 DEF FNARRAY()=B
+80 N1=FNN(3):S1$=FNJOIN$("OK")
+90 S2$=FNSTRING(0):N2=FNNUMBER$(4)
+100 G=5:N3=FNN(3):PICK=FNPICK()
+110 BAD=FNARRAY()"#,
+            )
+            .unwrap();
+
+        let error = interp
+            .run_loaded()
+            .expect_err("a bare array result must remain forbidden");
+        assert_eq!(error.code, ErrorCode::TypeMismatch);
+        assert_eq!(error.line, Some(110));
+        assert_eq!(interp.numeric_variables.get("N1"), Some(&6.0));
+        assert_eq!(interp.numeric_variables.get("N2"), Some(&5.0));
+        assert_eq!(interp.numeric_variables.get("N3"), Some(&15.0));
+        assert_eq!(interp.numeric_variables.get("PICK"), Some(&5.0));
+        assert_eq!(
+            interp.string_variables.get("S1$").map(String::as_str),
+            Some("OK!")
+        );
+        assert_eq!(
+            interp.string_variables.get("S2$").map(String::as_str),
+            Some("VALUE")
+        );
+
+        for name in [
+            "FNN",
+            "FNJOIN$",
+            "FNSTRING",
+            "FNNUMBER$",
+            "FNPICK",
+            "FNARRAY",
+        ] {
+            assert!(cached_single_line_body(&interp, name).is_some(), "{name}");
+        }
+        assert!(cached_single_line_body(&interp, "FNN")
+            .unwrap()
+            .fast_numeric
+            .is_some());
+        assert!(cached_single_line_body(&interp, "FNJOIN$")
+            .unwrap()
+            .fast_numeric
+            .is_none());
+        assert!(cached_single_line_body(&interp, "FNNUMBER$")
+            .unwrap()
+            .fast_numeric
+            .is_some());
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
+    fn cached_single_line_functions_restore_duplicate_nested_and_alias_bindings() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(2),B(2)
+20 A(1)=7:B(1)=11:X=99:G=100:RESULT=0
+30 DEF FNDUP(X,X)=X
+40 DEF FNDOUBLE(X)=X*2
+50 DEF FNOUTER(X)=FNDOUBLE(X+1)+X
+60 DEF FNREAD(I)=P(I)+G
+70 DEF SUB USE(P)
+80 LOCAL G
+90 G=3
+100 RESULT=RESULT+FNREAD(1)
+110 SUBEND
+120 DUP=FNDUP(1,2):NESTED=FNOUTER(2)
+130 CALL USE(A):CALL USE(B)
+140 SAVEDX=X:AFTERG=G"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("DUP"), Some(&2.0));
+        assert_eq!(interp.numeric_variables.get("NESTED"), Some(&8.0));
+        assert_eq!(interp.numeric_variables.get("RESULT"), Some(&24.0));
+        assert_eq!(interp.numeric_variables.get("SAVEDX"), Some(&99.0));
+        assert_eq!(interp.numeric_variables.get("X"), Some(&99.0));
+        assert_eq!(interp.numeric_variables.get("AFTERG"), Some(&100.0));
+        assert_eq!(interp.numeric_variables.get("G"), Some(&100.0));
+        assert_eq!(interp.numeric_variables.get("I"), None);
+        assert_eq!(interp.numeric_variables.get("P"), None);
+        assert!(interp.array_aliases.get("P").is_none());
+        assert!(cached_single_line_body(&interp, "FNREAD")
+            .unwrap()
+            .fast_numeric
+            .is_some());
+        assert!(cached_single_line_body(&interp, "FNOUTER")
+            .unwrap()
+            .fast_numeric
+            .is_none());
+    }
+
+    #[test]
+    fn single_line_function_body_cache_preserves_error_state_rng_and_unwind() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 RANDOMIZE 123
+20 X=99
+30 DEF FNFAIL(X)=RND+1/0
+35 DEF FNSTATE()=ERR*1000+ERL
+40 ON ERROR GOTO 80
+50 Y=FNFAIL(1)
+60 END
+80 SAVEDX=X:SEENERR=ERR:SEENERL=ERL:STATE=FNSTATE():NEXTRND=RND
+90 END"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        let mut expected_rng = SimpleRng::new(123);
+        let _consumed_before_error = expected_rng.next_f64();
+        let expected_next = expected_rng.next_f64();
+        assert_eq!(interp.numeric_variables.get("SAVEDX"), Some(&99.0));
+        assert_eq!(
+            interp.numeric_variables.get("SEENERR"),
+            Some(&(basic_error_number(&BasicError::new(ErrorCode::DivisionByZero)) as f64))
+        );
+        assert_eq!(interp.numeric_variables.get("SEENERL"), Some(&50.0));
+        assert_eq!(
+            interp.numeric_variables.get("STATE"),
+            Some(
+                &((basic_error_number(&BasicError::new(ErrorCode::DivisionByZero)) * 1000 + 50)
+                    as f64)
+            )
+        );
+        assert_eq!(
+            interp.numeric_variables.get("NEXTRND"),
+            Some(&expected_next)
+        );
+        assert_eq!(interp.numeric_variables.get("X"), Some(&99.0));
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
+    fn single_line_function_body_cache_preserves_recursion_checks() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 X=88
+20 DEF FNA(X)=FNB(X)
+30 DEF FNB(X)=FNA(X)
+40 RESULT=FNA(1)"#,
+            )
+            .unwrap();
+
+        let error = interp
+            .run_loaded()
+            .expect_err("indirect recursion must remain forbidden");
+        assert_eq!(error.code, ErrorCode::FunctionForbidden);
+        assert_eq!(error.line, Some(40));
+        assert_eq!(interp.numeric_variables.get("X"), Some(&88.0));
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
+    fn single_line_function_body_cache_survives_clear_and_invalidates_on_definition() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text("10 DEF FNV(X)=X+G\n20 RESULT=FNV(1)")
+            .unwrap();
+        interp.run_loaded().unwrap();
+        let first = cached_single_line_body(&interp, "FNV").unwrap();
+
+        interp.process_immediate("CLEAR").unwrap();
+        interp.numeric_variables.insert("G".to_string(), 9.0);
+        assert_eq!(
+            interp
+                .call_user_function("FNV", vec![Value::number(2.0)])
+                .unwrap()
+                .as_number()
+                .unwrap(),
+            11.0
+        );
+        let after_clear = cached_single_line_body(&interp, "FNV").unwrap();
+        assert!(Rc::ptr_eq(&first, &after_clear));
+
+        interp.process_immediate("10 DEF FNV(X)=X+10").unwrap();
+        interp.run_loaded().unwrap();
+        assert_eq!(interp.numeric_variables.get("RESULT"), Some(&11.0));
+        let redefined = cached_single_line_body(&interp, "FNV").unwrap();
+        assert!(!Rc::ptr_eq(&after_clear, &redefined));
+
+        interp.process_immediate("NEW").unwrap();
+        assert!(interp.single_line_function_cache.is_empty());
+    }
+
+    #[test]
+    fn multiline_redefinition_discards_single_line_function_body_cache() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DEF FNV(X)=X+1
+20 FIRST=FNV(1)
+30 DEF FNV(X)
+40 FNV=X+10
+50 FNEND
+60 SECOND=FNV(1)"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("FIRST"), Some(&2.0));
+        assert_eq!(interp.numeric_variables.get("SECOND"), Some(&11.0));
+        assert!(cached_single_line_body(&interp, "FNV").is_none());
     }
 
     #[test]
@@ -10961,6 +11656,71 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn single_line_function_bindings_restore_duplicate_and_nested_parameters() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 X=99:S$="outer"
+20 DEF FNMIX$(X,X,S$,S$)=STR$(X)+S$
+30 DEF FNINNER(X)=X+1
+40 DEF FNOUTER(X)=FNINNER(X*2)+X
+50 R$=FNMIX$(1,2,"a","b")
+60 R=FNOUTER(3)"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(
+            interp.string_variables.get("R$").map(String::as_str),
+            Some("2b")
+        );
+        assert_eq!(interp.numeric_variables.get("R"), Some(&10.0));
+        assert_eq!(interp.numeric_variables.get("X"), Some(&99.0));
+        assert_eq!(
+            interp.string_variables.get("S$").map(String::as_str),
+            Some("outer")
+        );
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
+    fn single_line_function_bindings_restore_after_binding_and_body_errors() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 DEF FNBIND(X,Y$)=X
+20 DEF FNBODY(X)=X+1/0"#,
+            )
+            .unwrap();
+        interp.run_loaded().unwrap();
+        interp.numeric_variables.insert("X".to_string(), 91.0);
+        interp
+            .string_variables
+            .insert("Y$".to_string(), "outer".to_string());
+
+        let bind_error = interp
+            .call_user_function("FNBIND", vec![Value::Number(1.0), Value::Number(2.0)])
+            .expect_err("the second parameter has the wrong type");
+        assert_eq!(bind_error.code, ErrorCode::TypeMismatch);
+        assert_eq!(interp.numeric_variables.get("X"), Some(&91.0));
+        assert_eq!(
+            interp.string_variables.get("Y$").map(String::as_str),
+            Some("outer")
+        );
+        assert!(interp.function_call_stack.is_empty());
+
+        let body_error = interp
+            .call_user_function("FNBODY", vec![Value::Number(3.0)])
+            .expect_err("the function body divides by zero");
+        assert_eq!(body_error.code, ErrorCode::DivisionByZero);
+        assert_eq!(interp.numeric_variables.get("X"), Some(&91.0));
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
     fn cached_call_preserves_on_error_trace_and_recursion_rules() {
         let mut handled = Interpreter::new();
         handled.ansi_output = false;
@@ -11036,6 +11796,10 @@ mod interpreter_tests {
 110 RETURN"#,
             )
             .unwrap();
+        let CachedCommand::NumericAssignment(_) = interp.compile_cached_command("FIRED=FIRED+1")
+        else {
+            panic!("timer handler assignment should compile as a numeric scalar assignment");
+        };
 
         interp.run_loaded().unwrap();
 
@@ -11316,6 +12080,281 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn unary_numeric_builtins_share_the_compact_function_variant() {
+        for name in ["ABS", "INT", "SQR", "SIN", "COS"] {
+            let source = format!("{name}(X)");
+            let expr = compile_expression(&source).unwrap();
+            assert!(
+                matches!(
+                    compile_fast_number_expr(&expr, true),
+                    Some(FastNumberExpr::Function1 {
+                        function: FastNumberFunction::Abs
+                            | FastNumberFunction::Int
+                            | FastNumberFunction::Sqr
+                            | FastNumberFunction::Sin
+                            | FastNumberFunction::Cos,
+                        ..
+                    })
+                ),
+                "{source} must retain the original fast-function representation"
+            );
+        }
+
+        for name in [
+            "FIX", "SGN", "FRAC", "LOG", "LOG10", "EXP", "TAN", "ASN", "ACS", "ATN", "COT", "RTD",
+            "DTR", "ROUND",
+        ] {
+            let source = format!("{name}(X)");
+            let expr = compile_expression(&source).unwrap();
+            assert!(
+                matches!(
+                    compile_fast_number_expr(&expr, true),
+                    Some(FastNumberExpr::Function1 {
+                        function: FastNumberFunction::Fix
+                            | FastNumberFunction::Sgn
+                            | FastNumberFunction::Frac
+                            | FastNumberFunction::Log
+                            | FastNumberFunction::Log10
+                            | FastNumberFunction::Exp
+                            | FastNumberFunction::Tan
+                            | FastNumberFunction::Asn
+                            | FastNumberFunction::Acs
+                            | FastNumberFunction::Atn
+                            | FastNumberFunction::Cot
+                            | FastNumberFunction::Rtd
+                            | FastNumberFunction::Dtr
+                            | FastNumberFunction::Round,
+                        ..
+                    })
+                ),
+                "{source}"
+            );
+        }
+
+        for source in [
+            "ROUND(X,2)",
+            "ROUND(X,RND)",
+            "FIX(X,2)",
+            "TAN()",
+            r#"FIX("X")"#,
+        ] {
+            let expr = compile_expression(source).unwrap();
+            assert!(
+                compile_fast_number_expr(&expr, true).is_none(),
+                "{source} must retain the generic evaluator"
+            );
+        }
+    }
+
+    #[test]
+    fn unary_numeric_fast_builtins_match_generic_values_boundaries_and_errors() {
+        for source in [
+            "FIX(1.75)",
+            "FIX(-1.75)",
+            "FIX(-0)",
+            "FIX(INF)",
+            "FIX(FRAC(INF))",
+            "SGN(3)",
+            "SGN(-3)",
+            "SGN(0)",
+            "SGN(-0)",
+            "SGN(INF)",
+            "SGN(FRAC(INF))",
+            "FRAC(1.75)",
+            "FRAC(-1.75)",
+            "FRAC(INF)",
+            "LOG(1)",
+            "LOG(EXP(1))",
+            "LOG(FRAC(INF))",
+            "LOG10(1000)",
+            "LOG10(INF)",
+            "LOG10(FRAC(INF))",
+            "EXP(-1000)",
+            "EXP(1)",
+            "TAN(PI/4)",
+            "TAN(INF)",
+            "TAN(FRAC(INF))",
+            "ASN(-1)",
+            "ASN(.5)",
+            "ASN(1)",
+            "ACS(-1)",
+            "ACS(.5)",
+            "ACS(1)",
+            "ATN(-2)",
+            "ATN(0)",
+            "ATN(INF)",
+            "ATN(FRAC(INF))",
+            "COT(PI/4)",
+            "COT(INF)",
+            "COT(FRAC(INF))",
+            "RTD(PI)",
+            "RTD(INF)",
+            "RTD(FRAC(INF))",
+            "DTR(180)",
+            "DTR(INF)",
+            "DTR(FRAC(INF))",
+            "ROUND(1.5)",
+            "ROUND(-1.5)",
+            "ROUND(INF)",
+            "ROUND(FRAC(INF))",
+            "FIX(RND*10)+SGN(RND-.5)+FRAC(RND*10)+ROUND(RND*10)+TAN(RND/10)",
+        ] {
+            assert_fast_number_matches_generic(source, false);
+        }
+
+        for source in [
+            "LOG(0)",
+            "LOG(-1)",
+            "LOG10(0)",
+            "LOG10(-1)",
+            "EXP(1000)",
+            "EXP(INF)",
+            "EXP(FRAC(INF))",
+            "ASN(1.0000001)",
+            "ASN(-1.0000001)",
+            "ASN(FRAC(INF))",
+            "ACS(1.0000001)",
+            "ACS(-1.0000001)",
+            "ACS(FRAC(INF))",
+            "COT(0)",
+            "FIX(1/0)",
+            "ROUND(1/0)",
+            "LOG(EXP(1000))",
+            "LOG(0)+EXP(1000)",
+            "EXP(1000)+LOG(0)",
+            "EXP(RND*0+1000)",
+            "LOG(RND*0-1)",
+            "COT(RND*0)",
+            "LOG(RND*0-1)+EXP(RND*0+1000)",
+        ] {
+            assert_fast_number_matches_generic(source, false);
+        }
+    }
+
+    #[test]
+    fn unary_numeric_fast_builtins_follow_dynamic_degree_and_radian_modes() {
+        for angle_degrees in [false, true] {
+            for source in [
+                "SIN(.5)", "COS(.5)", "TAN(.5)", "ASN(.5)", "ACS(.5)", "ATN(.5)", "COT(.5)",
+                "RTD(.5)", "DTR(.5)",
+            ] {
+                assert_fast_number_matches_generic(source, angle_degrees);
+            }
+        }
+
+        let expr =
+            compile_expression("TAN(.5)+ASN(.5)+ACS(.5)+ATN(.5)+COT(.5)+RTD(.5)+DTR(.5)").unwrap();
+        let fast = compile_fast_number_expr(&expr, true).unwrap();
+        let mut interpreter = Interpreter::new();
+        let radians = fast.eval(&mut interpreter).unwrap();
+        interpreter.angle_degrees = true;
+        let degrees = fast.eval(&mut interpreter).unwrap();
+        assert_ne!(radians.to_bits(), degrees.to_bits());
+
+        for source in ["RTD(.5)", "DTR(.5)"] {
+            let expr = compile_expression(source).unwrap();
+            let fast = compile_fast_number_expr(&expr, true).unwrap();
+            interpreter.angle_degrees = false;
+            let radians = fast.eval(&mut interpreter).unwrap();
+            interpreter.angle_degrees = true;
+            let degrees = fast.eval(&mut interpreter).unwrap();
+            assert_eq!(radians.to_bits(), degrees.to_bits(), "{source}");
+        }
+    }
+
+    #[test]
+    fn unary_numeric_fast_builtin_errors_preserve_on_error_resume_next() {
+        let mut interp = Interpreter::new();
+        for command in ["A=LOG(0)", "B=EXP(1000)", "C=FIX(1/0)"] {
+            let CachedCommand::NumericAssignment(compiled) = interp.compile_cached_command(command)
+            else {
+                panic!("{command} should compile as a numeric assignment");
+            };
+            assert!(
+                matches!(
+                    compiled.as_ref(),
+                    CompiledNumericAssignment::Scalar {
+                        rhs: FastNumericScalarRhs::Expr(_),
+                        ..
+                    }
+                ),
+                "{command} should use the fast numeric evaluator"
+            );
+        }
+
+        interp
+            .program
+            .load_text(
+                r#"10 ON ERROR GOTO 100
+20 A=LOG(0)
+30 B=EXP(1000)
+40 C=FIX(1/0)
+50 DONE=1
+60 END
+100 CODES=CODES*100+ERR
+110 LINES=LINES*100+ERL
+120 RESUME NEXT"#,
+            )
+            .unwrap();
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("CODES"), Some(&260706.0));
+        assert_eq!(interp.numeric_variables.get("LINES"), Some(&203040.0));
+        assert_eq!(interp.numeric_variables.get("DONE"), Some(&1.0));
+        assert!(interp.last_error.is_none());
+    }
+
+    #[test]
+    fn inf_is_a_fast_constant_and_string_variables_never_become_fast_numbers() {
+        let inf = compile_expression("INF").unwrap();
+        assert!(matches!(
+            compile_fast_number_expr(&inf, false),
+            Some(FastNumberExpr::Number(value))
+                if value.is_infinite() && value.is_sign_positive()
+        ));
+
+        let string = compile_expression("S$").unwrap();
+        assert!(compile_fast_number_expr(&string, false).is_none());
+        let mixed = compile_expression("S$+1").unwrap();
+        assert!(compile_fast_number_expr(&mixed, false).is_none());
+    }
+
+    #[test]
+    fn fast_variables_preserve_inf_clear_and_function_frame_semantics() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 X=7
+20 DEF FNM(V)
+30 FNM=V
+40 FNEND
+50 GOSUB 200
+60 PRINT VALUE;FNM(X)
+70 CLEAR
+80 X=11:GOSUB 200
+90 PRINT VALUE;FNM(X)
+100 END
+200 CONSTANT=INF
+210 VALUE=X
+220 RETURN"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.take_output(), " 7  7\n 11  11\n");
+        assert_eq!(interp.numeric_variables.get("VALUE"), Some(&11.0));
+        assert_eq!(interp.numeric_variables.get("X"), Some(&11.0));
+        assert!(interp
+            .numeric_variables
+            .get("CONSTANT")
+            .is_some_and(|value| value.is_infinite() && value.is_sign_positive()));
+        assert!(interp.active_functions.is_empty());
+        assert!(interp.function_call_stack.is_empty());
+    }
+
+    #[test]
     fn console_refocus_after_run_requires_current_graphics_use() {
         let mut interp = Interpreter::new();
         interp.graphics_window_used_this_run = false;
@@ -11468,6 +12507,700 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn numeric_assignment_cache_covers_scalar_and_array_fast_rhs_and_immediate_stays_normal() {
+        let mut interp = Interpreter::new();
+        let CachedCommand::NumericAssignment(self_update) = interp.compile_cached_command("A=A+1")
+        else {
+            panic!("A=A+1 should compile as a numeric scalar assignment");
+        };
+        assert!(matches!(
+            self_update.as_ref(),
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::SelfUpdate(_),
+                ..
+            }
+        ));
+
+        for source in ["A=B+A", "A=(A+1)+2"] {
+            let CachedCommand::NumericAssignment(compiled) = interp.compile_cached_command(source)
+            else {
+                panic!("{source} should compile as a numeric scalar assignment");
+            };
+            assert!(
+                matches!(
+                    compiled.as_ref(),
+                    CompiledNumericAssignment::Scalar {
+                        rhs: FastNumericScalarRhs::Expr(_),
+                        ..
+                    }
+                ),
+                "{source} should retain the complete fast expression"
+            );
+        }
+
+        let CachedCommand::NumericAssignment(array) = interp.compile_cached_command("A(0)=A(0)+1")
+        else {
+            panic!("numeric array target should use the numeric assignment command");
+        };
+        assert!(matches!(
+            array.as_ref(),
+            CompiledNumericAssignment::Array { .. }
+        ));
+        assert!(!matches!(
+            interp.compile_cached_command("A$=A$+\"X\""),
+            CachedCommand::NumericAssignment(_)
+        ));
+
+        interp.process_immediate("A=2").unwrap();
+        interp.process_immediate("A=A+3").unwrap();
+        assert_eq!(interp.numeric_variables.get("A"), Some(&5.0));
+    }
+
+    #[test]
+    fn fast_numeric_scalar_expr_matches_normal_path() {
+        let (optimized, reference) = compile_numeric_assignment_pair("A=B+C*2");
+        assert!(matches!(
+            &optimized,
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::Expr(_),
+                ..
+            }
+        ));
+        let mut fast = Interpreter::new();
+        let mut normal = Interpreter::new();
+        for interp in [&mut fast, &mut normal] {
+            interp.numeric_variables.insert("B".to_string(), 4.0);
+            interp.numeric_variables.insert("C".to_string(), 7.0);
+        }
+
+        execute_numeric_assignment_candidate(&mut fast, &optimized).unwrap();
+        normal
+            .execute_compiled_assignment(reference.as_ref())
+            .unwrap();
+
+        assert_eq!(fast.numeric_variables.get("A"), Some(&18.0));
+        assert_eq!(
+            fast.numeric_variables.get("A"),
+            normal.numeric_variables.get("A")
+        );
+    }
+
+    #[test]
+    fn fast_numeric_scalar_expr_matches_rng_and_error_order_without_writing() {
+        let (optimized, reference) = compile_numeric_assignment_pair("A=RND+1/0");
+        assert!(matches!(
+            &optimized,
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::Expr(_),
+                ..
+            }
+        ));
+        let mut fast = Interpreter::new();
+        let mut normal = Interpreter::new();
+        fast.current_line = Some(35);
+        normal.current_line = Some(35);
+        fast.numeric_variables.insert("A".to_string(), 11.0);
+        normal.numeric_variables.insert("A".to_string(), 11.0);
+
+        let fast_error = execute_numeric_assignment_candidate(&mut fast, &optimized)
+            .expect_err("division by zero should abort the assignment");
+        let normal_error = normal
+            .execute_compiled_assignment(reference.as_ref())
+            .expect_err("division by zero should abort the assignment");
+
+        assert_eq!(fast_error.code, ErrorCode::DivisionByZero);
+        assert_eq!(fast_error.line, Some(35));
+        assert_eq!(fast_error.code, normal_error.code);
+        assert_eq!(fast_error.line, normal_error.line);
+        assert_eq!(fast.numeric_variables.get("A"), Some(&11.0));
+        assert_eq!(
+            fast.numeric_variables.get("A"),
+            normal.numeric_variables.get("A")
+        );
+        assert_eq!(fast.rng.next_f64(), normal.rng.next_f64());
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_matches_normal_path_for_absent_variable() {
+        let (optimized, reference) = compile_numeric_update_pair("A=A+3");
+        let mut fast = Interpreter::new();
+        let mut normal = Interpreter::new();
+        fast.current_line = Some(20);
+        normal.current_line = Some(20);
+
+        execute_numeric_assignment_candidate(&mut fast, &optimized).unwrap();
+        normal
+            .execute_compiled_assignment(reference.as_ref())
+            .unwrap();
+
+        assert_eq!(fast.numeric_variables.get("A"), Some(&3.0));
+        assert_eq!(
+            fast.numeric_variables.get("A"),
+            normal.numeric_variables.get("A")
+        );
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_matches_normal_rng_and_error_order_without_writing() {
+        let (optimized, reference) = compile_numeric_update_pair("A=A+(RND+1/0)");
+        let mut fast = Interpreter::new();
+        let mut normal = Interpreter::new();
+        fast.current_line = Some(40);
+        normal.current_line = Some(40);
+        fast.numeric_variables.insert("A".to_string(), 11.0);
+        normal.numeric_variables.insert("A".to_string(), 11.0);
+
+        let fast_error = execute_numeric_assignment_candidate(&mut fast, &optimized)
+            .expect_err("division by zero should abort the update");
+        let normal_error = normal
+            .execute_compiled_assignment(reference.as_ref())
+            .expect_err("division by zero should abort the assignment");
+
+        assert_eq!(fast_error.code, ErrorCode::DivisionByZero);
+        assert_eq!(fast_error.line, Some(40));
+        assert_eq!(fast_error.code, normal_error.code);
+        assert_eq!(fast_error.line, normal_error.line);
+        assert_eq!(fast.numeric_variables.get("A"), Some(&11.0));
+        assert_eq!(
+            fast.numeric_variables.get("A"),
+            normal.numeric_variables.get("A")
+        );
+        assert_eq!(fast.rng.next_f64(), normal.rng.next_f64());
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_matches_normal_path_for_local_shadowing() {
+        let (optimized, reference) = compile_numeric_update_pair("A=A+3");
+
+        let run_local = |fast_update: Option<&CompiledNumericAssignment>| {
+            let mut interp = Interpreter::new();
+            interp.numeric_variables.insert("A".to_string(), 100.0);
+            let specs = [LocalSpec::Scalar("A".to_string())];
+            let mut saved_numeric = Vec::new();
+            let mut saved_string = Vec::new();
+            let mut saved_arrays = Vec::new();
+            let mut saved_aliases = Vec::new();
+            interp
+                .bind_local_specs_vec(
+                    &specs,
+                    &mut saved_numeric,
+                    &mut saved_string,
+                    &mut saved_arrays,
+                    &mut saved_aliases,
+                )
+                .unwrap();
+            interp.active_subs.push(ActiveSubFrame {
+                name: Rc::from("WORK"),
+            });
+
+            if let Some(compiled) = fast_update {
+                execute_numeric_assignment_candidate(&mut interp, compiled).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            let local = interp.numeric_variables.get("A").copied();
+
+            interp.active_subs.pop();
+            restore_numeric_bindings_ref(&mut interp.numeric_variables, saved_numeric);
+            let restored = interp.numeric_variables.get("A").copied();
+            (local, restored)
+        };
+
+        let fast = run_local(Some(&optimized));
+        let normal = run_local(None);
+        assert_eq!(fast, (Some(3.0), Some(100.0)));
+        assert_eq!(fast, normal);
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_matches_normal_for_global_and_aliased_arrays() {
+        let (optimized, reference) = compile_numeric_update_pair("S=S+P(0)");
+        let run = |fast_update: bool, alias: bool| {
+            let mut interp = Interpreter::new();
+            let array_name = if alias { "Z" } else { "P" };
+            let mut array = ArrayValue::new(array_name, vec![1]);
+            array.set_number_direct_1d(0, 5.0).unwrap();
+            interp.arrays.insert(array_name.to_string(), array);
+            if alias {
+                interp.set_array_alias_binding("P", "Z".to_string());
+            }
+            interp.numeric_variables.insert("S".to_string(), 2.0);
+
+            if fast_update {
+                let command = CachedCommand::NumericAssignment(Rc::new(optimized.clone()));
+                interp
+                    .execute_cached_command(
+                        &command,
+                        &mut Cursor {
+                            line_idx: 0,
+                            cmd_idx: 0,
+                        },
+                        &[],
+                    )
+                    .unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            interp.numeric_variables.get("S").copied()
+        };
+
+        assert_eq!(run(true, false), Some(7.0));
+        assert_eq!(run(true, false), run(false, false));
+        assert_eq!(run(true, true), Some(7.0));
+        assert_eq!(run(true, true), run(false, true));
+    }
+
+    #[test]
+    fn fast_numeric_scalar_expr_matches_normal_for_active_function_return() {
+        let (optimized, reference) = compile_numeric_assignment_pair("FNACC=V+3");
+        assert!(matches!(
+            &optimized,
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::Expr(_),
+                ..
+            }
+        ));
+
+        let run_active_function = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            let name = Rc::<str>::from("FNACC");
+            interp.numeric_variables.insert("V".to_string(), 4.0);
+            interp.function_call_stack.push(name.clone());
+            interp.active_functions.push(ActiveFunctionFrame {
+                name,
+                return_value: Some(Value::number(0.0)),
+            });
+
+            if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            interp.active_functions[0]
+                .return_value
+                .as_ref()
+                .unwrap()
+                .as_number()
+                .unwrap()
+        };
+
+        assert_eq!(run_active_function(true), 7.0);
+        assert_eq!(run_active_function(true), run_active_function(false));
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_falls_back_for_active_function_return() {
+        let reference = Rc::new(compile_assignment_statement("FNACC=FNACC+3").unwrap());
+        assert!(compile_cached_numeric_assignment(reference.clone()).is_none());
+        let CompiledLValue::Scalar {
+            name, numeric_slot, ..
+        } = &reference.targets[0]
+        else {
+            panic!("function return should compile as a scalar");
+        };
+        let optimized = CompiledNumericAssignment::Scalar {
+            target: name.clone(),
+            target_slot: numeric_slot.clone(),
+            rhs: FastNumericScalarRhs::SelfUpdate(FastNumericScalarUpdate::Constant {
+                op: BinaryOp::Add,
+                right: 3.0,
+            }),
+            fallback: reference.clone(),
+        };
+
+        let run_active_function = |fast_update: bool| {
+            let mut interp = Interpreter::new();
+            let name = Rc::<str>::from("FNACC");
+            interp.functions.insert(
+                "FNACC".to_string(),
+                UserFunction::Single {
+                    name: name.clone(),
+                    params: Rc::from(Vec::<String>::new().into_boxed_slice()),
+                    expr: "0".to_string(),
+                },
+            );
+            interp.function_call_stack.push(name.clone());
+            interp.active_functions.push(ActiveFunctionFrame {
+                name,
+                return_value: Some(Value::number(4.0)),
+            });
+
+            if fast_update {
+                execute_numeric_assignment_candidate(&mut interp, &optimized).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            interp.active_functions[0]
+                .return_value
+                .as_ref()
+                .unwrap()
+                .as_number()
+                .unwrap()
+        };
+
+        assert_eq!(run_active_function(true), 7.0);
+        assert_eq!(run_active_function(true), run_active_function(false));
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_matches_normal_overflow_and_does_not_write() {
+        let (optimized, reference) = compile_numeric_update_pair("A=A*1E308");
+        let run = |fast_update: bool| {
+            let mut interp = Interpreter::new();
+            interp.current_line = Some(60);
+            interp.numeric_variables.insert("A".to_string(), 1e308);
+            let result = if fast_update {
+                execute_numeric_assignment_candidate(&mut interp, &optimized)
+            } else {
+                interp.execute_compiled_assignment(reference.as_ref())
+            };
+            let error = result.expect_err("overflow should abort the update");
+            (
+                error.code,
+                error.line,
+                interp.numeric_variables.get("A").copied(),
+            )
+        };
+
+        let fast = run(true);
+        let normal = run(false);
+        assert_eq!(fast, (ErrorCode::Overflow, Some(60), Some(1e308)));
+        assert_eq!(fast, normal);
+    }
+
+    #[test]
+    fn fast_numeric_scalar_update_preserves_on_error_resume_next_and_trace() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                r#"10 A=11
+20 ON ERROR GOTO 100
+30 TRON
+40 A=A+(RND+1/0)
+50 TROFF
+60 END
+100 SEEN=A:SEENERR=ERR:SEENERL=ERL
+110 TROFF
+120 RESUME NEXT"#,
+            )
+            .unwrap();
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("A"), Some(&11.0));
+        assert_eq!(interp.numeric_variables.get("SEEN"), Some(&11.0));
+        assert_eq!(interp.numeric_variables.get("SEENERR"), Some(&6.0));
+        assert_eq!(interp.numeric_variables.get("SEENERL"), Some(&40.0));
+        assert_eq!(interp.take_output(), "[40][100][110]\n");
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_matches_normal_for_1d_2d_and_autodim() {
+        let (optimized_1d, reference_1d) = compile_numeric_array_assignment_pair("A(I)=B+3");
+        let mut fast_1d = Interpreter::new();
+        let mut normal_1d = Interpreter::new();
+        for interp in [&mut fast_1d, &mut normal_1d] {
+            interp
+                .arrays
+                .insert("A".to_string(), ArrayValue::new("A", vec![3]));
+            interp.numeric_variables.insert("I".to_string(), 2.0);
+            interp.numeric_variables.insert("B".to_string(), 4.0);
+        }
+        execute_numeric_assignment_candidate(&mut fast_1d, &optimized_1d).unwrap();
+        normal_1d
+            .execute_compiled_assignment(reference_1d.as_ref())
+            .unwrap();
+        assert_eq!(
+            fast_1d.array_ref("A").unwrap().get_number(&[2]).unwrap(),
+            7.0
+        );
+        assert_eq!(
+            fast_1d.array_ref("A").unwrap().get_number(&[2]).unwrap(),
+            normal_1d.array_ref("A").unwrap().get_number(&[2]).unwrap()
+        );
+
+        let (optimized_2d, reference_2d) = compile_numeric_array_assignment_pair("M(I,J)=B*2");
+        let mut fast_2d = Interpreter::new();
+        let mut normal_2d = Interpreter::new();
+        for interp in [&mut fast_2d, &mut normal_2d] {
+            interp
+                .arrays
+                .insert("M".to_string(), ArrayValue::new("M", vec![2, 2]));
+            interp.numeric_variables.insert("I".to_string(), 1.0);
+            interp.numeric_variables.insert("J".to_string(), 2.0);
+            interp.numeric_variables.insert("B".to_string(), 6.0);
+        }
+        execute_numeric_assignment_candidate(&mut fast_2d, &optimized_2d).unwrap();
+        normal_2d
+            .execute_compiled_assignment(reference_2d.as_ref())
+            .unwrap();
+        assert_eq!(
+            fast_2d.array_ref("M").unwrap().get_number(&[1, 2]).unwrap(),
+            12.0
+        );
+        assert_eq!(
+            fast_2d.array_ref("M").unwrap().get_number(&[1, 2]).unwrap(),
+            normal_2d
+                .array_ref("M")
+                .unwrap()
+                .get_number(&[1, 2])
+                .unwrap()
+        );
+
+        let (optimized_auto, reference_auto) = compile_numeric_array_assignment_pair("AUTO(7)=B+1");
+        let mut fast_auto = Interpreter::new();
+        let mut normal_auto = Interpreter::new();
+        fast_auto.numeric_variables.insert("B".to_string(), 8.0);
+        normal_auto.numeric_variables.insert("B".to_string(), 8.0);
+        execute_numeric_assignment_candidate(&mut fast_auto, &optimized_auto).unwrap();
+        normal_auto
+            .execute_compiled_assignment(reference_auto.as_ref())
+            .unwrap();
+        let fast_array = fast_auto.array_ref("AUTO").unwrap();
+        let normal_array = normal_auto.array_ref("AUTO").unwrap();
+        assert_eq!(fast_array.dims, normal_array.dims);
+        assert_eq!(fast_array.get_number(&[7]).unwrap(), 9.0);
+        assert_eq!(
+            fast_array.get_number(&[7]).unwrap(),
+            normal_array.get_number(&[7]).unwrap()
+        );
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_matches_fractional_and_range_behavior() {
+        let (optimized_fractional, reference_fractional) =
+            compile_numeric_array_assignment_pair("A(1.9)=4");
+        let mut fast_fractional = Interpreter::new();
+        let mut normal_fractional = Interpreter::new();
+        for interp in [&mut fast_fractional, &mut normal_fractional] {
+            interp
+                .arrays
+                .insert("A".to_string(), ArrayValue::new("A", vec![2]));
+        }
+        execute_numeric_assignment_candidate(&mut fast_fractional, &optimized_fractional).unwrap();
+        normal_fractional
+            .execute_compiled_assignment(reference_fractional.as_ref())
+            .unwrap();
+        assert_eq!(
+            fast_fractional
+                .array_ref("A")
+                .unwrap()
+                .get_number(&[1])
+                .unwrap(),
+            4.0
+        );
+        assert_eq!(
+            fast_fractional
+                .array_ref("A")
+                .unwrap()
+                .get_number(&[1])
+                .unwrap(),
+            normal_fractional
+                .array_ref("A")
+                .unwrap()
+                .get_number(&[1])
+                .unwrap()
+        );
+
+        let (optimized_range, reference_range) = compile_numeric_array_assignment_pair("A(3)=4");
+        let run_range = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            interp.current_line = Some(65);
+            let mut array = ArrayValue::new("A", vec![2]);
+            array.set_number_direct_1d(1, 9.0).unwrap();
+            interp.arrays.insert("A".to_string(), array);
+            let result = if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized_range)
+            } else {
+                interp.execute_compiled_assignment(reference_range.as_ref())
+            };
+            let error = result.expect_err("the array range error should abort the write");
+            (
+                error.code,
+                error.line,
+                interp
+                    .array_ref("A")
+                    .unwrap()
+                    .get_number_direct_1d(1)
+                    .unwrap(),
+            )
+        };
+        let fast_range = run_range(true);
+        let normal_range = run_range(false);
+        assert_eq!(fast_range, (ErrorCode::IndexOutOfRange, Some(65), 9.0));
+        assert_eq!(fast_range, normal_range);
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_matches_alias_and_local_bindings() {
+        let (optimized_alias, reference_alias) = compile_numeric_array_assignment_pair("P(0)=V+1");
+        let run_alias = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            interp
+                .arrays
+                .insert("Z".to_string(), ArrayValue::new("Z", vec![1]));
+            interp.set_array_alias_binding("P", "Z".to_string());
+            interp.numeric_variables.insert("V".to_string(), 6.0);
+            if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized_alias).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference_alias.as_ref())
+                    .unwrap();
+            }
+            interp
+                .array_ref("Z")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap()
+        };
+        assert_eq!(run_alias(true), 7.0);
+        assert_eq!(run_alias(true), run_alias(false));
+
+        let (optimized_local, reference_local) = compile_numeric_array_assignment_pair("A(0)=V+1");
+        let run_local = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            let mut global = ArrayValue::new("A", vec![1]);
+            global.set_number_direct_1d(0, 100.0).unwrap();
+            interp.arrays.insert("A".to_string(), global);
+            interp.numeric_variables.insert("V".to_string(), 8.0);
+            let specs = [LocalSpec::Array {
+                name: "A".to_string(),
+                dims: vec!["1".to_string()],
+            }];
+            let mut saved_numeric = Vec::new();
+            let mut saved_string = Vec::new();
+            let mut saved_arrays = Vec::new();
+            let mut saved_aliases = Vec::new();
+            interp
+                .bind_local_specs_vec(
+                    &specs,
+                    &mut saved_numeric,
+                    &mut saved_string,
+                    &mut saved_arrays,
+                    &mut saved_aliases,
+                )
+                .unwrap();
+            interp.active_subs.push(ActiveSubFrame {
+                name: Rc::from("WORK"),
+            });
+
+            if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized_local).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference_local.as_ref())
+                    .unwrap();
+            }
+            let local = interp
+                .array_ref("A")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap();
+
+            interp.active_subs.pop();
+            restore_array_bindings_ref(&mut interp.arrays, saved_arrays);
+            interp.restore_array_alias_bindings(saved_aliases);
+            let restored = interp
+                .array_ref("A")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap();
+            (local, restored)
+        };
+        assert_eq!(run_local(true), (9.0, 100.0));
+        assert_eq!(run_local(true), run_local(false));
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_preserves_rng_error_order_and_no_write() {
+        let (optimized, reference) = compile_numeric_array_assignment_pair("A(RND)=RND+1/0");
+        let run = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            interp.current_line = Some(70);
+            let mut array = ArrayValue::new("A", vec![1]);
+            array.set_number_direct_1d(0, 11.0).unwrap();
+            array.set_number_direct_1d(1, 12.0).unwrap();
+            interp.arrays.insert("A".to_string(), array);
+            let result = if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized)
+            } else {
+                interp.execute_compiled_assignment(reference.as_ref())
+            };
+            let error = result.expect_err("the RHS error should abort before the target index");
+            (
+                error.code,
+                error.line,
+                interp
+                    .array_ref("A")
+                    .unwrap()
+                    .get_number_direct_1d(0)
+                    .unwrap(),
+                interp
+                    .array_ref("A")
+                    .unwrap()
+                    .get_number_direct_1d(1)
+                    .unwrap(),
+                interp.rng.next_f64(),
+            )
+        };
+        let fast = run(true);
+        let normal = run(false);
+        assert_eq!(fast.0, ErrorCode::DivisionByZero);
+        assert_eq!(fast.1, Some(70));
+        assert_eq!((fast.2, fast.3), (11.0, 12.0));
+        assert_eq!(fast, normal);
+    }
+
+    #[test]
+    fn fast_numeric_array_assignment_matches_active_function_return() {
+        let (optimized, reference) = compile_numeric_array_assignment_pair("FNACC(0)=V+3");
+        let run = |fast_assignment: bool| {
+            let mut interp = Interpreter::new();
+            let name = Rc::<str>::from("FNACC");
+            interp
+                .arrays
+                .insert("FNACC".to_string(), ArrayValue::new("FNACC", vec![1]));
+            interp.numeric_variables.insert("V".to_string(), 4.0);
+            interp.function_call_stack.push(name.clone());
+            interp.active_functions.push(ActiveFunctionFrame {
+                name,
+                return_value: Some(Value::number(0.0)),
+            });
+            if fast_assignment {
+                execute_numeric_assignment_candidate(&mut interp, &optimized).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            (
+                interp
+                    .array_ref("FNACC")
+                    .unwrap()
+                    .get_number_direct_1d(0)
+                    .unwrap(),
+                interp.active_functions[0]
+                    .return_value
+                    .as_ref()
+                    .unwrap()
+                    .as_number()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(run(true), (7.0, 7.0));
+        assert_eq!(run(true), run(false));
+    }
+
+    #[test]
     fn array_slots_preserve_presence_clear_remove_and_table_identity() {
         let cache = CachedArraySlot::default();
         let mut first = ArrayVariables::default();
@@ -11514,6 +13247,51 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn cached_array_slots_rebind_for_alias_changes_and_ignore_unrelated_aliases() {
+        let mut interp = Interpreter::new();
+        interp
+            .arrays
+            .insert("A".to_string(), ArrayValue::new("A", vec![1]));
+        interp
+            .arrays
+            .insert("B".to_string(), ArrayValue::new("B", vec![1]));
+
+        let direct = CachedArraySlot::default();
+        let a_index = interp.resolve_cached_array_slot("A", &direct);
+        let direct_table_id = direct.table_id.get();
+        assert_eq!(interp.resolve_cached_array_slot("A", &direct), a_index);
+        assert_eq!(direct.table_id.get(), direct_table_id);
+
+        interp.set_array_alias_binding("UNRELATED", "B".to_string());
+        assert_ne!(interp.arrays.table_id, direct_table_id);
+        assert_eq!(interp.resolve_cached_array_slot("A", &direct), a_index);
+        let rebound_table_id = direct.table_id.get();
+        assert_eq!(interp.resolve_cached_array_slot("A", &direct), a_index);
+        assert_eq!(direct.table_id.get(), rebound_table_id);
+
+        let alias = CachedArraySlot::default();
+        interp.set_array_alias_binding("P", "A".to_string());
+        assert_eq!(interp.resolve_cached_array_slot("P", &alias), a_index);
+        let same_binding_table_id = interp.arrays.table_id;
+        interp.set_array_alias_binding("P", "A".to_string());
+        assert_eq!(interp.arrays.table_id, same_binding_table_id);
+        let b_index = interp.arrays.names["B"];
+        interp.restore_array_alias_bindings(vec![("P", Some("B".to_string()))]);
+        assert_eq!(interp.resolve_cached_array_slot("P", &alias), b_index);
+
+        interp.restore_array_alias_bindings(vec![("P", None)]);
+        let p_index = interp.resolve_cached_array_slot("P", &alias);
+        assert_ne!(p_index, a_index);
+        assert_ne!(p_index, b_index);
+        assert_eq!(interp.resolve_cached_array_slot("P", &alias), p_index);
+
+        interp.set_array_alias_binding("LOCAL", "A".to_string());
+        let before_remove = interp.arrays.table_id;
+        interp.remove_array_alias_binding("LOCAL");
+        assert_ne!(interp.arrays.table_id, before_remove);
+    }
+
+    #[test]
     fn cached_numeric_slots_survive_run_reset_locals_and_scalar_array_names() {
         let mut interp = Interpreter::new();
         interp
@@ -11556,6 +13334,7 @@ mod interpreter_tests {
     #[test]
     fn cached_array_slots_survive_redim_clear_locals_aliases_and_run_reset() {
         let mut interp = Interpreter::new();
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(1)=P(1)+10");
         interp
             .program
             .load_text(
@@ -11592,8 +13371,102 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn cached_array_aliases_rebind_nested_local_string_and_unrelated_arrays() {
+        let mut interp = Interpreter::new();
+        assert_fast_array_read_is_compiled(&mut interp, "X=P(0)");
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(0)=P(0)+1");
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(1,1)=P(1,1)+7");
+        interp
+            .program
+            .load_text(
+                r#"10 DIM A(1),B(1),U(1),G(1),C(1,1),D(1,1),A$(1),B$(1)
+20 A(0)=1:A(1)=2:B(0)=3:B(1)=4:U(0)=5
+30 A$(0)="A":B$(0)="B"
+40 DEF SUB INNER(Q)
+50 Q(0)=Q(0)*10+Q(1)
+60 SUBEND
+70 DEF SUB LOCALHIDE()
+80 LOCAL P(1)
+90 P(0)=99
+100 SUBEND
+110 DEF SUB WORK(P,U)
+120 P(0)=P(0)+1
+130 CALL INNER(P)
+140 CALL LOCALHIDE
+150 P(1)=P(1)+1
+160 U(0)=U(0)+100
+170 G(0)=G(0)+1
+180 SUBEND
+190 DEF SUB TOUCHSTR(P$)
+200 P$(0)=P$(0)+"!"
+210 SUBEND
+220 DEF SUB GRID(P)
+230 P(1,1)=P(1,1)+7
+240 SUBEND
+250 CALL WORK(A,U)
+260 CALL WORK(B,U)
+270 CALL TOUCHSTR(A$)
+280 CALL TOUCHSTR(B$)
+290 CALL GRID(C):CALL GRID(D)"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        let a = interp.array_ref("A").unwrap();
+        assert_eq!(a.get_number_direct_1d(0).unwrap(), 22.0);
+        assert_eq!(a.get_number_direct_1d(1).unwrap(), 3.0);
+        let b = interp.array_ref("B").unwrap();
+        assert_eq!(b.get_number_direct_1d(0).unwrap(), 44.0);
+        assert_eq!(b.get_number_direct_1d(1).unwrap(), 5.0);
+        assert_eq!(
+            interp
+                .array_ref("U")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap(),
+            205.0
+        );
+        assert_eq!(
+            interp
+                .array_ref("G")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap(),
+            2.0
+        );
+        assert_eq!(
+            interp
+                .array_ref("C")
+                .unwrap()
+                .get_number_direct_2d(1, 1)
+                .unwrap(),
+            7.0
+        );
+        assert_eq!(
+            interp
+                .array_ref("D")
+                .unwrap()
+                .get_number_direct_2d(1, 1)
+                .unwrap(),
+            7.0
+        );
+        assert_eq!(
+            interp.array_ref("A$").unwrap().get(&[0]).unwrap(),
+            Value::string("A!")
+        );
+        assert_eq!(
+            interp.array_ref("B$").unwrap().get(&[0]).unwrap(),
+            Value::string("B!")
+        );
+        assert!(interp.arrays.get("P").is_none());
+        assert!(interp.array_aliases.is_empty());
+    }
+
+    #[test]
     fn cached_array_slots_follow_mat_replacement_and_clear_inside_alias() {
         let mut interp = Interpreter::new();
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(1)=9");
         interp
             .program
             .load_text(
@@ -11624,6 +13497,7 @@ mod interpreter_tests {
     #[test]
     fn array_bindings_follow_existing_subroutine_error_unwind() {
         let mut interp = Interpreter::new();
+        assert_fast_numeric_array_write_is_compiled(&mut interp, "P(0)=7");
         interp
             .program
             .load_text(
@@ -11702,21 +13576,33 @@ mod interpreter_tests {
     fn fast_array_errors_preserve_on_error_resume_and_resume_next() {
         let mut retry = Interpreter::new();
         assert_fast_array_read_is_compiled(&mut retry, "X=A(I)");
-        let CachedCommand::Assignment(err_assignment) = retry.compile_cached_command("SEENERR=ERR")
+        let CachedCommand::NumericAssignment(err_assignment) =
+            retry.compile_cached_command("SEENERR=ERR")
         else {
             panic!("ERR assignment should compile");
         };
         assert!(matches!(
-            err_assignment.fast_numeric_rhs.as_ref(),
-            Some(FastNumberExpr::Function0(FastZeroArgFunction::Err))
+            err_assignment.as_ref(),
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::Expr(FastNumberExpr::Function0(
+                    FastZeroArgFunction::Err
+                )),
+                ..
+            }
         ));
-        let CachedCommand::Assignment(erl_assignment) = retry.compile_cached_command("SEENERL=ERL")
+        let CachedCommand::NumericAssignment(erl_assignment) =
+            retry.compile_cached_command("SEENERL=ERL")
         else {
             panic!("ERL assignment should compile");
         };
         assert!(matches!(
-            erl_assignment.fast_numeric_rhs.as_ref(),
-            Some(FastNumberExpr::Function0(FastZeroArgFunction::Erl))
+            erl_assignment.as_ref(),
+            CompiledNumericAssignment::Scalar {
+                rhs: FastNumericScalarRhs::Expr(FastNumberExpr::Function0(
+                    FastZeroArgFunction::Erl
+                )),
+                ..
+            }
         ));
         retry
             .program
@@ -11933,6 +13819,40 @@ mod interpreter_tests {
             assert_eq!(interp.numeric_variables.get("A"), Some(&8.0));
             assert_eq!(interp.numeric_variables.get("I"), Some(&4.0));
         }
+    }
+
+    #[test]
+    fn compiled_for_shares_its_name_and_named_next_still_truncates_inner_frames() {
+        let compiled = compile_for_statement("I=1 TO 2").unwrap();
+        let compiled_name = compiled.var.clone();
+        let mut direct = Interpreter::new();
+        let mut cursor = Cursor {
+            line_idx: 0,
+            cmd_idx: 0,
+        };
+        direct.execute_compiled_for(&compiled, &mut cursor).unwrap();
+        assert!(Rc::ptr_eq(
+            &compiled_name,
+            &direct.for_stack.last().unwrap().var
+        ));
+
+        let mut nested = Interpreter::new();
+        nested
+            .program
+            .load_text(
+                r#"10 S=0
+20 FOR I=1 TO 2
+30 FOR J=1 TO 2
+40 S=S+I*10+J
+50 NEXT I
+60 END"#,
+            )
+            .unwrap();
+        nested.run_loaded().unwrap();
+        assert_eq!(nested.numeric_variables.get("S"), Some(&32.0));
+        assert_eq!(nested.numeric_variables.get("I"), Some(&3.0));
+        assert_eq!(nested.numeric_variables.get("J"), Some(&1.0));
+        assert!(nested.for_stack.is_empty());
     }
 }
 
@@ -12749,29 +14669,6 @@ fn cursor_in_exited_block(cursor: &Cursor, start: &Cursor, target: &Cursor) -> b
     (cursor == start || cursor_after(cursor, start)) && cursor_before(cursor, target)
 }
 
-fn restore_numeric_bindings(variables: &mut NumericVariables, saved: HashMap<String, Option<f64>>) {
-    for (name, value) in saved {
-        if let Some(value) = value {
-            variables.insert(name, value);
-        } else {
-            variables.remove(&name);
-        }
-    }
-}
-
-fn restore_string_bindings(
-    variables: &mut FastHashMap<String, String>,
-    saved: HashMap<String, Option<String>>,
-) {
-    for (name, value) in saved {
-        if let Some(value) = value {
-            variables.insert(name, value);
-        } else {
-            variables.remove(&name);
-        }
-    }
-}
-
 fn set_numeric_binding_ref(variables: &mut NumericVariables, name: &str, value: f64) {
     if let Some(slot) = variables.get_mut(name) {
         *slot = value;
@@ -12869,19 +14766,6 @@ fn restore_array_bindings_ref(arrays: &mut ArrayVariables, saved: Vec<(&str, Opt
             set_array_binding_ref(arrays, name, value);
         } else {
             arrays.remove(name);
-        }
-    }
-}
-
-fn restore_array_alias_bindings_ref(
-    aliases: &mut FastHashMap<String, String>,
-    saved: Vec<(&str, Option<String>)>,
-) {
-    for (name, value) in saved {
-        if let Some(value) = value {
-            aliases.insert(name.to_string(), value);
-        } else {
-            aliases.remove(name);
         }
     }
 }
@@ -13631,7 +15515,7 @@ fn compile_for_statement(source: &str) -> BasicResult<CompiledFor> {
         (after_to, None)
     };
     Ok(CompiledFor {
-        var,
+        var: Rc::<str>::from(var),
         var_slot: CachedNumericSlot::default(),
         start: compile_number_expression(start_expr)?,
         end: compile_number_expression(end_expr.trim())?,
@@ -13801,6 +15685,8 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
         Expr::Var(name) => {
             if is_pi_constant_name(name) {
                 Some(FastNumberExpr::Number(std::f64::consts::PI))
+            } else if name == "INF" {
+                Some(FastNumberExpr::Number(f64::INFINITY))
             } else if let Some(function) = compile_fast_zero_arg_function(name) {
                 Some(FastNumberExpr::Function0(function))
             } else if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name)
@@ -13858,6 +15744,20 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
                 "SQR" => FastNumberFunction::Sqr,
                 "SIN" => FastNumberFunction::Sin,
                 "COS" => FastNumberFunction::Cos,
+                "FIX" => FastNumberFunction::Fix,
+                "SGN" => FastNumberFunction::Sgn,
+                "FRAC" => FastNumberFunction::Frac,
+                "LOG" => FastNumberFunction::Log,
+                "LOG10" => FastNumberFunction::Log10,
+                "EXP" => FastNumberFunction::Exp,
+                "TAN" => FastNumberFunction::Tan,
+                "ASN" => FastNumberFunction::Asn,
+                "ACS" => FastNumberFunction::Acs,
+                "ATN" => FastNumberFunction::Atn,
+                "COT" => FastNumberFunction::Cot,
+                "RTD" => FastNumberFunction::Rtd,
+                "DTR" => FastNumberFunction::Dtr,
+                "ROUND" => FastNumberFunction::Round,
                 _ => return None,
             };
             Some(FastNumberExpr::Function1 {
@@ -14157,6 +16057,85 @@ fn compile_assignment_statement(source: &str) -> BasicResult<CompiledAssignment>
         rhs,
         rhs_is_string,
         fast_numeric_rhs,
+    })
+}
+
+fn compile_cached_numeric_assignment(
+    fallback: Rc<CompiledAssignment>,
+) -> Option<CompiledNumericAssignment> {
+    if fallback.rhs_is_string || fallback.targets.len() != 1 {
+        return None;
+    }
+    let fast_rhs = fallback.fast_numeric_rhs.as_ref()?.clone();
+    match &fallback.targets[0] {
+        CompiledLValue::Scalar {
+            name: target_name,
+            is_string: false,
+            numeric_slot,
+        } => {
+            let rhs = compile_fast_numeric_self_update(target_name, &fallback.rhs)
+                .map(FastNumericScalarRhs::SelfUpdate)
+                .unwrap_or(FastNumericScalarRhs::Expr(fast_rhs));
+            let target = target_name.clone();
+            let target_slot = numeric_slot.clone();
+            Some(CompiledNumericAssignment::Scalar {
+                target,
+                target_slot,
+                rhs,
+                fallback,
+            })
+        }
+        CompiledLValue::Array {
+            name: target_name,
+            indexes,
+            is_string: false,
+            array_slot,
+        } => {
+            let target = target_name.clone();
+            let indexes = indexes.clone();
+            let array_slot = array_slot.clone();
+            Some(CompiledNumericAssignment::Array {
+                target,
+                indexes,
+                array_slot,
+                rhs: fast_rhs,
+                fallback,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn compile_fast_numeric_self_update(
+    target_name: &str,
+    rhs: &Expr,
+) -> Option<FastNumericScalarUpdate> {
+    let Expr::Binary { op, left, right } = rhs else {
+        return None;
+    };
+    let Expr::Var(left_name) = left.as_ref() else {
+        return None;
+    };
+    if left_name != target_name {
+        return None;
+    }
+    let FastNumberExpr::Var {
+        name: fast_left_name,
+        ..
+    } = compile_fast_number_expr(left, true)?
+    else {
+        return None;
+    };
+    if fast_left_name.as_str() != target_name {
+        return None;
+    }
+    let right = compile_fast_number_expr(right, true)?;
+    Some(match right {
+        FastNumberExpr::Number(right) => FastNumericScalarUpdate::Constant { op: *op, right },
+        right => FastNumericScalarUpdate::Expr {
+            op: *op,
+            right: Box::new(right),
+        },
     })
 }
 
