@@ -2023,7 +2023,7 @@ impl Interpreter {
         self.graphics_window_used_by_immediate = false;
         let result = self.process_immediate_inner(line);
         if self.current_line.is_none() && self.graphics_window_used_by_immediate {
-            focus_console_window();
+            focus_console_window(self.graphics_window.as_mut());
         }
         self.graphics_window_used_by_immediate = false;
         result
@@ -2092,24 +2092,7 @@ impl Interpreter {
             return Ok(());
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "RUN") {
-            let arg = arg.trim();
-            let start_line = if arg.is_empty() {
-                None
-            } else if arg.starts_with('"') {
-                let path = self.resolve_bas_literal_arg(arg)?;
-                self.load_file(&path)?;
-                None
-            } else if let Some(line) = parse_line_number_literal(arg) {
-                Some(line)
-            } else {
-                let _ = self.resolve_bas_literal_arg(arg)?;
-                None
-            };
-            let result = self.run_loaded_from(start_line);
-            self.current_line = None;
-            self.program_dir = None;
-            result?;
-            return Ok(());
+            return self.execute_immediate_run(arg);
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "CONT") {
             if !arg.trim().is_empty() {
@@ -2185,6 +2168,27 @@ impl Interpreter {
 
     fn invalidate_continuation_after_program_change(&mut self) {
         self.stopped_cursor = None;
+    }
+
+    fn execute_immediate_run(&mut self, arg: &str) -> BasicResult<()> {
+        let arg = arg.trim();
+        let start_line = if arg.is_empty() {
+            None
+        } else if arg.starts_with('"') {
+            let path = self.resolve_bas_literal_arg(arg)?;
+            self.load_file(&path)?;
+            None
+        } else if let Some(line) = parse_line_number_literal(arg) {
+            Some(line)
+        } else {
+            let _ = self.resolve_bas_literal_arg(arg)?;
+            None
+        };
+        let result = self.run_loaded_from(start_line);
+        self.current_line = None;
+        self.program_dir = None;
+        result?;
+        Ok(())
     }
 
     fn execute_immediate_goto(&mut self, arg: &str) -> BasicResult<()> {
@@ -2678,7 +2682,7 @@ impl Interpreter {
         self.run_depth -= 1;
         if self.run_depth == 0 {
             if self.should_refocus_console_after_run(closed_graphics_window) {
-                focus_console_window();
+                focus_console_window(self.graphics_window.as_mut());
             }
             if matches!(result, Ok(RunOutcome::End)) {
                 self.last_error = None;
@@ -2868,16 +2872,21 @@ impl Interpreter {
         }
         self.present_dirty_graphics_at_run_boundary()?;
         self.finish_output_line();
-        self.stopped_cursor = Some(cursor.clone());
+        let running_program = self.run_depth > 0;
+        if running_program {
+            self.stopped_cursor = Some(cursor.clone());
+        }
         self.end_requested = false;
         self.function_return_requested = false;
         self.sub_return_requested = false;
         let mut err = BasicError::new(ErrorCode::KeyboardInterrupt);
-        if let Some(line) = self
-            .current_line
-            .or_else(|| self.line_numbers_cache.get(cursor.line_idx).copied())
-        {
-            err = err.at_line(line);
+        if running_program {
+            if let Some(line) = self
+                .current_line
+                .or_else(|| self.line_numbers_cache.get(cursor.line_idx).copied())
+            {
+                err = err.at_line(line);
+            }
         }
         Err(err)
     }
@@ -2939,6 +2948,7 @@ impl Interpreter {
         }
         match first {
             "REM" | "DATA" => Ok(()),
+            "RUN" => self.execute_immediate_run(command[3..].trim()),
             "PRINT" | "?" => self.execute_print(command[first.len()..].trim()),
             "ZONE" => self.execute_zone(command[4..].trim()),
             "INPUT" => {
@@ -6930,11 +6940,12 @@ impl Interpreter {
     }
 
     fn execute_pause(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
+        let running_program = self.run_depth > 0;
         if arg.trim().is_empty() {
             loop {
                 std::thread::sleep(Duration::from_millis(2));
                 self.check_user_interrupt(cursor)?;
-                if self.process_timers(cursor)? {
+                if running_program && self.process_timers(cursor)? {
                     break;
                 }
                 self.check_user_interrupt(cursor)?;
@@ -6942,10 +6953,11 @@ impl Interpreter {
                     break;
                 }
                 self.check_user_interrupt(cursor)?;
-                if self.end_requested
-                    || self.stopped_cursor.is_some()
-                    || self.function_return_requested
-                    || self.sub_return_requested
+                if running_program
+                    && (self.end_requested
+                        || self.stopped_cursor.is_some()
+                        || self.function_return_requested
+                        || self.sub_return_requested)
                 {
                     break;
                 }
@@ -6963,30 +6975,33 @@ impl Interpreter {
                 deadline
             }
         };
-        let mut interrupted_by_timer = false;
-        while Instant::now() < deadline {
-            let now = Instant::now();
-            let remaining = deadline.saturating_duration_since(now);
-            std::thread::sleep(remaining.min(Duration::from_millis(2)));
-            self.check_user_interrupt(cursor)?;
-            if self.process_timers(cursor)? {
-                interrupted_by_timer = true;
-                break;
+        let wait_result = (|| -> BasicResult<bool> {
+            while Instant::now() < deadline {
+                let now = Instant::now();
+                let remaining = deadline.saturating_duration_since(now);
+                std::thread::sleep(remaining.min(Duration::from_millis(2)));
+                self.check_user_interrupt(cursor)?;
+                if running_program && self.process_timers(cursor)? {
+                    return Ok(true);
+                }
+                self.check_user_interrupt(cursor)?;
+                if self.pause_user_input_ready()? {
+                    break;
+                }
+                self.check_user_interrupt(cursor)?;
+                if running_program
+                    && (self.end_requested
+                        || self.stopped_cursor.is_some()
+                        || self.function_return_requested
+                        || self.sub_return_requested)
+                {
+                    break;
+                }
             }
-            self.check_user_interrupt(cursor)?;
-            if self.pause_user_input_ready()? {
-                break;
-            }
-            self.check_user_interrupt(cursor)?;
-            if self.end_requested
-                || self.stopped_cursor.is_some()
-                || self.function_return_requested
-                || self.sub_return_requested
-            {
-                break;
-            }
-        }
-        if !interrupted_by_timer {
+            Ok(false)
+        })();
+        let interrupted_by_timer = matches!(wait_result, Ok(true));
+        if !running_program || !interrupted_by_timer {
             if self
                 .pause_deadline
                 .is_some_and(|(saved_cursor, _)| saved_cursor == pause_cursor)
@@ -6994,7 +7009,7 @@ impl Interpreter {
                 self.pause_deadline = None;
             }
         }
-        Ok(())
+        wait_result.map(|_| ())
     }
 
     fn clear_input_buffer(&mut self) {
@@ -7088,7 +7103,7 @@ impl Interpreter {
     }
 
     fn process_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
-        if self.timers.is_empty() {
+        if self.run_depth == 0 || self.timers.is_empty() {
             return Ok(false);
         }
         let now = Instant::now();
@@ -14003,7 +14018,7 @@ fn immediate_arg<'a>(command: &'a str, upper_command: &str, word: &str) -> Optio
 fn is_non_immediate_command(first: &str) -> bool {
     matches!(
         first,
-        "DATA" | "RETURN" | "GOSUB" | "STOP" | "RESUME" | "ON" | "ERROR"
+        "DATA" | "RETURN" | "GOSUB" | "STOP" | "RESUME" | "ON" | "ERROR" | "FRAME"
     )
 }
 

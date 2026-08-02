@@ -966,6 +966,7 @@ Notes
 Quick notes
 - Regardless of the timer, `PAUSE` always exits the wait when a key is pressed in console programs or when the left mouse button is clicked on the graphics window, if one is open.
   * This lets `PAUSE` be used to implement the typical "Press a key to continue" behavior, without needing a loop with `INKEY$`.
+- `PAUSE` is also valid in immediate mode and may precede other statements on the same line; for example, `PAUSE 2*60*60*1000 : RUN` waits up to two hours before running the program. A key press or click ends the wait early.
 - `PAUSE` has lower priority than `ON MOUSE`, so if an `ON MOUSE` consumes the left-button click, `PAUSE` will never receive it.
   * In that case, `PAUSE` can be used as an "infinite" event-capture loop. See the `ON MOUSE` examples.
 - `TRON` shows the execution trace by lines; `TROFF` disables it.
@@ -1081,7 +1082,7 @@ Notes
 
 9.1 Commands forbidden in immediate mode:
 
-+ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR
++ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR | FRAME
 
 Range formats
 1 `n`        Only line `n`

@@ -212,6 +212,26 @@ impl GraphicsWindow {
         self.input_events.borrow_mut().clear();
     }
 
+    #[cfg(windows)]
+    fn settle_keyboard_before_console_focus(&mut self) {
+        while self.window.is_open() {
+            // Keep dispatching messages while the graphics window still owns
+            // the focus, so every key-down seen by minifb also gets its key-up.
+            self.window.update();
+            self.clear_key_queue();
+
+            let foreground = self.window.is_open() && self.ctrl_c_state().foreground;
+            if !foreground || self.window.get_keys().is_empty() {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        self.clear_key_queue();
+        self.ctrl_c_down = self.ctrl_c_state().down;
+    }
+
     pub fn take_key_code(&mut self) -> Option<u8> {
         self.key_queue.pop_front()
     }
@@ -635,14 +655,20 @@ fn code_to_key(code: u8) -> Option<Key> {
 }
 
 #[cfg(windows)]
-pub fn focus_console_window() {
+pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetConsoleWindow() -> *mut c_void;
     }
-    unsafe {
-        focus_window_handle(GetConsoleWindow());
+
+    let console_window = unsafe { GetConsoleWindow() };
+    if console_window.is_null() {
+        return;
     }
+    if let Some(window) = graphics_window {
+        window.settle_keyboard_before_console_focus();
+    }
+    focus_window_handle(console_window);
 }
 
 #[cfg(windows)]
@@ -693,7 +719,7 @@ fn focus_window_handle(hwnd: *mut c_void) {
 }
 
 #[cfg(not(windows))]
-pub fn focus_console_window() {}
+pub fn focus_console_window(_graphics_window: Option<&mut GraphicsWindow>) {}
 
 #[cfg(not(windows))]
 fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}

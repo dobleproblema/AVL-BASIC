@@ -528,6 +528,57 @@ fn immediate_colon_commands_run_after_stopped_program_without_losing_cont() {
 }
 
 #[test]
+fn immediate_pause_waits_after_stop_and_keeps_cont_available() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 STOP").unwrap();
+    interp.process_immediate("20 PRINT \"CONT\"").unwrap();
+
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), "Line 10. Program stopped.\n");
+
+    let started = Instant::now();
+    interp.process_immediate("PAUSE 20").unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(10));
+
+    interp.process_immediate("CONT").unwrap();
+    assert_eq!(interp.take_output(), "CONT\n");
+}
+
+#[test]
+fn ctrl_c_during_immediate_pause_preserves_cont_and_clears_its_deadline() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 STOP").unwrap();
+    interp.process_immediate("20 PRINT \"CONT\"").unwrap();
+
+    interp.process_immediate("RUN").unwrap();
+    assert_eq!(interp.take_output(), "Line 10. Program stopped.\n");
+
+    interp.request_interrupt_for_test();
+    let err = interp.process_immediate("PAUSE 1000").unwrap_err();
+    assert_eq!(err.display_for_basic(), "Execution interrupted by user.");
+
+    let started = Instant::now();
+    interp.process_immediate("PAUSE 10").unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "a cancelled immediate PAUSE must not retain its old deadline"
+    );
+
+    interp.process_immediate("CONT").unwrap();
+    assert_eq!(interp.take_output(), "CONT\n");
+}
+
+#[test]
+fn immediate_pause_can_be_followed_by_run_on_the_same_line() {
+    let mut interp = Interpreter::new();
+    interp.process_immediate("10 PRINT \"DELAYED\"").unwrap();
+
+    interp.process_immediate("PAUSE 5:RUN").unwrap();
+
+    assert_eq!(interp.take_output(), "DELAYED\n");
+}
+
+#[test]
 fn editing_program_after_stop_invalidates_cont_with_standard_error() {
     let mut interp = Interpreter::new();
     interp.process_immediate("10 PRINT \"A\"").unwrap();
@@ -2730,8 +2781,22 @@ fn frame_fps_extension_rejects_non_positive_rate() {
 #[test]
 fn frame_fps_extension_rejects_extra_arguments() {
     let mut interp = Interpreter::new();
-    let err = interp.process_immediate("FRAME 30,60").unwrap_err();
-    assert_eq!(err.display_for_basic(), "Incorrect number of arguments.");
+    interp.process_immediate("10 FRAME 30,60").unwrap();
+    let err = interp.process_immediate("RUN").unwrap_err();
+    assert_eq!(
+        err.display_for_basic(),
+        "Line 10. Incorrect number of arguments."
+    );
+}
+
+#[test]
+fn frame_is_not_allowed_in_immediate_mode() {
+    let mut interp = Interpreter::new();
+    let err = interp.process_immediate("FRAME").unwrap_err();
+    assert_eq!(
+        err.display_for_basic(),
+        "Instruction not allowed in immediate mode."
+    );
 }
 
 #[test]

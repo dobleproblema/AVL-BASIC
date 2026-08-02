@@ -3,6 +3,7 @@
 use std::ffi::c_void;
 use std::io::{BufRead, BufReader, Write};
 use std::mem::size_of;
+use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -12,6 +13,12 @@ type Hwnd = *mut c_void;
 type Bool = i32;
 type Dword = u32;
 type Lparam = isize;
+
+const INPUT_KEYBOARD: u32 = 1;
+const KEYEVENTF_KEYUP: u32 = 0x0002;
+const KEYEVENTF_SCANCODE: u32 = 0x0008;
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+const SCAN_N: u16 = 0x31;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -39,6 +46,8 @@ struct KeyboardInput {
 
 #[link(name = "user32")]
 extern "system" {
+    fn AttachThreadInput(id_attach: Dword, id_attach_to: Dword, attach: Bool) -> Bool;
+    fn BringWindowToTop(hwnd: Hwnd) -> Bool;
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
     fn GetForegroundWindow() -> Hwnd;
     fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
@@ -46,8 +55,83 @@ extern "system" {
     fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
     fn IsWindowVisible(hwnd: Hwnd) -> Bool;
     fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> Bool;
+    fn SetActiveWindow(hwnd: Hwnd) -> Hwnd;
+    fn SetFocus(hwnd: Hwnd) -> Hwnd;
     fn SetForegroundWindow(hwnd: Hwnd) -> Bool;
     fn SendInput(count: u32, inputs: *const Input, size: i32) -> u32;
+    fn ShowWindow(hwnd: Hwnd, cmd_show: i32) -> Bool;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentThreadId() -> Dword;
+}
+
+#[test]
+#[ignore = "opens a real graphics window and holds N across the RUN boundary"]
+fn graphics_end_waits_for_key_release_and_does_not_poison_next_run() {
+    let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn avl-basic");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin
+        .write_all(
+            b"10 SCREEN\n\
+20 FRAME\n\
+30 PRINT \"WAITING-N\"\n\
+40 R$=UPPER$(INKEY$)\n\
+50 IF R$=\"\" THEN 40\n\
+60 PRINT \"GOT=\";R$\n\
+70 END\n\
+RUN\n",
+        )
+        .unwrap();
+
+    let hwnd = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    wait_for_line(&rx, "WAITING-N", Duration::from_secs(5));
+
+    let mut held_n = focus_and_hold_key(hwnd, SCAN_N);
+    wait_for_line(&rx, "GOT=N", Duration::from_secs(5));
+    assert_no_line_containing(&rx, "Ready", Duration::from_millis(200));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        hwnd,
+        "console received focus before N was released"
+    );
+    held_n.release();
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+
+    stdin.write_all(b"RUN\n").unwrap();
+    wait_for_line(&rx, "WAITING-N", Duration::from_secs(5));
+
+    let mut held_n = focus_and_hold_key(hwnd, SCAN_N);
+    wait_for_line(&rx, "GOT=N", Duration::from_secs(5));
+    assert_no_line_containing(&rx, "Ready", Duration::from_millis(200));
+    held_n.release();
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+
+    let _ = stdin.write_all(b"SCREEN CLOSE\nQUIT\n");
+    let _ = child.child.wait();
+    child.finished = true;
 }
 
 #[test]
@@ -278,6 +362,32 @@ struct ChildGuard {
     finished: bool,
 }
 
+struct HeldKeyGuard {
+    scan_code: u16,
+    released: bool,
+}
+
+impl HeldKeyGuard {
+    fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        send_inputs(&[scan_code_input(self.scan_code, KEYEVENTF_KEYUP)]);
+        self.released = true;
+    }
+}
+
+impl Drop for HeldKeyGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            let input = scan_code_input(self.scan_code, KEYEVENTF_KEYUP);
+            unsafe {
+                let _ = SendInput(1, &input, size_of::<Input>() as i32);
+            }
+        }
+    }
+}
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if !self.finished {
@@ -293,14 +403,16 @@ fn project_root() -> std::path::PathBuf {
 
 fn wait_for_line(rx: &Receiver<String>, needle: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
+    let mut seen = Vec::new();
     while Instant::now() < deadline {
         if let Ok(line) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             if line.contains(needle) {
                 return;
             }
+            seen.push(line);
         }
     }
-    panic!("timed out waiting for line containing {needle:?}");
+    panic!("timed out waiting for line containing {needle:?}; saw {seen:?}");
 }
 
 fn assert_no_line_containing(rx: &Receiver<String>, needle: &str, timeout: Duration) {
@@ -385,18 +497,8 @@ fn window_title(hwnd: Hwnd) -> String {
 }
 
 fn send_ctrl_c_to_window(hwnd: Hwnd) {
-    unsafe {
-        assert_ne!(SetForegroundWindow(hwnd), 0, "SetForegroundWindow failed");
-    }
-    thread::sleep(Duration::from_millis(100));
-    assert_eq!(
-        unsafe { GetForegroundWindow() },
-        hwnd,
-        "graphics window did not become foreground; refusing to send Ctrl-C"
-    );
+    focus_graphics_window(hwnd);
 
-    const INPUT_KEYBOARD: u32 = 1;
-    const KEYEVENTF_KEYUP: u32 = 0x0002;
     const VK_CONTROL: u16 = 0x11;
     const VK_C: u16 = 0x43;
 
@@ -410,6 +512,73 @@ fn send_ctrl_c_to_window(hwnd: Hwnd) {
         key_input(INPUT_KEYBOARD, VK_CONTROL, KEYEVENTF_KEYUP),
     ]);
     thread::sleep(Duration::from_millis(100));
+}
+
+fn focus_and_hold_key(hwnd: Hwnd, scan_code: u16) -> HeldKeyGuard {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while unsafe { GetForegroundWindow() } != hwnd && Instant::now() < deadline {
+        focus_graphics_window_once(hwnd);
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        hwnd,
+        "graphics window did not become foreground; refusing to hold a key"
+    );
+
+    send_inputs(&[scan_code_input(scan_code, 0)]);
+    HeldKeyGuard {
+        scan_code,
+        released: false,
+    }
+}
+
+fn focus_graphics_window(hwnd: Hwnd) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while unsafe { GetForegroundWindow() } != hwnd && Instant::now() < deadline {
+        focus_graphics_window_once(hwnd);
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        hwnd,
+        "graphics window did not become foreground; refusing to send input"
+    );
+}
+
+fn focus_graphics_window_once(hwnd: Hwnd) {
+    unsafe {
+        let current_thread = GetCurrentThreadId();
+        let target_thread = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, std::ptr::null_mut())
+        };
+
+        let attached_target = target_thread != 0
+            && target_thread != current_thread
+            && AttachThreadInput(current_thread, target_thread, 1) != 0;
+        let attached_foreground = foreground_thread != 0
+            && foreground_thread != current_thread
+            && foreground_thread != target_thread
+            && AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+
+        const SW_SHOW: i32 = 5;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetActiveWindow(hwnd);
+        let _ = SetFocus(hwnd);
+
+        if attached_foreground {
+            let _ = AttachThreadInput(current_thread, foreground_thread, 0);
+        }
+        if attached_target {
+            let _ = AttachThreadInput(current_thread, target_thread, 0);
+        }
+    }
 }
 
 fn close_window(hwnd: Hwnd) {
@@ -437,6 +606,21 @@ fn key_input(kind: u32, virtual_key: u16, flags: u32) -> Input {
                 virtual_key,
                 scan_code: 0,
                 flags,
+                time: 0,
+                extra_info: 0,
+            },
+        },
+    }
+}
+
+fn scan_code_input(scan_code: u16, flags: u32) -> Input {
+    Input {
+        kind: INPUT_KEYBOARD,
+        data: InputData {
+            keyboard: KeyboardInput {
+                virtual_key: 0,
+                scan_code,
+                flags: flags | KEYEVENTF_SCANCODE,
                 time: 0,
                 extra_info: 0,
             },

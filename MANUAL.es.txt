@@ -968,6 +968,7 @@ Notas
 Notas rápidas
 - Independientemente del temporizador, `PAUSE` siempre sale de la espera al pulsar una tecla en los programas de consola o al hacer clic con el botón izquierdo del ratón sobre la ventana gráfica, si hay una abierta.
   + De este modo, `PAUSE` se puede utilizar para implementar los típicos "Pulse una tecla para continuar", sin necesidad de hacer un bucle con INKEY$.
+- `PAUSE` también es válida en modo inmediato y puede preceder a otras instrucciones en la misma línea; por ejemplo, `PAUSE 2*60*60*1000 : RUN` espera hasta dos horas antes de ejecutar el programa. Una tecla o clic finaliza la espera anticipadamente.
 - `PAUSE` tiene menor prioridad que `ON MOUSE`, de modo que si hay un `ON MOUSE` que consume el clic del botón izquierdo, `PAUSE` nunca lo recibirá.
   + En ese caso, `PAUSE` se puede usar como un bucle "infinito" para capturar eventos. Ver ejemplos de `ON MOUSE`.
 - `TRON` muestra la traza de ejecución por líneas; `TROFF` la desactiva. 
@@ -1083,7 +1084,7 @@ Notas
 
 9.1 Comandos prohibidos en inmediato:
 
-+ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR
++ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR | FRAME
 
 Formato de rangos
 1 `n`        Solo la línea n
