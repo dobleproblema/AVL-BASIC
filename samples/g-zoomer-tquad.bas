@@ -9,7 +9,7 @@
 180 DEG
 190 BLOAD TEXFILE$,TEX$
 200 P1=INSTR(TEX$,"x") : P2=INSTR(TEX$,":")
-210 IF P1=0 OR P2=0 THEN PRINT "Formato grafico no valido":END
+210 IF P1=0 OR P2=0 THEN PRINT "Invalid graphics format":END
 220 TW=VAL(LEFT$(TEX$,P1-1))
 230 TH=VAL(MID$(TEX$,P1+1,P2-P1-1))
 240 CX=(W-1)/2 : CY=(H-1)/2

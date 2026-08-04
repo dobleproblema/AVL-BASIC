@@ -18,6 +18,8 @@ const INPUT_KEYBOARD: u32 = 1;
 const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KEYEVENTF_SCANCODE: u32 = 0x0008;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+const SCAN_A: u16 = 0x1E;
+const SCAN_ENTER: u16 = 0x1C;
 const SCAN_N: u16 = 0x31;
 
 #[repr(C)]
@@ -65,6 +67,68 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentThreadId() -> Dword;
+}
+
+#[test]
+#[ignore = "opens a real graphics window and verifies graphical PAUSE input"]
+fn graphics_pause_ignores_click_and_exits_for_consumed_key() {
+    let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn avl-basic");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin
+        .write_all(
+            b"10 SCREEN\n\
+20 GINPUT \"VALUE: \",A$\n\
+30 PRINT \"PAUSE-START\"\n\
+40 PAUSE\n\
+50 PRINT \"PAUSE-END\"\n\
+60 IF INKEY$<>\"\" THEN PRINT \"LEAK\" : GOTO 100\n\
+70 PRINT \"CONSUMED\"\n\
+100 END\n\
+RUN\n",
+        )
+        .unwrap();
+
+    let hwnd = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    thread::sleep(Duration::from_millis(100));
+    focus_graphics_window(hwnd);
+    tap_key(SCAN_A);
+    tap_key(SCAN_ENTER);
+    wait_for_line(&rx, "PAUSE-START", Duration::from_secs(5));
+    assert_no_line_containing(&rx, "PAUSE-END", Duration::from_millis(350));
+
+    click_window(hwnd, 20, 20);
+    assert_no_line_containing(&rx, "PAUSE-END", Duration::from_millis(350));
+
+    let mut held_n = focus_and_hold_key(hwnd, SCAN_N);
+    wait_for_line(&rx, "PAUSE-END", Duration::from_secs(5));
+    wait_for_line(&rx, "CONSUMED", Duration::from_secs(5));
+    held_n.release();
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+
+    let _ = stdin.write_all(b"SCREEN CLOSE\nQUIT\n");
+    let _ = child.child.wait();
+    child.finished = true;
 }
 
 #[test]
@@ -533,6 +597,13 @@ fn focus_and_hold_key(hwnd: Hwnd, scan_code: u16) -> HeldKeyGuard {
     }
 }
 
+fn tap_key(scan_code: u16) {
+    send_inputs(&[scan_code_input(scan_code, 0)]);
+    thread::sleep(Duration::from_millis(50));
+    send_inputs(&[scan_code_input(scan_code, KEYEVENTF_KEYUP)]);
+    thread::sleep(Duration::from_millis(50));
+}
+
 fn focus_graphics_window(hwnd: Hwnd) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while unsafe { GetForegroundWindow() } != hwnd && Instant::now() < deadline {
@@ -585,6 +656,18 @@ fn close_window(hwnd: Hwnd) {
     const WM_CLOSE: u32 = 0x0010;
     let ok = unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
     assert_ne!(ok, 0, "PostMessageW(WM_CLOSE) failed");
+}
+
+fn click_window(hwnd: Hwnd, x: u16, y: u16) {
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const MK_LBUTTON: usize = 0x0001;
+    let position = ((y as u32) << 16 | x as u32) as isize;
+
+    let down = unsafe { PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, position) };
+    let up = unsafe { PostMessageW(hwnd, WM_LBUTTONUP, 0, position) };
+    assert_ne!(down, 0, "PostMessageW(WM_LBUTTONDOWN) failed");
+    assert_ne!(up, 0, "PostMessageW(WM_LBUTTONUP) failed");
 }
 
 fn send_inputs(inputs: &[Input]) {

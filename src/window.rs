@@ -34,6 +34,13 @@ pub enum GraphicsInputEvent {
 
 type InputEventQueue = Rc<RefCell<VecDeque<GraphicsInputEvent>>>;
 
+fn has_pending_pause_key(
+    key_queue: &VecDeque<u8>,
+    input_events: &VecDeque<GraphicsInputEvent>,
+) -> bool {
+    !key_queue.is_empty() || !input_events.is_empty()
+}
+
 struct GraphicsInputCallback {
     events: InputEventQueue,
 }
@@ -199,6 +206,18 @@ impl GraphicsWindow {
     pub fn clear_key_queue(&mut self) {
         self.key_queue.clear();
         self.input_events.borrow_mut().clear();
+    }
+
+    pub fn consume_pause_key(&mut self) -> bool {
+        let pending = {
+            let input_events = self.input_events.borrow();
+            has_pending_pause_key(&self.key_queue, &input_events)
+        };
+        if !pending {
+            return false;
+        }
+        self.clear_key_queue();
+        true
     }
 
     pub fn clear_transient_input(&mut self) {
@@ -727,9 +746,11 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        code_to_key, key_to_code, GraphicsInputCallback, GraphicsInputEvent, InputEventQueue,
+        code_to_key, has_pending_pause_key, key_to_code, GraphicsInputCallback, GraphicsInputEvent,
+        InputEventQueue,
     };
     use minifb::{InputCallback, Key};
+    use std::collections::VecDeque;
 
     #[cfg(target_os = "linux")]
     use super::embedded_linux_window_icon_argb;
@@ -771,6 +792,19 @@ mod tests {
                 GraphicsInputEvent::Enter,
             ]
         );
+    }
+
+    #[test]
+    fn pause_detects_canonical_and_unicode_graphics_keys() {
+        let mut keys = VecDeque::new();
+        let mut events = VecDeque::new();
+
+        assert!(!has_pending_pause_key(&keys, &events));
+        keys.push_back(b'A');
+        assert!(has_pending_pause_key(&keys, &events));
+        keys.clear();
+        events.push_back(GraphicsInputEvent::Character('ñ'));
+        assert!(has_pending_pause_key(&keys, &events));
     }
 
     #[cfg(target_os = "linux")]

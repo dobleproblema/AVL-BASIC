@@ -898,7 +898,8 @@ Ejemplos (botón derecho finaliza)
 15 ON MOUSE LEFTDOWN GOSUB 35
 20 ON MOUSE LEFTUP GOSUB 45
 25 ON MOUSE RIGHTUP GOSUB 60
-30 PAUSE 'Bucle infinito porque la línea 15 consume el click
+30 PAUSE 'Espera una tecla mientras siguen activos los manejadores del ratón
+31 END
 35 x1=MOUSEX : y1=MOUSEY
 40 RETURN
 45 FRECTANGLE x1,y1,MOUSEX,MOUSEY,INT(RND*32)
@@ -959,18 +960,17 @@ Notas
 8. Sistema, tiempo y depuración
 
 + RANDOMIZE [semilla]
-+ PAUSE [ms]            Espera el número de milisegundos especificado o hasta que se pulsa una tecla/clic en la ventana gráfica
++ PAUSE [ms]            Espera el número de milisegundos especificado o hasta que se pulsa una tecla
 + BEEP                  Tono ASCII
 + TRON | TROFF          Traza paso a paso
 + DEG | RAD             Trigonometría en grados/radianes
 + EXIT | QUIT | SYSTEM  Abandonar intérprete
 
 Notas rápidas
-- Independientemente del temporizador, `PAUSE` siempre sale de la espera al pulsar una tecla en los programas de consola o al hacer clic con el botón izquierdo del ratón sobre la ventana gráfica, si hay una abierta.
+- Independientemente del temporizador, `PAUSE` siempre sale de la espera al pulsar una tecla, tanto en programas de consola como gráficos.
   + De este modo, `PAUSE` se puede utilizar para implementar los típicos "Pulse una tecla para continuar", sin necesidad de hacer un bucle con INKEY$.
-- `PAUSE` también es válida en modo inmediato y puede preceder a otras instrucciones en la misma línea; por ejemplo, `PAUSE 2*60*60*1000 : RUN` espera hasta dos horas antes de ejecutar el programa. Una tecla o clic finaliza la espera anticipadamente.
-- `PAUSE` tiene menor prioridad que `ON MOUSE`, de modo que si hay un `ON MOUSE` que consume el clic del botón izquierdo, `PAUSE` nunca lo recibirá.
-  + En ese caso, `PAUSE` se puede usar como un bucle "infinito" para capturar eventos. Ver ejemplos de `ON MOUSE`.
+- `PAUSE` también es válida en modo inmediato y puede preceder a otras instrucciones en la misma línea; por ejemplo, `PAUSE 2*60*60*1000 : RUN` espera hasta dos horas antes de ejecutar el programa. Una tecla finaliza la espera anticipadamente.
+- La actividad del ratón nunca finaliza `PAUSE`, pero los manejadores `ON MOUSE` registrados siguen ejecutándose mientras espera. Un manejador aún puede terminar o redirigir el programa. Ver ejemplos de `ON MOUSE`.
 - `TRON` muestra la traza de ejecución por líneas; `TROFF` la desactiva. 
 - `TRON` muestra el número de línea actual en el formato `[n]`.
 - `DEG/RAD` afectan tanto la trigonometría como los ángulos de dibujo.

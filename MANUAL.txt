@@ -896,7 +896,8 @@ Examples (right button exits)
 15 ON MOUSE LEFTDOWN GOSUB 35
 20 ON MOUSE LEFTUP GOSUB 45
 25 ON MOUSE RIGHTUP GOSUB 60
-30 PAUSE 'Infinite loop because line 15 consumes the click
+30 PAUSE 'Waits for a key while the mouse handlers remain active
+31 END
 35 x1=MOUSEX : y1=MOUSEY
 40 RETURN
 45 FRECTANGLE x1,y1,MOUSEX,MOUSEY,INT(RND*32)
@@ -957,18 +958,17 @@ Notes
 8. System, time and debugging
 
 + RANDOMIZE [seed]
-+ PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed or the graphics window is clicked
++ PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed
 + BEEP                  ASCII tone
 + TRON | TROFF          Step-by-step trace
 + DEG | RAD             Trigonometry in degrees/radians
 + EXIT | QUIT | SYSTEM  Leave the interpreter
 
 Quick notes
-- Regardless of the timer, `PAUSE` always exits the wait when a key is pressed in console programs or when the left mouse button is clicked on the graphics window, if one is open.
+- Regardless of the timer, `PAUSE` always exits the wait when a key is pressed, in both console and graphics programs.
   * This lets `PAUSE` be used to implement the typical "Press a key to continue" behavior, without needing a loop with `INKEY$`.
-- `PAUSE` is also valid in immediate mode and may precede other statements on the same line; for example, `PAUSE 2*60*60*1000 : RUN` waits up to two hours before running the program. A key press or click ends the wait early.
-- `PAUSE` has lower priority than `ON MOUSE`, so if an `ON MOUSE` consumes the left-button click, `PAUSE` will never receive it.
-  * In that case, `PAUSE` can be used as an "infinite" event-capture loop. See the `ON MOUSE` examples.
+- `PAUSE` is also valid in immediate mode and may precede other statements on the same line; for example, `PAUSE 2*60*60*1000 : RUN` waits up to two hours before running the program. A key press ends the wait early.
+- Mouse activity never ends `PAUSE`, but registered `ON MOUSE` handlers continue to run while it waits. A handler may still terminate or redirect the program. See the `ON MOUSE` examples.
 - `TRON` shows the execution trace by lines; `TROFF` disables it.
 - `TRON` shows the current line number in the format `[n]`.
 - `DEG/RAD` affect both trigonometry and drawing angles.

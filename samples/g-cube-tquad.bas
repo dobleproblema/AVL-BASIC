@@ -8,7 +8,7 @@
 170 PAPER 0 : CLG
 180 BLOAD TEXFILE$,TEX$
 190 P1=INSTR(TEX$,"x") : P2=INSTR(TEX$,":")
-200 IF P1=0 OR P2=0 THEN PRINT "Formato grafico no valido":END
+200 IF P1=0 OR P2=0 THEN PRINT "Invalid graphics format":END
 210 TW=VAL(LEFT$(TEX$,P1-1))
 220 TH=VAL(MID$(TEX$,P1+1,P2-P1-1))
 230 XC=(W-1)/2 : YC=(H-1)/2

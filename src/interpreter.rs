@@ -7023,10 +7023,18 @@ impl Interpreter {
     fn pause_user_input_ready(&mut self) -> BasicResult<bool> {
         if self.pause_uses_graphics_input() {
             self.pump_graphics_window_now()?;
-            if self.mouse_state.event == "LEFTDOWN" && !self.mouse_event_consumed {
-                self.graphics
-                    .set_cursor_from_logical_screen(self.mouse_state.x, self.mouse_state.y);
-                self.mouse_event_consumed = true;
+            let key_ready = self
+                .graphics_window
+                .as_mut()
+                .is_some_and(GraphicsWindow::consume_pause_key);
+            if key_ready {
+                // minifb can deliver the character callback one update after
+                // the physical key edge. Pump that tail now, including any
+                // simultaneous mouse event, and consume it before PAUSE ends.
+                self.pump_graphics_window_now()?;
+                if let Some(window) = self.graphics_window.as_mut() {
+                    window.clear_key_queue();
+                }
                 return Ok(true);
             }
             return Ok(false);

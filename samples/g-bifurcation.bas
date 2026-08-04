@@ -3,17 +3,19 @@
 110 REM  © 2025  José Antonio Ávila
 115 REM =========================================================
 120 DEG : SCREEN : PENWIDTH 1
+122 ON MOUSE LEFTDOWN GOSUB 425
 125 B=40                        'Margin in pixels (BORDER from SCALE)
 130 AN=WIDTH-2*B                'Usable width
 140 R0=2.5 : R1=4               'Initial window in r
 145 IT=1000 : SK=100 : MS=120
 150 GOTO 160                    'Main loop
 155 REM Main loop
-160 CLG
+160 CLICKED=0 : CLG
 165 GOSUB 310                   'Draw axes
 170 GOSUB 210                   'Draw diagram
-175 PAUSE                       'Click inside graph = zoom, click outside = end
-180 CX=XPOS : IF CX<R0 OR CX>R1 THEN END
+175 IF CLICKED=0 THEN PAUSE 10
+176 IF CLICKED=0 THEN 175
+180 CX=CLICKX : IF CX<R0 OR CX>R1 THEN END
 190 RV=CX                       'r clicked
 195 W=(R1-R0)/4
 200 R0=RV-W/2 : R1=RV+W/2
@@ -61,4 +63,5 @@
 410 CR=1 : CG=0 : CB=Q
 415 INK INT(CR*255),INT(CG*255),INT(CB*255)
 420 RETURN
+425 CLICKX=MOUSEX : CLICKED=1 : RETURN
 
