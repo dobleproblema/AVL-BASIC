@@ -9528,10 +9528,35 @@ impl Interpreter {
         {
             return Err(self.err(ErrorCode::OnlyBasFiles));
         }
-        if !resolved.exists() {
-            return Ok(resolved);
+
+        Ok(Self::match_existing_case(resolved))
+    }
+
+    fn match_existing_case(path: PathBuf) -> PathBuf {
+        if path.exists() {
+            return path;
         }
-        Ok(resolved)
+
+        let Some(parent) = path.parent() else {
+            return path;
+        };
+        let Some(target) = path.file_name().and_then(|name| name.to_str()) else {
+            return path;
+        };
+        let Ok(entries) = fs::read_dir(parent) else {
+            return path;
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(target))
+            {
+                return entry.path();
+            }
+        }
+        path
     }
 
     fn resolve_path_value(&mut self, expr: &str) -> BasicResult<PathBuf> {
@@ -13565,6 +13590,21 @@ mod interpreter_tests {
         interp.load_file(&first).unwrap();
         interp.run_loaded().unwrap();
         assert_eq!(interp.take_output(), " 7\n 8\n");
+    }
+
+    #[test]
+    fn chain_matches_existing_bas_filename_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = dir.path().join("second.bas");
+        fs::write(&second, "10 PRINT \"CASE OK\"\n20 END\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.root_dir = dir.path().to_path_buf();
+        interp.current_dir = dir.path().to_path_buf();
+        interp.program.load_text("10 CHAIN \"SECOND.BAS\"").unwrap();
+
+        interp.run_loaded().unwrap();
+        assert_eq!(interp.take_output(), "CASE OK\n");
     }
 
     #[test]
