@@ -1,0 +1,116 @@
+filename	category	featured_order	title	description	techniques
+g-bernoulli.bas	Showcase animations and retro effects		Radial Curve	Animated five-lobed radial point curve.	PLOT;ORIGIN;FRAME
+g-bernoulli2.bas	Showcase animations and retro effects		Living Radial Curve	Time-varying radial lobes with cycling colors.	PLOT;trigonometry;FRAME
+g-bigbang.bas	Showcase animations and retro effects	4	Big Bang	Thousands of pixels explode into particles and reassemble as a second image.	BLOAD;TEST;particle morphing
+g-bobs.bas	Showcase animations and retro effects		Orbiting Bobs	Six depth-sorted circles orbit in simulated 3D.	3D projection;depth sorting;FCIRCLE
+g-cooperative.bas	Showcase animations and retro effects		Cooperative Simulation	Two animations redraw sequentially on each timer pulse.	EVERY;ORIGIN;sequential redraw
+g-dot-tunnel.bas	Showcase animations and retro effects	9	Twisting Dot Tunnel	Twisting 3D dot tunnel with star backdrop.	3D projection;procedural animation;FRAME
+g-jelly.bas	Showcase animations and retro effects	13	Jelly	Ten thousand points fold into a living neon form.	parametric plotting;offscreen rendering;FRAME
+g-old-school.bas	Showcase animations and retro effects	1	Old-School Demo	A complete demoscene postcard: 3D starfield, copper bars and a hand-built sine scroller.	3D starfield;SPRITE$;sine scroller
+g-roulette.bas	Showcase animations and retro effects		Color Roulette	Rotating colored circle sectors create a pinwheel.	FCIRCLE;animation;DEG
+g-scroll.bas	Showcase animations and retro effects		Diagonal Text Scroll	Diagonal rotating-text scroll with offscreen redraw.	LDIR;LABEL;offscreen rendering
+g-sine-scroll.bas	Showcase animations and retro effects		Sine Scroller	Hand-built bitmap font bends through a sine wave.	SPRITE$;TEST;bitmap font
+g-starfield.bas	Showcase animations and retro effects		3D Starfield	Two thousand depth-recycled stars flow through 3D.	3D projection;depth recycling;FRAME
+g-sunflower.bas	Showcase animations and retro effects		Sunflower	Animated phyllotaxis spiral with hue cycling.	phyllotaxis;custom RGB;FRAME
+g-tunnel-tquad.bas	Showcase animations and retro effects	19	Textured Tunnel	A seamless textured tunnel turns a ring mesh into a fluid animated ride.	TQUAD;mesh generation;texture animation
+g-tunnel.bas	Showcase animations and retro effects		BASIC Texture Tunnel	BASIC texture lookup creates a block-rendered tunnel.	BLOAD;TEST;texture mapping
+g-zoomer-tquad.bas	Showcase animations and retro effects		Textured Zoomer	One textured quad produces rotating zoom feedback.	TQUAD;rotation;zoom
+g-zoomer.bas	Showcase animations and retro effects	5	BASIC Zoomer	Block-sampled texture mapping powers a retro zoomer.	BLOAD;TEST;block rendering
+g-arkanoid.bas	Games, applications, and algorithmic scenes	3	AVL Arkanoid	A genuinely playable brick-breaker—and a collision-engine masterclass.	sprite collisions;color collisions;mouse input
+g-chess960.bas	Games, applications, and algorithmic scenes	11	Chess960 Generator	Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls.	DEF SUB;constrained randomization;sprites
+g-loan.bas	Games, applications, and algorithmic scenes	18	Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
+g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
+g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
+g-cube.bas	3D, lighting, and texture mapping		Rotating Cube	Filled rotating cube with hidden-face removal.	3D projection;back-face culling;FTRIANGLE
+g-cube2.bas	3D, lighting, and texture mapping		Orbiting Cubes	Two depth-sorted cubes orbit in opposite phases.	3D projection;depth sorting;FTRIANGLE
+g-cube3.bas	3D, lighting, and texture mapping		Flood-Filled Cube	Rotating cube fills outlined faces using flood fill.	3D projection;DRAW;FILL
+g-cube-tquad.bas	3D, lighting, and texture mapping	6	Textured Cube	A spinning textured cube built from projection math and affine quads.	3D projection;back-face culling;TQUAD
+g-demo.bas	3D, lighting, and texture mapping		Cube and Scroll Demo	Filled rotating cube behind a diagonal text scroll.	3D projection;FTRIANGLE;LDIR
+g-gouraud.bas	3D, lighting, and texture mapping	7	Gouraud Surface	A mathematical surface rendered with a software Z-buffer and per-vertex lighting.	Z-buffer;barycentric rasterization;vertex lighting
+g-lambert.bas	3D, lighting, and texture mapping		Lambert Surface	Painter-sorted surface uses flat Lambert lighting.	painter's algorithm;Lambert shading;quicksort
+g-origin.bas	3D, lighting, and texture mapping	8	Bouncing Viewport Cube	Rotating cube moves inside a bouncing viewport.	ORIGIN;3D projection;viewport animation
+g-raytracer.bas	3D, lighting, and texture mapping	2	Ray Tracer	A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC.	ray tracing;Fresnel;reflection and refraction
+g-sphere.bas	3D, lighting, and texture mapping		Parametric Sphere	Parametric line sweep sketches a colored sphere.	parametric plotting;SCALE;DRAW
+g-chords.bas	Fractals, curves, and procedural geometry		Circle Chords	Complete chord graph drawn around a circle.	polar coordinates;DRAW;FRAME
+g-fdragon.bas	Fractals, curves, and procedural geometry		Dragon Curve	Dragon curve drawn with simulated recursive calls.	simulated recursion;DRAWR;arrays
+g-fhilbert.bas	Fractals, curves, and procedural geometry		Hilbert Curve	Hilbert curve generated from an expanded L-system.	L-system;string rewriting;DRAWR
+g-flevy.bas	Fractals, curves, and procedural geometry		Lévy Curve State Machine	Lévy curve uses an explicit recursion state machine.	recursion state machine;arrays;DRAW
+g-flevy2.bas	Fractals, curves, and procedural geometry		Iterative Lévy C Curve	Iterative L-system draws a Lévy C curve.	L-system;string expansion;DRAWR
+g-fmandelbrot.bas	Fractals, curves, and procedural geometry	10	Mandelbrot Explorer	Click into the Mandelbrot set and dive deeper with every redraw.	complex iteration;mouse zoom;SCALE
+g-fsierpinski.bas	Fractals, curves, and procedural geometry		Sierpiński Triangle	Recursive Sierpiński triangle drawn through shrinking steps.	recursion;trigonometry;DRAW
+g-fsnow.bas	Fractals, curves, and procedural geometry		Koch Snowflake	Koch snowflake generated by iterative L-system expansion.	L-system;string expansion;DRAWR
+g-ftree.bas	Fractals, curves, and procedural geometry		Binary Tree	Monochrome binary tree simulates recursion with arrays.	simulated recursion;arrays;FRAME
+g-ftree2.bas	Fractals, curves, and procedural geometry		Organic Tree	Organic branching tree adds depth-based width and color.	simulated recursion;line width;color gradient
+g-ftree3.bas	Fractals, curves, and procedural geometry		Gradient Tree	Three-stage color gradient enriches the recursive tree.	simulated recursion;multi-stage color;line width
+g-ftree4.bas	Fractals, curves, and procedural geometry	15	Animated Tree	Animated swaying tree redraws recursive branches each frame.	simulated recursion;EVERY;offscreen rendering
+g-parametric.bas	Fractals, curves, and procedural geometry		Parametric Curve	Rainbow multi-frequency curve uses custom color functions.	DEF FN;parametric plotting;RGB
+g-parametric2.bas	Fractals, curves, and procedural geometry		Lissajous 3:4	Rainbow Lissajous curve traces a three-by-four ratio.	DEF FN;Lissajous curve;RGB
+g-parametric3.bas	Fractals, curves, and procedural geometry		Lissajous 12:11	Dense rainbow Lissajous curve uses adjacent frequencies.	DEF FN;Lissajous curve;RGB
+g-axis.bas	Plotting, charts, and mathematical visualization		Shifted Axes	Minimal shifted-axis example using SCALE and CROSSAT.	SCALE;CROSSAT;XAXIS and YAXIS
+g-bifurcation.bas	Plotting, charts, and mathematical visualization	17	Bifurcation Explorer	Explore chaos by clicking into a rainbow logistic-map bifurcation diagram.	logistic map;Lyapunov exponent;mouse zoom
+g-function.bas	Plotting, charts, and mathematical visualization		Sine Plot	Plots sine from a string expression with axes.	GRAPH;string expression;axes
+g-function2.bas	Plotting, charts, and mathematical visualization		Tangent Plot	Plots tangent directly across multiple discontinuities.	GRAPH;discontinuities;SCALE
+g-function2b.bas	Plotting, charts, and mathematical visualization		Manual Tangent Plot	Manually plots tangent while skipping discontinuity jumps.	DEF FN;error handling;discontinuity filtering
+g-function3.bas	Plotting, charts, and mathematical visualization		Reciprocal Branch	Plots one reciprocal branch on a negative domain.	GRAPH;SCALE;axes
+g-function4.bas	Plotting, charts, and mathematical visualization		Nested Function Detail	Plots a complex nested expression with highlighted subrange.	GRAPH;GRAPHRANGE;MASK
+g-function5.bas	Plotting, charts, and mathematical visualization		Sinc Plot	Plots sinc with sampled stems and labeled axes.	DEF FN;GRAPH;sample stems
+g-function6.bas	Plotting, charts, and mathematical visualization		Composite Function	Plots a composite trigonometric-exponential string expression.	GRAPH;string expression;SCALE
+g-function7.bas	Plotting, charts, and mathematical visualization		Large Polynomial	Plots an enormous polynomial with exponential tick labels.	DEF FN;exponential labels;axes
+g-origin-scale.bas	Plotting, charts, and mathematical visualization	16	Four-Panel Plot Gallery	Four independent mathematical canvases share one screen: plots, data, axes and fractals.	DEF SUB;ORIGIN and SCALE;GRAPHRANGE
+g-regression.bas	Plotting, charts, and mathematical visualization		Linear Regression	Fits and plots a linear regression from DATA.	least squares;DATA;GRAPH
+g-scale.bas	Plotting, charts, and mathematical visualization		Axis Label Placement	Demonstrates axis-label placement on a data scale.	SCALE;CROSSAT;axis labels
+g-scale2.bas	Plotting, charts, and mathematical visualization		Polar Cardioid	Draws a labeled cardioid in polar coordinates.	polar coordinates;SCALE;DRAW
+g-scale3.bas	Plotting, charts, and mathematical visualization		Olympic Times Chart	Charts historical Olympic freestyle times by sex.	DATA;SCALE;custom markers
+g-scale4.bas	Plotting, charts, and mathematical visualization		Diagonal Axis Grid	Repeats zero-tick axes along a diagonal grid.	CROSSAT;XAXIS;YAXIS
+g-scale5.bas	Plotting, charts, and mathematical visualization		Clipped Reciprocal Plot	Clips a reciprocal graph to one custom range.	GRAPHRANGE;GRAPH;SCALE
+g-scale6.bas	Plotting, charts, and mathematical visualization		Masked Reciprocal Ranges	Overlays masked reciprocal plots across two ranges.	GRAPHRANGE;MASK;GRAPH
+g-scale7.bas	Plotting, charts, and mathematical visualization		Aspect-Ratio Circles	Shows aspect-ratio effects on two nominal circles.	SCALE;CIRCLE;aspect ratio
+g-scale8.bas	Plotting, charts, and mathematical visualization		Data Bar Chart	Builds a DATA-driven bar chart with scaled axes.	DATA;RECTANGLE;scaled axes
+g-colors.bas	Drawing, color, and coordinate primitives		Color Formats	Documents supported color syntaxes with labeled swatches.	INK and PAPER;RGB;named colors
+g-demo2.bas	Drawing, color, and coordinate primitives		Circle Fill Test	Tiny random circle-and-fill drawing test.	CIRCLE;FILL;RND
+g-demo3.bas	Drawing, color, and coordinate primitives		Filled Primitive Benchmark	Random filled circles and rectangles benchmark primitives.	FCIRCLE;FRECTANGLE;FRAME
+g-demo4.bas	Drawing, color, and coordinate primitives		Triangle Benchmark	Random filled triangles benchmark rasterization.	FTRIANGLE;RND;FRAME
+g-line.bas	Drawing, color, and coordinate primitives		Bouncing Line	Bouncing rotating line exercises relative origin changes.	ORIGIN;DRAW;animation
+g-mask.bas	Drawing, color, and coordinate primitives		Line Masks	Four line patterns demonstrate binary drawing masks.	MASK;DRAW;binary patterns
+g-origin2.bas	Drawing, color, and coordinate primitives		Viewport Clipping Test	Random shapes are clipped to a custom viewport.	ORIGIN;clipping;filled primitives
+g-palette.bas	Drawing, color, and coordinate primitives		Indexed Palette Grid	Displays all 32 indexed colors in a grid.	FILL;LOCATE;indexed colors
+g-relative.bas	Drawing, color, and coordinate primitives		Relative Drawing	Short path demonstrates relative moves and draws.	DRAWR;MOVER;named colors
+g-width.bas	Drawing, color, and coordinate primitives		Pen Widths	Compares pen widths on lines and overlapping points.	PENWIDTH;DRAW;PLOT
+g-banner.bas	Text and typography		Character Banner	Rebuilds AVL BASIC as a large character banner.	LABEL;TEST;GPRINT
+g-chartest.bas	Text and typography		Character Set Test	Exercises accented glyphs, symbols, fonts, and transparency.	Unicode text;font modes;transparency
+g-chartest2.bas	Text and typography		Text Stress Test	Randomly places Spanish labels as a text stress test.	LABEL;RND;FRAME
+g-ldir.bas	Text and typography		Text Direction Test	Places sample labels at many text directions.	LDIR;LABEL;GPRINT
+g-ldir2.bas	Text and typography		Circular Text	Arranges a copyright string around a circle.	LDIR;trigonometry;LABEL
+g-ldir3.bas	Text and typography		Rotating Text Ring	Animates one rotating ring of directional text.	LDIR;offscreen rendering;FRAME
+g-ldir4.bas	Text and typography		Double Text Ring	Animates two concentric rings of directional text.	LDIR;offscreen rendering;FRAME
+g-ldirt.bas	Text and typography		Text Ring Benchmark	Times repeated rendering of one rotating text ring.	LDIR;timing;FRAME
+g-ldirt2.bas	Text and typography		Double Ring Benchmark	Times repeated rendering of two rotating text rings.	LDIR;timing;FRAME
+g-locate.bas	Text and typography		Cursor and Font Test	Mixes font sizes, cursor positions, and labels.	LOCATE;font modes;LABEL
+g-strings.bas	Text and typography		Colored Text Modes	Compares colored opaque and transparent text output.	INK and PAPER;font modes;LABEL
+g-text.bas	Text and typography		Substring Text Scroll	Scrolls numeric text by changing its substring offset.	GPRINT;MID$;font modes
+g-usflag.bas	Text and typography		Text-Cell Flag	Draws a text-cell United States flag.	LOCATE;GPRINT;PAPER
+g-animation.bas	Sprites, images, and frame animation		3D Plot Animation	Plays pre-rendered 3D plot frames from PNG files.	BLOAD;SCREEN;FRAME
+g-animation2.bas	Sprites, images, and frame animation		Tree Growth Animation	Ping-pongs pre-rendered tree-growth PNG frames.	BLOAD;ping-pong playback;FRAME
+g-animation3.bas	Sprites, images, and frame animation		Moving Light Animation	Loops pre-rendered moving-light PNG frames.	BLOAD;SCREEN;FRAME
+g-balls.bas	Sprites, images, and frame animation	14	Colliding Balls	Fifty numbered sprites bounce and collide without full clears.	sprite collisions;dirty redraw;COLMODE
+g-sprite.bas	Sprites, images, and frame animation		Sprite Transparency	Captures and redraws one sprite with transparency variants.	SPRITE$;SPRITE;transparency
+g-sprite2.bas	Sprites, images, and frame animation		Scaled Sprite Transparency	Repeats sprite transparency inside a scaled viewport.	SPRITE$;ORIGIN;transparency
+g-sprite3.bas	Sprites, images, and frame animation		Sprite Benchmark	Benchmarks many randomly placed transparent sprites.	SPRITE$;RND;FRAME
+g-sprite4.bas	Sprites, images, and frame animation		Draggable Sprite	Drags a sprite while restoring its captured background.	mouse events;background capture;SPRITE
+g-sprite5.bas	Sprites, images, and frame animation		Collision Modes	Demonstrates both color and sprite collision modes.	COLMODE;HITTEST;HITID
+g-swap.bas	Sprites, images, and frame animation		Graphics Buffer Swap	Benchmarks swapping two full-screen graphics buffers.	BLOAD;SCREEN;SWAP
+g-inkey.bas	Input, events, and timing		Graphical Key Codes	Displays graphical key input and numeric codes.	INKEY$;ASC;graphics console
+g-input.bas	Input, events, and timing		Graphics Input Form	Collects name and age through graphical input fields.	GINPUT;GPRINT;PAUSE
+g-mouse.bas	Input, events, and timing		Mouse Rectangle	Draws rectangles from mouse press-and-release events.	ON MOUSE;event callbacks;FRECTANGLE
+g-mouse2.bas	Input, events, and timing		Mouse Freehand Drawing	Freehand drawing follows mouse drag events.	LEFTDRAG;MASK;DRAW
+inkey.bas	Input, events, and timing		Console Key Codes	Displays console key input and numeric codes.	INKEY$;ASC;console input
+interrupts.bas	Input, events, and timing		Scheduled Guessing Game	Scheduled callbacks race to guess a random letter.	EVERY;AFTER;callbacks
+g-subsample.bas	Console algorithms and language features		Local Scope Example	Demonstrates DEF SUB locals, shared names, and scope failure.	DEF SUB;LOCAL;scope
+loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
+matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
+nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output
+nr-factorial.bas	Console algorithms and language features		Block Factorial	Computes 100 factorial using nine-digit integer blocks.	arbitrary precision;arrays;PRINT USING
+palette.bas	Console algorithms and language features		Named Color Table	Lists named colors and their packed RGB values.	RGB;HEX$;DATA
+pimachin.bas	Console algorithms and language features		Machin Pi	GOSUB-based Machin algorithm computes 1,000 pi digits.	arbitrary precision;GOSUB;Machin formula
+pimachin-modern.bas	Console algorithms and language features	20	Modern Machin Pi	Compute 1,000 digits of π with block arithmetic and structured, modern BASIC.	DEF SUB;LOCAL;arbitrary precision
+powermul.bas	Console algorithms and language features		Arbitrary-Precision Powers	Computes arbitrary-precision integer powers by block multiplication.	DEF SUB;block multiplication;PRINT USING

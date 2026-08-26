@@ -1080,7 +1080,7 @@ Tabla completa de códigos de error
 
 9. Comandos “solo inmediato”
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
@@ -1140,6 +1140,15 @@ RENUM 295,1,190,215 'Mueve el bloque 190-215 al hueco 295-298.
 + `RUN "prog.bas"`                     Carga y ejecuta el programa indicado (arranque limpio).
 + `FILES "patrón"` | `CAT "patrón"`    Lista el contenido del directorio virtual actual.
 + `CD "ruta"`                          Cambia el directorio virtual actual dentro de la raíz del intérprete.
++ `TOUR`                               Presenta 20 ejemplos seleccionados, lo que demuestran y comandos `RUN` listos para copiar.
++ `SAMPLES`                            Lista los 115 programas incluidos, agrupados por categoría.
+
+Notas sobre `TOUR` / `SAMPLES`
+- No admiten argumentos y solo están disponibles en modo inmediato.
+- Sus nombres siguen siendo identificadores válidos; solo una línea inmediata completa invoca cada comando.
+- Son de solo lectura: no cambian el programa actual, el `CD`, las variables ni un estado reanudable con `CONT`.
+- Su catálogo está incrustado en el ejecutable Rust, por lo que puede consultarse aunque no esté disponible el directorio `samples/`. En ese caso AVL BASIC explica que los comandos `RUN "/samples/..."` mostrados necesitan un paquete o copia del repositorio que contenga `samples/` bajo la raíz virtual.
+- El recorrido visual está disponible sin conexión en `samples/index.html`; el catálogo completo y comentado también está disponible en Markdown en `samples/README.md`.
 
 Notas sobre el patrón de FILES / CAT
 - Comillas obligatorias; solo comodines `*` y `?`; no se permiten rutas ni `..`.

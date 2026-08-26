@@ -29,6 +29,7 @@ NOISE_PREFIXES = (
     "License:",
     "This is free software",
     "This program comes with",
+    "Type TOUR to explore",
     "Ready",
     "Saliendo",
 )

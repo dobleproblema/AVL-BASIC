@@ -50,13 +50,17 @@ Double-click avl-basic.exe, or open a terminal in this folder and run:
 
 Run a bundled example:
 
-    avl-basic.exe samples\\g-cube2.bas
+    avl-basic.exe samples\\g-old-school.bas
 
 Inside AVL BASIC:
 
-    CD "samples"
-    FILES "*.bas"
-    RUN "g-cube2.bas"
+    TOUR
+    SAMPLES
+    RUN "/samples/g-old-school.bas"
+
+TOUR presents 20 highlights with descriptions and ready-to-copy RUN commands.
+SAMPLES lists all 115 bundled programs by category. The complete visual gallery
+is in samples\\index.html; the annotated Markdown catalog is samples\\README.md.
 
 This package uses the native Rust runtime. You do not need to install Rust or
 Cargo to use it.
@@ -65,7 +69,7 @@ Included files
 --------------
 
 - avl-basic.exe: native Windows interpreter
-- samples/: bundled BASIC programs and assets
+- samples/: 115 BASIC programs, visual gallery, catalog, and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
 - COPYING: GPLv3-or-later license

@@ -548,6 +548,7 @@ pub fn trace_text(ansi: bool, line: i32) -> String {
 }
 
 pub fn normalize_code(code: &str) -> String {
+    let showcase_immediate = is_showcase_immediate_line(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code(main.trim_end());
     result = add_bas_extension_to_leading_file_command(&result);
@@ -561,6 +562,9 @@ pub fn normalize_code(code: &str) -> String {
         result.push_str(&" ".repeat(spaces));
         result.push('\'');
         result.push_str(comment);
+    }
+    if showcase_immediate {
+        result.make_ascii_uppercase();
     }
     result
 }
@@ -605,6 +609,10 @@ fn highlight_normalized_code(
     if let Some(cases) = cases {
         line = apply_identifier_case_for_display(&line, cases);
     }
+    let showcase_immediate = is_showcase_immediate_line(&line);
+    if showcase_immediate {
+        line.make_ascii_uppercase();
+    }
     if !ansi {
         return line;
     }
@@ -617,7 +625,7 @@ fn highlight_normalized_code(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette));
+    out.push_str(&highlight_main(rest, palette, showcase_immediate));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -636,6 +644,7 @@ fn normalize_code_for_editing(code: &str, cursor: usize) -> String {
 }
 
 fn normalize_code_for_editing_marked(code: &str) -> String {
+    let showcase_immediate = is_showcase_immediate_line_marked(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code_for_editing_marked(main.trim_end());
     result = add_bas_extension_to_leading_file_command(&result);
@@ -649,6 +658,9 @@ fn normalize_code_for_editing_marked(code: &str) -> String {
         result.push_str(&" ".repeat(spaces));
         result.push('\'');
         result.push_str(comment);
+    }
+    if showcase_immediate {
+        result.make_ascii_uppercase();
     }
     result
 }
@@ -665,6 +677,7 @@ pub fn syntax_highlight_raw_with_cases(
     if !ansi {
         return line;
     }
+    let showcase_immediate = is_showcase_immediate_line(&line);
     let (main, comment) = split_single_quote_comment(&line);
     let mut out = String::new();
     let mut rest = main;
@@ -675,7 +688,7 @@ pub fn syntax_highlight_raw_with_cases(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette));
+    out.push_str(&highlight_main(rest, palette, showcase_immediate));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -2909,6 +2922,16 @@ fn normalize_main_code_for_editing_marked(code: &str) -> String {
     normalize_main_code_inner(code, true)
 }
 
+fn is_showcase_immediate_line(line: &str) -> bool {
+    let command = line.trim();
+    command.eq_ignore_ascii_case("TOUR") || command.eq_ignore_ascii_case("SAMPLES")
+}
+
+fn is_showcase_immediate_line_marked(line: &str) -> bool {
+    let unmarked: String = line.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
+    is_showcase_immediate_line(&unmarked)
+}
+
 fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
@@ -3335,7 +3358,7 @@ fn increment_fixed_decimal(int_part: &str, frac_part: &str, frac_width: usize) -
     (trim_leading_decimal_zeros(&int_part).to_string(), frac_part)
 }
 
-fn highlight_main(text: &str, palette: SyntaxPalette) -> String {
+fn highlight_main(text: &str, palette: SyntaxPalette, showcase_immediate: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0usize;
@@ -3368,7 +3391,9 @@ fn highlight_main(text: &str, palette: SyntaxPalette) -> String {
             }
             let word: String = chars[start..i].iter().collect();
             let upper = word.to_ascii_uppercase();
-            if expect_sub_name {
+            if showcase_immediate {
+                push_styled(&mut out, palette.keyword, &upper);
+            } else if expect_sub_name {
                 push_styled(&mut out, palette.keyword, &upper);
                 expect_sub_name = false;
                 after_def = false;
@@ -3863,6 +3888,80 @@ mod tests {
         assert_eq!(
             syntax_highlight_with_cases(source, false, None),
             "10 PRINT 1 :"
+        );
+    }
+
+    #[test]
+    fn showcase_metacommands_are_capitalized_and_highlighted_only_as_complete_lines() {
+        for command in ["tour", "samples"] {
+            let upper = command.to_ascii_uppercase();
+            assert_eq!(normalize_code(command), upper);
+            assert_eq!(
+                normalize_code(&format!("  {command}  ")),
+                format!("  {upper}")
+            );
+            assert_eq!(
+                syntax_highlight(command, true),
+                format!("{KEYWORD_STYLE}{upper}{RESET}")
+            );
+            assert_eq!(
+                syntax_highlight_raw_with_cases(command, true, None),
+                format!("{KEYWORD_STYLE}{upper}{RESET}")
+            );
+
+            for cursor in 0..=command.chars().count() {
+                assert_eq!(
+                    syntax_highlight_editing_with_cases(command, cursor, false, None),
+                    upper
+                );
+            }
+        }
+
+        assert!(!is_known_basic_word("TOUR"));
+        assert!(!is_known_basic_word("SAMPLES"));
+
+        assert_eq!(normalize_code("samples=7"), "samples=7");
+        assert_eq!(normalize_code("10 tour=3"), "10 tour=3");
+        assert_eq!(normalize_code("print tour"), "PRINT tour");
+        assert_eq!(normalize_code("tour:"), "tour :");
+        assert_eq!(
+            normalize_code("tour ' not immediate"),
+            "tour ' not immediate"
+        );
+
+        for (source, identifier) in [
+            ("SAMPLES=7", "SAMPLES"),
+            ("10 TOUR=3", "TOUR"),
+            ("PRINT TOUR", "TOUR"),
+            ("10 TOUR", "TOUR"),
+            ("TOUR ' not immediate", "TOUR"),
+        ] {
+            let highlighted = syntax_highlight(source, true);
+            assert!(
+                !highlighted.contains(&format!("{KEYWORD_STYLE}{identifier}{RESET}")),
+                "unexpected metacommand highlighting for {source}: {highlighted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn showcase_metacommand_display_overrides_a_matching_identifier_case_only_when_immediate() {
+        let cases = HashMap::from([
+            ("TOUR".to_string(), "tour".to_string()),
+            ("SAMPLES".to_string(), "Samples".to_string()),
+        ]);
+
+        assert_eq!(
+            syntax_highlight_with_cases("tour", false, Some(&cases)),
+            "TOUR"
+        );
+        assert_eq!(
+            syntax_highlight_with_cases("samples", false, Some(&cases)),
+            "SAMPLES"
+        );
+        assert_eq!(
+            syntax_highlight_with_cases("PRINT tour; samples", false, Some(&cases)),
+            "PRINT tour; Samples"
         );
     }
 

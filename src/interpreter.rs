@@ -10,6 +10,7 @@ use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
+use crate::showcase;
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, logical_round, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsInputEvent, GraphicsWindow, MouseSnapshot};
@@ -1905,6 +1906,7 @@ impl Interpreter {
             "This is free software under GPLv3 or later. You may redistribute it under its terms.",
         );
         self.write_line("This program comes with ABSOLUTELY NO WARRANTY. See COPYING.");
+        self.write_line("Type TOUR to explore 20 highlights, or SAMPLES for the full catalog.");
     }
 
     pub fn repl(&mut self) -> i32 {
@@ -2080,6 +2082,16 @@ impl Interpreter {
         if let Some(arg) = immediate_arg(trimmed, &upper, "CD") {
             self.execute_cd(arg)?;
             return Ok(());
+        }
+        if !is_assignment(trimmed) {
+            if let Some(arg) = immediate_arg(trimmed, &upper, "SAMPLES") {
+                self.execute_showcase(arg, false)?;
+                return Ok(());
+            }
+            if let Some(arg) = immediate_arg(trimmed, &upper, "TOUR") {
+                self.execute_showcase(arg, true)?;
+                return Ok(());
+            }
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "SAVE") {
             let path = self.resolve_bas_literal_arg(arg)?;
@@ -2327,6 +2339,26 @@ impl Interpreter {
             return Err(self.err(ErrorCode::FileNotFound));
         }
         self.current_dir = target;
+        Ok(())
+    }
+
+    fn execute_showcase(&mut self, args: &str, tour: bool) -> BasicResult<()> {
+        if !args.trim().is_empty() {
+            return Err(self.err(ErrorCode::Syntax));
+        }
+
+        let samples_available = self.root_dir.join("samples").is_dir();
+        let lines = if tour {
+            showcase::tour_lines(samples_available)
+        } else {
+            showcase::samples_lines(samples_available)
+        }
+        .map_err(|detail| self.err(ErrorCode::InvalidValue).with_detail(detail))?;
+
+        self.finish_output_line();
+        for line in lines {
+            self.write_line(&line);
+        }
         Ok(())
     }
 
@@ -14165,11 +14197,12 @@ fn is_immediate_only_command(first: &str, upper_command: &str) -> bool {
             | "DELETE"
             | "SYSTEM"
             | "QUIT"
-    ) || (first == "EXIT"
-        && !matches!(
-            upper_command,
-            "EXIT FOR" | "EXIT WHILE" | "EXIT FN" | "EXIT SUB"
-        ))
+    ) || matches!(upper_command, "SAMPLES" | "TOUR")
+        || (first == "EXIT"
+            && !matches!(
+                upper_command,
+                "EXIT FOR" | "EXIT WHILE" | "EXIT FN" | "EXIT SUB"
+            ))
 }
 
 fn parse_line_number_literal(source: &str) -> Option<i32> {

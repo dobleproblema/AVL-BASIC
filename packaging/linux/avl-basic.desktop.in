@@ -7,6 +7,7 @@ GenericName[es]=Intérprete BASIC
 Comment=Interactive BASIC interpreter with native graphics
 Comment[es]=Intérprete BASIC interactivo con gráficos nativos
 Exec=@EXEC@
+Path=@PATH@
 Icon=avl-basic
 Terminal=true
 Categories=Development;

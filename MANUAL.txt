@@ -1078,7 +1078,7 @@ Complete table of error codes
 
 9. "Immediate mode only" commands
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
@@ -1138,6 +1138,15 @@ RENUM 295,1,190,215 'Moves block 190-215 into the 295-298 gap.
 + `RUN "prog.bas"`                     Loads and runs the indicated program (clean start).
 + `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
 + `CD "path"`                          Changes the current virtual directory within the interpreter root.
++ `TOUR`                               Presents 20 selected samples, what they demonstrate, and ready-to-copy `RUN` commands.
++ `SAMPLES`                            Lists all 115 bundled programs grouped by category.
+
+Notes on `TOUR` / `SAMPLES`
+- They take no arguments and are available only in immediate mode.
+- Their names remain valid identifiers; only a complete immediate line invokes either command.
+- They are read-only: they do not change the current program, `CD`, variables, or a resumable `CONT` state.
+- Their catalog is embedded in the Rust executable, so it remains viewable even when the `samples/` directory is not available. In that case, AVL BASIC explains that the displayed `RUN "/samples/..."` commands need a package or checkout containing `samples/` under the virtual root.
+- The visual tour is available offline in `samples/index.html`; the complete annotated catalog is also available as Markdown in `samples/README.md`.
 
 Notes on the `FILES` / `CAT` pattern
 - Quotes are mandatory; only `*` and `?` wildcards are allowed; paths and `..` are not allowed.
