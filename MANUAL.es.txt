@@ -431,6 +431,8 @@ Notas rápidas
 - `SCREEN` no borra por sí solo el contenido gráfico existente.
 - SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
+- `MODE` cambia la resolución física, borra la pantalla con el `PAPER` actual, restablece el origen físico y el viewport a pantalla completa y sitúa los cursores en 0,0. Un `SCALE` explícito y su `BORDER` se conservan y remapean dentro del nuevo viewport completo; sin escala explícita, `XMAX=WIDTH-1` e `YMAX=HEIGHT-1`.
+- Si un `BORDER` conservado no cabe en un modo menor (deben cumplirse `2*BORDER < WIDTH-1` y `2*BORDER < HEIGHT-1`), `MODE` da `Invalid argument` y deja intactos el modo y el estado gráfico anteriores. Usa antes `SCALE` o `SCREEN` cuando quieras restablecerlos.
 - `ORIGIN` sin argumentos equivale exactamente a `ORIGIN 0,0,0,WIDTH-1,HEIGHT-1,0`: restablece el origen físico y el viewport a pantalla completa sin modificar un `SCALE` activo, `PAPER`, `INK`, fuente, `PENWIDTH`, `MASK` ni `LDIR`.
 - Todos los argumentos de `ORIGIN` son siempre coordenadas físicas de pantalla, incluso mientras haya un `SCALE` de usuario activo. `ORIGIN x,y` traslada el origen físico almacenado; con 6 argumentos define además un viewport físico y clipping.
 - `SCALE` remapea las coordenadas de usuario usadas por `PLOT/DRAW/CIRCLE/FILL/SPRITE/TEST/XPOS/YPOS`.
@@ -693,7 +695,8 @@ Ejemplo
 
 Notas rápidas
 - `SCREEN$` captura la pantalla en una cadena; `SCREEN var$` vuelca una variable a pantalla.
-- `BSAVE/BLOAD` con `gscr$` evitan modificar la pantalla principal.
+- `BSAVE "img.png",gscr$` usa las dimensiones codificadas en la cadena gráfica; `BLOAD "img.png",gscr$` carga el PNG en la cadena conservando sus propias dimensiones. Estas formas no modifican la pantalla principal.
+- `BLOAD "img.png"` y `SCREEN gscr$` exigen que las dimensiones de la imagen/cadena coincidan con el `MODE` activo; en caso contrario dan `Invalid value` sin modificar la pantalla.
 - Reglas de fichero PNG: comillas obligatorias, extensión `.png` requerida y rutas siempre dentro de la raíz virtual del intérprete.
 - En modo inmediato, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio virtual actual.
 - Dentro de un programa cargado desde disco, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio del propio programa. Esto no cambia el `CD` actual del usuario.

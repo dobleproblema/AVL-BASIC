@@ -432,6 +432,8 @@ Quick notes
 - `SCREEN` does not clear the existing graphics contents by itself.
 - `SCREEN CLOSE` closes the window and also restores the default graphics state, like `SCREEN`.
 - By default, (0,0) is at the lower-left corner.
+- `MODE` changes the physical resolution, clears the screen with the current `PAPER`, restores the physical origin and full-screen viewport, and places the cursors at 0,0. An explicit `SCALE` and its `BORDER` are preserved and remapped into the new full viewport; without an explicit scale, `XMAX=WIDTH-1` and `YMAX=HEIGHT-1`.
+- If a preserved `BORDER` does not fit in a smaller mode (`2*BORDER < WIDTH-1` and `2*BORDER < HEIGHT-1` must both hold), `MODE` reports `Invalid argument` and leaves the previous mode and graphics state unchanged. Use `SCALE` or `SCREEN` first when a reset is intended.
 - Bare `ORIGIN` is exactly equivalent to `ORIGIN 0,0,0,WIDTH-1,HEIGHT-1,0`: it restores the physical origin and full-screen viewport without changing an active `SCALE`, `PAPER`, `INK`, font, `PENWIDTH`, `MASK`, or `LDIR`.
 - All `ORIGIN` arguments are always physical screen coordinates, even while a user `SCALE` is active. `ORIGIN x,y` shifts the stored physical origin; with 6 arguments it also defines a physical viewport and clipping.
 - `SCALE` remaps the user coordinates used by `PLOT/DRAW/CIRCLE/FILL/SPRITE/TEST/XPOS/YPOS`.
@@ -692,7 +694,8 @@ Example
 
 Quick notes
 - `SCREEN$` captures the screen into a string; `SCREEN var$` restores a variable to the screen.
-- `BSAVE/BLOAD` with `gscr$` avoid modifying the main screen.
+- `BSAVE "img.png",gscr$` uses the dimensions encoded in the graphics string; `BLOAD "img.png",gscr$` loads the PNG into the string with the PNG's own dimensions. These forms do not modify the main screen.
+- `BLOAD "img.png"` and `SCREEN gscr$` require the image/string dimensions to match the active `MODE`; otherwise they report `Invalid value` without changing the screen.
 - PNG file rules: quotes are mandatory, the `.png` extension is required, and paths must always stay within the interpreter's virtual root.
 - In immediate mode, relative paths in `BLOAD/BSAVE` are resolved from the current virtual directory.
 - Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.

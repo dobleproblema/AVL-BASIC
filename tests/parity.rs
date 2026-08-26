@@ -2118,6 +2118,45 @@ fn multiline_subroutine_locals_and_array_references() {
 }
 
 #[test]
+fn multiline_subroutine_local_scalar_and_array_may_share_base_name() {
+    for declarations in ["50 LOCAL C(3)\n55 LOCAL C", "50 LOCAL C\n55 LOCAL C(3)"] {
+        let program = format!(
+            r#"10 C=7
+20 DIM C(5)
+30 C(2)=8
+40 DEF SUB WORK()
+{declarations}
+60 C=4:C(2)=9
+70 PRINT C;C(2)
+80 SUBEND
+90 CALL WORK()
+100 PRINT C;C(2)"#
+        );
+
+        assert_eq!(run_rust(&program), " 4  9\n 7  8\n");
+    }
+}
+
+#[test]
+fn duplicate_local_of_same_kind_reports_its_declaration_line() {
+    for (first_local, second_local) in [("C", "C"), ("C(3)", "C(4)")] {
+        let mut interp = Interpreter::new();
+        for line in [
+            "10 DEF SUB WORK()".to_string(),
+            format!("20 LOCAL {first_local}"),
+            format!("25 LOCAL {second_local}"),
+            "30 SUBEND".to_string(),
+            "40 END".to_string(),
+        ] {
+            interp.process_immediate(&line).unwrap();
+        }
+
+        let err = interp.process_immediate("RUN").unwrap_err();
+        assert_eq!(err.display_for_basic(), "Line 25. Invalid argument.");
+    }
+}
+
+#[test]
 fn multiline_subroutine_array_parameters_are_real_aliases() {
     let output = run_rust(
         r#"10 DEF SUB TOUCH(A,B)
@@ -2582,6 +2621,47 @@ fn scale_parameter_functions_report_active_scale() {
 90 END"#,
     );
     assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn mode_reports_physical_bounds_and_preserves_an_explicit_scale() {
+    let output = run_rust(
+        r#"10 SCREEN : MODE 1024
+20 IF WIDTH<>1024 OR HEIGHT<>768 THEN PRINT "BAD SIZE":END
+30 IF XMIN<>0 OR XMAX<>1023 OR YMIN<>0 OR YMAX<>767 OR BORDER<>0 THEN PRINT "BAD PHYSICAL SCALE":END
+40 MODE 640 : SCALE 0,639,0,479,20
+50 MODE 1024
+60 IF WIDTH<>1024 OR HEIGHT<>768 THEN PRINT "BAD RESIZED SIZE":END
+70 IF XMIN<>0 OR XMAX<>639 OR YMIN<>0 OR YMAX<>479 OR BORDER<>20 THEN PRINT "BAD PRESERVED SCALE":END
+80 IF XPOS<>0 OR YPOS<>0 THEN PRINT "BAD CURSOR":END
+90 PLOT 639,479,66051 : IF TEST(639,479)<>66051 THEN PRINT "BAD MAPPING":END
+100 SCALE
+110 IF XMAX<>1023 OR YMAX<>767 OR BORDER<>0 THEN PRINT "BAD SCALE RESET":END
+120 PRINT "OK"
+130 END"#,
+    );
+    assert_eq!(output, "OK\n");
+}
+
+#[test]
+fn g_origin_scale_sample_runs_in_every_registered_mode() {
+    let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples")
+        .join("g-origin-scale.bas");
+
+    for width in [640, 800, 1024] {
+        let mut interp = Interpreter::new();
+        interp.process_immediate(&format!("MODE {width}")).unwrap();
+        interp.load_file(&sample).unwrap();
+        interp.run_loaded().unwrap();
+    }
+}
+
+#[test]
+fn mode_requires_a_registered_integer_width() {
+    for program in ["10 MODE 640.5", "10 MODE 1280", "10 MODE 1920"] {
+        assert_eq!(run_rust_error_code(program), ErrorCode::InvalidArgument);
+    }
 }
 
 #[test]

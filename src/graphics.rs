@@ -107,12 +107,17 @@ impl Default for Graphics {
 }
 
 impl Graphics {
+    fn mode_dimensions(mode_width: usize) -> Option<(usize, usize)> {
+        match mode_width {
+            640 => Some((640, 480)),
+            800 => Some((800, 600)),
+            1024 => Some((1024, 768)),
+            _ => None,
+        }
+    }
+
     pub fn new(mode_width: usize) -> Self {
-        let (width, height) = match mode_width {
-            800 => (800, 600),
-            1024 => (1024, 768),
-            _ => (640, 480),
-        };
+        let (width, height) = Self::mode_dimensions(mode_width).unwrap_or((640, 480));
         let background_color = 0x000000;
         Self {
             width,
@@ -200,8 +205,16 @@ impl Graphics {
     }
 
     pub fn set_mode(&mut self, mode_width: usize) -> BasicResult<()> {
-        if !matches!(mode_width, 640 | 800 | 1024) {
+        let Some((new_width, new_height)) = Self::mode_dimensions(mode_width) else {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
+        };
+        if let Some(scale) = self.scale {
+            let double_border = scale.border.saturating_mul(2);
+            let viewport_width = new_width as i32 - 1;
+            let viewport_height = new_height as i32 - 1;
+            if double_border >= viewport_width || double_border >= viewport_height {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
         }
         let mut reusable_buffer =
             (mode_width == self.width).then(|| std::mem::take(&mut self.buffer));
@@ -209,11 +222,13 @@ impl Graphics {
         let background_color = self.background_color;
         let font = self.font;
         let ldir = self.ldir;
+        let scale = self.scale;
         *self = Graphics::new(mode_width);
         self.current_color = current_color;
         self.background_color = background_color;
         self.font = font;
         self.ldir = ldir;
+        self.scale = scale;
         if let Some(mut buffer) = reusable_buffer.take() {
             debug_assert_eq!(buffer.len(), self.buffer.len());
             buffer.fill(background_color);
@@ -1334,17 +1349,39 @@ impl Graphics {
     }
 
     pub fn save_png(&self, path: &Path) -> BasicResult<()> {
+        Self::save_pixels_png(path, self.width, self.height, &self.buffer)
+    }
+
+    pub fn save_gscr_png(screen: &str, path: &Path) -> BasicResult<()> {
+        let (width, height, pixels) = parse_gscr(screen)?;
+        Self::save_pixels_png(path, width, height, &pixels)
+    }
+
+    fn save_pixels_png(
+        path: &Path,
+        width: usize,
+        height: usize,
+        pixels: &[u32],
+    ) -> BasicResult<()> {
+        if width == 0
+            || height == 0
+            || width.checked_mul(height) != Some(pixels.len())
+            || width > u32::MAX as usize
+            || height > u32::MAX as usize
+        {
+            return Err(BasicError::new(ErrorCode::InvalidValue));
+        }
         let file = File::create(path)
             .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
         let writer = BufWriter::new(file);
-        let mut encoder = png::Encoder::new(writer, self.width as u32, self.height as u32);
+        let mut encoder = png::Encoder::new(writer, width as u32, height as u32);
         encoder.set_color(png::ColorType::Rgb);
         encoder.set_depth(png::BitDepth::Eight);
         let mut png_writer = encoder
             .write_header()
             .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let mut bytes = Vec::with_capacity(self.buffer.len() * 3);
-        for rgb in &self.buffer {
+        let mut bytes = Vec::with_capacity(pixels.len() * 3);
+        for rgb in pixels {
             bytes.push((rgb >> 16) as u8);
             bytes.push((rgb >> 8) as u8);
             bytes.push(*rgb as u8);
@@ -2478,6 +2515,7 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
 #[cfg(test)]
 mod tests {
     use super::{resolve_color_number, Graphics, Texture};
+    use crate::ErrorCode;
 
     fn assert_operation_marks_buffer_dirty(
         mut graphics: Graphics,
@@ -2985,6 +3023,98 @@ mod tests {
     }
 
     #[test]
+    fn mode_preserves_scale_on_the_new_full_viewport() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(37, 53, Some((100, 399, 379, 180)))
+            .unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -2.0, 2.0, 20)))
+            .unwrap();
+
+        graphics.set_mode(1024).unwrap();
+
+        assert_eq!((graphics.width, graphics.height), (1024, 768));
+        assert_eq!(graphics.buffer.len(), 1024 * 768);
+        assert_eq!(graphics.owner.len(), 1024 * 768);
+        assert_eq!((graphics.origin_x, graphics.origin_y), (0, 0));
+        assert_eq!(
+            (
+                graphics.w_left,
+                graphics.w_top,
+                graphics.w_right,
+                graphics.w_bottom,
+            ),
+            (0, 0, 1023, 767)
+        );
+        assert!(graphics.has_explicit_scale());
+        assert_eq!(graphics.scale_bounds(), (-1.0, 1.0, -2.0, 2.0));
+        assert_eq!(graphics.scale_border(), 20);
+        assert_eq!(graphics.user_to_canvas(-1.0, -2.0), (20, 747));
+        assert_eq!(graphics.user_to_canvas(1.0, 2.0), (1003, 20));
+        assert_eq!((graphics.xpos(), graphics.ypos()), (0.0, 0.0));
+    }
+
+    #[test]
+    fn mode_rejects_unusable_scale_border_without_changing_state() {
+        let mut graphics = Graphics::new(1024);
+        graphics
+            .set_origin(7, 9, Some((100, 900, 700, 100)))
+            .unwrap();
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 240)))
+            .unwrap();
+        graphics.move_to(0.5, -0.5);
+        let buffer_address = graphics.buffer.as_ptr();
+        let owner_address = graphics.owner.as_ptr();
+        let state = (
+            (graphics.width, graphics.height),
+            (graphics.origin_x, graphics.origin_y),
+            (
+                graphics.w_left,
+                graphics.w_top,
+                graphics.w_right,
+                graphics.w_bottom,
+            ),
+            (
+                graphics.cursor_x,
+                graphics.cursor_y,
+                graphics.xpos(),
+                graphics.ypos(),
+            ),
+            graphics.scale_bounds(),
+            graphics.scale_border(),
+        );
+
+        let error = graphics.set_mode(640).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert_eq!(graphics.buffer.as_ptr(), buffer_address);
+        assert_eq!(graphics.owner.as_ptr(), owner_address);
+        assert_eq!(
+            (
+                (graphics.width, graphics.height),
+                (graphics.origin_x, graphics.origin_y),
+                (
+                    graphics.w_left,
+                    graphics.w_top,
+                    graphics.w_right,
+                    graphics.w_bottom,
+                ),
+                (
+                    graphics.cursor_x,
+                    graphics.cursor_y,
+                    graphics.xpos(),
+                    graphics.ypos(),
+                ),
+                graphics.scale_bounds(),
+                graphics.scale_border(),
+            ),
+            state
+        );
+    }
+
+    #[test]
     fn same_size_resets_preserve_the_presented_buffer_allocation() {
         let mut graphics = Graphics::new(640);
         let buffer_address = graphics.buffer.as_ptr();
@@ -3001,5 +3131,16 @@ mod tests {
             .buffer
             .iter()
             .all(|pixel| *pixel == resolve_color_number(3)));
+    }
+
+    #[test]
+    fn save_gscr_png_preserves_arbitrary_encoded_dimensions_and_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capture.png");
+        let screen = "3x2:010203112233abcdef000000ffffff445566";
+
+        Graphics::save_gscr_png(screen, &path).unwrap();
+
+        assert_eq!(Graphics::load_png_to_gscr(&path).unwrap(), screen);
     }
 }

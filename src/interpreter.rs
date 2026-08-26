@@ -3098,12 +3098,17 @@ impl Interpreter {
             }
             "SCREEN" => self.execute_screen(command[6..].trim()),
             "MODE" => {
+                let width = self.eval_number(command[4..].trim())?;
+                if !width.is_finite() || width < 0.0 || width.fract() != 0.0 {
+                    return Err(self.err(ErrorCode::InvalidArgument));
+                }
+                let width = width as usize;
+                let previous_width = self.graphics.width;
+                self.graphics.set_mode(width)?;
                 self.graphics_window_suppressed = false;
-                let width = self.eval_number(command[4..].trim())? as usize;
-                if matches!(width, 640 | 800 | 1024) && width != self.graphics.width {
+                if width != previous_width {
                     self.graphics_window = None;
                 }
-                self.graphics.set_mode(width)?;
                 self.present_graphics_window()
             }
             "CLG" => {
@@ -7342,7 +7347,7 @@ impl Interpreter {
     ) -> BasicResult<Vec<LocalSpec>> {
         let mut local_specs = Vec::new();
         let mut seen_nonlocal = false;
-        let mut seen_names: Vec<String> = Vec::new();
+        let mut seen_specs: Vec<(bool, String)> = Vec::new();
         let lines = self.program.line_numbers();
 
         for line_idx in start_line_idx..=end_line_idx {
@@ -7377,12 +7382,15 @@ impl Interpreter {
                     })?;
                     for spec in parsed {
                         let name = local_spec_name(&spec).to_string();
-                        if seen_names.iter().any(|existing| existing == &name) {
+                        let is_array = matches!(&spec, LocalSpec::Array { .. });
+                        if seen_specs.iter().any(|(existing_is_array, existing_name)| {
+                            *existing_is_array == is_array && existing_name == &name
+                        }) {
                             return Err(
                                 BasicError::new(ErrorCode::InvalidArgument).at_line(line_no)
                             );
                         }
-                        seen_names.push(name);
+                        seen_specs.push((is_array, name));
                         local_specs.push(spec);
                     }
                     continue;
@@ -8709,9 +8717,7 @@ impl Interpreter {
             self.graphics.save_png(&path)
         } else {
             let screen = self.eval_value(&parts[1])?.into_string()?;
-            let mut temp = Graphics::new(640);
-            temp.restore_screen(&screen)?;
-            temp.save_png(&path)
+            Graphics::save_gscr_png(&screen, &path)
         }
     }
 
@@ -13916,6 +13922,77 @@ mod interpreter_tests {
         assert_eq!(nested.numeric_variables.get("I"), Some(&3.0));
         assert_eq!(nested.numeric_variables.get("J"), Some(&1.0));
         assert!(nested.for_stack.is_empty());
+    }
+
+    #[test]
+    fn bsave_accepts_gscr_captures_independent_of_active_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut interp = Interpreter::new();
+        interp.root_dir = dir.path().to_path_buf();
+        interp.current_dir = dir.path().to_path_buf();
+        interp.graphics_window_enabled = false;
+
+        for (width, height) in [(3, 2), (800, 600), (1024, 768)] {
+            let file_name = format!("capture-{width}.png");
+            let screen = format!("{width}x{height}:{}", "123456".repeat(width * height));
+            interp.assign("GSCR$", Value::string(screen)).unwrap();
+
+            interp
+                .execute_bsave(&format!("\"{file_name}\", GSCR$"))
+                .unwrap();
+
+            let file = fs::File::open(dir.path().join(file_name)).unwrap();
+            let decoder = png::Decoder::new(std::io::BufReader::new(file));
+            let mut reader = decoder.read_info().unwrap();
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut pixels).unwrap();
+            assert_eq!((info.width, info.height), (width as u32, height as u32));
+            assert!(pixels[..info.buffer_size()]
+                .chunks_exact(3)
+                .all(|pixel| pixel == [0x12, 0x34, 0x56]));
+        }
+    }
+
+    #[test]
+    fn bload_to_variable_accepts_dimensions_independent_of_active_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capture.png");
+        let screen = "3x2:010203112233abcdef000000ffffff445566";
+        Graphics::save_gscr_png(screen, &path).unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.root_dir = dir.path().to_path_buf();
+        interp.current_dir = dir.path().to_path_buf();
+        interp.execute_bload("\"capture.png\", GSCR$").unwrap();
+
+        assert_eq!(interp.string_variables.get("GSCR$").unwrap(), screen);
+        assert_eq!((interp.graphics.width, interp.graphics.height), (640, 480));
+    }
+
+    #[test]
+    fn bload_to_screen_requires_dimensions_matching_the_active_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let matching_path = dir.path().join("matching.png");
+        let mismatch_path = dir.path().join("mismatch.png");
+        let matching = format!("800x600:{}", "654321".repeat(800 * 600));
+        Graphics::save_gscr_png(&matching, &matching_path).unwrap();
+        Graphics::save_gscr_png("3x2:010203112233abcdef000000ffffff445566", &mismatch_path)
+            .unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.root_dir = dir.path().to_path_buf();
+        interp.current_dir = dir.path().to_path_buf();
+        interp.graphics = Graphics::new(800);
+        interp.graphics_window_enabled = false;
+
+        interp.execute_bload("\"matching.png\"").unwrap();
+        assert_eq!((interp.graphics.width, interp.graphics.height), (800, 600));
+        assert_eq!(interp.graphics.test(0.0, 0.0), 0x654321);
+
+        let error = interp.execute_bload("\"mismatch.png\"").unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidValue);
+        assert_eq!((interp.graphics.width, interp.graphics.height), (800, 600));
+        assert_eq!(interp.graphics.test(0.0, 0.0), 0x654321);
     }
 }
 

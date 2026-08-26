@@ -199,6 +199,22 @@ GRAPHICS_SMOKE_CASES = [
 """,
     ),
     GraphicsCase(
+        name="mode_preserves_scale",
+        description="MODE remaps a preserved explicit SCALE into the new registered size",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 0,639,0,479,20
+30 MODE 1024
+40 PRINT "__AVL_GRAPHICS_VALUE__=size=";WIDTH;"x";HEIGHT
+50 PRINT "__AVL_GRAPHICS_VALUE__=scale=";XMAX;",";YMAX;",";BORDER
+60 PLOT 0,0,2 : PLOT 639,479,3
+70 SCALE
+80 PRINT "__AVL_GRAPHICS_SPRITE__=lower="+SPRITE$(0,0,30,30)
+90 PRINT "__AVL_GRAPHICS_SPRITE__=upper="+SPRITE$(993,737,1023,767)
+100 END
+""",
+    ),
+    GraphicsCase(
         name="penwidth_plot_sizes",
         description="PENWIDTH 1/2/4 plot footprints",
         program=r"""
