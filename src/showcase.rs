@@ -83,9 +83,7 @@ pub(crate) fn tour_lines(samples_available: bool) -> Result<Vec<String>, String>
 
 fn append_run_guidance(lines: &mut Vec<String>, samples_available: bool) {
     if samples_available {
-        lines.push(
-            "Visual gallery: samples/index.html; annotated catalog: samples/README.md".to_string(),
-        );
+        lines.push("Visual gallery and annotated catalog: samples/README.md".to_string());
     } else {
         lines.push(
             "The catalog is available, but /samples is not present in this session.".to_string(),
@@ -308,7 +306,6 @@ mod tests {
             }
         }
         assert!(samples_dir.join("README.md").is_file());
-        assert!(samples_dir.join("index.html").is_file());
     }
 
     #[test]

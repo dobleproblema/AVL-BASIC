@@ -23,9 +23,8 @@ fn tour_and_samples_render_the_embedded_catalog() {
         20
     );
     assert!(!tour.contains("The RUN commands use /samples"));
-    assert!(
-        tour.contains("Visual gallery: samples/index.html; annotated catalog: samples/README.md\n")
-    );
+    assert!(tour.contains("Visual gallery and annotated catalog: samples/README.md\n"));
+    assert!(!tour.contains("index.html"));
 
     interpreter.process_immediate("samples").unwrap();
     let samples = interpreter.take_output();

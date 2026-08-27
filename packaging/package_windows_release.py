@@ -60,7 +60,7 @@ Inside AVL BASIC:
 
 TOUR presents 20 highlights with descriptions and ready-to-copy RUN commands.
 SAMPLES lists all 115 bundled programs by category. The complete visual gallery
-is in samples\\index.html; the annotated Markdown catalog is samples\\README.md.
+and annotated catalog are in samples\\README.md.
 
 This package uses the native Rust runtime. You do not need to install Rust or
 Cargo to use it.
@@ -103,6 +103,7 @@ def build_package(skip_build: bool) -> Path:
     for name in [
         "README.md",
         "README.png",
+        "README-console.png",
         "MANUAL.txt",
         "MANUAL.es.txt",
         "COPYING",

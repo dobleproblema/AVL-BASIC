@@ -12,6 +12,15 @@ environment.
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
 
+## Interactive by design
+
+AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
+program, inspect it with `LIST`, and continue from the prompt.
+
+<p align="center">
+  <img src="README-console.png" alt="AVL BASIC interactive session showing the welcome screen, CD, LOAD, and LIST" width="900">
+</p>
+
 ## See What AVL BASIC Can Do
 
 The hero above already shows the old-school demo, ray tracer, and Arkanoid.
@@ -73,9 +82,6 @@ not mockups or engine screenshots:
 </table>
 
 **[Explore all 20 visual highlights and the complete 115-program catalog →](samples/README.md)**
-
-Downloaded packages also include `samples/index.html`, an offline gallery that
-opens in any web browser.
 
 ## Download
 
@@ -155,7 +161,7 @@ sh packaging/install_linux_desktop.sh
 
 The script uses `target/release/avl-basic` by default. You may pass another
 compiled executable as its first argument. It installs the binary under
-`~/.local/bin`, and the samples and gallery under
+`~/.local/bin`, and the samples and visual catalog under
 `${XDG_DATA_HOME:-~/.local/share}/avl-basic`, without requiring root
 permissions. The desktop launcher starts in that data directory, so `TOUR`,
 `SAMPLES`, and their `/samples/...` commands work immediately. The launcher
@@ -194,7 +200,6 @@ build.
 - Full manual in English: [`MANUAL.txt`](MANUAL.txt)
 - Manual completo en español: [`MANUAL.es.txt`](MANUAL.es.txt)
 - Visual tour and complete sample catalog: [`samples/README.md`](samples/README.md)
-- Offline visual gallery for downloaded packages: `samples/index.html`
 - License: [`COPYING`](COPYING)
 
 ## Project Layout

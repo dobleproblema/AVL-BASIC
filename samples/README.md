@@ -4,10 +4,6 @@ AVL BASIC ships with **115 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
-For the richest offline view, open [`samples/index.html`](index.html) in any
-modern browser. It needs no web server and keeps all 20 highlights and the
-complete catalog on one responsive page.
-
 From the interpreter, type:
 
 ```basic
