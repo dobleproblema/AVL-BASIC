@@ -7,6 +7,7 @@ use crate::expr::{
 };
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
+use crate::help;
 use crate::lexer::{split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
@@ -1906,7 +1907,9 @@ impl Interpreter {
             "This is free software under GPLv3 or later. You may redistribute it under its terms.",
         );
         self.write_line("This program comes with ABSOLUTELY NO WARRANTY. See COPYING.");
-        self.write_line("Type TOUR to explore 20 highlights, or SAMPLES for the full catalog.");
+        self.write_line(
+            "Type HELP <topic> for syntax, TOUR for highlights, or SAMPLES for the catalog.",
+        );
     }
 
     pub fn repl(&mut self) -> i32 {
@@ -2032,6 +2035,7 @@ impl Interpreter {
     }
 
     fn process_immediate_inner(&mut self, line: &str) -> BasicResult<()> {
+        let help_immediate = console::is_help_immediate_line(line);
         let normalized = console::normalize_code(line);
         let trimmed = normalized.trim();
         if trimmed.is_empty() {
@@ -2084,6 +2088,12 @@ impl Interpreter {
             return Ok(());
         }
         if !is_assignment(trimmed) {
+            if help_immediate {
+                if let Some(arg) = immediate_arg(trimmed, &upper, "HELP") {
+                    self.execute_help(arg)?;
+                    return Ok(());
+                }
+            }
             if let Some(arg) = immediate_arg(trimmed, &upper, "SAMPLES") {
                 self.execute_showcase(arg, false)?;
                 return Ok(());
@@ -2355,6 +2365,16 @@ impl Interpreter {
         }
         .map_err(|detail| self.err(ErrorCode::InvalidValue).with_detail(detail))?;
 
+        self.finish_output_line();
+        for line in lines {
+            self.write_line(&line);
+        }
+        Ok(())
+    }
+
+    fn execute_help(&mut self, topic: &str) -> BasicResult<()> {
+        let lines = help::render(topic)
+            .map_err(|detail| self.err(ErrorCode::InvalidValue).with_detail(detail))?;
         self.finish_output_line();
         for line in lines {
             self.write_line(&line);
@@ -3253,10 +3273,12 @@ impl Interpreter {
                 Ok(())
             }
             "LDIR" => {
+                let angle = self.eval_number(command[4..].trim())?;
+                if !angle.is_finite() {
+                    return Err(self.err(ErrorCode::InvalidArgument));
+                }
                 self.ensure_graphics_window()?;
-                let angle = self.eval_number(command[4..].trim())? as i32;
-                self.graphics.set_ldir(angle);
-                Ok(())
+                self.graphics.set_ldir(angle)
             }
             "SPRITE" => self.execute_sprite(command[6..].trim()),
             "COLMODE" => {
@@ -8411,13 +8433,16 @@ impl Interpreter {
     }
 
     fn execute_graph(&mut self, args: &str) -> BasicResult<()> {
-        self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if parts.is_empty() || parts.len() > 2 {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
+        self.ensure_graphics_window()?;
         let expr_source = self.resolve_graph_expression(&parts[0])?;
         let compiled = compile_expression(&expr_source)?;
+        if !expression_uses_numeric_variable(&compiled, "X") {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
         let (xmin, xmax, ymin, ymax) = self.graphics.graph_plot_bounds()?;
         let span_x = xmax - xmin;
         if !span_x.is_finite() || span_x <= 0.0 {
@@ -8438,11 +8463,12 @@ impl Interpreter {
         };
 
         let previous_x = self.numeric_variables.get("X").copied();
+        let mut type_mismatch_found = false;
         let mut mask_phase = 0;
         let mut branch_connected = false;
         let segments = (span_x / step).ceil().max(1.0) as usize;
         let mut x_prev = xmin;
-        let mut y_prev = self.eval_graph_y(&compiled, x_prev);
+        let mut y_prev = self.eval_graph_y(&compiled, x_prev, &mut type_mismatch_found);
         let mut valid_prev = y_prev.is_some();
         for i in 1..=segments {
             let x_curr = if i == segments {
@@ -8450,20 +8476,30 @@ impl Interpreter {
             } else {
                 xmin + i as f64 * step
             };
-            let y_curr = self.eval_graph_y(&compiled, x_curr);
+            let y_curr = self.eval_graph_y(&compiled, x_curr, &mut type_mismatch_found);
             let valid_curr = y_curr.is_some();
             match (y_prev, y_curr) {
                 (Some(prev_y), Some(curr_y)) if valid_prev && valid_curr => {
                     let x_mid = 0.5 * (x_prev + x_curr);
-                    let y_mid = self.eval_graph_y(&compiled, x_mid);
+                    let y_mid = self.eval_graph_y(&compiled, x_mid, &mut type_mismatch_found);
                     if graph_is_discontinuity_bridge(prev_y, curr_y, y_mid, ymin, ymax) {
                         mask_phase = 0;
                         branch_connected = false;
                     } else if y_mid.is_none() {
-                        let (lx, ly) =
-                            self.refine_graph_valid_endpoint(&compiled, x_prev, prev_y, x_mid);
-                        let (rx, ry) =
-                            self.refine_graph_valid_endpoint(&compiled, x_curr, curr_y, x_mid);
+                        let (lx, ly) = self.refine_graph_valid_endpoint(
+                            &compiled,
+                            x_prev,
+                            prev_y,
+                            x_mid,
+                            &mut type_mismatch_found,
+                        );
+                        let (rx, ry) = self.refine_graph_valid_endpoint(
+                            &compiled,
+                            x_curr,
+                            curr_y,
+                            x_mid,
+                            &mut type_mismatch_found,
+                        );
                         let _ = self.draw_graph_segment_clipped(
                             x_prev,
                             prev_y,
@@ -8502,8 +8538,13 @@ impl Interpreter {
                     }
                 }
                 (Some(prev_y), None) if valid_prev => {
-                    let (bx, by) =
-                        self.refine_graph_valid_endpoint(&compiled, x_prev, prev_y, x_curr);
+                    let (bx, by) = self.refine_graph_valid_endpoint(
+                        &compiled,
+                        x_prev,
+                        prev_y,
+                        x_curr,
+                        &mut type_mismatch_found,
+                    );
                     let _ = self.draw_graph_segment_clipped(
                         x_prev,
                         prev_y,
@@ -8517,8 +8558,13 @@ impl Interpreter {
                     branch_connected = false;
                 }
                 (None, Some(curr_y)) if valid_curr => {
-                    let (bx, by) =
-                        self.refine_graph_valid_endpoint(&compiled, x_curr, curr_y, x_prev);
+                    let (bx, by) = self.refine_graph_valid_endpoint(
+                        &compiled,
+                        x_curr,
+                        curr_y,
+                        x_prev,
+                        &mut type_mismatch_found,
+                    );
                     mask_phase = 0;
                     branch_connected = false;
                     let (next_phase, consumed) = self.draw_graph_segment_clipped(
@@ -8543,6 +8589,9 @@ impl Interpreter {
             self.numeric_variables.insert("X".to_string(), value);
         } else {
             self.numeric_variables.remove("X");
+        }
+        if type_mismatch_found {
+            return Err(self.err(ErrorCode::TypeMismatch));
         }
         self.refresh_graphics_window()
     }
@@ -8603,11 +8652,16 @@ impl Interpreter {
         }
     }
 
-    fn eval_graph_y(&mut self, expr: &Expr, x: f64) -> Option<f64> {
+    fn eval_graph_y(&mut self, expr: &Expr, x: f64, type_mismatch_found: &mut bool) -> Option<f64> {
         self.numeric_variables.insert("X".to_string(), x);
-        eval_compiled_number(self, expr)
-            .ok()
-            .filter(|value| value.is_finite())
+        match eval_compiled(self, expr) {
+            Ok(Value::Number(value)) => value.is_finite().then_some(value),
+            Ok(Value::Str(_) | Value::ArrayRef(_)) => {
+                *type_mismatch_found = true;
+                None
+            }
+            Err(_) => None,
+        }
     }
 
     fn refine_graph_valid_endpoint(
@@ -8616,6 +8670,7 @@ impl Interpreter {
         x_valid: f64,
         y_valid: f64,
         x_invalid: f64,
+        type_mismatch_found: &mut bool,
     ) -> (f64, f64) {
         let mut lx = x_valid;
         let mut ly = y_valid;
@@ -8625,7 +8680,7 @@ impl Interpreter {
             if mx == lx || mx == rx {
                 break;
             }
-            if let Some(my) = self.eval_graph_y(expr, mx) {
+            if let Some(my) = self.eval_graph_y(expr, mx, type_mismatch_found) {
                 lx = mx;
                 ly = my;
             } else {
@@ -11049,6 +11104,102 @@ mod interpreter_tests {
         name: &str,
     ) -> Option<Rc<CompiledSingleLineFunctionBody>> {
         interp.single_line_function_cache.get(name).cloned()
+    }
+
+    #[test]
+    fn graph_requires_the_compiled_expression_to_depend_on_x() {
+        for source in ["X", "SIN(X)", "FNX(X)", "Y+X*2", "A(X+1)"] {
+            let expr = compile_expression(source).unwrap();
+            assert!(
+                expression_uses_numeric_variable(&expr, "X"),
+                "{source} should depend on X"
+            );
+        }
+        for source in ["3", "Y*2", "SIN(1)", "X(1)"] {
+            let expr = compile_expression(source).unwrap();
+            assert!(
+                !expression_uses_numeric_variable(&expr, "X"),
+                "{source} should not depend on scalar X"
+            );
+        }
+
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp
+            .graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 0)))
+            .unwrap();
+
+        for source in ["3", "Y*2", "\"3\""] {
+            let error = interp.execute_graph(source).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidArgument, "GRAPH {source}");
+        }
+
+        interp.numeric_variables.insert("X".to_string(), 17.0);
+        interp.execute_graph("X*X,0.5").unwrap();
+        assert_eq!(interp.numeric_variables.get("X"), Some(&17.0));
+    }
+
+    #[test]
+    fn graph_reports_non_numeric_results_after_restoring_x() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp
+            .graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 0)))
+            .unwrap();
+        interp
+            .program
+            .load_text(
+                r#"10 X=123.5
+20 ON ERROR GOTO 100
+30 GRAPH "CHR$(65+0*X)",0.5
+40 FAILED=1
+50 END
+100 SEENERR=ERR:SEENERL=ERL:SEENX=X
+110 END"#,
+            )
+            .unwrap();
+
+        interp.run_loaded().unwrap();
+
+        assert_eq!(interp.numeric_variables.get("FAILED"), None);
+        assert_eq!(interp.numeric_variables.get("SEENERR"), Some(&5.0));
+        assert_eq!(interp.numeric_variables.get("SEENERL"), Some(&30.0));
+        assert_eq!(interp.numeric_variables.get("SEENX"), Some(&123.5));
+        assert_eq!(interp.numeric_variables.get("X"), Some(&123.5));
+    }
+
+    #[test]
+    fn graph_keeps_internal_evaluation_errors_as_gaps() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp
+            .graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 0)))
+            .unwrap();
+        interp.numeric_variables.insert("X".to_string(), 17.0);
+
+        for expression in ["1/X,0.5", "X+\"A\",0.5"] {
+            interp.execute_graph(expression).unwrap();
+        }
+
+        assert_eq!(interp.numeric_variables.get("X"), Some(&17.0));
+    }
+
+    #[test]
+    fn ldir_command_keeps_fractional_degrees_and_rejects_non_finite_values() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp.process_immediate("MOVE 100,100").unwrap();
+        interp.process_immediate("LDIR 22.5").unwrap();
+        interp.process_immediate("LABEL \"A\"").unwrap();
+
+        assert_eq!(interp.graphics.xpos(), 107.0);
+        assert_eq!(interp.graphics.ypos(), 103.0);
+
+        let error = interp.process_immediate("LDIR INF").unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -14198,6 +14349,7 @@ fn is_immediate_only_command(first: &str, upper_command: &str) -> bool {
             | "SYSTEM"
             | "QUIT"
     ) || matches!(upper_command, "SAMPLES" | "TOUR")
+        || (first == "HELP" && !is_assignment(upper_command))
         || (first == "EXIT"
             && !matches!(
                 upper_command,
@@ -15199,6 +15351,25 @@ fn nonnegative_millis_arg(value: f64) -> BasicResult<u64> {
         return Err(BasicError::new(ErrorCode::Overflow));
     }
     Ok(value.max(0.0) as u64)
+}
+
+fn expression_uses_numeric_variable(expr: &Expr, variable: &str) -> bool {
+    match expr {
+        Expr::Var(name) => name.eq_ignore_ascii_case(variable),
+        Expr::ArrayOrCall { args, .. } => args
+            .iter()
+            .any(|arg| expression_uses_numeric_variable(arg, variable)),
+        Expr::StringIndex { target, index } => {
+            expression_uses_numeric_variable(target, variable)
+                || expression_uses_numeric_variable(index, variable)
+        }
+        Expr::Unary { expr, .. } => expression_uses_numeric_variable(expr, variable),
+        Expr::Binary { left, right, .. } => {
+            expression_uses_numeric_variable(left, variable)
+                || expression_uses_numeric_variable(right, variable)
+        }
+        Expr::Number(_) | Expr::Str(_) => false,
+    }
 }
 
 fn clip_graph_segment(

@@ -44,6 +44,7 @@ SESSION_NOISE_RE = re.compile(
     r"This is free software under GPLv3 or later\. You may redistribute it under its terms\.|"
     r"This program comes with ABSOLUTELY NO WARRANTY\. See COPYING\.|"
     r"Type TOUR to explore 20 highlights, or SAMPLES for the full catalog\.|"
+    r"Type HELP <topic> for syntax, TOUR for highlights, or SAMPLES for the catalog\.|"
     r"Secuencias de escape ANSI no soportadas\.|"
     r"Saliendo del int.rprete BASIC\.|"
     r"Ready"

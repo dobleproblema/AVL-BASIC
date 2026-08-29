@@ -350,7 +350,7 @@ Notas rápidas
 - `TESTCHR$` usa la fuente actual (`SMALLFONT` o `BIGFONT`) para reconocer los píxeles. Devuelve `""` si la celda no coincide exactamente con un glifo conocido: por ejemplo, si el carácter está recortado, deformado, sobrescrito o sobre un fondo no uniforme.
 - Si un carácter no está definido en la fuente, se muestra `□` (cuadro de sustitución).
 - Igual para los caracteres de control, que no son soportados por GPRINT/LABEL. Por ejemplo: `GPRINT CHR$(13)` → □
-- La orientación de LDIR está en grados; se redondea al entero más cercano y se normaliza módulo 360. Los ángulos positivos giran en sentido horario. Solo afecta a LABEL (en GPRINT se ignora).
+- `LDIR` admite ángulos finitos en grados, conserva su parte decimal y los normaliza módulo 360. Los ángulos positivos giran en sentido horario. Solo afecta a `LABEL` (en `GPRINT` se ignora).
 - `GPRINT` imprime texto en coordenadas de texto y no respeta `ORIGIN`.
 - `LABEL` imprime en coordenadas gráficas y respeta `LDIR` para orientar el texto. El cursor gráfico queda en el final del texto, según la orientación actual.
 - Al imprimir con `LABEL`, es la esquina superior izquierda del carácter la que ocupa la posición del cursor gráfico.
@@ -488,7 +488,6 @@ El ejemplo `samples/g-origin-scale.bas` dibuja cuatro ejemplos gráficos, cada u
 + DRAWR dx,dy[,c]                 Línea relativa. 
 + GRAPH expr|expr$                Traza una función (`expr` literal o cadena con la expresión) usando `X`.
 + GRAPH expr|expr$,paso           Igual, con paso explícito.
-+ GRAPH expr|expr$,var,paso       Igual, fijando explícitamente la variable independiente.
 + GRAPHRANGE xmin,xmax,ymin,ymax  Fuerza el rectángulo de trazado de `GRAPH` (debe quedar dentro de `SCALE`).
 + GRAPHRANGE                      Vuelve al rango automático (`XAXIS/YAXIS` o `SCALE`).
 + PENWIDTH n                      1, 2 o 4 píxeles. 
@@ -502,8 +501,7 @@ Notas rápidas (trazado)
 - `GRAPH` requiere `SCALE` activo (si la escala es física, da error).
 - `expr` debe ser una expresión numérica evaluable (ej.: `SIN(X)`, `FNX(X)`). `FNX` sin paréntesis no es válido.
 - También puedes pasar la fórmula en cadena (`expr$`), por ejemplo: `F$="SIN(X)/X" : GRAPH F$`.
-- En `GRAPH expr` y `GRAPH expr,paso`, la variable independiente es `X`; si `expr` no depende de `X`, error.
-- En `GRAPH expr,var,paso`, `var` es un identificador de variable numérica (sin comillas), no una expresión, y debe aparecer dentro de `expr`; si no, error.
+- La variable independiente es siempre `X`; si `expr` no depende de `X`, error. `GRAPH` restaura después el valor anterior de `X`, o la elimina si no existía.
 - `paso` debe ser numérico; si se pasa cadena/array, se produce `TYPE_MISMATCH`.
 - Si se omite `paso`, `GRAPH` usa un valor por defecto de ~1 píxel horizontal en el rango activo de trazado.
 - Si `expr` devuelve un valor no numérico, `GRAPH` produce `TYPE_MISMATCH`.
@@ -1080,7 +1078,7 @@ Tabla completa de códigos de error
 
 9. Comandos “solo inmediato”
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
@@ -1140,8 +1138,15 @@ RENUM 295,1,190,215 'Mueve el bloque 190-215 al hueco 295-298.
 + `RUN "prog.bas"`                     Carga y ejecuta el programa indicado (arranque limpio).
 + `FILES "patrón"` | `CAT "patrón"`    Lista el contenido del directorio virtual actual.
 + `CD "ruta"`                          Cambia el directorio virtual actual dentro de la raíz del intérprete.
++ `HELP [tema]`                         Muestra una referencia compacta de sintaxis y parámetros para una sentencia o función integrada de BASIC.
 + `TOUR`                               Presenta 20 ejemplos seleccionados, lo que demuestran y comandos `RUN` listos para copiar.
 + `SAMPLES`                            Lista los 115 programas incluidos, agrupados por categoría.
+
+Notas sobre `HELP`
+- `HELP tema` no distingue mayúsculas/minúsculas y admite temas compuestos como `ON ERROR`, nombres terminados en `$` y alias documentados.
+- `HELP` sin tema muestra su forma de uso. Cada ficha contiene únicamente la sintaxis, los parámetros, una descripción breve y, cuando resulta útil, temas relacionados; para los detalles está este manual.
+- Solo está disponible en modo inmediato y es de solo lectura: no cambia el programa actual, el `CD`, las variables ni un estado reanudable con `CONT`.
+- `HELP` sigue siendo un identificador válido cuando se usa como variable, por ejemplo `HELP=1`.
 
 Notas sobre `TOUR` / `SAMPLES`
 - No admiten argumentos y solo están disponibles en modo inmediato.
@@ -1222,6 +1227,10 @@ Notas aclaratorias para algunas funciones
   • Con 2 argumentos busca desde el primer caracter.
   • Con 3 argumentos, `inicio` indica la posicion 1-basada desde donde empezar la busqueda; debe ser >=1 o da INVALID_ARGUMENT.
   • Ejemplos: `INSTR(1,"hola","la")` -> 3; `INSTR("hola\nmundo","\n")` -> 5.
+- `MID$(cadena,inicio[,longitud])` usa un `inicio` 1-basado, que debe ser >=1. La `longitud` opcional debe ser >=0; si es cero devuelve una cadena vacía. Los valores inválidos dan `INVALID_ARGUMENT`; un inicio posterior al final devuelve una cadena vacía.
+- En `LEFT$(cadena,longitud)` y `RIGHT$(cadena,longitud)`, `longitud` es un número no negativo de caracteres, no una posición. Cero devuelve una cadena vacía; un valor negativo da `INVALID_ARGUMENT`.
+- `SPACE$(longitud)` y `STRING$(longitud,carácter)` siguen la misma regla de longitud no negativa. `STRING$` repite el primer carácter de una cadena no vacía o el carácter representado por un código numérico válido.
+- `ASC("")` da `INVALID_ARGUMENT`; `ASC` requiere una cadena no vacía.
 - `cadena$[n]`: extensión de AVL BASIC que devuelve el carácter individual situado en la posición `n` (desde 1).
   • Solo admite variables de cadena o elementos de arrays de cadenas a la izquierda.
   • `n` debe ser un entero positivo; `n<1` da `INVALID_INDEX` y `n>LEN(cadena$)` da `INDEX_OUT_OF_BOUNDS`.
@@ -1401,11 +1410,11 @@ Literales numéricos
 Funciones `HEX$` y `BIN$`
 - `HEX$(n[, w])`: cadena hexadecimal en mayúsculas, sin prefijo.
   • Sin `w`: para `n≥0`, el mínimo nº de dígitos; para `n<0`, el mínimo múltiplo de 2 dígitos (bytes completos) en complemento a dos.
-  • Con `w`: usa exactamente `w` dígitos y enmascara los `w*4` bits menos significativos (se recortan los superiores).
+  • Con `w`: `w` debe ser no negativo; usa exactamente `w` dígitos y enmascara los `w*4` bits menos significativos (se recortan los superiores).
   • Ejemplos: `HEX$(255)` → `"FF"`; `HEX$(255,4)` → `"00FF"`; `HEX$(-1)` → `"FF"`; `HEX$(-1,4)` → `"FFFF"`.
 - `BIN$(n[, w])`: cadena binaria, sin prefijo.
   • Sin `w`: para `n≥0`, el mínimo nº de bits; para `n<0`, el mínimo múltiplo de 8 bits (bytes completos) en complemento a dos.
-  • Con `w`: usa exactamente `w` bits y enmascara a los `w` bits menos significativos.
+  • Con `w`: `w` debe ser no negativo; usa exactamente `w` bits y enmascara a los `w` bits menos significativos.
   • Ejemplos: `BIN$(10)` → `"1010"`; `BIN$(10,8)` → `"00001010"`; `BIN$(-1)` → `"11111111"`; `BIN$(-1,4)` → `"1111"`; `BIN$(10,3)` → `"010"`.
 
 Conversión desde texto (`VAL`)

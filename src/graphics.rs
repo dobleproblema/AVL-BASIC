@@ -27,7 +27,7 @@ pub struct Graphics {
     text_row: i32,
     font: FontKind,
     text_transparent: bool,
-    ldir: i32,
+    ldir: f64,
     pen_width: i32,
     mask: u8,
     scale: Option<Scale>,
@@ -140,7 +140,7 @@ impl Graphics {
             text_row: 0,
             font: FontKind::Small,
             text_transparent: false,
-            ldir: 0,
+            ldir: 0.0,
             pen_width: 1,
             mask: 255,
             scale: None,
@@ -185,7 +185,7 @@ impl Graphics {
         self.text_row = 0;
         self.font = FontKind::Small;
         self.text_transparent = false;
-        self.ldir = 0;
+        self.ldir = 0.0;
         self.pen_width = 1;
         self.mask = 255;
         self.scale = None;
@@ -1049,8 +1049,12 @@ impl Graphics {
         (self.width as i32 / cell_w).max(1)
     }
 
-    pub fn set_ldir(&mut self, angle: i32) {
-        self.ldir = angle;
+    pub fn set_ldir(&mut self, angle: f64) -> BasicResult<()> {
+        if !angle.is_finite() {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        self.ldir = angle.rem_euclid(360.0);
+        Ok(())
     }
 
     pub fn gprint(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
@@ -1073,7 +1077,7 @@ impl Graphics {
         let color = ink.map(resolve_color_number).unwrap_or(self.current_color);
         let paper = self.text_background_color(paper);
         let (cell_w, _) = font_dimensions(self.font);
-        let radians = -(self.ldir as f64).to_radians();
+        let radians = -self.ldir.to_radians();
         let cos_a = radians.cos();
         let sin_a = radians.sin();
         let dx = cell_w as f64 * cos_a;
@@ -1088,10 +1092,9 @@ impl Graphics {
             x += dx;
             y += dy;
         }
-        self.cursor_x = x.round() as i32;
-        self.cursor_y = self.canvas_y_to_logical(y.round() as i32);
-        self.cursor_user_x += text.chars().count() as f64 * dx;
-        self.cursor_user_y -= text.chars().count() as f64 * dy;
+        if !text.is_empty() {
+            self.set_cursor_from_canvas(x.round() as i32, y.round() as i32);
+        }
     }
 
     pub fn capture_screen(&self) -> String {
@@ -2559,6 +2562,87 @@ mod tests {
     }
 
     #[test]
+    fn ldir_preserves_fractional_degrees_and_normalizes_the_angle() {
+        let mut graphics = Graphics::new(640);
+
+        graphics.set_ldir(22.5).unwrap();
+        assert_eq!(graphics.ldir, 22.5);
+
+        graphics.set_ldir(382.5).unwrap();
+        assert_eq!(graphics.ldir, 22.5);
+
+        graphics.set_ldir(-12.75).unwrap();
+        assert_eq!(graphics.ldir, 347.25);
+
+        graphics.set_ldir(90.0).unwrap();
+        assert_eq!(graphics.ldir, 90.0);
+
+        for angle in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let error = graphics.set_ldir(angle).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidArgument);
+            assert_eq!(graphics.ldir, 90.0);
+        }
+    }
+
+    #[test]
+    fn fractional_ldir_keeps_label_cursor_at_the_rendered_canvas_endpoint() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+            .unwrap();
+        graphics.move_to(0.0, 0.0);
+        graphics.set_ldir(22.5).unwrap();
+
+        let (start_x, start_y) = graphics.user_to_canvas(0.0, 0.0);
+        let radians = -22.5_f64.to_radians();
+        let expected_canvas = (
+            (start_x as f64 + 8.0 * radians.cos()).round() as i32,
+            (start_y as f64 + 8.0 * radians.sin()).round() as i32,
+        );
+
+        graphics.label("A", Some(1), Some(-1));
+
+        assert_eq!(
+            (
+                graphics.cursor_x,
+                graphics.logical_y_to_canvas(graphics.cursor_y)
+            ),
+            expected_canvas
+        );
+        assert_eq!(
+            (graphics.xpos(), graphics.ypos()),
+            graphics.canvas_to_user(expected_canvas.0, expected_canvas.1)
+        );
+    }
+
+    #[test]
+    fn empty_label_preserves_the_exact_graphics_cursor_with_scale() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-2.0, 2.0, -1.5, 1.5, 10)))
+            .unwrap();
+        graphics.move_to(0.123, 0.456);
+        let before = (
+            graphics.cursor_x,
+            graphics.cursor_y,
+            graphics.xpos(),
+            graphics.ypos(),
+        );
+
+        graphics.label("", Some(1), Some(-1));
+
+        assert_eq!(
+            (
+                graphics.cursor_x,
+                graphics.cursor_y,
+                graphics.xpos(),
+                graphics.ypos(),
+            ),
+            before
+        );
+    }
+
+    #[test]
     fn scale_maps_inside_the_active_viewport_and_ignores_origin() {
         let mut graphics = Graphics::new(640);
         graphics
@@ -2989,7 +3073,7 @@ mod tests {
         });
         assert_operation_marks_buffer_dirty(Graphics::new(640), "rotated text", |graphics| {
             graphics.move_to(180.0, 200.0);
-            graphics.set_ldir(37);
+            graphics.set_ldir(37.0).unwrap();
             graphics.label("Rotated", Some(8), Some(-1));
         });
         assert_operation_marks_buffer_dirty(Graphics::new(640), "sprite", |graphics| {

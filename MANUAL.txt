@@ -351,7 +351,7 @@ Quick notes
 - `TESTCHR$` uses the current font (`SMALLFONT` or `BIGFONT`) to recognize pixels. It returns `""` if the cell does not exactly match a known glyph, for example when the character is clipped, distorted, overwritten, or on a non-uniform background.
 - If a character is not defined in the font, `□` (replacement box) is shown.
 - The same applies to control characters, which are not supported by GPRINT/LABEL. For example: `GPRINT CHR$(13)` -> `□`.
-- `LDIR` uses degrees; it is rounded to the nearest integer and normalized modulo 360. Positive angles rotate clockwise. It only affects `LABEL` (it is ignored by `GPRINT`).
+- `LDIR` accepts finite angles in degrees, preserves their decimal part, and normalizes them modulo 360. Positive angles rotate clockwise. It only affects `LABEL` (it is ignored by `GPRINT`).
 - `GPRINT` prints text in text coordinates and does not respect `ORIGIN`.
 - `LABEL` prints in graphics coordinates and respects `LDIR` to orient the text. The graphics cursor ends up at the end of the text, according to the current orientation.
 - When printing with `LABEL`, the upper-left corner of the character is what occupies the graphics cursor position.
@@ -487,7 +487,6 @@ Sample `samples/g-origin-scale.bas` draws four graphics examples, each with its 
 + DRAWR dx,dy[,c]                 Relative line
 + GRAPH expr|expr$                Plots a function (`expr` literal or string with the expression) using `X`
 + GRAPH expr|expr$,step           Same, with an explicit step
-+ GRAPH expr|expr$,var,step       Same, explicitly setting the independent variable
 + GRAPHRANGE xmin,xmax,ymin,ymax  Forces the plotting rectangle for `GRAPH` (must remain inside `SCALE`)
 + GRAPHRANGE                      Returns to the automatic range (`XAXIS/YAXIS` or `SCALE`)
 + PENWIDTH n                      1, 2 or 4 pixels
@@ -501,8 +500,7 @@ Quick notes (plotting)
 - `GRAPH` requires `SCALE` to be active (if the scale is physical, it raises an error).
 - `expr` must be an evaluable numeric expression (for example, `SIN(X)`, `FNX(X)`). `FNX` without parentheses is not valid.
 - You can also pass the formula as a string (`expr$`), for example: `F$="SIN(X)/X" : GRAPH F$`.
-- In `GRAPH expr` and `GRAPH expr,step`, the independent variable is `X`; if `expr` does not depend on `X`, an error is raised.
-- In `GRAPH expr,var,step`, `var` is a numeric variable identifier (without quotes), not an expression, and it must appear inside `expr`; otherwise, an error is raised.
+- The independent variable is always `X`; if `expr` does not depend on `X`, an error is raised. `GRAPH` restores the previous value of `X` afterwards, or removes it if it did not exist.
 - `step` must be numeric; if a string/array is passed, `TYPE_MISMATCH` occurs.
 - If `step` is omitted, `GRAPH` uses a default value of about 1 horizontal pixel in the active plotting range.
 - If `expr` returns a non-numeric value, `GRAPH` raises `TYPE_MISMATCH`.
@@ -1078,7 +1076,7 @@ Complete table of error codes
 
 9. "Immediate mode only" commands
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
@@ -1138,8 +1136,15 @@ RENUM 295,1,190,215 'Moves block 190-215 into the 295-298 gap.
 + `RUN "prog.bas"`                     Loads and runs the indicated program (clean start).
 + `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
 + `CD "path"`                          Changes the current virtual directory within the interpreter root.
++ `HELP [topic]`                        Shows a compact syntax and parameter reference for a BASIC statement or built-in function.
 + `TOUR`                               Presents 20 selected samples, what they demonstrate, and ready-to-copy `RUN` commands.
 + `SAMPLES`                            Lists all 115 bundled programs grouped by category.
+
+Notes on `HELP`
+- `HELP topic` is case-insensitive and accepts compound topics such as `ON ERROR`, names ending in `$`, and documented aliases.
+- `HELP` with no topic shows its usage. Each entry contains only syntax, parameters, a short description and, when useful, related topics; use this manual for full details.
+- It is available only in immediate mode and is read-only: it does not change the current program, `CD`, variables, or a resumable `CONT` state.
+- `HELP` remains a valid identifier when used as a variable, for example `HELP=1`.
 
 Notes on `TOUR` / `SAMPLES`
 - They take no arguments and are available only in immediate mode.
@@ -1220,6 +1225,10 @@ Clarifying notes for some functions
   * With 2 arguments it searches from the first character.
   * With 3 arguments, `start` indicates the 1-based position from which to begin the search; it must be >=1 or it raises an invalid-argument error.
   * Examples: `INSTR(1,"hello","lo")` -> 4; `INSTR("hello\nworld","\n")` -> 6.
+- `MID$(string,start[,length])` uses a 1-based `start`, which must be >=1. The optional `length` must be >=0; zero returns an empty string. Invalid values raise `INVALID_ARGUMENT`, while a start beyond the end returns an empty string.
+- In `LEFT$(string,length)` and `RIGHT$(string,length)`, `length` is a nonnegative character count, not a position. Zero returns an empty string; a negative count raises `INVALID_ARGUMENT`.
+- `SPACE$(length)` and `STRING$(length,character)` use the same nonnegative-count rule. `STRING$` repeats the first character of a non-empty string, or the character represented by a valid numeric code.
+- `ASC("")` raises `INVALID_ARGUMENT`; `ASC` requires a non-empty string.
 - `string$[n]`: AVL BASIC extension that returns the single character at 1-based position `n`.
   * It only accepts string variables or string array elements on the left side.
   * `n` must be a positive integer; `n<1` raises `INVALID_INDEX` and `n>LEN(string$)` raises `INDEX_OUT_OF_BOUNDS`.
@@ -1399,11 +1408,11 @@ Numeric literals
 `HEX$` and `BIN$` functions
 - `HEX$(n[, w])`: uppercase hexadecimal string, without prefix.
   * Without `w`: for `n>=0`, the minimum number of digits; for `n<0`, the minimum multiple of 2 digits (whole bytes) in two's complement.
-  * With `w`: uses exactly `w` digits and masks the least significant `w*4` bits (higher bits are truncated).
+  * With `w`: `w` must be nonnegative; it uses exactly `w` digits and masks the least significant `w*4` bits (higher bits are truncated).
   * Examples: `HEX$(255)` -> `"FF"`; `HEX$(255,4)` -> `"00FF"`; `HEX$(-1)` -> `"FF"`; `HEX$(-1,4)` -> `"FFFF"`.
 - `BIN$(n[, w])`: binary string, without prefix.
   * Without `w`: for `n>=0`, the minimum number of bits; for `n<0`, the minimum multiple of 8 bits (whole bytes) in two's complement.
-  * With `w`: uses exactly `w` bits and masks to the least significant `w` bits.
+  * With `w`: `w` must be nonnegative; it uses exactly `w` bits and masks to the least significant `w` bits.
   * Examples: `BIN$(10)` -> `"1010"`; `BIN$(10,8)` -> `"00001010"`; `BIN$(-1)` -> `"11111111"`; `BIN$(-1,4)` -> `"1111"`; `BIN$(10,3)` -> `"010"`.
 
 Conversion from text (`VAL`)

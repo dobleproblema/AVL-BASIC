@@ -179,6 +179,29 @@ GRAPHICS_SMOKE_CASES = [
 """,
     ),
     GraphicsCase(
+        name="ldir_fractional_angles",
+        description="LDIR preserves fractional degrees and normalizes equivalent rotations",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG : SMALLFONT TRANSPARENT : INK 1
+20 MOVE 80,120 : LDIR 22.5 : LABEL "A"
+25 PRINT "__AVL_GRAPHICS_VALUE__=cursor_22_5=";XPOS;",";YPOS
+30 MOVE 180,120 : LDIR -337.5 : LABEL "A"
+35 PRINT "__AVL_GRAPHICS_VALUE__=cursor_equivalent=";XPOS;",";YPOS
+40 MOVE 280,120 : LDIR -22.5 : LABEL "A"
+45 PRINT "__AVL_GRAPHICS_VALUE__=cursor_negative=";XPOS;",";YPOS
+50 MOVE 380,120 : LDIR 382.5 : LABEL "A"
+55 PRINT "__AVL_GRAPHICS_VALUE__=cursor_wrapped=";XPOS;",";YPOS
+60 PRINT "__AVL_GRAPHICS_SCREEN__=fractional="+SCREEN$
+65 SCALE -2,2,-1.5,1.5,10
+66 MOVE 0,0 : LDIR 22.5 : LABEL "S"
+67 PRINT "__AVL_GRAPHICS_VALUE__=scaled_cursor=";XPOS;",";YPOS
+68 PRINT "__AVL_GRAPHICS_SCREEN__=scaled_fractional="+SCREEN$
+69 MOVE .123,.456 : PRINT "__AVL_GRAPHICS_VALUE__=empty_before=";XPOS;",";YPOS
+70 LABEL "" : PRINT "__AVL_GRAPHICS_VALUE__=empty_after=";XPOS;",";YPOS
+80 END
+""",
+    ),
+    GraphicsCase(
         name="embedded_big_font_transparent",
         description="embedded big font with transparent text background",
         program=r"""
@@ -393,6 +416,20 @@ GRAPHICS_SMOKE_CASES = [
 70 SCALE
 80 PRINT "__AVL_GRAPHICS_SPRITE__=range="+SPRITE$(400,105,485,185)
 90 END
+""",
+    ),
+    GraphicsCase(
+        name="graph_type_mismatch_restores_x",
+        description="GRAPH propagates a nonnumeric result after restoring X",
+        program=r"""
+10 ON ERROR GOTO 100
+20 SCREEN : MODE 640 : SCALE -1,1,-1,1
+30 X=17
+40 GRAPH "CHR$(65+0*X)",0.5
+50 PRINT "__AVL_GRAPHICS_VALUE__=graph_type_error=NO ERROR"
+60 END
+100 PRINT "__AVL_GRAPHICS_VALUE__=graph_type_error=";ERR;",";ERL;",";X
+110 END
 """,
     ),
     GraphicsCase(

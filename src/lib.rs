@@ -3,6 +3,7 @@ pub mod error;
 pub mod expr;
 pub mod fonts;
 pub mod graphics;
+mod help;
 pub mod interpreter;
 mod keyboard;
 pub mod lexer;

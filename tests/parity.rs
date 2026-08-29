@@ -689,6 +689,14 @@ fn hex_and_bin_reject_negative_widths_and_non_finite_values() {
         ErrorCode::InvalidArgument
     );
     assert_eq!(
+        run_rust_error_code("10 PRINT HEX$(255,-0.5)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        run_rust_error_code("10 PRINT BIN$(5,-0.5)"),
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
         run_rust_error_code("10 PRINT HEX$(1E309)"),
         ErrorCode::Overflow
     );
@@ -700,8 +708,19 @@ fn hex_and_bin_reject_negative_widths_and_non_finite_values() {
 
 #[test]
 fn string_repeat_helpers_reject_invalid_counts_and_empty_pattern() {
-    let output = run_rust(r#"10 PRINT "[";SPACE$(-2);STRING$(3," -");"]""#);
-    assert_eq!(output, "[---]\n");
+    let output = run_rust(r#"10 PRINT "[";SPACE$(0);"][";STRING$(3," -");"][";STRING$(3,65);"]""#);
+    assert_eq!(output, "[][   ][AAA]\n");
+
+    for program in [
+        "10 PRINT SPACE$(-1)",
+        "10 PRINT STRING$(-1,\"x\")",
+        "10 N=-1:PRINT SPACE$(N)",
+        "10 N=-1:PRINT STRING$(N,\"x\")",
+        "10 PRINT SPACE$(-0.5)",
+        "10 PRINT STRING$(-0.5,\"x\")",
+    ] {
+        assert_eq!(run_rust_error_code(program), ErrorCode::InvalidArgument);
+    }
 
     assert_eq!(
         run_rust_error_code("10 PRINT SPACE$(1E309)"),
@@ -722,7 +741,35 @@ fn string_repeat_helpers_reject_invalid_counts_and_empty_pattern() {
 }
 
 #[test]
-fn string_slice_helpers_reject_non_finite_counts_and_positions() {
+fn string_slice_helpers_validate_counts_and_one_based_positions() {
+    assert_eq!(
+        run_rust(
+            r#"10 A$="ABCDE":N=0
+20 PRINT "[";LEFT$(A$,N);"][";RIGHT$(A$,N);"]"
+30 PRINT "[";LEFT$(A$,2);"][";RIGHT$(A$,2);"]"
+40 PRINT "[";MID$(A$,1,2);"]"
+50 PRINT "[";MID$(A$,3);"]"
+60 PRINT "[";MID$(A$,1,0);"]"
+70 PRINT "[";MID$(A$,9,2);"]""#,
+        ),
+        "[][]\n[AB][DE]\n[AB]\n[CDE]\n[]\n[]\n"
+    );
+    for program in [
+        "10 PRINT LEFT$(\"ABCDE\",-1)",
+        "10 PRINT RIGHT$(\"ABCDE\",-1)",
+        "10 PRINT LEFT$(\"ABCDE\",-0.5)",
+        "10 PRINT RIGHT$(\"ABCDE\",-0.5)",
+        "10 A$=\"ABCDE\":N=-1:PRINT LEFT$(A$,N)",
+        "10 A$=\"ABCDE\":N=-1:PRINT RIGHT$(A$,N)",
+        "10 PRINT MID$(\"ABCDE\",0,1)",
+        "10 PRINT MID$(\"ABCDE\",-1,1)",
+        "10 PRINT MID$(\"ABCDE\",1,-1)",
+        "10 PRINT ASC(\"\")",
+        "10 PRINT CHR$(-0.5)",
+    ] {
+        assert_eq!(run_rust_error_code(program), ErrorCode::InvalidArgument);
+    }
+
     assert_eq!(
         run_rust_error_code("10 PRINT LEFT$(\"abc\",1E309)"),
         ErrorCode::Overflow

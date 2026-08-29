@@ -833,7 +833,10 @@ fn nonnegative_count(value: f64) -> BasicResult<usize> {
     if !value.is_finite() || value > usize::MAX as f64 {
         return Err(BasicError::new(ErrorCode::Overflow));
     }
-    Ok(value.max(0.0) as usize)
+    if value < 0.0 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(value as usize)
 }
 
 fn zero_based_string_start(value: f64) -> BasicResult<usize> {
@@ -843,8 +846,8 @@ fn zero_based_string_start(value: f64) -> BasicResult<usize> {
     if !value.is_finite() || value > isize::MAX as f64 {
         return Err(BasicError::new(ErrorCode::Overflow));
     }
-    if value <= 1.0 {
-        return Ok(0);
+    if value < 1.0 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
     }
     Ok(value as usize - 1)
 }
@@ -1001,10 +1004,10 @@ fn radix_width(value: f64) -> BasicResult<usize> {
     if !value.is_finite() {
         return Err(BasicError::new(ErrorCode::Overflow));
     }
-    let width = value as i64;
-    if width < 0 {
+    if value < 0.0 {
         return Err(BasicError::new(ErrorCode::InvalidArgument));
     }
+    let width = value as i64;
     Ok(width as usize)
 }
 
@@ -1377,7 +1380,7 @@ fn first_char_code(text: &str) -> BasicResult<u32> {
     text.chars()
         .next()
         .map(|ch| ch as u32)
-        .ok_or_else(|| BasicError::new(ErrorCode::InvalidValue))
+        .ok_or_else(|| BasicError::new(ErrorCode::InvalidArgument))
 }
 
 fn string_slice(text: &str, start: usize, count: Option<usize>) -> String {
@@ -1643,8 +1646,7 @@ pub fn call_pure_function(name: &str, args: Vec<Value>) -> BasicResult<Option<Va
                 Value::Str(s) => {
                     let ch = s
                         .chars()
-                        .find(|ch| !ch.is_whitespace())
-                        .or_else(|| s.chars().next())
+                        .next()
                         .ok_or_else(|| BasicError::new(ErrorCode::InvalidArgument))?;
                     ch.to_string()
                 }

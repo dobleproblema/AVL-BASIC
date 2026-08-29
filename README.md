@@ -110,13 +110,15 @@ avl-basic.exe samples\g-old-school.bas
 From BASIC immediate mode:
 
 ```basic
+HELP RIGHT$
 TOUR
 SAMPLES
 RUN "/samples/g-old-school.bas"
 ```
 
-`TOUR` explains the 20 highlights and the techniques behind them. `SAMPLES`
-lists all 115 bundled programs by category. Both commands are read-only: they
+`HELP topic` gives a compact syntax and parameter reminder. `TOUR` explains
+the 20 highlights and the techniques behind them. `SAMPLES` lists all 115
+bundled programs by category. `HELP`, `TOUR`, and `SAMPLES` are read-only: they
 do not replace the program in memory or run anything automatically.
 
 ## Build From Source
@@ -177,6 +179,7 @@ AVL BASIC aims to preserve the immediacy of classic home-computer BASIC while
 adding a practical modern feature set:
 
 - plain `.bas` files and an interactive immediate mode,
+- a compact built-in `HELP topic` syntax and parameter reference,
 - syntax-preserving program editing and listing,
 - `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,

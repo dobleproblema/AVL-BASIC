@@ -548,7 +548,7 @@ pub fn trace_text(ansi: bool, line: i32) -> String {
 }
 
 pub fn normalize_code(code: &str) -> String {
-    let showcase_immediate = is_showcase_immediate_line(code);
+    let contextual_immediate = contextual_immediate_command(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code(main.trim_end());
     result = add_bas_extension_to_leading_file_command(&result);
@@ -563,8 +563,10 @@ pub fn normalize_code(code: &str) -> String {
         result.push('\'');
         result.push_str(comment);
     }
-    if showcase_immediate {
-        result.make_ascii_uppercase();
+    match contextual_immediate {
+        Some(ContextualImmediateCommand::Showcase) => result.make_ascii_uppercase(),
+        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
+        None => {}
     }
     result
 }
@@ -609,9 +611,11 @@ fn highlight_normalized_code(
     if let Some(cases) = cases {
         line = apply_identifier_case_for_display(&line, cases);
     }
-    let showcase_immediate = is_showcase_immediate_line(&line);
-    if showcase_immediate {
-        line.make_ascii_uppercase();
+    let contextual_immediate = contextual_immediate_command(&line);
+    match contextual_immediate {
+        Some(ContextualImmediateCommand::Showcase) => line.make_ascii_uppercase(),
+        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut line),
+        None => {}
     }
     if !ansi {
         return line;
@@ -625,7 +629,7 @@ fn highlight_normalized_code(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette, showcase_immediate));
+    out.push_str(&highlight_main(rest, palette, contextual_immediate));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -644,7 +648,7 @@ fn normalize_code_for_editing(code: &str, cursor: usize) -> String {
 }
 
 fn normalize_code_for_editing_marked(code: &str) -> String {
-    let showcase_immediate = is_showcase_immediate_line_marked(code);
+    let contextual_immediate = contextual_immediate_command_marked(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code_for_editing_marked(main.trim_end());
     result = add_bas_extension_to_leading_file_command(&result);
@@ -659,8 +663,10 @@ fn normalize_code_for_editing_marked(code: &str) -> String {
         result.push('\'');
         result.push_str(comment);
     }
-    if showcase_immediate {
-        result.make_ascii_uppercase();
+    match contextual_immediate {
+        Some(ContextualImmediateCommand::Showcase) => result.make_ascii_uppercase(),
+        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
+        None => {}
     }
     result
 }
@@ -677,7 +683,7 @@ pub fn syntax_highlight_raw_with_cases(
     if !ansi {
         return line;
     }
-    let showcase_immediate = is_showcase_immediate_line(&line);
+    let contextual_immediate = contextual_immediate_command(&line);
     let (main, comment) = split_single_quote_comment(&line);
     let mut out = String::new();
     let mut rest = main;
@@ -688,7 +694,7 @@ pub fn syntax_highlight_raw_with_cases(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette, showcase_immediate));
+    out.push_str(&highlight_main(rest, palette, contextual_immediate));
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -2922,14 +2928,75 @@ fn normalize_main_code_for_editing_marked(code: &str) -> String {
     normalize_main_code_inner(code, true)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContextualImmediateCommand {
+    Showcase,
+    Help,
+}
+
+fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand> {
+    if is_showcase_immediate_line(line) {
+        Some(ContextualImmediateCommand::Showcase)
+    } else if is_help_immediate_line(line) {
+        Some(ContextualImmediateCommand::Help)
+    } else {
+        None
+    }
+}
+
+fn contextual_immediate_command_marked(line: &str) -> Option<ContextualImmediateCommand> {
+    let unmarked: String = line.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
+    contextual_immediate_command(&unmarked)
+}
+
 fn is_showcase_immediate_line(line: &str) -> bool {
     let command = line.trim();
     command.eq_ignore_ascii_case("TOUR") || command.eq_ignore_ascii_case("SAMPLES")
 }
 
-fn is_showcase_immediate_line_marked(line: &str) -> bool {
-    let unmarked: String = line.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
-    is_showcase_immediate_line(&unmarked)
+pub(crate) fn is_help_immediate_line(line: &str) -> bool {
+    let command = line.trim();
+    let Some(prefix) = command.get(..4) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case("HELP") {
+        return false;
+    }
+    let rest = &command[4..];
+    if rest.is_empty() {
+        return true;
+    }
+    if !rest.starts_with(char::is_whitespace) {
+        return false;
+    }
+    let topic = rest.trim();
+    if topic == "'" {
+        return true;
+    }
+    !topic.contains(['=', ':', '\''])
+}
+
+fn uppercase_leading_help(line: &mut String) {
+    let mut command_chars = 0usize;
+    let mut command_started = false;
+    *line = line
+        .chars()
+        .map(|ch| {
+            if !command_started && ch.is_whitespace() {
+                return ch;
+            }
+            command_started = true;
+            if ch == CURSOR_MARKER {
+                return ch;
+            }
+            if command_chars < 4 {
+                command_chars += 1;
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            }
+        })
+        .collect();
 }
 
 fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String {
@@ -3358,7 +3425,11 @@ fn increment_fixed_decimal(int_part: &str, frac_part: &str, frac_width: usize) -
     (trim_leading_decimal_zeros(&int_part).to_string(), frac_part)
 }
 
-fn highlight_main(text: &str, palette: SyntaxPalette, showcase_immediate: bool) -> String {
+fn highlight_main(
+    text: &str,
+    palette: SyntaxPalette,
+    contextual_immediate: Option<ContextualImmediateCommand>,
+) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0usize;
@@ -3391,8 +3462,13 @@ fn highlight_main(text: &str, palette: SyntaxPalette, showcase_immediate: bool) 
             }
             let word: String = chars[start..i].iter().collect();
             let upper = word.to_ascii_uppercase();
-            if showcase_immediate {
+            if contextual_immediate == Some(ContextualImmediateCommand::Showcase) {
                 push_styled(&mut out, palette.keyword, &upper);
+            } else if contextual_immediate == Some(ContextualImmediateCommand::Help)
+                && upper == "HELP"
+                && chars[..start].iter().all(|ch| ch.is_whitespace())
+            {
+                push_styled(&mut out, palette.keyword, "HELP");
             } else if expect_sub_name {
                 push_styled(&mut out, palette.keyword, &upper);
                 expect_sub_name = false;
@@ -3963,6 +4039,66 @@ mod tests {
             syntax_highlight_with_cases("PRINT tour; samples", false, Some(&cases)),
             "PRINT tour; Samples"
         );
+    }
+
+    #[test]
+    fn help_is_contextual_without_becoming_a_reserved_word() {
+        assert_eq!(normalize_code("help"), "HELP");
+        assert_eq!(normalize_code("help right$"), "HELP RIGHT$");
+        assert_eq!(normalize_code("help '"), "HELP '");
+        assert_eq!(normalize_code("  help   right$  "), "  HELP   RIGHT$");
+        assert_eq!(
+            syntax_highlight("help right$", true),
+            format!("{KEYWORD_STYLE}HELP{RESET}{OTHER_STYLE} {RESET}{OTHER_STYLE}RIGHT${RESET}")
+        );
+        assert_eq!(
+            syntax_highlight_raw_with_cases("help right$", true, None),
+            format!("{KEYWORD_STYLE}HELP{RESET}{OTHER_STYLE} {RESET}{OTHER_STYLE}RIGHT${RESET}")
+        );
+
+        for cursor in 0..="help right$".chars().count() {
+            assert!(
+                syntax_highlight_editing_with_cases("help right$", cursor, false, None)
+                    .starts_with("HELP ")
+            );
+        }
+
+        assert!(!is_known_basic_word("HELP"));
+        for source in [
+            "help=1",
+            "help = 1",
+            "10 help",
+            "10 help=1",
+            "PRINT help",
+            "help:",
+            "help ' comment",
+        ] {
+            let highlighted = syntax_highlight(source, true);
+            assert!(
+                !highlighted.contains(&format!("{KEYWORD_STYLE}HELP{RESET}")),
+                "unexpected HELP highlighting for {source}: {highlighted:?}"
+            );
+        }
+        assert_eq!(normalize_code("help=1"), "help=1");
+        assert_eq!(normalize_code("help = 1"), "help = 1");
+        assert_eq!(normalize_code("10 help"), "10 help");
+    }
+
+    #[test]
+    fn highlighted_functions_constants_and_operators_have_help_topics() {
+        for (group, words) in [
+            ("FUNCTIONS", FUNCTIONS),
+            ("PRINT_FUNCTIONS", PRINT_FUNCTIONS),
+            ("NUMERIC_CONSTANTS", NUMERIC_CONSTANTS),
+            ("OPERATORS", OPERATORS),
+        ] {
+            for word in words {
+                assert!(
+                    crate::help::has_topic(word),
+                    "{group} entry {word} has no HELP topic"
+                );
+            }
+        }
     }
 
     #[test]

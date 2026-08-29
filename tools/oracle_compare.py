@@ -30,6 +30,7 @@ NOISE_PREFIXES = (
     "This is free software",
     "This program comes with",
     "Type TOUR to explore",
+    "Type HELP <topic> for syntax",
     "Ready",
     "Saliendo",
 )

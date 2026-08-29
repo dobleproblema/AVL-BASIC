@@ -130,7 +130,7 @@ fn banner_points_to_the_showcase_commands() {
 
     interpreter.print_banner();
 
-    assert!(interpreter
-        .take_output()
-        .contains("Type TOUR to explore 20 highlights, or SAMPLES for the full catalog.\n"));
+    assert!(interpreter.take_output().contains(
+        "Type HELP <topic> for syntax, TOUR for highlights, or SAMPLES for the catalog.\n"
+    ));
 }
