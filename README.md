@@ -6,7 +6,7 @@
 
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
 line-numbered programs, immediate mode, an integrated full-screen editor and
-visual debugger, structured control flow, matrix operations, sprites, mouse and
+debugger, structured control flow, matrix operations, sprites, mouse and
 keyboard input, and a complete built-in graphics environment.
 
 The project is built around the Rust runtime: a fast native executable for
