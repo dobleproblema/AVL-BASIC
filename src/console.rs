@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use crate::keyboard::TerminalInputDecoder;
+use crate::lexer::split_command_ranges;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
@@ -831,9 +832,65 @@ where
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FullscreenEditorSession {
+    lines: Vec<String>,
+    breakpoints: HashSet<i32>,
+    editor_state: FullscreenEditorState,
+}
+
+impl FullscreenEditorSession {
+    pub fn new(lines: Vec<String>) -> Self {
+        Self::with_breakpoints(lines, HashSet::new())
+    }
+
+    pub fn with_breakpoints(lines: Vec<String>, breakpoints: HashSet<i32>) -> Self {
+        let editor = BasicEditor::with_breakpoints(&lines, breakpoints);
+        Self::from_editor(&editor)
+    }
+
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    pub fn breakpoints(&self) -> &HashSet<i32> {
+        &self.breakpoints
+    }
+
+    fn from_editor(editor: &BasicEditor) -> Self {
+        let lines = editor.lines_as_strings();
+        let breakpoints = valid_editor_breakpoints(&lines, &editor.breakpoints);
+        Self {
+            lines,
+            breakpoints,
+            editor_state: FullscreenEditorState::from_editor(editor),
+        }
+    }
+
+    fn into_editor(self) -> BasicEditor {
+        let mut editor = BasicEditor::with_breakpoints(&self.lines, self.breakpoints);
+        self.editor_state.restore_into(&mut editor);
+        editor
+    }
+}
+
+impl Default for FullscreenEditorSession {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 pub enum FullscreenEditOutcome {
-    Apply(Vec<String>),
+    Apply(FullscreenEditorSession),
     Cancel,
+}
+
+fn valid_editor_breakpoints(lines: &[String], breakpoints: &HashSet<i32>) -> HashSet<i32> {
+    let valid_lines = lines
+        .iter()
+        .filter_map(|line| editor_line_number(&line.chars().collect::<Vec<_>>()))
+        .collect::<HashSet<_>>();
+    breakpoints.intersection(&valid_lines).copied().collect()
 }
 
 pub fn edit_fullscreen<F>(
@@ -859,6 +916,26 @@ where
     F: FnMut(&[String]) -> Result<(), String>,
     I: FnMut() -> io::Result<()>,
 {
+    edit_fullscreen_session_with_idle(
+        FullscreenEditorSession::new(initial_lines.to_vec()),
+        ansi,
+        cases,
+        &mut validate,
+        &mut idle,
+    )
+}
+
+pub fn edit_fullscreen_session_with_idle<F, I>(
+    initial_session: FullscreenEditorSession,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    mut validate: F,
+    mut idle: I,
+) -> io::Result<FullscreenEditOutcome>
+where
+    F: FnMut(&[String]) -> Result<(), String>,
+    I: FnMut() -> io::Result<()>,
+{
     if !interactive_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -867,7 +944,7 @@ where
     }
 
     let _guard = FullscreenEditorGuard::enter()?;
-    let mut editor = BasicEditor::new(initial_lines);
+    let mut editor = initial_session.into_editor();
     let mut status = BasicEditor::default_help();
     render_fullscreen_editor(&mut editor, ansi, cases, &status)?;
 
@@ -883,9 +960,9 @@ where
                 }
                 match event.code {
                     KeyCode::F(12) => {
-                        let lines = editor.lines_as_strings();
-                        match validate(&lines) {
-                            Ok(()) => return Ok(FullscreenEditOutcome::Apply(lines)),
+                        let session = editor.session();
+                        match validate(session.lines()) {
+                            Ok(()) => return Ok(FullscreenEditOutcome::Apply(session)),
                             Err(message) => {
                                 status = format!("Apply failed: {message}");
                             }
@@ -1043,6 +1120,477 @@ where
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DebugTimerInspection {
+    target: i32,
+    repeat: bool,
+    active: bool,
+    interval: Duration,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum DebugDataInspection {
+    #[default]
+    Empty,
+    Next {
+        position: usize,
+        line: i32,
+        line_item: usize,
+        value: String,
+    },
+    Exhausted {
+        position: usize,
+        total: usize,
+    },
+}
+
+impl From<&crate::debugger::DebugDataSnapshot> for DebugDataInspection {
+    fn from(data: &crate::debugger::DebugDataSnapshot) -> Self {
+        match data {
+            crate::debugger::DebugDataSnapshot::Empty => Self::Empty,
+            crate::debugger::DebugDataSnapshot::Next {
+                position,
+                line,
+                line_item,
+                value,
+            } => Self::Next {
+                position: *position,
+                line: *line,
+                line_item: *line_item,
+                value: format_debug_value(value),
+            },
+            crate::debugger::DebugDataSnapshot::Exhausted { position, total } => Self::Exhausted {
+                position: *position,
+                total: *total,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct DebugInspectionState {
+    variables: HashMap<String, String>,
+    arrays: HashMap<String, crate::debugger::DebugArraySummary>,
+    err: i32,
+    erl: i32,
+    timers: HashMap<i32, DebugTimerInspection>,
+    data: DebugDataInspection,
+}
+
+impl DebugInspectionState {
+    fn from_snapshot(snapshot: &crate::debugger::DebugSnapshot) -> Self {
+        Self {
+            variables: snapshot
+                .variables
+                .iter()
+                .chain(snapshot.array_elements.iter())
+                .map(|variable| {
+                    (
+                        variable.name.to_ascii_uppercase(),
+                        format_debug_value(&variable.value),
+                    )
+                })
+                .collect(),
+            arrays: snapshot
+                .arrays
+                .iter()
+                .map(|array| (array.name.to_ascii_uppercase(), array.clone()))
+                .collect(),
+            err: snapshot.err,
+            erl: snapshot.erl,
+            timers: snapshot
+                .timers
+                .iter()
+                .map(|timer| {
+                    (
+                        timer.number,
+                        DebugTimerInspection {
+                            target: timer.target,
+                            repeat: timer.repeat,
+                            active: timer.active,
+                            interval: timer.interval,
+                        },
+                    )
+                })
+                .collect(),
+            data: DebugDataInspection::from(&snapshot.data),
+        }
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct DebugPanelChanges {
+    variables: HashSet<String>,
+    arrays: HashSet<String>,
+    state: bool,
+    timers: HashSet<i32>,
+    data: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DebugInspectionHistory {
+    previous: Option<DebugInspectionState>,
+}
+
+impl DebugInspectionHistory {
+    fn changes(&self, snapshot: &crate::debugger::DebugSnapshot) -> DebugPanelChanges {
+        let Some(previous) = &self.previous else {
+            return DebugPanelChanges::default();
+        };
+        let current = DebugInspectionState::from_snapshot(snapshot);
+        DebugPanelChanges {
+            variables: current
+                .variables
+                .iter()
+                .filter(|(name, value)| previous.variables.get(*name) != Some(*value))
+                .map(|(name, _)| name.clone())
+                .collect(),
+            arrays: current
+                .arrays
+                .iter()
+                .filter(|(name, value)| previous.arrays.get(*name) != Some(*value))
+                .map(|(name, _)| name.clone())
+                .collect(),
+            state: (current.err, current.erl) != (previous.err, previous.erl),
+            timers: current
+                .timers
+                .iter()
+                .filter(|(number, value)| previous.timers.get(number) != Some(*value))
+                .map(|(number, _)| *number)
+                .collect(),
+            data: current.data != previous.data,
+        }
+    }
+
+    fn remember(&mut self, snapshot: &crate::debugger::DebugSnapshot) {
+        self.previous = Some(DebugInspectionState::from_snapshot(snapshot));
+    }
+}
+
+pub fn debug_fullscreen(
+    lines: &[String],
+    breakpoints: &mut HashSet<i32>,
+    snapshot: &crate::debugger::DebugSnapshot,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> io::Result<crate::debugger::DebugAction> {
+    debug_fullscreen_with_idle(lines, breakpoints, snapshot, ansi, cases, || Ok(()))
+}
+
+pub fn debug_fullscreen_with_idle<I>(
+    lines: &[String],
+    breakpoints: &mut HashSet<i32>,
+    snapshot: &crate::debugger::DebugSnapshot,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    idle: I,
+) -> io::Result<crate::debugger::DebugAction>
+where
+    I: FnMut() -> io::Result<()>,
+{
+    debug_fullscreen_with_idle_and_changes(
+        lines,
+        breakpoints,
+        snapshot,
+        ansi,
+        cases,
+        &DebugPanelChanges::default(),
+        idle,
+    )
+}
+
+pub(crate) fn debug_fullscreen_with_idle_and_history<I>(
+    lines: &[String],
+    breakpoints: &mut HashSet<i32>,
+    snapshot: &crate::debugger::DebugSnapshot,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    history: &mut DebugInspectionHistory,
+    idle: I,
+) -> io::Result<crate::debugger::DebugAction>
+where
+    I: FnMut() -> io::Result<()>,
+{
+    let changes = history.changes(snapshot);
+    let result = debug_fullscreen_with_idle_and_changes(
+        lines,
+        breakpoints,
+        snapshot,
+        ansi,
+        cases,
+        &changes,
+        idle,
+    );
+    if result.is_ok() {
+        history.remember(snapshot);
+    }
+    result
+}
+
+fn debug_fullscreen_with_idle_and_changes<I>(
+    lines: &[String],
+    breakpoints: &mut HashSet<i32>,
+    snapshot: &crate::debugger::DebugSnapshot,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    changes: &DebugPanelChanges,
+    mut idle: I,
+) -> io::Result<crate::debugger::DebugAction>
+where
+    I: FnMut() -> io::Result<()>,
+{
+    if !interactive_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "integrated debugger requires an interactive terminal",
+        ));
+    }
+
+    let _runtime_raw_suspend = suspend_runtime_raw_mode()?;
+    let _guard = FullscreenEditorGuard::enter()?;
+    let mut editor = BasicEditor::with_breakpoints(lines, breakpoints.clone());
+    if let Some(line_index) = editor
+        .lines
+        .iter()
+        .position(|line| editor_line_number(line) == Some(snapshot.location.line))
+    {
+        editor.cursor_line = line_index;
+        let (cols, rows) = size().unwrap_or((80, 24));
+        let layout = debug_layout(cols.max(1) as usize, rows.max(1) as usize);
+        if let Some(statement_col) = reveal_debug_statement(
+            &mut editor,
+            line_index,
+            snapshot.location.statement,
+            snapshot.location.source_span.as_ref(),
+            layout.code_cols,
+            true,
+        ) {
+            editor.cursor_col = statement_col;
+        } else {
+            editor.cursor_col = 0;
+        }
+        editor.top_line = line_index.saturating_sub(layout.code_rows / 2);
+    }
+
+    let mut panel_scroll = 0usize;
+    let mut status = debug_status(
+        snapshot,
+        editor.current_line_number(),
+        terminal_debug_layout().has_inspector(),
+    );
+    render_fullscreen_debugger(
+        &mut editor,
+        snapshot,
+        ansi,
+        cases,
+        &status,
+        &mut panel_scroll,
+        changes,
+    )?;
+
+    loop {
+        if interrupt_requested() {
+            clear_interrupt_requested();
+            *breakpoints = editor.breakpoints;
+            return Ok(crate::debugger::DebugAction::Abort);
+        }
+        if !poll(Duration::from_millis(30))? {
+            idle()?;
+            continue;
+        }
+        match read()? {
+            Event::Key(event) => {
+                if event.kind == KeyEventKind::Release {
+                    continue;
+                }
+                if let Some(action) = debug_action_for_key(event.code, event.modifiers) {
+                    if is_debugger_ctrl_c(event.code, event.modifiers) {
+                        clear_interrupt_requested();
+                    }
+                    *breakpoints = editor.breakpoints;
+                    return Ok(action);
+                }
+                match event.code {
+                    KeyCode::F(2) => {
+                        let message = match editor.toggle_breakpoint() {
+                            Ok((true, line)) => format!("Breakpoint set at {line}"),
+                            Ok((false, line)) => format!("Breakpoint cleared at {line}"),
+                            Err(message) => format!("Breakpoint failed: {message}"),
+                        };
+                        status =
+                            debug_status_message(snapshot, editor.current_line_number(), &message);
+                        *breakpoints = editor.breakpoints.clone();
+                    }
+                    KeyCode::Up => {
+                        editor.move_up();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::Down => {
+                        editor.move_down();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::Left => {
+                        editor.scroll_debug_left();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::Right => {
+                        let layout = terminal_debug_layout();
+                        let view_line_len = debug_viewed_line_len(&editor, snapshot);
+                        editor.scroll_debug_right(layout.code_cols, view_line_len);
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::Home => {
+                        editor.move_document_start();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::End => {
+                        editor.move_document_end();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::PageUp => {
+                        editor.page_up();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::PageDown => {
+                        editor.page_down();
+                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    }
+                    KeyCode::BackTab => {
+                        let layout = terminal_debug_layout();
+                        panel_scroll =
+                            advance_debug_panel_scroll(snapshot, layout, panel_scroll, true);
+                        status = debug_status(
+                            snapshot,
+                            editor.current_line_number(),
+                            layout.has_inspector(),
+                        );
+                    }
+                    KeyCode::Tab => {
+                        let layout = terminal_debug_layout();
+                        panel_scroll =
+                            advance_debug_panel_scroll(snapshot, layout, panel_scroll, false);
+                        status = debug_status(
+                            snapshot,
+                            editor.current_line_number(),
+                            layout.has_inspector(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Event::Resize(cols, rows) => {
+                let layout = debug_layout(cols.max(1) as usize, rows.max(1) as usize);
+                if editor.current_line_number() == Some(snapshot.location.line) {
+                    let cursor_line = editor.cursor_line;
+                    reveal_debug_statement(
+                        &mut editor,
+                        cursor_line,
+                        snapshot.location.statement,
+                        snapshot.location.source_span.as_ref(),
+                        layout.code_cols,
+                        false,
+                    );
+                }
+                panel_scroll = clamp_debug_panel_scroll(snapshot, layout, panel_scroll);
+                status = debug_status(
+                    snapshot,
+                    editor.current_line_number(),
+                    layout.has_inspector(),
+                );
+            }
+            _ => {}
+        }
+        render_fullscreen_debugger(
+            &mut editor,
+            snapshot,
+            ansi,
+            cases,
+            &status,
+            &mut panel_scroll,
+            changes,
+        )?;
+    }
+}
+
+fn debug_action_for_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Option<crate::debugger::DebugAction> {
+    use crate::debugger::DebugAction;
+    match code {
+        KeyCode::F(1) | KeyCode::F(5) => Some(DebugAction::Continue),
+        KeyCode::F(6) => Some(DebugAction::StepInto),
+        KeyCode::F(7) => Some(DebugAction::StepOver),
+        KeyCode::F(8) => Some(DebugAction::StepOut),
+        KeyCode::Char('c' | 'C') if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(DebugAction::Abort)
+        }
+        KeyCode::Esc => Some(DebugAction::Abort),
+        _ => None,
+    }
+}
+
+fn is_debugger_ctrl_c(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    matches!(code, KeyCode::Char('c' | 'C')) && modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn debug_location_status(
+    snapshot: &crate::debugger::DebugSnapshot,
+    viewed_line: Option<i32>,
+) -> String {
+    let mut location = format!(
+        "Ln {} Stmt {}",
+        snapshot.location.line,
+        snapshot.location.statement + 1
+    );
+    if let Some(line) = viewed_line.filter(|line| *line != snapshot.location.line) {
+        location.push_str(&format!(" View {line}"));
+    }
+    location
+}
+
+fn debug_status(
+    snapshot: &crate::debugger::DebugSnapshot,
+    viewed_line: Option<i32>,
+    has_inspector: bool,
+) -> String {
+    let location = debug_location_status(snapshot, viewed_line);
+    let reason = debug_pause_reason_label(snapshot.reason);
+    let inspect = if has_inspector {
+        " Tab/Shift+Tab Inspect"
+    } else {
+        ""
+    };
+    format!("{reason} | {location} | F5 Go F6 Into F7 Over F8 Out Esc Abort F2 Break{inspect}")
+}
+
+fn debug_status_for_terminal(
+    snapshot: &crate::debugger::DebugSnapshot,
+    viewed_line: Option<i32>,
+) -> String {
+    debug_status(
+        snapshot,
+        viewed_line,
+        terminal_debug_layout().has_inspector(),
+    )
+}
+
+fn debug_status_message(
+    snapshot: &crate::debugger::DebugSnapshot,
+    viewed_line: Option<i32>,
+    message: &str,
+) -> String {
+    format!(
+        "{} | {} | {message}",
+        debug_pause_reason_label(snapshot.reason),
+        debug_location_status(snapshot, viewed_line)
+    )
+}
+
+fn debug_panel_page_size() -> usize {
+    4
+}
+
 struct FullscreenEditorGuard;
 
 impl FullscreenEditorGuard {
@@ -1071,6 +1619,16 @@ const SELECTION_END_STYLE: &str = "\x1b[27m";
 const STATUS_BAR_STYLE: &str = "\x1b[30m\x1b[48;5;250m";
 const STATUS_KEY_STYLE: &str = "\x1b[38;5;21m";
 const STATUS_KEY_END_STYLE: &str = STATUS_BAR_STYLE;
+const DEBUG_BREAKPOINT_STYLE: &str = "\x1b[1m\x1b[31m";
+const DEBUG_EXECUTION_DOT_DARK_STYLE: &str = "\x1b[1m\x1b[38;5;41m";
+const DEBUG_EXECUTION_DOT_LIGHT_STYLE: &str = "\x1b[1m\x1b[38;5;41m";
+const DEBUG_EXECUTION_ARROW_DARK_STYLE: &str = "\x1b[1m\x1b[38;5;226m";
+const DEBUG_EXECUTION_ARROW_LIGHT_STYLE: &str = "\x1b[1m\x1b[38;5;202m";
+const DEBUG_CURRENT_LINE_DARK_STYLE: &str = "\x1b[48;5;236m";
+const DEBUG_CURRENT_LINE_LIGHT_STYLE: &str = "\x1b[48;5;254m";
+const DEBUG_PANEL_HEADER_STYLE: &str = "\x1b[1m\x1b[38;5;45m";
+const DEBUG_STATEMENT_PLACEHOLDER: char = '\u{E001}';
+const EDITOR_GUTTER_WIDTH: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct EditorPosition {
@@ -1078,9 +1636,10 @@ struct EditorPosition {
     col: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct EditorSnapshot {
     lines: Vec<Vec<char>>,
+    breakpoints: HashSet<i32>,
     cursor_line: usize,
     cursor_col: usize,
     top_line: usize,
@@ -1089,14 +1648,71 @@ struct EditorSnapshot {
     selection_anchor: Option<EditorPosition>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FullscreenEditorState {
+    cursor_line: usize,
+    cursor_col: usize,
+    top_line: usize,
+    left_col: usize,
+    page_rows: usize,
+    dirty: bool,
+    selection_anchor: Option<EditorPosition>,
+    clipboard: String,
+    last_find: String,
+    last_replace: String,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
+}
+
+impl FullscreenEditorState {
+    fn from_editor(editor: &BasicEditor) -> Self {
+        Self {
+            cursor_line: editor.cursor_line,
+            cursor_col: editor.cursor_col,
+            top_line: editor.top_line,
+            left_col: editor.left_col,
+            page_rows: editor.page_rows,
+            dirty: editor.dirty,
+            selection_anchor: editor.selection_anchor,
+            clipboard: editor.clipboard.clone(),
+            last_find: editor.last_find.clone(),
+            last_replace: editor.last_replace.clone(),
+            undo_stack: editor.undo_stack.clone(),
+            redo_stack: editor.redo_stack.clone(),
+        }
+    }
+
+    fn restore_into(self, editor: &mut BasicEditor) {
+        editor.cursor_line = self.cursor_line.min(editor.lines.len().saturating_sub(1));
+        editor.cursor_col = self.cursor_col.min(editor.current_line_len());
+        editor.top_line = self.top_line.min(editor.lines.len().saturating_sub(1));
+        editor.left_col = self.left_col;
+        editor.page_rows = self.page_rows.max(1);
+        editor.dirty = self.dirty;
+        editor.selection_anchor = self.selection_anchor.filter(|position| {
+            editor
+                .lines
+                .get(position.line)
+                .is_some_and(|line| position.col <= line.len())
+        });
+        editor.clipboard = self.clipboard;
+        editor.last_find = self.last_find;
+        editor.last_replace = self.last_replace;
+        editor.undo_stack = self.undo_stack;
+        editor.redo_stack = self.redo_stack;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EditorFindResult {
     Found,
     Wrapped,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct BasicEditor {
     lines: Vec<Vec<char>>,
+    breakpoints: HashSet<i32>,
     cursor_line: usize,
     cursor_col: usize,
     top_line: usize,
@@ -1112,7 +1728,12 @@ struct BasicEditor {
 }
 
 impl BasicEditor {
+    #[cfg(test)]
     fn new(initial_lines: &[String]) -> Self {
+        Self::with_breakpoints(initial_lines, HashSet::new())
+    }
+
+    fn with_breakpoints(initial_lines: &[String], breakpoints: HashSet<i32>) -> Self {
         let mut lines: Vec<Vec<char>> = initial_lines
             .iter()
             .map(|line| line.chars().collect::<Vec<_>>())
@@ -1122,6 +1743,7 @@ impl BasicEditor {
         }
         Self {
             lines,
+            breakpoints,
             cursor_line: 0,
             cursor_col: 0,
             top_line: 0,
@@ -1142,6 +1764,26 @@ impl BasicEditor {
             .iter()
             .map(|line| line.iter().collect())
             .collect()
+    }
+
+    fn session(&self) -> FullscreenEditorSession {
+        FullscreenEditorSession::from_editor(self)
+    }
+
+    fn current_line_number(&self) -> Option<i32> {
+        self.lines
+            .get(self.cursor_line)
+            .and_then(|line| editor_line_number(line))
+    }
+
+    fn toggle_breakpoint(&mut self) -> Result<(bool, i32), &'static str> {
+        let line = self.current_line_number().ok_or("no BASIC line")?;
+        if self.breakpoints.remove(&line) {
+            Ok((false, line))
+        } else {
+            self.breakpoints.insert(line);
+            Ok((true, line))
+        }
     }
 
     fn default_help() -> String {
@@ -1174,6 +1816,7 @@ impl BasicEditor {
     fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
             lines: self.lines.clone(),
+            breakpoints: self.breakpoints.clone(),
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
             top_line: self.top_line,
@@ -1185,6 +1828,7 @@ impl BasicEditor {
 
     fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
         self.lines = snapshot.lines;
+        self.breakpoints = snapshot.breakpoints;
         self.cursor_line = snapshot.cursor_line.min(self.lines.len().saturating_sub(1));
         self.cursor_col = snapshot.cursor_col.min(self.current_line_len());
         self.top_line = snapshot.top_line.min(self.lines.len().saturating_sub(1));
@@ -1628,6 +2272,11 @@ impl BasicEditor {
             let code = renumber_editor_line_references(&code, &mapping);
             self.lines[line.index] = format!("{prefix}{new_number}{code}").chars().collect();
         }
+        self.breakpoints = self
+            .breakpoints
+            .iter()
+            .filter_map(|line| mapping.get(line).copied())
+            .collect();
         self.cursor_col = self.cursor_col.min(self.current_line_len());
         self.clear_selection();
         self.dirty = true;
@@ -1808,6 +2457,25 @@ impl BasicEditor {
             self.left_col = self.cursor_col + 1 - cols;
         }
     }
+
+    fn ensure_debug_view_visible(&mut self, cols: usize, rows: usize, view_line_len: usize) {
+        self.page_rows = rows.max(1);
+        if self.cursor_line < self.top_line {
+            self.top_line = self.cursor_line;
+        } else if self.cursor_line >= self.top_line + rows.max(1) {
+            self.top_line = self.cursor_line + 1 - rows.max(1);
+        }
+        self.left_col = self.left_col.min(view_line_len.saturating_sub(cols.max(1)));
+    }
+
+    fn scroll_debug_left(&mut self) {
+        self.left_col = self.left_col.saturating_sub(4);
+    }
+
+    fn scroll_debug_right(&mut self, cols: usize, view_line_len: usize) {
+        let max_left = view_line_len.saturating_sub(cols.max(1));
+        self.left_col = self.left_col.saturating_add(4).min(max_left);
+    }
 }
 
 fn chars_equal_ignore_ascii_case(left: char, right: char) -> bool {
@@ -1936,6 +2604,22 @@ struct EditorNumberedLine {
     old_number: i32,
     number_start: usize,
     number_end: usize,
+}
+
+fn editor_line_number(line: &[char]) -> Option<i32> {
+    let mut start = 0usize;
+    while start < line.len() && line[start].is_whitespace() {
+        start += 1;
+    }
+    let mut end = start;
+    while end < line.len() && line[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == start || (end < line.len() && !line[end].is_whitespace()) {
+        return None;
+    }
+    let raw: String = line[start..end].iter().collect();
+    raw.parse::<i32>().ok().filter(|number| *number > 0)
 }
 
 fn collect_editor_line_numbers(
@@ -2293,6 +2977,704 @@ fn render_fullscreen_editor_prompt(
     stdout.flush()
 }
 
+fn editor_gutter_width(cols: usize) -> usize {
+    if cols > EDITOR_GUTTER_WIDTH + 1 {
+        EDITOR_GUTTER_WIDTH
+    } else {
+        0
+    }
+}
+
+fn render_editor_gutter(ansi: bool, breakpoint: bool, current: bool, viewed: bool) -> String {
+    render_editor_gutter_for_theme(ansi, breakpoint, current, viewed, current_syntax_theme())
+}
+
+fn debug_execution_dot_style(theme: SyntaxTheme) -> &'static str {
+    match theme {
+        SyntaxTheme::Dark => DEBUG_EXECUTION_DOT_DARK_STYLE,
+        SyntaxTheme::Light => DEBUG_EXECUTION_DOT_LIGHT_STYLE,
+    }
+}
+
+fn debug_execution_arrow_style(theme: SyntaxTheme) -> &'static str {
+    match theme {
+        SyntaxTheme::Dark => DEBUG_EXECUTION_ARROW_DARK_STYLE,
+        SyntaxTheme::Light => DEBUG_EXECUTION_ARROW_LIGHT_STYLE,
+    }
+}
+
+fn render_editor_gutter_for_theme(
+    ansi: bool,
+    breakpoint: bool,
+    current: bool,
+    viewed: bool,
+    theme: SyntaxTheme,
+) -> String {
+    let breakpoint_marker = if breakpoint { '●' } else { ' ' };
+    let line_marker = if current {
+        '●'
+    } else if viewed {
+        '▶'
+    } else {
+        ' '
+    };
+    if !ansi {
+        return format!("{breakpoint_marker} {line_marker}");
+    }
+
+    let mut rendered = String::new();
+    if breakpoint {
+        rendered.push_str(DEBUG_BREAKPOINT_STYLE);
+        rendered.push(breakpoint_marker);
+        rendered.push_str(RESET);
+    } else {
+        rendered.push(' ');
+    }
+    rendered.push(' ');
+    if current {
+        rendered.push_str(debug_execution_dot_style(theme));
+        rendered.push(line_marker);
+        rendered.push_str(RESET);
+    } else if viewed {
+        rendered.push_str(DEBUG_BREAKPOINT_STYLE);
+        rendered.push(line_marker);
+        rendered.push_str(RESET);
+    } else {
+        rendered.push(' ');
+    }
+    rendered
+}
+
+fn debug_statement_column(
+    line: &[char],
+    statement: usize,
+    source_span: Option<&std::ops::Range<usize>>,
+) -> Option<usize> {
+    let source: String = line.iter().collect();
+    if let Some(span) = source_span.filter(|span| {
+        span.start < span.end
+            && span.end <= source.len()
+            && source.is_char_boundary(span.start)
+            && source.is_char_boundary(span.end)
+    }) {
+        return Some(source[..span.start].chars().count());
+    }
+
+    let (_, code) = split_line_number(&source)?;
+    let code_start = source.len().saturating_sub(code.len());
+    let commands = split_command_ranges(code);
+    let statement = commands.get(statement)?;
+    Some(source[..code_start + statement.start].chars().count())
+}
+
+fn debug_viewed_line_len(editor: &BasicEditor, snapshot: &crate::debugger::DebugSnapshot) -> usize {
+    let Some(line) = editor.lines.get(editor.cursor_line) else {
+        return 0;
+    };
+    if editor_line_number(line) == Some(snapshot.location.line)
+        && debug_statement_column(
+            line,
+            snapshot.location.statement,
+            snapshot.location.source_span.as_ref(),
+        )
+        .is_some()
+    {
+        line.len().saturating_add(2)
+    } else {
+        line.len()
+    }
+}
+
+fn reveal_debug_statement(
+    editor: &mut BasicEditor,
+    line_index: usize,
+    statement: usize,
+    source_span: Option<&std::ops::Range<usize>>,
+    code_cols: usize,
+    force: bool,
+) -> Option<usize> {
+    let line = editor.lines.get(line_index)?;
+    let statement_col = debug_statement_column(line, statement, source_span)?;
+    let display_len = line.len().saturating_add(2);
+    let visible_end = editor.left_col.saturating_add(code_cols);
+    if force || statement_col < editor.left_col || statement_col.saturating_add(2) > visible_end {
+        let max_left = display_len.saturating_sub(code_cols);
+        editor.left_col = statement_col.saturating_sub(code_cols / 3).min(max_left);
+    }
+    Some(statement_col)
+}
+
+fn debug_source_window(
+    line: &[char],
+    left_col: usize,
+    width: usize,
+    statement: usize,
+    source_span: Option<&std::ops::Range<usize>>,
+) -> (String, Option<usize>) {
+    let Some(statement_col) = debug_statement_column(line, statement, source_span) else {
+        return (line.iter().skip(left_col).take(width).collect(), None);
+    };
+    let mut augmented = line.to_vec();
+    let statement_col = statement_col.min(augmented.len());
+    augmented.insert(statement_col, DEBUG_STATEMENT_PLACEHOLDER);
+    augmented.insert(statement_col + 1, ' ');
+    let marker_col = (statement_col >= left_col && statement_col < left_col.saturating_add(width))
+        .then(|| statement_col - left_col);
+    let visible = augmented
+        .iter()
+        .skip(left_col)
+        .take(width)
+        .copied()
+        .collect::<String>();
+    (visible, marker_col)
+}
+
+fn finish_debug_statement_marker(rendered: &str, ansi: bool, marker_col: usize) -> String {
+    finish_debug_statement_marker_for_theme(rendered, ansi, marker_col, current_syntax_theme())
+}
+
+fn finish_debug_statement_marker_for_theme(
+    rendered: &str,
+    ansi: bool,
+    marker_col: usize,
+    theme: SyntaxTheme,
+) -> String {
+    let marker = if ansi {
+        format!("{}▶{RESET}", debug_execution_arrow_style(theme))
+    } else {
+        String::from("▶")
+    };
+    let mut out = String::with_capacity(rendered.len() + marker.len());
+    let mut chars = rendered.chars().peekable();
+    let mut plain_col = 0usize;
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            out.push(ch);
+            out.push(chars.next().unwrap());
+            for next in chars.by_ref() {
+                out.push(next);
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        if plain_col == marker_col && ch == DEBUG_STATEMENT_PLACEHOLDER {
+            out.push_str(&marker);
+        } else {
+            out.push(ch);
+        }
+        plain_col += 1;
+    }
+    out
+}
+
+fn apply_debug_execution_line_style(rendered: &str, ansi: bool, width: usize) -> String {
+    if !ansi {
+        return fit_plain_text(rendered, width);
+    }
+
+    let style = match current_syntax_theme() {
+        SyntaxTheme::Dark => DEBUG_CURRENT_LINE_DARK_STYLE,
+        SyntaxTheme::Light => DEBUG_CURRENT_LINE_LIGHT_STYLE,
+    };
+    let mut out = String::from(style);
+    let mut rest = rendered;
+    while let Some(index) = rest.find(RESET) {
+        let end = index + RESET.len();
+        out.push_str(&rest[..end]);
+        out.push_str(style);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    let rendered_width = visible_width(rendered);
+    if rendered_width < width {
+        out.push_str(&" ".repeat(width - rendered_width));
+    }
+    out.push_str(RESET);
+    out
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DebugPanelPlacement {
+    Hidden,
+    Below,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DebugLayout {
+    code_rows: usize,
+    panel_rows: usize,
+    status_row: usize,
+    gutter_width: usize,
+    code_cols: usize,
+    code_region_cols: usize,
+    panel_cols: usize,
+    panel_x: usize,
+    panel_y: usize,
+    panel_placement: DebugPanelPlacement,
+}
+
+impl DebugLayout {
+    fn has_inspector(self) -> bool {
+        self.panel_rows > 0 && self.panel_cols > 0
+    }
+}
+
+fn debug_layout(cols: usize, rows: usize) -> DebugLayout {
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let usable_rows = rows.saturating_sub(1);
+    let panel_placement = if cols >= 110 && usable_rows >= 4 {
+        DebugPanelPlacement::Right
+    } else if usable_rows >= 8 {
+        DebugPanelPlacement::Below
+    } else {
+        DebugPanelPlacement::Hidden
+    };
+    let (code_rows, panel_rows, code_region_cols, panel_cols, panel_x, panel_y) =
+        match panel_placement {
+            DebugPanelPlacement::Right => {
+                let panel_cols = (cols / 3).clamp(36, 48);
+                let code_region_cols = cols.saturating_sub(panel_cols + 1).max(1);
+                (
+                    usable_rows.max(1),
+                    usable_rows,
+                    code_region_cols,
+                    panel_cols,
+                    code_region_cols + 1,
+                    0,
+                )
+            }
+            DebugPanelPlacement::Below => {
+                let panel_rows = (usable_rows / 3).clamp(4, 10);
+                (
+                    usable_rows.saturating_sub(panel_rows).max(1),
+                    panel_rows,
+                    cols,
+                    cols,
+                    0,
+                    usable_rows.saturating_sub(panel_rows),
+                )
+            }
+            DebugPanelPlacement::Hidden => (usable_rows.max(1), 0, cols, 0, 0, 0),
+        };
+    let gutter_width = editor_gutter_width(code_region_cols);
+    DebugLayout {
+        code_rows,
+        panel_rows,
+        status_row: rows - 1,
+        gutter_width,
+        code_cols: code_region_cols.saturating_sub(gutter_width).max(1),
+        code_region_cols,
+        panel_cols,
+        panel_x,
+        panel_y,
+        panel_placement,
+    }
+}
+
+fn terminal_debug_layout() -> DebugLayout {
+    let (cols, rows) = size().unwrap_or((80, 24));
+    debug_layout(cols.max(1) as usize, rows.max(1) as usize)
+}
+
+fn clamp_debug_panel_scroll(
+    snapshot: &crate::debugger::DebugSnapshot,
+    layout: DebugLayout,
+    panel_scroll: usize,
+) -> usize {
+    if !layout.has_inspector() {
+        return 0;
+    }
+    let panel_lines = debug_panel_lines(snapshot, layout.panel_cols);
+    panel_scroll.min(panel_lines.len().saturating_sub(layout.panel_rows))
+}
+
+fn advance_debug_panel_scroll(
+    snapshot: &crate::debugger::DebugSnapshot,
+    layout: DebugLayout,
+    panel_scroll: usize,
+    backwards: bool,
+) -> usize {
+    if !layout.has_inspector() {
+        return 0;
+    }
+    let page = debug_panel_page_size();
+    if backwards {
+        panel_scroll.saturating_sub(page)
+    } else {
+        let lines = debug_panel_lines(snapshot, layout.panel_cols);
+        let max_scroll = lines.len().saturating_sub(layout.panel_rows);
+        if max_scroll == 0 || panel_scroll >= max_scroll {
+            0
+        } else {
+            panel_scroll.saturating_add(page).min(max_scroll)
+        }
+    }
+}
+
+fn render_fullscreen_debugger(
+    editor: &mut BasicEditor,
+    snapshot: &crate::debugger::DebugSnapshot,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+    status: &str,
+    panel_scroll: &mut usize,
+    changes: &DebugPanelChanges,
+) -> io::Result<()> {
+    let (cols, rows) = size().unwrap_or((80, 24));
+    let cols = cols.max(1) as usize;
+    let rows = rows.max(1) as usize;
+    let layout = debug_layout(cols, rows);
+    *panel_scroll = clamp_debug_panel_scroll(snapshot, layout, *panel_scroll);
+    let view_line_len = debug_viewed_line_len(editor, snapshot);
+    editor.ensure_debug_view_visible(layout.code_cols, layout.code_rows, view_line_len);
+    let render_cases = editor_identifier_cases(&editor.lines, cases);
+
+    let mut stdout = io::stdout();
+    queue!(stdout, Hide)?;
+    for screen_row in 0..layout.code_rows {
+        queue!(stdout, MoveTo(0, screen_row.min(u16::MAX as usize) as u16))?;
+        let mut rendered_width = 0usize;
+        if let Some(line) = editor.lines.get(editor.top_line + screen_row) {
+            let line_number = editor_line_number(line);
+            let current = line_number == Some(snapshot.location.line);
+            if layout.gutter_width > 0 {
+                let gutter = render_editor_gutter(
+                    ansi,
+                    line_number.is_some_and(|line| editor.breakpoints.contains(&line)),
+                    current,
+                    editor.top_line + screen_row == editor.cursor_line,
+                );
+                write!(stdout, "{gutter}")?;
+                rendered_width += layout.gutter_width;
+            }
+            let (visible, statement_marker_col) = if current {
+                debug_source_window(
+                    line,
+                    editor.left_col,
+                    layout.code_cols,
+                    snapshot.location.statement,
+                    snapshot.location.source_span.as_ref(),
+                )
+            } else {
+                (
+                    line.iter()
+                        .skip(editor.left_col)
+                        .take(layout.code_cols)
+                        .collect(),
+                    None,
+                )
+            };
+            let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
+            let rendered = if let Some(marker_col) = statement_marker_col {
+                finish_debug_statement_marker(&rendered, ansi, marker_col)
+            } else {
+                rendered
+            };
+            let rendered = if current {
+                apply_debug_execution_line_style(&rendered, ansi, layout.code_cols)
+            } else {
+                rendered
+            };
+            rendered_width += visible_width(&rendered);
+            write!(stdout, "{rendered}")?;
+        } else if layout.gutter_width > 0 {
+            write!(stdout, "{}", " ".repeat(layout.gutter_width))?;
+            rendered_width = layout.gutter_width;
+        }
+        if rendered_width < layout.code_region_cols {
+            write!(
+                stdout,
+                "{}",
+                " ".repeat(layout.code_region_cols - rendered_width)
+            )?;
+        }
+    }
+
+    if layout.has_inspector() {
+        let panel_lines = debug_panel_lines_with_changes(snapshot, changes, layout.panel_cols);
+        for panel_row in 0..layout.panel_rows {
+            let screen_row = layout.panel_y + panel_row;
+            if screen_row >= layout.status_row {
+                break;
+            }
+            if layout.panel_placement == DebugPanelPlacement::Right {
+                queue!(
+                    stdout,
+                    MoveTo(
+                        layout.code_region_cols.min(u16::MAX as usize) as u16,
+                        screen_row.min(u16::MAX as usize) as u16
+                    )
+                )?;
+                write!(stdout, "│")?;
+            }
+            queue!(
+                stdout,
+                MoveTo(
+                    layout.panel_x.min(u16::MAX as usize) as u16,
+                    screen_row.min(u16::MAX as usize) as u16
+                )
+            )?;
+            let line = panel_lines
+                .get(*panel_scroll + panel_row)
+                .map_or("", String::as_str);
+            let line = fit_plain_text(line, layout.panel_cols);
+            if ansi && debug_panel_line_has_heading(&line) {
+                write!(stdout, "{DEBUG_PANEL_HEADER_STYLE}{line}{RESET}")?;
+            } else {
+                write!(stdout, "{line}")?;
+            }
+        }
+    }
+
+    queue!(
+        stdout,
+        MoveTo(0, layout.status_row.min(u16::MAX as usize) as u16)
+    )?;
+    let status_text = fit_plain_text(status, cols);
+    if ansi {
+        let status_text = style_editor_status_keys(&status_text);
+        write!(stdout, "{STATUS_BAR_STYLE}{status_text}{RESET}")?;
+    } else {
+        write!(stdout, "{status_text}")?;
+    }
+    stdout.flush()
+}
+
+fn debug_panel_line_has_heading(line: &str) -> bool {
+    let headings = ["VARIABLES", "ARRAYS", "STACK", "STATE", "TIMERS", "DATA"];
+    line.split(" | ")
+        .map(str::trim)
+        .any(|column| headings.contains(&column))
+}
+
+fn debug_panel_lines(snapshot: &crate::debugger::DebugSnapshot, width: usize) -> Vec<String> {
+    debug_panel_lines_with_changes(snapshot, &DebugPanelChanges::default(), width)
+}
+
+fn debug_panel_change_prefix(changed: bool) -> &'static str {
+    if changed {
+        "* "
+    } else {
+        "  "
+    }
+}
+
+fn debug_panel_lines_with_changes(
+    snapshot: &crate::debugger::DebugSnapshot,
+    changes: &DebugPanelChanges,
+    width: usize,
+) -> Vec<String> {
+    let mut values = vec![String::from("VARIABLES")];
+    if snapshot.variables.is_empty() && snapshot.array_elements.is_empty() {
+        values.push(String::from("  (none)"));
+    } else {
+        values.extend(
+            snapshot
+                .variables
+                .iter()
+                .chain(snapshot.array_elements.iter())
+                .map(|variable| {
+                    format!(
+                        "{}{} = {}",
+                        debug_panel_change_prefix(
+                            changes
+                                .variables
+                                .contains(&variable.name.to_ascii_uppercase())
+                        ),
+                        variable.name,
+                        format_debug_value(&variable.value)
+                    )
+                }),
+        );
+    }
+    values.push(String::from("ARRAYS"));
+    if snapshot.arrays.is_empty() {
+        values.push(String::from("  (none)"));
+    } else {
+        values.extend(snapshot.arrays.iter().map(|array| {
+            let dimensions = array
+                .dimensions
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let alias = array
+                .alias_of
+                .as_deref()
+                .map_or_else(String::new, |target| format!(" -> {target}"));
+            format!(
+                "{}{}{}({}) {} [{}]",
+                debug_panel_change_prefix(
+                    changes.arrays.contains(&array.name.to_ascii_uppercase())
+                ),
+                array.name,
+                alias,
+                dimensions,
+                debug_array_kind_label(array.kind),
+                array.elements
+            )
+        }));
+    }
+
+    let mut stack = vec![String::from("STACK")];
+    if snapshot.stack.is_empty() {
+        stack.push(String::from("  (none)"));
+    } else {
+        stack.extend(snapshot.stack.iter().enumerate().map(|(index, frame)| {
+            let name = frame.name.as_deref().unwrap_or("");
+            let line = frame
+                .line
+                .map_or_else(String::new, |line| format!(" @{line}"));
+            let separator = if name.is_empty() { "" } else { " " };
+            format!(
+                "  {index}: {}{separator}{name}{line}",
+                debug_frame_kind_label(frame.kind),
+            )
+        }));
+    }
+    stack.push(String::from("STATE"));
+    stack.push(format!(
+        "{}ERR={} ERL={}",
+        debug_panel_change_prefix(changes.state),
+        snapshot.err,
+        snapshot.erl
+    ));
+
+    let mut timers = vec![String::from("TIMERS")];
+    if snapshot.timers.is_empty() {
+        timers.push(String::from("  (none)"));
+    } else {
+        timers.extend(snapshot.timers.iter().map(|timer| {
+            format!(
+                "{}#{} {} -> {} {} {}/{}ms",
+                debug_panel_change_prefix(changes.timers.contains(&timer.number)),
+                timer.number,
+                if timer.repeat { "EVERY" } else { "AFTER" },
+                timer.target,
+                if timer.active { "active" } else { "stopped" },
+                timer.remaining.as_millis(),
+                timer.interval.as_millis()
+            )
+        }));
+    }
+    timers.push(String::from("DATA"));
+    timers.push(match &snapshot.data {
+        crate::debugger::DebugDataSnapshot::Empty => String::from("  (none)"),
+        crate::debugger::DebugDataSnapshot::Next {
+            line,
+            line_item,
+            value,
+            ..
+        } => format!(
+            "{}Ln {line} Item {line_item}: {}",
+            debug_panel_change_prefix(changes.data),
+            format_debug_value(value)
+        ),
+        crate::debugger::DebugDataSnapshot::Exhausted { .. } => {
+            format!("{}(end)", debug_panel_change_prefix(changes.data))
+        }
+    });
+
+    let columns = if width >= 96 {
+        vec![values, stack, timers]
+    } else if width >= 60 {
+        let mut right = stack;
+        right.push(String::new());
+        right.extend(timers);
+        vec![values, right]
+    } else {
+        let mut all = values;
+        all.push(String::new());
+        all.extend(stack);
+        all.push(String::new());
+        all.extend(timers);
+        vec![all]
+    };
+    join_debug_panel_columns(&columns, width.max(1))
+}
+
+fn join_debug_panel_columns(columns: &[Vec<String>], width: usize) -> Vec<String> {
+    let gap = " | ";
+    let gap_width = gap.chars().count();
+    let count = columns.len().max(1);
+    let available = width.saturating_sub(gap_width.saturating_mul(count.saturating_sub(1)));
+    let column_width = (available / count).max(1);
+    let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
+    (0..rows)
+        .map(|row| {
+            let joined = columns
+                .iter()
+                .map(|column| {
+                    fit_plain_text(column.get(row).map_or("", String::as_str), column_width)
+                })
+                .collect::<Vec<_>>()
+                .join(gap);
+            fit_plain_text(&joined, width)
+        })
+        .collect()
+}
+
+fn format_debug_value(value: &crate::debugger::DebugValue) -> String {
+    match value {
+        crate::debugger::DebugValue::Number(value) => value.to_string(),
+        crate::debugger::DebugValue::String(value) => format!("\"{}\"", escape_debug_string(value)),
+    }
+}
+
+fn escape_debug_string(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\"\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\0' => escaped.push_str("\\0"),
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            ch if ch.is_control() => {
+                let code = ch as u32;
+                if code <= 0xff {
+                    escaped.push_str(&format!("\\x{code:02X}"));
+                } else {
+                    escaped.push_str(&format!("\\u{{{code:04X}}}"));
+                }
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn debug_array_kind_label(kind: crate::debugger::DebugArrayKind) -> &'static str {
+    match kind {
+        crate::debugger::DebugArrayKind::Number => "NUM",
+        crate::debugger::DebugArrayKind::String => "STR",
+    }
+}
+
+fn debug_frame_kind_label(kind: crate::debugger::DebugFrameKind) -> &'static str {
+    match kind {
+        crate::debugger::DebugFrameKind::Program => "MAIN",
+        crate::debugger::DebugFrameKind::Gosub => "GOSUB",
+        crate::debugger::DebugFrameKind::Sub => "SUB",
+        crate::debugger::DebugFrameKind::Function => "FUNCTION",
+        crate::debugger::DebugFrameKind::Timer => "TIMER",
+        crate::debugger::DebugFrameKind::Mouse => "MOUSE",
+    }
+}
+
+fn debug_pause_reason_label(reason: crate::debugger::DebugPauseReason) -> &'static str {
+    match reason {
+        crate::debugger::DebugPauseReason::Breakpoint => "BREAKPOINT",
+        crate::debugger::DebugPauseReason::Step => "STEP",
+        crate::debugger::DebugPauseReason::PauseRequested => "PAUSE",
+    }
+}
+
 fn render_fullscreen_editor(
     editor: &mut BasicEditor,
     ansi: bool,
@@ -2303,7 +3685,8 @@ fn render_fullscreen_editor(
     let cols = cols.max(1) as usize;
     let rows = rows.max(1) as usize;
     let edit_rows = rows.saturating_sub(1).max(1);
-    editor.ensure_cursor_visible(cols, edit_rows);
+    let code_cols = cols;
+    editor.ensure_cursor_visible(code_cols, edit_rows);
     let render_cases = editor_identifier_cases(&editor.lines, cases);
 
     let mut stdout = io::stdout();
@@ -2313,14 +3696,14 @@ fn render_fullscreen_editor(
         let mut rendered_width = 0usize;
         if let Some(line) = editor.lines.get(editor.top_line + screen_row) {
             let line_index = editor.top_line + screen_row;
-            let visible: String = line.iter().skip(editor.left_col).take(cols).collect();
+            let visible: String = line.iter().skip(editor.left_col).take(code_cols).collect();
             let visible_len = visible.chars().count();
             let selection =
                 editor
                     .selection_columns_for_line(line_index)
                     .and_then(|(start, end)| {
                         let visible_start = editor.left_col;
-                        let visible_end = editor.left_col.saturating_add(cols);
+                        let visible_end = editor.left_col.saturating_add(code_cols);
                         if end <= visible_start || start >= visible_end {
                             return None;
                         }
@@ -2330,7 +3713,7 @@ fn render_fullscreen_editor(
                     });
             let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
             let rendered = apply_selection_to_rendered(&rendered, ansi, selection);
-            rendered_width = visible_width(&rendered);
+            rendered_width += visible_width(&rendered);
             write!(stdout, "{rendered}")?;
         }
         // Avoid EL after a full-width write: terminals with pending autowrap
@@ -2361,6 +3744,7 @@ fn render_fullscreen_editor(
     let cursor_x = editor
         .cursor_col
         .saturating_sub(editor.left_col)
+        .min(code_cols - 1)
         .min(cols - 1) as u16;
     let cursor_y = editor
         .cursor_line
@@ -2469,6 +3853,15 @@ fn style_editor_status_keys(text: &str) -> String {
 }
 
 fn status_key_token_len(chars: &[char], start: usize) -> Option<usize> {
+    const TAB_AND_BACKTAB: [char; 13] = [
+        'T', 'a', 'b', '/', 'S', 'h', 'i', 'f', 't', '+', 'T', 'a', 'b',
+    ];
+    if chars.get(start..start + TAB_AND_BACKTAB.len()) == Some(&TAB_AND_BACKTAB) {
+        return Some(TAB_AND_BACKTAB.len());
+    }
+    if chars.get(start..start + 3) == Some(&['T', 'a', 'b']) {
+        return Some(3);
+    }
     if chars.get(start..start + 3) == Some(&['E', 's', 'c']) {
         return Some(3);
     }
@@ -4506,8 +5899,9 @@ mod tests {
     }
 
     #[test]
-    fn editor_status_styles_help_keys_without_changing_width() {
-        let plain = "F12 Apply Esc Cancel F3/F4 Undo/Redo F9 Renum Ln 1 Col 1";
+    fn status_bar_styles_help_keys_without_changing_width() {
+        let plain =
+            "F12 Apply Esc Cancel F3/F4 Undo/Redo F9 Renum Tab/Shift+Tab Inspect Ln 1 Col 1";
         let styled = style_editor_status_keys(plain);
 
         assert_eq!(visible_width(&styled), plain.chars().count());
@@ -4517,5 +5911,748 @@ mod tests {
         assert!(styled.contains(&format!(
             "{STATUS_KEY_STYLE}Esc{STATUS_KEY_END_STYLE} Cancel"
         )));
+        assert!(styled.contains(&format!(
+            "{STATUS_KEY_STYLE}Tab/Shift+Tab{STATUS_KEY_END_STYLE} Inspect"
+        )));
+    }
+
+    fn sample_debug_snapshot() -> crate::debugger::DebugSnapshot {
+        use crate::debugger::{
+            DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugFrameKind, DebugLocation,
+            DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugTimerSnapshot, DebugValue,
+            DebugVariable,
+        };
+        DebugSnapshot {
+            reason: DebugPauseReason::Breakpoint,
+            location: DebugLocation {
+                line: 20,
+                statement: 1,
+                source_span: None,
+                source: String::from("20 CALL DRAW(I):PRINT I"),
+                command: String::from("PRINT I"),
+            },
+            source_lines: vec![
+                String::from("10 A=1"),
+                String::from("20 CALL DRAW(I):PRINT I"),
+            ],
+            variables: vec![
+                DebugVariable {
+                    name: String::from("I"),
+                    value: DebugValue::Number(4.0),
+                },
+                DebugVariable {
+                    name: String::from("NAME$"),
+                    value: DebugValue::String(String::from("SHIP")),
+                },
+            ],
+            array_elements: vec![DebugVariable {
+                name: String::from("P(7,3)"),
+                value: DebugValue::Number(19.0),
+            }],
+            arrays: vec![DebugArraySummary {
+                name: String::from("P"),
+                alias_of: Some(String::from("A")),
+                kind: DebugArrayKind::Number,
+                dimensions: vec![20, 10],
+                elements: 231,
+            }],
+            stack: vec![
+                DebugStackFrame {
+                    kind: DebugFrameKind::Program,
+                    name: None,
+                    line: Some(10),
+                },
+                DebugStackFrame {
+                    kind: DebugFrameKind::Sub,
+                    name: Some(String::from("DRAW")),
+                    line: Some(20),
+                },
+                DebugStackFrame {
+                    kind: DebugFrameKind::Mouse,
+                    name: None,
+                    line: Some(900),
+                },
+            ],
+            err: 5,
+            erl: 120,
+            timers: vec![DebugTimerSnapshot {
+                number: 1,
+                target: 500,
+                repeat: true,
+                active: true,
+                interval: Duration::from_millis(1000),
+                remaining: Duration::from_millis(250),
+            }],
+            data: DebugDataSnapshot::Next {
+                position: 4,
+                line: 100,
+                line_item: 3,
+                value: DebugValue::String(String::from("READY")),
+            },
+        }
+    }
+
+    #[test]
+    fn debugger_uses_contiguous_function_keys_without_f10_or_f11() {
+        use crate::debugger::DebugAction;
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(1), KeyModifiers::NONE),
+            Some(DebugAction::Continue)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(5), KeyModifiers::NONE),
+            Some(DebugAction::Continue)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(6), KeyModifiers::NONE),
+            Some(DebugAction::StepInto)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(7), KeyModifiers::NONE),
+            Some(DebugAction::StepOver)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(8), KeyModifiers::NONE),
+            Some(DebugAction::StepOut)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(10), KeyModifiers::NONE),
+            None
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(11), KeyModifiers::NONE),
+            None
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(11), KeyModifiers::CONTROL),
+            None
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(11), KeyModifiers::SHIFT),
+            None
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(11), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            None
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::Esc, KeyModifiers::NONE),
+            Some(DebugAction::Abort)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Some(DebugAction::Abort)
+        );
+        assert_eq!(
+            debug_action_for_key(
+                KeyCode::Char('C'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
+            Some(DebugAction::Abort)
+        );
+        assert_eq!(
+            debug_action_for_key(KeyCode::F(9), KeyModifiers::NONE),
+            None
+        );
+        let help = BasicEditor::default_help();
+        assert!(help.contains("F5/F6 Copy/Paste"));
+        assert!(help.contains("F9 Renum"));
+        assert!(!help.contains("Break"));
+        assert!(!help.contains("Debug"));
+        assert!(!help.contains("Step"));
+    }
+
+    #[test]
+    fn editor_breakpoints_toggle_by_basic_line_and_session_prunes_stale_entries() {
+        let lines = vec!["10 PRINT 1".to_string(), "20 END".to_string()];
+        let mut editor = BasicEditor::new(&lines);
+        assert_eq!(editor.toggle_breakpoint(), Ok((true, 10)));
+        assert!(editor.breakpoints.contains(&10));
+        assert_eq!(editor.toggle_breakpoint(), Ok((false, 10)));
+
+        editor.cursor_line = 1;
+        assert_eq!(editor.toggle_breakpoint(), Ok((true, 20)));
+        editor.breakpoints.insert(999);
+        assert_eq!(editor.session().breakpoints(), &HashSet::from([20]));
+
+        editor.lines[1] = "REM not a numbered line".chars().collect();
+        assert_eq!(editor.toggle_breakpoint(), Err("no BASIC line"));
+    }
+
+    #[test]
+    fn renum_moves_breakpoints_and_undo_restores_them() {
+        let lines = vec![
+            "100 GOTO 295".to_string(),
+            "295 PRINT 1".to_string(),
+            "330 RETURN".to_string(),
+        ];
+        let mut editor = BasicEditor::with_breakpoints(&lines, HashSet::from([295, 330]));
+
+        editor.renumber_visible_lines().unwrap();
+        assert_eq!(editor.breakpoints, HashSet::from([135, 170]));
+        assert!(editor.undo());
+        assert_eq!(editor.breakpoints, HashSet::from([295, 330]));
+    }
+
+    #[test]
+    fn debugger_gutter_distinguishes_breakpoint_execution_and_viewed_lines() {
+        assert_eq!(render_editor_gutter(false, false, false, false), "   ");
+        assert_eq!(render_editor_gutter(false, true, false, false), "●  ");
+        assert_eq!(render_editor_gutter(false, false, true, false), "  ●");
+        assert_eq!(render_editor_gutter(false, true, true, false), "● ●");
+        assert_eq!(render_editor_gutter(false, false, false, true), "  ▶");
+        assert_eq!(render_editor_gutter(false, true, false, true), "● ▶");
+        assert_eq!(render_editor_gutter(false, true, true, true), "● ●");
+        assert!(render_editor_gutter(true, false, false, true)
+            .contains(&format!("{DEBUG_BREAKPOINT_STYLE}▶{RESET}")));
+        assert_eq!(
+            render_editor_gutter_for_theme(true, false, true, false, SyntaxTheme::Dark),
+            format!("  {DEBUG_EXECUTION_DOT_DARK_STYLE}●{RESET}")
+        );
+        assert_eq!(
+            render_editor_gutter_for_theme(true, false, true, false, SyntaxTheme::Light),
+            format!("  {DEBUG_EXECUTION_DOT_LIGHT_STYLE}●{RESET}")
+        );
+        assert_eq!(
+            render_editor_gutter_for_theme(true, true, true, true, SyntaxTheme::Light),
+            format!("{DEBUG_BREAKPOINT_STYLE}●{RESET} {DEBUG_EXECUTION_DOT_LIGHT_STYLE}●{RESET}")
+        );
+        assert_eq!(
+            visible_width(&render_editor_gutter(true, true, true, true)),
+            EDITOR_GUTTER_WIDTH
+        );
+    }
+
+    #[test]
+    fn debugger_places_the_execution_marker_before_the_exact_statement() {
+        let line = "915 P=N : GOSUB 700 : GOSUB 700"
+            .chars()
+            .collect::<Vec<_>>();
+
+        assert_eq!(debug_statement_column(&line, 0, None), Some(4));
+        assert_eq!(debug_statement_column(&line, 1, None), Some(10));
+        assert_eq!(debug_statement_column(&line, 2, None), Some(22));
+
+        let (visible, marker_col) = debug_source_window(&line, 0, 40, 1, None);
+        assert_eq!(marker_col, Some(10));
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert_eq!(rendered, "915 P=N : ▶ GOSUB 700 : GOSUB 700");
+
+        let (visible, marker_col) = debug_source_window(&line, 11, 12, 1, None);
+        assert_eq!(marker_col, None);
+        assert_eq!(visible.chars().count(), 12);
+        assert!(!visible.contains(DEBUG_STATEMENT_PLACEHOLDER));
+
+        let (visible, marker_col) = debug_source_window(&line, 8, 20, 2, None);
+        assert_eq!(marker_col, Some(14));
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert_eq!(rendered.chars().nth(14), Some('▶'));
+    }
+
+    #[test]
+    fn debugger_source_spans_distinguish_repeated_then_and_else_statements() {
+        let source = "10 IF X THEN A=1:A=1 ELSE A=1:A=1";
+        let line = source.chars().collect::<Vec<_>>();
+        let starts = source
+            .match_indices("A=1")
+            .map(|(start, _)| start)
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 4);
+
+        for start in &starts {
+            let span = *start..*start + "A=1".len();
+            assert_eq!(
+                debug_statement_column(&line, usize::MAX, Some(&span)),
+                Some(source[..*start].chars().count())
+            );
+        }
+
+        let then_span = starts[0]..starts[0] + "A=1".len();
+        let (visible, marker_col) = debug_source_window(&line, 0, 80, usize::MAX, Some(&then_span));
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert_eq!(rendered, "10 IF X THEN ▶ A=1:A=1 ELSE A=1:A=1");
+
+        let else_span = starts[2]..starts[2] + "A=1".len();
+        let (visible, marker_col) = debug_source_window(&line, 0, 80, usize::MAX, Some(&else_span));
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert_eq!(rendered, "10 IF X THEN A=1:A=1 ELSE ▶ A=1:A=1");
+    }
+
+    #[test]
+    fn debugger_source_span_byte_offsets_become_utf8_character_columns() {
+        let source = "10 IF 1 THEN PRINT \"é:ELSE\":B=2 ELSE B=2";
+        let line = source.chars().collect::<Vec<_>>();
+        let start = source.find("B=2").unwrap();
+        let span = start..start + "B=2".len();
+        let expected_column = source[..start].chars().count();
+
+        assert!(start > expected_column);
+        assert_eq!(
+            debug_statement_column(&line, usize::MAX, Some(&span)),
+            Some(expected_column)
+        );
+        let (visible, marker_col) = debug_source_window(&line, 0, 80, usize::MAX, Some(&span));
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert_eq!(rendered, "10 IF 1 THEN PRINT \"é:ELSE\":▶ B=2 ELSE B=2");
+    }
+
+    #[test]
+    fn debugger_invalid_source_spans_safely_fall_back_to_the_statement_index() {
+        let source = "10 PRINT \"é\":B=2";
+        let line = source.chars().collect::<Vec<_>>();
+        let fallback = debug_statement_column(&line, 1, None);
+        let command_start = source.find("B=2").unwrap();
+        assert_eq!(fallback, Some(source[..command_start].chars().count()));
+
+        let inside_utf8 = source.find('é').unwrap() + 1;
+        let invalid_utf8 = inside_utf8..inside_utf8 + 1;
+        assert_eq!(
+            debug_statement_column(&line, 1, Some(&invalid_utf8)),
+            fallback
+        );
+
+        let out_of_bounds = source.len()..source.len() + 1;
+        assert_eq!(
+            debug_statement_column(&line, 1, Some(&out_of_bounds)),
+            fallback
+        );
+
+        let (start, end) = (8, 3);
+        let reversed = start..end;
+        assert_eq!(debug_statement_column(&line, 1, Some(&reversed)), fallback);
+    }
+
+    #[test]
+    fn debugger_reveals_a_spanned_inline_statement_when_horizontally_scrolled() {
+        let source = format!("10 IF 1 THEN PRINT \"{}\":TARGET=1", "X".repeat(60));
+        let target_start = source.find("TARGET=1").unwrap();
+        let target_span = target_start..target_start + "TARGET=1".len();
+        let mut editor = BasicEditor::new(std::slice::from_ref(&source));
+
+        let statement_col =
+            reveal_debug_statement(&mut editor, 0, usize::MAX, Some(&target_span), 20, true)
+                .unwrap();
+        assert_eq!(statement_col, source[..target_start].chars().count());
+        assert!(editor.left_col > 0);
+
+        let (visible, marker_col) = debug_source_window(
+            &editor.lines[0],
+            editor.left_col,
+            20,
+            usize::MAX,
+            Some(&target_span),
+        );
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+        assert!(rendered.contains("▶ TARGET=1"));
+    }
+
+    #[test]
+    fn debugger_statement_marker_preserves_ansi_width_and_execution_background() {
+        let line = "915 P=N : GOSUB 700".chars().collect::<Vec<_>>();
+        let (visible, marker_col) = debug_source_window(&line, 0, 20, 1, None);
+        let marker_col = marker_col.unwrap();
+        let highlighted = syntax_highlight_raw_with_cases(&visible, true, None);
+        let marked = finish_debug_statement_marker(&highlighted, true, marker_col);
+        let rendered = apply_debug_execution_line_style(&marked, true, 20);
+
+        assert!(rendered.contains(&format!(
+            "{}▶{RESET}",
+            debug_execution_arrow_style(current_syntax_theme())
+        )));
+        assert!(!rendered.contains(DEBUG_STATEMENT_PLACEHOLDER));
+        assert_eq!(visible_width(&rendered), 20);
+    }
+
+    #[test]
+    fn debugger_statement_marker_uses_an_independent_arrow_style_for_each_theme() {
+        let rendered = format!("A{DEBUG_STATEMENT_PLACEHOLDER} B");
+        let dark = finish_debug_statement_marker_for_theme(&rendered, true, 1, SyntaxTheme::Dark);
+        let light = finish_debug_statement_marker_for_theme(&rendered, true, 1, SyntaxTheme::Light);
+
+        assert!(dark.contains(&format!("{DEBUG_EXECUTION_ARROW_DARK_STYLE}▶{RESET}")));
+        assert!(light.contains(&format!("{DEBUG_EXECUTION_ARROW_LIGHT_STYLE}▶{RESET}")));
+        assert!(!dark.contains(DEBUG_EXECUTION_DOT_DARK_STYLE));
+        assert!(!light.contains(DEBUG_EXECUTION_DOT_LIGHT_STYLE));
+        assert_eq!(visible_width(&dark), visible_width(&light));
+    }
+
+    #[test]
+    fn debugger_replaces_only_its_own_statement_placeholder() {
+        let line = format!("10 PRINT \"{DEBUG_STATEMENT_PLACEHOLDER}\" : END")
+            .chars()
+            .collect::<Vec<_>>();
+        let (visible, marker_col) = debug_source_window(&line, 0, 80, 1, None);
+        let rendered = finish_debug_statement_marker(&visible, false, marker_col.unwrap());
+
+        assert_eq!(rendered.matches('▶').count(), 1);
+        assert_eq!(rendered.matches(DEBUG_STATEMENT_PLACEHOLDER).count(), 1);
+        assert!(rendered.ends_with("▶ END"));
+    }
+
+    #[test]
+    fn debugger_execution_background_survives_syntax_resets() {
+        let highlighted = format!("{LINE_NUMBER_STYLE}10{RESET} {KEYWORD_STYLE}PRINT{RESET} A");
+        let rendered = apply_debug_execution_line_style(&highlighted, true, 20);
+        let background = match current_syntax_theme() {
+            SyntaxTheme::Dark => DEBUG_CURRENT_LINE_DARK_STYLE,
+            SyntaxTheme::Light => DEBUG_CURRENT_LINE_LIGHT_STYLE,
+        };
+
+        assert!(rendered.starts_with(background));
+        assert!(rendered.contains(&format!("{RESET}{background}")));
+        assert!(rendered.ends_with(RESET));
+        assert_eq!(visible_width(&rendered), 20);
+    }
+
+    #[test]
+    fn debugger_string_values_escape_every_terminal_control() {
+        use crate::debugger::DebugValue;
+        let value = DebugValue::String(String::from("A\"\\\0\t\n\r\x08\x1b\x7f\u{85}Z"));
+        let rendered = format_debug_value(&value);
+
+        assert_eq!(rendered, "\"A\"\"\\\\\\0\\t\\n\\r\\x08\\x1B\\x7F\\x85Z\"");
+        assert!(!rendered.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn fullscreen_session_round_trip_preserves_complete_editor_state() {
+        let lines = vec!["10 PRINT 1".to_string(), "20 END".to_string()];
+        let mut editor = BasicEditor::with_breakpoints(&lines, HashSet::from([20]));
+        editor.cursor_line = 1;
+        editor.cursor_col = 2;
+        editor.top_line = 1;
+        editor.left_col = 1;
+        editor.page_rows = 7;
+        editor.selection_anchor = Some(EditorPosition { line: 0, col: 3 });
+        editor.clipboard = String::from("PRINT");
+        editor.last_find = String::from("END");
+        editor.last_replace = String::from("STOP");
+        editor.insert_text(" REM");
+        assert!(editor.undo());
+
+        let expected = editor.clone();
+        let session = editor.session();
+        assert_eq!(session.lines(), lines);
+        assert_eq!(session.breakpoints(), &HashSet::from([20]));
+
+        let restored = session.into_editor();
+        assert_eq!(restored.cursor_line, expected.cursor_line);
+        assert_eq!(restored.cursor_col, expected.cursor_col);
+        assert_eq!(restored.top_line, expected.top_line);
+        assert_eq!(restored.left_col, expected.left_col);
+        assert_eq!(restored.selection_anchor, expected.selection_anchor);
+        assert_eq!(restored.clipboard, expected.clipboard);
+        assert_eq!(restored.last_find, expected.last_find);
+        assert_eq!(restored.last_replace, expected.last_replace);
+        assert_eq!(restored.undo_stack, expected.undo_stack);
+        assert_eq!(restored.redo_stack, expected.redo_stack);
+        assert!(!restored.dirty);
+        assert_eq!(restored.breakpoints, HashSet::from([20]));
+    }
+
+    #[test]
+    fn debugger_layout_hides_inspector_only_on_very_short_terminals() {
+        let wide = debug_layout(120, 30);
+        assert_eq!(wide.panel_placement, DebugPanelPlacement::Right);
+        assert_eq!(wide.gutter_width, EDITOR_GUTTER_WIDTH);
+        assert_eq!(wide.code_rows, 29);
+        assert_eq!(wide.panel_rows, 29);
+        assert_eq!(wide.code_region_cols + 1 + wide.panel_cols, 120);
+        assert_eq!(wide.panel_x, wide.code_region_cols + 1);
+
+        let normal = debug_layout(100, 30);
+        assert_eq!(normal.panel_placement, DebugPanelPlacement::Below);
+        assert!(normal.code_rows > normal.panel_rows);
+        assert!(normal.panel_rows >= 4);
+        assert_eq!(normal.code_rows + normal.panel_rows, 29);
+        assert_eq!(normal.panel_y, normal.code_rows);
+
+        let short = debug_layout(40, 7);
+        assert_eq!(short.panel_placement, DebugPanelPlacement::Hidden);
+        assert_eq!(short.panel_rows, 0);
+        assert_eq!(short.status_row, 6);
+        assert_eq!(short.code_rows, 6);
+    }
+
+    #[test]
+    fn debugger_status_starts_with_pause_reason_and_only_advertises_visible_inspector() {
+        let snapshot = sample_debug_snapshot();
+        let with_panel = debug_status(&snapshot, Some(10), true);
+        assert!(with_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
+        assert!(with_panel.contains("F5 Go F6 Into F7 Over F8 Out"));
+        assert!(!with_panel.contains("F10"));
+        assert!(!with_panel.contains("F11"));
+        assert!(with_panel.contains("Tab/Shift+Tab Inspect"));
+
+        let without_panel = debug_status(&snapshot, Some(10), false);
+        assert!(without_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
+        assert!(!without_panel.contains("Tab/Shift+Tab Inspect"));
+        assert_eq!(fit_plain_text(&without_panel, 20), "BREAKPOINT | Ln 20 S");
+        assert!(
+            debug_status_message(&snapshot, Some(10), "Breakpoint set at 10")
+                .starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |")
+        );
+    }
+
+    #[test]
+    fn debugger_panel_scroll_clamps_after_responsive_resize() {
+        let snapshot = sample_debug_snapshot();
+        let narrow = debug_layout(42, 24);
+        let scrolled = clamp_debug_panel_scroll(&snapshot, narrow, usize::MAX);
+        assert!(scrolled > 0);
+
+        let wide = debug_layout(120, 24);
+        let clamped = clamp_debug_panel_scroll(&snapshot, wide, scrolled);
+        let wide_lines = debug_panel_lines(&snapshot, wide.panel_cols);
+        assert!(clamped <= wide_lines.len().saturating_sub(wide.panel_rows));
+    }
+
+    #[test]
+    fn debugger_panel_tab_reaches_the_last_page_then_wraps() {
+        let snapshot = sample_debug_snapshot();
+        let layout = debug_layout(42, 24);
+        let lines = debug_panel_lines(&snapshot, layout.panel_cols);
+        let max_scroll = lines.len().saturating_sub(layout.panel_rows);
+        assert!(max_scroll > 0);
+
+        assert_eq!(
+            advance_debug_panel_scroll(&snapshot, layout, max_scroll, false),
+            0
+        );
+        assert_eq!(
+            advance_debug_panel_scroll(&snapshot, layout, max_scroll, true),
+            max_scroll.saturating_sub(debug_panel_page_size())
+        );
+    }
+
+    #[test]
+    fn debugger_horizontal_scroll_is_read_only_and_bounded() {
+        let lines = vec![format!("10 PRINT {}", "X".repeat(80))];
+        let mut editor = BasicEditor::new(&lines);
+        let original = editor.lines_as_strings();
+
+        let view_line_len = editor.current_line_len();
+        editor.scroll_debug_right(20, view_line_len);
+        assert_eq!(editor.left_col, 4);
+        editor.scroll_debug_left();
+        assert_eq!(editor.left_col, 0);
+        assert_eq!(editor.lines_as_strings(), original);
+        assert!(!editor.dirty);
+        assert!(editor.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn debugger_horizontal_scroll_accounts_for_the_inline_marker_width() {
+        let lines = vec![format!("10 A=1 : PRINT \"{}\"", "X".repeat(80))];
+        let mut editor = BasicEditor::new(&lines);
+        let display_len = editor.current_line_len() + 2;
+        for _ in 0..100 {
+            editor.scroll_debug_right(20, display_len);
+        }
+        assert_eq!(editor.left_col, display_len - 20);
+
+        let (visible, marker_col) =
+            debug_source_window(&editor.lines[0], editor.left_col, 20, 1, None);
+        assert_eq!(marker_col, None);
+        assert_eq!(visible.chars().count(), 20);
+        assert!(visible.ends_with('"'));
+    }
+
+    #[test]
+    fn debugger_panel_adapts_and_contains_all_snapshot_categories() {
+        let snapshot = sample_debug_snapshot();
+        let wide = debug_panel_lines(&snapshot, 120);
+        assert!(wide.iter().all(|line| line.chars().count() == 120));
+        let wide_text = wide.join("\n");
+        for expected in [
+            "VARIABLES",
+            "I = 4",
+            "NAME$ = \"SHIP\"",
+            "P(7,3) = 19",
+            "ARRAYS",
+            "P -> A(20,10)",
+            "STACK",
+            "SUB DRAW @20",
+            "MOUSE @900",
+            "ERR=5 ERL=120",
+            "TIMERS",
+            "#1 EVERY -> 500 active 250/1000ms",
+            "DATA",
+            "Ln 100 Item 3: \"READY\"",
+        ] {
+            assert!(
+                wide_text.contains(expected),
+                "missing {expected:?}: {wide_text}"
+            );
+        }
+
+        let narrow = debug_panel_lines(&snapshot, 42);
+        assert!(narrow.iter().all(|line| line.chars().count() == 42));
+        assert!(narrow.len() > wide.len());
+        let narrow_text = narrow.join("\n");
+        assert!(narrow_text.contains("VARIABLES"));
+        assert!(narrow_text.contains("DATA"));
+        assert!(!narrow_text.contains("LOCATION"));
+        assert!(!narrow_text.contains("PRINT I"));
+    }
+
+    #[test]
+    fn debugger_data_marks_visible_changes_and_distinguishes_empty_from_end() {
+        use crate::debugger::{DebugDataSnapshot, DebugValue};
+
+        let snapshot = sample_debug_snapshot();
+        let mut history = DebugInspectionHistory::default();
+        history.remember(&snapshot);
+
+        assert!(!history.changes(&snapshot).data);
+
+        let mut changed_at_same_position = snapshot.clone();
+        changed_at_same_position.data = DebugDataSnapshot::Next {
+            position: 4,
+            line: 999,
+            line_item: 99,
+            value: DebugValue::Number(123.0),
+        };
+        assert!(
+            history.changes(&changed_at_same_position).data,
+            "a change in any displayed DATA field must be highlighted"
+        );
+
+        let mut duplicate_value_at_next_position = snapshot.clone();
+        duplicate_value_at_next_position.data = DebugDataSnapshot::Next {
+            position: 5,
+            line: 100,
+            line_item: 4,
+            value: DebugValue::String(String::from("READY")),
+        };
+        assert!(
+            history.changes(&duplicate_value_at_next_position).data,
+            "advancing over duplicate DATA values must still be highlighted"
+        );
+
+        let mut nan = snapshot.clone();
+        nan.data = DebugDataSnapshot::Next {
+            position: 4,
+            line: 100,
+            line_item: 3,
+            value: DebugValue::Number(f64::NAN),
+        };
+        history.remember(&nan);
+        assert!(
+            !history.changes(&nan).data,
+            "an unchanged displayed NaN must not flash on every pause"
+        );
+
+        let mut negative_zero = nan.clone();
+        negative_zero.data = DebugDataSnapshot::Next {
+            position: 4,
+            line: 100,
+            line_item: 3,
+            value: DebugValue::Number(-0.0),
+        };
+        history.remember(&negative_zero);
+        let mut positive_zero = negative_zero.clone();
+        positive_zero.data = DebugDataSnapshot::Next {
+            position: 4,
+            line: 100,
+            line_item: 3,
+            value: DebugValue::Number(0.0),
+        };
+        assert!(
+            history.changes(&positive_zero).data,
+            "values displayed as -0 and 0 must be distinguished"
+        );
+
+        let mut exhausted = snapshot.clone();
+        exhausted.data = DebugDataSnapshot::Exhausted {
+            position: 5,
+            total: 5,
+        };
+        let changes = history.changes(&exhausted);
+        assert!(changes.data);
+        let exhausted_text = debug_panel_lines_with_changes(&exhausted, &changes, 120).join("\n");
+        assert!(exhausted_text.contains("* (end)"));
+
+        let mut empty = snapshot;
+        empty.data = DebugDataSnapshot::Empty;
+        let empty_text = debug_panel_lines(&empty, 120).join("\n");
+        assert!(empty_text.contains("DATA"));
+        assert!(empty_text.contains("  (none)"));
+    }
+
+    #[test]
+    fn debugger_panel_heading_detection_does_not_style_data_named_values() {
+        assert!(debug_panel_line_has_heading("VARIABLES        | DATA"));
+        assert!(!debug_panel_line_has_heading("  DATABASE = 1  |   (none)"));
+    }
+
+    #[test]
+    fn debugger_inspector_marks_net_changes_since_the_previous_pause() {
+        use crate::debugger::{DebugValue, DebugVariable};
+
+        let snapshot = sample_debug_snapshot();
+        let mut history = DebugInspectionHistory::default();
+        assert_eq!(history.changes(&snapshot), DebugPanelChanges::default());
+        history.remember(&snapshot);
+
+        let mut countdown_only = snapshot.clone();
+        countdown_only.timers[0].remaining = Duration::from_millis(10);
+        assert_eq!(
+            history.changes(&countdown_only),
+            DebugPanelChanges::default(),
+            "the natural timer countdown must not flash on every pause"
+        );
+
+        let mut changed = countdown_only;
+        changed.variables[0].value = DebugValue::Number(5.0);
+        changed.variables.push(DebugVariable {
+            name: String::from("NEW$"),
+            value: DebugValue::String(String::from("VISIBLE")),
+        });
+        changed.array_elements[0] = DebugVariable {
+            name: String::from("P(12,3)"),
+            value: DebugValue::Number(8.0),
+        };
+        changed.arrays[0].elements += 1;
+        changed.err = 6;
+        changed.timers[0].active = false;
+        changed.data = crate::debugger::DebugDataSnapshot::Next {
+            position: 5,
+            line: 100,
+            line_item: 4,
+            value: DebugValue::Number(9.0),
+        };
+
+        let changes = history.changes(&changed);
+        assert_eq!(
+            changes.variables,
+            HashSet::from([
+                String::from("I"),
+                String::from("NEW$"),
+                String::from("P(12,3)"),
+            ])
+        );
+        assert_eq!(changes.arrays, HashSet::from([String::from("P")]));
+        assert!(changes.state);
+        assert_eq!(changes.timers, HashSet::from([1]));
+        assert!(changes.data);
+
+        for width in [42, 120] {
+            let lines = debug_panel_lines_with_changes(&changed, &changes, width);
+            assert!(lines.iter().all(|line| line.chars().count() == width));
+            let text = lines.join("\n");
+            for expected in [
+                "* I = 5",
+                "* NEW$ = \"VISIBLE\"",
+                "* P(12,3) = 8",
+                "* P -> A",
+                "* ERR=6",
+                "* #1",
+                "* Ln 100 Item 4: 9",
+            ] {
+                assert!(text.contains(expected), "missing {expected:?}: {text}");
+            }
+            assert!(text.contains("  NAME$ = \"SHIP\""));
+        }
     }
 }

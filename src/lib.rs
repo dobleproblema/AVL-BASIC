@@ -1,4 +1,5 @@
 pub mod console;
+pub mod debugger;
 pub mod error;
 pub mod expr;
 pub mod fonts;
@@ -14,6 +15,11 @@ mod using_format;
 pub mod value;
 pub mod window;
 
+pub use debugger::{
+    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugFrameKind,
+    DebugLocation, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugTimerSnapshot,
+    DebugValue, DebugVariable, Debugger,
+};
 pub use error::{BasicError, BasicResult, ErrorCode};
 pub use graphics::Graphics;
 pub use interpreter::{Interpreter, RunOutcome};

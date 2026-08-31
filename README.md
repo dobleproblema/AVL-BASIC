@@ -5,9 +5,9 @@
 </p>
 
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
-line-numbered programs, immediate mode, structured control flow, matrix
-operations, sprites, mouse and keyboard input, and a complete built-in graphics
-environment.
+line-numbered programs, immediate mode, an integrated full-screen editor and
+visual debugger, structured control flow, matrix operations, sprites, mouse and
+keyboard input, and a complete built-in graphics environment.
 
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
@@ -16,6 +16,12 @@ daily use, packaged distribution, and source builds.
 
 AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
 program, inspect it with `LIST`, and continue from the prompt.
+
+`EDIT` opens the full-screen program editor. `DEBUG` opens the same source in a
+read-only debugger and pauses before the first statement. It provides line
+breakpoints, step into/over/out, and a live view of variables, arrays, the call
+stack, errors, and timers, including the exact next statement and values
+changed since the previous pause.
 
 <p align="center">
   <img src="README-console.png" alt="AVL BASIC interactive session showing the welcome screen, CD, LOAD, and LIST" width="900">
@@ -180,7 +186,7 @@ adding a practical modern feature set:
 
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
-- syntax-preserving program editing and listing,
+- syntax-preserving program editing and listing, plus a separate read-only debugger,
 - `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - embedded bitmap fonts for reproducible graphics text,

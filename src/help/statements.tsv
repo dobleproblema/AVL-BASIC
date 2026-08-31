@@ -129,10 +129,10 @@ TRON		TRON	-	Enables program line tracing.	TROFF
 TROFF		TROFF	-	Disables program line tracing.	TRON
 DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD
 RAD		RAD	-	Selects radians for trigonometry and drawing angles.	DEG
-DEBUG		DEBUG [block_size]	block_size: Optional dirty-block overlay size	Toggles or configures the graphics dirty-block debug overlay.	FRAME
+DEBUG		DEBUG	-	Opens the read-only debugger and pauses before the first statement.	EDIT,RUN
 RUN		RUN || RUN line || RUN "filename"	line: Optional starting line; filename: Optional BASIC program path	Starts the loaded program or loads and runs a program file.	CONT,LOAD
 LIST		LIST [range]	range: Optional line or line range	Displays stored program lines.	EDIT,DELETE
-EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	LIST,RENUM
+EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	DEBUG,LIST,RENUM
 DELETE		DELETE [range]	range: Optional line or line range	Deletes selected program lines or the entire program.	LIST,NEW
 RENUM		RENUM [start[,step[,from[,to]]]]	start: First new line number; step: New line increment; from: First old line; to: Last old line	Renumbers program lines and their references.	LIST,EDIT
 SAVE		SAVE "filename"	filename: BASIC program path	Saves the stored program.	LOAD

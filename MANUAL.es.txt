@@ -31,9 +31,10 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 8.1 - Ejecución y reanudación (RUN · STOP · CONT · END · CTRL+C)
 8.2 - Procesamiento de errores
 9.  - Comandos “solo inmediato”
-9.1 - Edición del programa (EDIT · RENUM · DELETE)
-9.2 - Otras utilidades inmediatas
-9.3 - Guardar y cargar programas
+9.1 - Comandos prohibidos en inmediato
+9.2 - Edición y depuración (EDIT · DEBUG · RENUM · DELETE)
+9.3 - Otras utilidades inmediatas
+9.4 - Guardar y cargar programas
 10. - Funciones integradas
 11. - Funciones definidas por el usuario
 12. - Hexadecimal/Binario y lógica bit a bit
@@ -975,7 +976,6 @@ Notas rápidas
 - `TRON` muestra la traza de ejecución por líneas; `TROFF` la desactiva. 
 - `TRON` muestra el número de línea actual en el formato `[n]`.
 - `DEG/RAD` afectan tanto la trigonometría como los ángulos de dibujo.
-- `DEBUG [n]` activa/ajusta una superposición de “dirty blocks” en la ventana gráfica (para depuración del refresco). Con número, cambia el tamaño del bloque.
 
 Ejemplo (para obtener la salida esperada, hay que haber ejecutado `TRON` previamente)
 10 k=10
@@ -1078,7 +1078,7 @@ Tabla completa de códigos de error
 
 9. Comandos “solo inmediato”
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DEBUG | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
@@ -1093,22 +1093,34 @@ Formato de rangos
 3 `-m`       Desde el inicio hasta la línea m
 4 `n-`       Desde n hasta el final
 
-9.2 Edición del programa (EDIT · RENUM · DELETE)
+9.2 Edición y depuración (EDIT · DEBUG · RENUM · DELETE)
 
 + EDIT                            En la versión Rust, abre un editor a pantalla completa para el programa en memoria
 + EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
++ DEBUG                           En la versión Rust, abre el depurador de solo lectura y se detiene antes de la primera instrucción
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
 + RENUM [inicio[, paso[, desde[, hasta]]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
 
 Notas sobre EDIT
-- `EDIT` sin número permite recorrer y modificar el programa completo. F12 aplica los cambios en memoria; Esc los descarta. Para guardar en disco hay que usar `SAVE`.
+- `EDIT` sin número permite recorrer y modificar el programa completo. F12 aplica los cambios en memoria y sale; Esc los descarta. Para guardar en disco hay que usar `SAVE`.
 - En el editor a pantalla completa, las flechas, Inicio/Fin y RePag/AvPag navegan por el texto; Ctrl+Inicio/Ctrl+Fin saltan al principio/final del programa. Shift+flechas selecciona texto; F3 deshace, F4 rehace, F5 copia, F6 pega, F7/F8 busca/reemplaza y F9 renumera el buffer visible.
 - `EDIT n` permite modificar tanto el código como el número de línea. Enter aplica los cambios. Si dejas solo el número sin código, la línea se borra. Esc cancela y deja la línea como estaba.
-- Requiere soporte de terminal interactivo; en entornos sin este soporte, EDIT no está disponible.
+- `EDIT` a pantalla completa requiere soporte de terminal interactivo; en entornos sin este soporte no está disponible.
 - Tras aplicar los cambios, el intérprete normaliza la línea y actualiza el estilo de las variables en todo el programa.
 - F7/F8 en el editor hacen búsqueda/reemplazo literal sin distinguir mayúsculas/minúsculas, sin expresiones regulares ni comodines. F8 empieza desde el principio del programa. En el submenú de reemplazo, Enter reemplaza la coincidencia seleccionada y busca la siguiente, F7 la salta, F8 reemplaza todas las coincidencias restantes desde la selección actual y Esc termina.
 - F9 en el editor renumera todas las líneas no vacías según el orden visible: empieza por el número más bajo presente y usa el incremento positivo más frecuente. Si hay líneas sin número válido o números duplicados, no modifica el buffer.
+
+Notas sobre DEBUG
+- `DEBUG` no admite parámetros. Abre el programa almacenado en un depurador de solo lectura a pantalla completa y se detiene inicialmente justo antes de la primera instrucción. Cuando la ejecución termina o se aborta, vuelve al modo inmediato.
+- Un `●` rojo en el margen señala un breakpoint. Mientras la ejecución está detenida, un `▶` amarillo brillante aparece inmediatamente antes de la próxima instrucción (naranja rojizo con el tema claro), y un `●` esmeralda junto al número identifica la línea de ejecución; un `▶` rojo en el margen señala la línea mostrada cuando es distinta de la línea de ejecución.
+- F5 continúa (F1 es un alias), F2 activa o desactiva un breakpoint en la línea mostrada, F6 entra en la rutina, F7 avanza por encima, F8 sale de ella, Tab/Shift+Tab desplaza el inspector y Esc o Ctrl+C aborta la ejecución.
+- El inspector muestra las variables numéricas y literales visibles, las dimensiones y tamaños de las matrices (incluidos sus alias como parámetros), la pila activa de `GOSUB`/`SUB`/funciones/temporizadores/ratón, `ERR`, `ERL`, el estado de los temporizadores y el próximo elemento `DATA`, con su línea de origen, posición dentro de ella (contada desde 1) y valor.
+- `VARIABLES` incluye como máximo el último elemento escalar escrito de cada array. Una escritura posterior en el mismo array sustituye esa entrada; las operaciones `MAT` sobre el array completo, `REDIM` y `CLEAR` la eliminan. Un `*` marca las variables y estados inspeccionados que han cambiado desde la pausa anterior; la cuenta atrás natural de un temporizador no se considera un cambio. No muestra los valores de ámbitos exteriores que estén ocultos por el ámbito actual.
+- Los breakpoints pertenecen a líneas y detienen la ejecución antes de su primera instrucción. Se conservan durante la sesión actual del intérprete, pero no se guardan en el archivo `.bas`; `RENUM` y F9 en `EDIT` los remapean. Las instrucciones de nivel superior separadas por dos puntos, la condición de un `IF` en línea y cada instrucción de su rama `THEN` o `ELSE` seleccionada se recorren individualmente; las expresiones de `DEF FN` de una línea siguen siendo atómicas.
+- El tiempo detenido en el depurador no hace avanzar los temporizadores BASIC ni los plazos usados por `PAUSE` y `FRAME`. Una pausa del depurador no es un error BASIC y no invoca ni altera `ON ERROR`.
+- Si un temporizador interrumpe un `PAUSE` o `FRAME` durante el recorrido paso a paso, al terminar la interrupción el depurador puede volver a detenerse sobre la instrucción suspendida. F7 ejecuta la interrupción completa sin mostrar su interior; continuar con F5 mantiene la ejecución normal.
+- `DEBUG` requiere soporte de terminal interactivo; en entornos sin este soporte no está disponible.
 
 Notas sobre DELETE
 - Sin argumentos: borra todo el programa en memoria.

@@ -80,9 +80,8 @@ pub fn split_top_level(text: &str, separators: &[char]) -> Vec<String> {
     parts
 }
 
-pub fn split_commands(line: &str) -> Vec<String> {
-    let stripped = strip_comment(line);
-    let mut parts = Vec::new();
+#[inline]
+fn visit_command_ranges(stripped: &str, mut visit: impl FnMut(std::ops::Range<usize>)) {
     let mut start = 0usize;
     let mut depth = 0i32;
     let mut in_string = false;
@@ -105,7 +104,9 @@ pub fn split_commands(line: &str) -> Vec<String> {
                 }
                 let part = stripped[start..idx].trim();
                 if !part.is_empty() {
-                    parts.push(part.to_string());
+                    let leading =
+                        stripped[start..idx].len() - stripped[start..idx].trim_start().len();
+                    visit(start + leading..start + leading + part.len());
                 }
                 start = idx + ch.len_utf8();
             }
@@ -115,8 +116,26 @@ pub fn split_commands(line: &str) -> Vec<String> {
 
     let tail = stripped[start..].trim();
     if !tail.is_empty() {
-        parts.push(tail.to_string());
+        let leading = stripped[start..].len() - stripped[start..].trim_start().len();
+        visit(start + leading..start + leading + tail.len());
     }
+}
+
+pub(crate) fn split_command_ranges(line: &str) -> Vec<std::ops::Range<usize>> {
+    let stripped = strip_comment(line);
+    let mut parts = Vec::new();
+    visit_command_ranges(&stripped, |range| {
+        parts.push(range);
+    });
+    parts
+}
+
+pub fn split_commands(line: &str) -> Vec<String> {
+    let stripped = strip_comment(line);
+    let mut parts = Vec::new();
+    visit_command_ranges(&stripped, |range| {
+        parts.push(stripped[range].to_string());
+    });
     parts
 }
 
@@ -316,4 +335,54 @@ impl<'a> Lexer<'a> {
 
 pub fn is_ident_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{split_command_ranges, split_commands};
+
+    #[test]
+    fn command_offsets_follow_the_same_top_level_splitting_rules() {
+        let cases = [
+            (" A=1 : A=1", vec![(1, "A=1"), (7, "A=1")]),
+            (
+                " PRINT \"A:B\" : F(1:2)",
+                vec![(1, "PRINT \"A:B\""), (15, "F(1:2)")],
+            ),
+            (" IF X THEN A=1:B=2", vec![(1, "IF X THEN A=1:B=2")]),
+            (" A=1 : B=2 ' C=3", vec![(1, "A=1"), (7, "B=2")]),
+            (" A=1 : REM B=2:C=3", vec![(1, "A=1")]),
+        ];
+
+        for (source, expected) in cases {
+            let actual = split_command_ranges(source)
+                .iter()
+                .map(|range| (range.start, source[range.clone()].to_string()))
+                .collect::<Vec<_>>();
+            let expected_with_offsets = expected
+                .iter()
+                .map(|(offset, command)| (*offset, command.to_string()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual, expected_with_offsets,
+                "unexpected offsets for {source:?}"
+            );
+            assert_eq!(
+                split_commands(source),
+                expected
+                    .into_iter()
+                    .map(|(_, command)| command.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn command_offsets_are_byte_offsets_even_with_utf8_before_a_statement() {
+        let source = " PRINT \"é\" : B=2";
+        let commands = split_command_ranges(source);
+
+        assert_eq!(commands[1], 14..17);
+        assert_eq!(&source[commands[1].clone()], "B=2");
+    }
 }

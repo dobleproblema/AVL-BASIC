@@ -1,4 +1,9 @@
 use crate::console;
+use crate::debugger::{
+    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugFrameKind,
+    DebugLocation, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugTimerSnapshot,
+    DebugValue, DebugVariable, Debugger,
+};
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::expr::{
     call_pure_function, checked_number, compile_expression, eval_compiled, eval_compiled_number,
@@ -8,7 +13,7 @@ use crate::expr::{
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::help;
-use crate::lexer::{split_commands, split_top_level, strip_comment};
+use crate::lexer::{split_command_ranges, split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
 use crate::showcase;
@@ -17,10 +22,11 @@ use crate::value::{format_basic_number, logical_round, round_half_away, Value};
 use crate::window::{focus_console_window, GraphicsInputEvent, GraphicsWindow, MouseSnapshot};
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{self, IsTerminal, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +40,7 @@ const PRINT_ZONE_DEFAULT_ENV: &str = "AVL_BASIC_PRINT_ZONE_DEFAULT";
 const PRINT_ZONE_DEFAULT: usize = 22;
 const PRINT_ZONE_MIN: usize = 1;
 const PRINT_ZONE_MAX: usize = 255;
+const DEBUG_ABORT_DETAIL: &str = "__AVL_DEBUG_ABORT__";
 
 #[derive(Debug, Clone)]
 struct FastHasher(u64);
@@ -217,6 +224,13 @@ impl NumericVariables {
         self.names.clear();
         self.slots.clear();
     }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.names.iter().filter_map(|(name, index)| {
+            let slot = &self.slots[*index];
+            slot.present.then_some((name.as_str(), slot.value))
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -362,6 +376,14 @@ impl ArrayVariables {
         // Alias changes can make a source name point at a different existing slot.
         self.table_id = NEXT_ARRAY_TABLE_ID.fetch_add(1, Ordering::Relaxed);
     }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, &ArrayValue)> {
+        self.names.iter().filter_map(|(name, index)| {
+            self.slots[*index]
+                .as_ref()
+                .map(|array| (name.as_str(), array))
+        })
+    }
 }
 
 fn default_print_zone() -> usize {
@@ -382,6 +404,34 @@ const RUNTIME_POLL_COMMAND_SKIP: u8 = 31;
 pub enum RunOutcome {
     End,
     Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebugHookControl {
+    Run,
+    Abort,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebugWaitCommand {
+    Pause,
+    Frame,
+}
+
+fn debug_abort_error() -> BasicError {
+    BasicError::new(ErrorCode::KeyboardInterrupt).with_detail(DEBUG_ABORT_DETAIL)
+}
+
+fn is_debug_abort_error(error: &BasicError) -> bool {
+    error.detail.as_deref() == Some(DEBUG_ABORT_DETAIL)
+}
+
+fn normalize_debug_abort(result: BasicResult<RunOutcome>) -> BasicResult<RunOutcome> {
+    if result.as_ref().err().is_some_and(is_debug_abort_error) {
+        Ok(RunOutcome::End)
+    } else {
+        result
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,6 +511,13 @@ struct Cursor {
     cmd_idx: usize,
 }
 
+#[derive(Debug)]
+struct CachedExecutionFailure {
+    error: BasicError,
+    retry: Cursor,
+    next: Cursor,
+}
+
 #[derive(Debug, Clone)]
 struct ForFrame {
     var: Rc<str>,
@@ -498,6 +555,18 @@ enum IfBranchKind {
     ElseIf,
     Else,
     EndIf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CachedStructureKind {
+    IfStart,
+    ElseIf,
+    Else,
+    EndIf,
+    For,
+    Next,
+    While,
+    Wend,
 }
 
 #[derive(Debug, Clone)]
@@ -539,6 +608,13 @@ struct TimerInterruptState {
 struct ArrayValue {
     dims: Vec<usize>,
     data: ArrayData,
+    last_debug_write: Option<DebugArrayWrite>,
+}
+
+#[derive(Debug, Clone)]
+struct DebugArrayWrite {
+    written_as: String,
+    indexes: Vec<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -555,7 +631,11 @@ impl ArrayValue {
         } else {
             ArrayData::Number(vec![0.0; len])
         };
-        Self { dims, data }
+        Self {
+            dims,
+            data,
+            last_debug_write: None,
+        }
     }
 
     fn flat_index(&self, indexes: &[i32]) -> BasicResult<usize> {
@@ -579,7 +659,7 @@ impl ArrayValue {
     }
 
     fn fill(&mut self, value: Value) -> BasicResult<()> {
-        match (&mut self.data, value) {
+        let result = match (&mut self.data, value) {
             (ArrayData::Number(values), Value::Number(n)) => {
                 values.fill(n);
                 Ok(())
@@ -589,7 +669,22 @@ impl ArrayValue {
                 Ok(())
             }
             _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
+        };
+        if result.is_ok() {
+            self.last_debug_write = None;
         }
+        result
+    }
+
+    fn remember_debug_write(&mut self, written_as: &str, indexes: &[i32]) {
+        self.last_debug_write = Some(DebugArrayWrite {
+            written_as: written_as.to_string(),
+            indexes: indexes.to_vec(),
+        });
+    }
+
+    fn clear_debug_write(&mut self) {
+        self.last_debug_write = None;
     }
 
     fn data_len(&self) -> usize {
@@ -862,6 +957,23 @@ struct UserSub {
 #[derive(Debug, Clone)]
 struct ActiveSubFrame {
     name: Rc<str>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveDebugRoutineFrame {
+    kind: DebugFrameKind,
+    name: Rc<str>,
+    gosub_base: usize,
+}
+
+#[derive(Debug, Default)]
+struct InterpreterDebuggerState {
+    debugger: Option<Debugger>,
+    resume_guards: Vec<(Cursor, usize)>,
+    editor_breakpoints: HashSet<i32>,
+    mouse_isr_markers: Vec<usize>,
+    active_routines: Vec<ActiveDebugRoutineFrame>,
+    refocus_graphics_on_use: bool,
 }
 
 #[derive(Debug)]
@@ -1347,10 +1459,17 @@ enum CachedCommand {
     TexturedRect(Rc<CompiledTexturedRect>),
     TexturedTriangle(Rc<CompiledTexturedTriangle>),
     TexturedQuad(Rc<CompiledTexturedQuad>),
-    If {
+    InlineIfGuard {
         condition: Rc<CompiledNumberExpr>,
-        then_branch: CachedIfBranch,
-        else_branch: Option<CachedIfBranch>,
+        false_cmd_idx: usize,
+        then_end_cmd_idx: usize,
+        else_cmd_idx: Option<usize>,
+        end_cmd_idx: usize,
+        then_fast: bool,
+        else_fast: bool,
+    },
+    InlineJump {
+        target_cmd_idx: usize,
     },
     BlockIf(Rc<CompiledNumberExpr>),
     BlockElseIf(Rc<CompiledNumberExpr>),
@@ -1384,12 +1503,75 @@ enum CachedCommand {
     While(Rc<CompiledNumberExpr>),
     Wend,
     NumericAssignment(Rc<CompiledNumericAssignment>),
+    InlineSubCall(Rc<str>),
 }
 
-#[derive(Debug, Clone)]
-enum CachedIfBranch {
-    Line(i32),
-    Commands(Vec<Rc<CachedCommand>>),
+impl CachedCommand {
+    #[inline]
+    fn is_hidden_execution_command(&self) -> bool {
+        matches!(self, Self::InlineJump { .. })
+    }
+
+    #[inline]
+    fn is_fast_inline_leaf(&self) -> bool {
+        matches!(
+            self,
+            Self::Noop
+                | Self::Assignment(_)
+                | Self::MidAssignment(_)
+                | Self::StringCharAssignment { .. }
+                | Self::NumericAssignment(_)
+        )
+    }
+}
+
+const NO_EXECUTION_SOURCE: u32 = u32::MAX;
+
+#[derive(Debug, Clone, Copy)]
+struct ExecutionMetadata {
+    /// Byte range within the unnumbered BASIC source line. `u32::MAX`
+    /// identifies a hidden synthetic command.
+    source_start: u32,
+    source_end: u32,
+    /// Zero-based ordinal among visible source instructions on this line.
+    visible_statement: u32,
+    debugger_boundary: bool,
+}
+
+impl ExecutionMetadata {
+    fn hidden() -> Self {
+        Self {
+            source_start: NO_EXECUTION_SOURCE,
+            source_end: NO_EXECUTION_SOURCE,
+            visible_statement: NO_EXECUTION_SOURCE,
+            debugger_boundary: false,
+        }
+    }
+
+    fn visible(
+        source_span: Range<usize>,
+        visible_statement: usize,
+        debugger_boundary: bool,
+    ) -> Self {
+        Self {
+            source_start: u32::try_from(source_span.start)
+                .expect("BASIC source offset must fit in u32"),
+            source_end: u32::try_from(source_span.end)
+                .expect("BASIC source offset must fit in u32"),
+            visible_statement: u32::try_from(visible_statement)
+                .expect("BASIC statement ordinal must fit in u32"),
+            debugger_boundary,
+        }
+    }
+
+    fn source_span(&self) -> Option<Range<usize>> {
+        (self.source_start != NO_EXECUTION_SOURCE)
+            .then(|| self.source_start as usize..self.source_end as usize)
+    }
+
+    fn visible_statement(&self) -> Option<usize> {
+        (self.visible_statement != NO_EXECUTION_SOURCE).then_some(self.visible_statement as usize)
+    }
 }
 
 impl CompiledLValue {
@@ -1695,6 +1877,7 @@ pub struct Interpreter {
     pub program: Program,
     command_cache: HashMap<i32, Vec<Rc<str>>>,
     compiled_command_cache: HashMap<i32, Vec<Rc<CachedCommand>>>,
+    execution_source_cache: HashMap<i32, Vec<ExecutionMetadata>>,
     compiled_line_cache: Rc<[Rc<[Rc<CachedCommand>]>]>,
     line_index_cache: HashMap<i32, usize>,
     line_numbers_cache: Rc<[i32]>,
@@ -1754,8 +1937,6 @@ pub struct Interpreter {
     output_col: usize,
     print_zone: usize,
     ansi_output: bool,
-    debug_dirty_blocks: bool,
-    debug_block_size: i32,
     pub graphics: Graphics,
     graphics_window: Option<GraphicsWindow>,
     graphics_window_enabled: bool,
@@ -1782,6 +1963,7 @@ pub struct Interpreter {
     run_depth: usize,
     test_interrupt_requested: bool,
     current_line: Option<i32>,
+    debugger_state: Option<Box<InterpreterDebuggerState>>,
 }
 
 impl Default for Interpreter {
@@ -1797,6 +1979,7 @@ impl Interpreter {
             program: Program::default(),
             command_cache: HashMap::new(),
             compiled_command_cache: HashMap::new(),
+            execution_source_cache: HashMap::new(),
             compiled_line_cache: Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice()),
             line_index_cache: HashMap::new(),
             line_numbers_cache: Rc::from(Vec::<i32>::new().into_boxed_slice()),
@@ -1855,8 +2038,6 @@ impl Interpreter {
             output_col: 0,
             print_zone: default_print_zone(),
             ansi_output: console::ansi_enabled(),
-            debug_dirty_blocks: false,
-            debug_block_size: 32,
             graphics: Graphics::default(),
             graphics_window: None,
             graphics_window_enabled: graphics_window_enabled(),
@@ -1883,6 +2064,7 @@ impl Interpreter {
             run_depth: 0,
             test_interrupt_requested: false,
             current_line: None,
+            debugger_state: None,
         }
     }
 
@@ -1892,6 +2074,107 @@ impl Interpreter {
 
     pub fn request_interrupt_for_test(&mut self) {
         self.test_interrupt_requested = true;
+    }
+
+    pub fn set_debugger(&mut self, debugger: Debugger) {
+        self.clear_debug_array_writes();
+        let state = self
+            .debugger_state
+            .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()));
+        state.debugger = Some(debugger);
+        state.resume_guards.clear();
+        state.mouse_isr_markers.clear();
+        state.active_routines.clear();
+        state.refocus_graphics_on_use = false;
+    }
+
+    pub fn clear_debugger(&mut self) -> Option<Debugger> {
+        let (debugger, remove_state) = {
+            let state = self.debugger_state.as_mut()?;
+            state.resume_guards.clear();
+            state.mouse_isr_markers.clear();
+            state.active_routines.clear();
+            state.refocus_graphics_on_use = false;
+            let debugger = state.debugger.take();
+            (debugger, state.editor_breakpoints.is_empty())
+        };
+        if remove_state {
+            self.debugger_state = None;
+        }
+        self.clear_debug_array_writes();
+        debugger
+    }
+
+    fn clear_debug_array_writes(&mut self) {
+        for array in self.arrays.slots.iter_mut().flatten() {
+            array.clear_debug_write();
+        }
+    }
+
+    #[inline(always)]
+    fn debug_array_writes_enabled(&self) -> bool {
+        self.debugger_state
+            .as_ref()
+            .is_some_and(|state| state.debugger.is_some())
+    }
+
+    pub fn debugger(&self) -> Option<&Debugger> {
+        self.debugger_state
+            .as_ref()
+            .and_then(|state| state.debugger.as_ref())
+    }
+
+    pub fn debugger_mut(&mut self) -> Option<&mut Debugger> {
+        self.debugger_state
+            .as_mut()
+            .and_then(|state| state.debugger.as_mut())
+    }
+
+    fn clear_program_breakpoints(&mut self) {
+        let Some(state) = self.debugger_state.as_mut() else {
+            return;
+        };
+        state.editor_breakpoints.clear();
+        if let Some(debugger) = state.debugger.as_mut() {
+            debugger.clear_breakpoints();
+        }
+        if state.debugger.is_none() {
+            self.debugger_state = None;
+        }
+    }
+
+    fn remove_program_breakpoints(&mut self, start: i32, end: i32) {
+        let Some(state) = self.debugger_state.as_mut() else {
+            return;
+        };
+        state
+            .editor_breakpoints
+            .retain(|line| *line < start || *line > end);
+        if let Some(debugger) = state.debugger.as_mut() {
+            let retained = debugger
+                .breakpoints()
+                .filter(|line| *line < start || *line > end)
+                .collect::<Vec<_>>();
+            debugger.replace_breakpoints(retained);
+        }
+        if state.debugger.is_none() && state.editor_breakpoints.is_empty() {
+            self.debugger_state = None;
+        }
+    }
+
+    fn replace_editor_breakpoints(&mut self, breakpoints: HashSet<i32>) {
+        if breakpoints.is_empty() {
+            if let Some(state) = self.debugger_state.as_mut() {
+                state.editor_breakpoints.clear();
+                if state.debugger.is_none() {
+                    self.debugger_state = None;
+                }
+            }
+            return;
+        }
+        self.debugger_state
+            .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()))
+            .editor_breakpoints = breakpoints;
     }
 
     pub fn set_stream_output(&mut self, enabled: bool) {
@@ -1969,6 +2252,7 @@ impl Interpreter {
     pub fn load_file(&mut self, path: &Path) -> BasicResult<()> {
         let text = read_text_file(path)?;
         self.program.load_text(&text)?;
+        self.clear_program_breakpoints();
         self.clear_runtime();
         self.clear_command_caches();
         self.program_dir = path.parent().map(Path::to_path_buf);
@@ -2018,10 +2302,10 @@ impl Interpreter {
         } else {
             0
         };
-        self.run_from(Cursor {
+        normalize_debug_abort(self.run_from(Cursor {
             line_idx,
             cmd_idx: 0,
-        })
+        }))
     }
 
     pub fn process_immediate(&mut self, line: &str) -> BasicResult<()> {
@@ -2053,8 +2337,14 @@ impl Interpreter {
             window.clear_transient_input();
         }
         if starts_with_line_number(trimmed) {
+            let line_number = numbered_line_number(trimmed);
+            let deletes_line =
+                numbered_line_code(trimmed).is_some_and(|code| code.trim().is_empty());
             self.program.add_source_line(trimmed)?;
-            if numbered_line_code(trimmed).is_some_and(|code| code.trim().is_empty()) {
+            if deletes_line {
+                if let Some(line_number) = line_number {
+                    self.remove_program_breakpoints(line_number, line_number);
+                }
                 self.refresh_identifier_case_from_program();
             } else {
                 self.record_identifier_case_from_numbered_line(trimmed, false);
@@ -2066,6 +2356,7 @@ impl Interpreter {
         let upper = trimmed.to_ascii_uppercase();
         if upper == "NEW" {
             self.program.clear();
+            self.clear_program_breakpoints();
             self.clear_command_caches();
             self.clear_runtime();
             self.identifier_case.clear();
@@ -2125,7 +2416,7 @@ impl Interpreter {
                 .clone()
                 .ok_or_else(|| BasicError::new(ErrorCode::NoStoppedProgram))?;
             self.stopped_cursor = None;
-            self.run_from(cursor)?;
+            normalize_debug_abort(self.run_from(cursor))?;
             return Ok(());
         }
         let commands = split_commands(trimmed);
@@ -2231,10 +2522,10 @@ impl Interpreter {
         self.sub_return_requested = false;
         self.repeat_current_command = false;
         self.restart_run_loop = false;
-        let result = self.run_from(Cursor {
+        let result = normalize_debug_abort(self.run_from(Cursor {
             line_idx,
             cmd_idx: 0,
-        });
+        }));
         self.current_line = None;
         result?;
         Ok(())
@@ -2328,6 +2619,20 @@ impl Interpreter {
             let code = self.program.get(old).unwrap_or("");
             let code = renumber_line_references(code, &mapping);
             text.push_str(&format!("{new_no}{code}\n"));
+        }
+        if let Some(state) = self.debugger_state.as_mut() {
+            state.editor_breakpoints = state
+                .editor_breakpoints
+                .drain()
+                .map(|line| mapping.get(&line).copied().unwrap_or(line))
+                .collect();
+            if let Some(debugger) = state.debugger.as_mut() {
+                let breakpoints = debugger
+                    .breakpoints()
+                    .map(|line| mapping.get(&line).copied().unwrap_or(line))
+                    .collect::<Vec<_>>();
+                debugger.replace_breakpoints(breakpoints);
+            }
         }
         self.program.load_text(&text)?;
         self.clear_command_caches();
@@ -2435,6 +2740,7 @@ impl Interpreter {
         let trimmed = args.trim();
         if trimmed.is_empty() {
             self.program.clear();
+            self.clear_program_breakpoints();
             self.clear_command_caches();
             self.identifier_case.clear();
             self.invalidate_continuation_after_program_change();
@@ -2447,9 +2753,11 @@ impl Interpreter {
                 return Err(self.err(ErrorCode::TargetLineNotFound));
             }
             self.program.delete_range(line, line);
+            self.remove_program_breakpoints(line, line);
         } else {
             let (start, end) = range.bounds_for(&lines);
             self.program.delete_range(start, end);
+            self.remove_program_breakpoints(start, end);
         }
         self.clear_command_caches();
         self.refresh_identifier_case_from_program();
@@ -2470,9 +2778,22 @@ impl Interpreter {
             return Err(self.err(ErrorCode::Unsupported));
         }
         let program_cases = self.program_identifier_case();
-        let lines = self.program_listing_lines(&program_cases);
-        match console::edit_fullscreen_with_idle(
-            &lines,
+        let mut breakpoints = self
+            .debugger_state
+            .as_ref()
+            .map(|state| state.editor_breakpoints.clone())
+            .unwrap_or_default();
+        if let Some(debugger) = self.debugger() {
+            breakpoints.extend(debugger.breakpoints());
+        }
+        let session = console::FullscreenEditorSession::with_breakpoints(
+            self.program_listing_lines(&program_cases),
+            breakpoints,
+        );
+
+        let program_cases = self.program_identifier_case();
+        let outcome = console::edit_fullscreen_session_with_idle(
+            session,
             self.ansi_output,
             Some(&program_cases),
             |lines| {
@@ -2482,17 +2803,19 @@ impl Interpreter {
             },
             || self.pump_graphics_window_for_editor(),
         )
-        .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?
-        {
-            console::FullscreenEditOutcome::Apply(lines) => {
-                self.program = Self::program_from_editor_lines(&lines)?;
+        .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
+
+        match outcome {
+            console::FullscreenEditOutcome::Apply(next_session) => {
+                self.program = Self::program_from_editor_lines(next_session.lines())?;
                 self.clear_command_caches();
                 self.refresh_identifier_case_from_program();
                 self.invalidate_continuation_after_program_change();
+                self.replace_editor_breakpoints(next_session.breakpoints().clone());
+                Ok(())
             }
-            console::FullscreenEditOutcome::Cancel => {}
+            console::FullscreenEditOutcome::Cancel => Ok(()),
         }
-        Ok(())
     }
 
     fn execute_edit_line(&mut self, args: &str) -> BasicResult<()> {
@@ -2509,8 +2832,14 @@ impl Interpreter {
             .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
         let normalized = console::normalize_code(&edited);
         if !normalized.trim().is_empty() {
+            let edited_line = numbered_line_number(&normalized);
+            let deletes_line =
+                numbered_line_code(&normalized).is_some_and(|code| code.trim().is_empty());
             self.program.add_source_line(&normalized)?;
-            if numbered_line_code(&normalized).is_some_and(|code| code.trim().is_empty()) {
+            if deletes_line {
+                if let Some(edited_line) = edited_line {
+                    self.remove_program_breakpoints(edited_line, edited_line);
+                }
                 self.refresh_identifier_case_from_program();
             } else {
                 self.record_identifier_case_from_numbered_line(&normalized, true);
@@ -2549,22 +2878,72 @@ impl Interpreter {
     }
 
     fn execute_debug(&mut self, args: &str) -> BasicResult<()> {
-        let arg = args.trim();
-        if arg.is_empty() {
-            self.debug_dirty_blocks = !self.debug_dirty_blocks;
-        } else {
-            self.debug_block_size = self.eval_number(arg)? as i32;
-            self.debug_dirty_blocks = true;
+        if !args.trim().is_empty() {
+            return Err(self.err(ErrorCode::Syntax));
         }
-        if self.debug_dirty_blocks {
-            self.write_line(&format!(
-                "Graphics debugging: ON (block_size = {})",
-                self.debug_block_size
-            ));
-        } else {
-            self.write_line("Graphics debugging: OFF");
+        if !console::interactive_terminal() {
+            return Err(self.err(ErrorCode::Unsupported));
+        }
+
+        let ansi = self.ansi_output;
+        let mut inspection_history = console::DebugInspectionHistory::default();
+        let debugger = Debugger::interactive(move |snapshot, breakpoints, idle| {
+            console::debug_fullscreen_with_idle_and_history(
+                &snapshot.source_lines,
+                breakpoints,
+                snapshot,
+                ansi,
+                None,
+                &mut inspection_history,
+                || idle(),
+            )
+        });
+        let (outcome, stopped_line) = self.run_debug_session(debugger)?;
+        match outcome {
+            RunOutcome::End => self.write_line("Debug session ended."),
+            RunOutcome::Stop => {
+                let message = stopped_line.map_or_else(
+                    || "Program stopped. CONT resumes it without the debugger.".to_string(),
+                    |line| {
+                        format!(
+                            "Line {line}. Program stopped. CONT resumes it without the debugger."
+                        )
+                    },
+                );
+                self.write_line(&message);
+            }
         }
         Ok(())
+    }
+
+    fn run_debug_session(
+        &mut self,
+        mut debugger: Debugger,
+    ) -> BasicResult<(RunOutcome, Option<i32>)> {
+        let mut breakpoints = self
+            .debugger_state
+            .as_ref()
+            .map(|state| state.editor_breakpoints.clone())
+            .unwrap_or_default();
+        if let Some(active) = self.debugger() {
+            breakpoints.extend(active.breakpoints());
+        }
+        breakpoints.extend(debugger.breakpoints());
+        debugger.replace_breakpoints(breakpoints);
+        debugger.request_pause();
+        self.set_debugger(debugger);
+
+        // Cleanup must also happen after a BASIC or debugger I/O error.
+        let run_result = self.run_loaded();
+        let stopped_line = self.current_line;
+        self.current_line = None;
+        let breakpoints = self
+            .clear_debugger()
+            .map(|debugger| debugger.breakpoints().collect())
+            .unwrap_or_default();
+        self.replace_editor_breakpoints(breakpoints);
+
+        run_result.map(|outcome| (outcome, stopped_line))
     }
 
     fn save_file(&mut self, path: &Path) -> BasicResult<()> {
@@ -2670,6 +3049,10 @@ impl Interpreter {
         self.timers.clear();
         self.timer_isr_stack.clear();
         self.timer_isr_markers.clear();
+        if let Some(state) = self.debugger_state.as_mut() {
+            state.mouse_isr_markers.clear();
+            state.active_routines.clear();
+        }
         self.current_interrupt_priority = -1;
         self.mouse_handlers.clear();
         self.mouse_state = MouseSnapshot::default();
@@ -2698,6 +3081,11 @@ impl Interpreter {
         self.repeat_current_command = false;
         self.restart_run_loop = false;
         self.program_structure_changed = false;
+        if let Some(state) = self.debugger_state.as_mut() {
+            state.resume_guards.clear();
+            state.active_routines.clear();
+            state.refocus_graphics_on_use = false;
+        }
         self.current_line = None;
         self.graphics_window_closed_by_current_run = false;
         self.mat_base = 0;
@@ -2729,7 +3117,11 @@ impl Interpreter {
         } else {
             None
         };
-        let result = self.run_from_inner(cursor);
+        let result = if self.debugger().is_some() {
+            self.run_from_inner_debug(cursor)
+        } else {
+            self.run_from_inner(cursor)
+        };
         let closed_graphics_window = self.graphics_window_closed_by_current_run;
         self.run_depth -= 1;
         if self.run_depth == 0 {
@@ -2749,6 +3141,7 @@ impl Interpreter {
         self.run_depth <= 1
     }
 
+    #[inline(never)]
     fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();
@@ -2792,12 +3185,32 @@ impl Interpreter {
                     return Ok(RunOutcome::Stop);
                 }
                 let command = compiled_lines[cursor.line_idx][cursor.cmd_idx].as_ref();
+                let inline_if = matches!(command, CachedCommand::InlineIfGuard { .. });
                 let before = cursor.clone();
                 let next = Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 };
-                if let Err(err) = self.execute_cached_command(command, &mut cursor, &[]) {
+                let failure = if inline_if {
+                    self.execute_cached_inline_if_fast(
+                        &compiled_lines[before.line_idx],
+                        &mut cursor,
+                    )?
+                } else {
+                    self.execute_cached_command(command, &mut cursor, &[])
+                        .err()
+                        .map(|error| CachedExecutionFailure {
+                            error,
+                            retry: before,
+                            next,
+                        })
+                };
+                if let Some(failure) = failure {
+                    let CachedExecutionFailure {
+                        error: err,
+                        retry,
+                        next: error_next,
+                    } = failure;
                     let err = if err
                         .detail
                         .as_deref()
@@ -2810,12 +3223,7 @@ impl Interpreter {
                     if err.code == ErrorCode::KeyboardInterrupt {
                         return Err(err);
                     }
-                    if self.handle_runtime_error(
-                        err.clone(),
-                        &mut cursor,
-                        before.clone(),
-                        next.clone(),
-                    )? {
+                    if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
                         if cursor.line_idx != before.line_idx {
                             continue 'run_loop;
                         }
@@ -2853,6 +3261,12 @@ impl Interpreter {
                     self.idle_wait_for_graphics_event_loop(&cursor)?;
                     continue;
                 }
+                if inline_if {
+                    if cursor.line_idx != before.line_idx {
+                        continue 'run_loop;
+                    }
+                    continue;
+                }
                 if cursor != before {
                     if cursor.line_idx != before.line_idx {
                         continue 'run_loop;
@@ -2879,11 +3293,775 @@ impl Interpreter {
         Ok(RunOutcome::End)
     }
 
+    #[cold]
+    #[inline(never)]
+    fn run_from_inner_debug(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
+        let mut lines = self.line_numbers_cache.clone();
+        let mut compiled_lines = self.compiled_line_cache.clone();
+        let mut runtime_poll_skip = 0u8;
+        'run_loop: loop {
+            if cursor.line_idx >= lines.len() {
+                break;
+            }
+            let line_no = lines[cursor.line_idx];
+            let commands_len = compiled_lines
+                .get(cursor.line_idx)
+                .map_or(0usize, |commands| commands.len());
+            if cursor.cmd_idx >= commands_len {
+                cursor.line_idx += 1;
+                cursor.cmd_idx = 0;
+                continue;
+            }
+            self.current_line = Some(line_no);
+            if self.trace {
+                self.write(&console::trace_text(self.ansi_output, line_no));
+            }
+            while cursor.cmd_idx < commands_len {
+                let poll_now = runtime_poll_skip == 0
+                    || self.test_interrupt_requested
+                    || !self.timers.is_empty()
+                    || console::interrupt_requested();
+                if poll_now {
+                    if self.poll_interrupts_and_timers(&mut cursor)? {
+                        continue 'run_loop;
+                    }
+                    runtime_poll_skip = RUNTIME_POLL_COMMAND_SKIP;
+                } else {
+                    runtime_poll_skip -= 1;
+                }
+                if self.end_requested {
+                    self.present_dirty_graphics_at_run_boundary()?;
+                    return Ok(RunOutcome::End);
+                }
+                if self.stopped_cursor.is_some() {
+                    self.present_dirty_graphics_at_run_boundary()?;
+                    return Ok(RunOutcome::Stop);
+                }
+                let command = compiled_lines[cursor.line_idx][cursor.cmd_idx].as_ref();
+                let inline_if = matches!(command, CachedCommand::InlineIfGuard { .. });
+                let command_metadata = self
+                    .execution_source_cache
+                    .get(&line_no)
+                    .and_then(|metadata| metadata.get(cursor.cmd_idx))
+                    .cloned();
+                let debugger_boundary = command_metadata.as_ref().map_or_else(
+                    || !command.is_hidden_execution_command(),
+                    |metadata| metadata.debugger_boundary,
+                );
+                if debugger_boundary
+                    && self.debug_before_cached_command(
+                        &cursor,
+                        line_no,
+                        command_metadata.as_ref(),
+                        None,
+                    )? == DebugHookControl::Abort
+                {
+                    self.present_dirty_graphics_at_run_boundary()?;
+                    return Err(debug_abort_error());
+                }
+                let debug_depth = self.run_depth + self.gosub_stack.len();
+                let before = cursor.clone();
+                let next = Cursor {
+                    line_idx: cursor.line_idx,
+                    cmd_idx: cursor.cmd_idx + 1,
+                };
+                let failure = if inline_if {
+                    let inline_metadata = self
+                        .execution_source_cache
+                        .get(&line_no)
+                        .cloned()
+                        .unwrap_or_default();
+                    let inline_source = Rc::<str>::from(self.program.get(line_no).unwrap_or(""));
+                    let result = self.execute_cached_inline_if_debug(
+                        &compiled_lines[before.line_idx],
+                        &inline_metadata,
+                        line_no,
+                        inline_source.as_ref(),
+                        &mut cursor,
+                    );
+                    match result {
+                        Err(error) if is_debug_abort_error(&error) => {
+                            self.present_dirty_graphics_at_run_boundary()?;
+                            return Err(error);
+                        }
+                        result => result?,
+                    }
+                } else {
+                    self.execute_cached_command_debug(command, &mut cursor, &[])
+                        .err()
+                        .map(|error| CachedExecutionFailure {
+                            error,
+                            retry: before,
+                            next,
+                        })
+                };
+                if let Some(failure) = failure {
+                    if debugger_boundary {
+                        self.debug_finished_cached_command(
+                            &before,
+                            debug_depth,
+                            false,
+                            false,
+                            command_metadata.as_ref(),
+                            None,
+                        );
+                    }
+                    let CachedExecutionFailure {
+                        error: err,
+                        retry,
+                        next: error_next,
+                    } = failure;
+                    let err = if err
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.starts_with("Error in error handler:"))
+                    {
+                        err
+                    } else {
+                        self.with_current_line(err)
+                    };
+                    if err.code == ErrorCode::KeyboardInterrupt {
+                        return Err(err);
+                    }
+                    if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
+                        if cursor.line_idx != before.line_idx {
+                            continue 'run_loop;
+                        }
+                        continue;
+                    }
+                    return Err(err);
+                }
+                if debugger_boundary {
+                    self.debug_finished_cached_command(
+                        &before,
+                        debug_depth,
+                        self.repeat_current_command,
+                        cursor != before,
+                        command_metadata.as_ref(),
+                        None,
+                    );
+                }
+                if self.end_requested {
+                    self.present_dirty_graphics_at_run_boundary()?;
+                    return Ok(RunOutcome::End);
+                }
+                if self.stopped_cursor.is_some() {
+                    self.present_dirty_graphics_at_run_boundary()?;
+                    return Ok(RunOutcome::Stop);
+                }
+                if self.function_return_requested {
+                    return Ok(RunOutcome::End);
+                }
+                if self.sub_return_requested {
+                    return Ok(RunOutcome::End);
+                }
+                if self.restart_run_loop {
+                    self.restart_run_loop = false;
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
+                    continue 'run_loop;
+                }
+                if self.program_structure_changed {
+                    self.program_structure_changed = false;
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
+                }
+                if self.repeat_current_command {
+                    self.repeat_current_command = false;
+                    self.idle_wait_for_graphics_event_loop(&cursor)?;
+                    continue;
+                }
+                if inline_if {
+                    if cursor.line_idx != before.line_idx {
+                        continue 'run_loop;
+                    }
+                    continue;
+                }
+                if cursor != before {
+                    if cursor.line_idx != before.line_idx {
+                        continue 'run_loop;
+                    }
+                    continue;
+                }
+                cursor = next;
+            }
+            cursor.line_idx += 1;
+            cursor.cmd_idx = 0;
+        }
+        if let Some(frame) = self.if_stack.last() {
+            let line = lines
+                .get(frame.line_idx)
+                .copied()
+                .or_else(|| self.line_numbers_cache.get(frame.line_idx).copied())
+                .unwrap_or_default();
+            return Err(BasicError::new(ErrorCode::IfWithoutEndIf).at_line(line));
+        }
+        self.present_dirty_graphics_at_run_boundary()?;
+        if cursor.line_idx != usize::MAX {
+            self.finish_output_line();
+        }
+        Ok(RunOutcome::End)
+    }
+
+    #[cold]
+    fn debug_before_cached_command(
+        &mut self,
+        cursor: &Cursor,
+        line: i32,
+        metadata: Option<&ExecutionMetadata>,
+        source_code: Option<&str>,
+    ) -> BasicResult<DebugHookControl> {
+        self.sync_debug_routine_stack();
+        let depth = self.run_depth + self.gosub_stack.len();
+        let resume_guarded = self
+            .debugger_state
+            .as_ref()
+            .is_some_and(|state| state.resume_guards.contains(&(*cursor, depth)));
+        let reason = {
+            let Some(debugger) = self
+                .debugger_state
+                .as_mut()
+                .and_then(|state| state.debugger.as_mut())
+            else {
+                return Ok(DebugHookControl::Run);
+            };
+            let pause_requested = debugger.take_pause_request();
+            // PAUSE and FRAME keep their resume guard while a timer handler
+            // temporarily changes the cursor. On return, suppress only the
+            // breakpoint that originally stopped this wait command: a pending
+            // step or explicit pause request must still be allowed to stop at
+            // the suspended instruction.
+            let breakpoint = !resume_guarded && cursor.cmd_idx == 0 && debugger.is_breakpoint(line);
+            let step = debugger.step_is_due(depth);
+            let reason = if breakpoint {
+                Some(DebugPauseReason::Breakpoint)
+            } else if pause_requested {
+                Some(DebugPauseReason::PauseRequested)
+            } else if step {
+                Some(DebugPauseReason::Step)
+            } else {
+                None
+            };
+            if reason.is_some() {
+                debugger.consume_step();
+            }
+            reason
+        };
+        let Some(reason) = reason else {
+            return Ok(DebugHookControl::Run);
+        };
+
+        let snapshot = self.build_debug_snapshot_at(cursor, line, metadata, source_code, reason);
+        if self.current_run_uses_graphics_window() {
+            let _ = self.present_graphics_window_for_debugger();
+        }
+        if self.graphics_window.is_some() {
+            focus_console_window(self.graphics_window.as_mut());
+        }
+
+        let Some(mut debugger) = self
+            .debugger_state
+            .as_mut()
+            .and_then(|state| state.debugger.take())
+        else {
+            return Ok(DebugHookControl::Run);
+        };
+        let paused_at = Instant::now();
+        let _runtime_raw_suspend = console::suspend_runtime_raw_mode().ok();
+        let pause_result = {
+            let mut idle = || self.pump_graphics_window_for_editor();
+            debugger.pause(&snapshot, &mut idle)
+        };
+        let paused_for = paused_at.elapsed();
+        self.shift_debugger_deadlines(paused_for);
+        self.debugger_state
+            .as_mut()
+            .expect("active debugger state must survive a synchronous pause")
+            .debugger = Some(debugger);
+
+        let action = pause_result.map_err(|err| {
+            if err.kind() == io::ErrorKind::Interrupted {
+                BasicError::new(ErrorCode::KeyboardInterrupt)
+            } else {
+                BasicError::new(ErrorCode::InvalidValue).with_detail(format!("Debugger: {err}"))
+            }
+        })?;
+        if action == DebugAction::Abort {
+            if let Some(state) = self.debugger_state.as_mut() {
+                state.resume_guards.clear();
+                state.refocus_graphics_on_use = false;
+            }
+            return Ok(DebugHookControl::Abort);
+        }
+        let state = self
+            .debugger_state
+            .as_mut()
+            .expect("debugger state must exist while execution is paused");
+        if !state.resume_guards.contains(&(*cursor, depth)) {
+            state.resume_guards.push((*cursor, depth));
+        }
+        if let Some(debugger) = state.debugger.as_mut() {
+            debugger.arm_step(action, depth);
+        }
+        state.refocus_graphics_on_use = self.graphics_window.is_some();
+        Ok(DebugHookControl::Run)
+    }
+
+    #[cold]
+    fn sync_debug_routine_stack(&mut self) {
+        let Some(state) = self.debugger_state.as_mut() else {
+            return;
+        };
+        if state.debugger.is_none() {
+            return;
+        }
+
+        let target_subs = self.active_subs.len();
+        let target_functions = self.active_functions.len();
+        let mut tracked_subs = state
+            .active_routines
+            .iter()
+            .filter(|frame| frame.kind == DebugFrameKind::Sub)
+            .count();
+        let mut tracked_functions = state.active_routines.len() - tracked_subs;
+
+        while tracked_subs > target_subs || tracked_functions > target_functions {
+            let Some(frame) = state.active_routines.pop() else {
+                break;
+            };
+            if frame.kind == DebugFrameKind::Sub {
+                tracked_subs -= 1;
+            } else {
+                tracked_functions -= 1;
+            }
+        }
+
+        while tracked_subs < target_subs || tracked_functions < target_functions {
+            let (kind, name) = if tracked_subs < target_subs {
+                let name = self.active_subs[tracked_subs].name.clone();
+                tracked_subs += 1;
+                (DebugFrameKind::Sub, name)
+            } else {
+                let name = self.active_functions[tracked_functions].name.clone();
+                tracked_functions += 1;
+                (DebugFrameKind::Function, name)
+            };
+            state.active_routines.push(ActiveDebugRoutineFrame {
+                kind,
+                name,
+                gosub_base: self.gosub_stack.len(),
+            });
+        }
+    }
+
+    #[cfg(test)]
+    #[cold]
+    fn build_debug_snapshot(&self, cursor: &Cursor, reason: DebugPauseReason) -> DebugSnapshot {
+        let line = self
+            .line_numbers_cache
+            .get(cursor.line_idx)
+            .copied()
+            .unwrap_or_default();
+        let metadata = self
+            .execution_source_cache
+            .get(&line)
+            .and_then(|commands| commands.get(cursor.cmd_idx));
+        self.build_debug_snapshot_at(cursor, line, metadata, None, reason)
+    }
+
+    #[cold]
+    fn build_debug_snapshot_at(
+        &self,
+        cursor: &Cursor,
+        line: i32,
+        metadata: Option<&ExecutionMetadata>,
+        source_code: Option<&str>,
+        reason: DebugPauseReason,
+    ) -> DebugSnapshot {
+        let code = source_code.unwrap_or_else(|| self.program.get(line).unwrap_or(""));
+        let source = format!("{line}{code}");
+        let source_cases = self.program_identifier_case();
+        let mut source_lines = self.program_listing_lines(&source_cases);
+        if source_code.is_some() {
+            let position = source_lines
+                .iter()
+                .position(|listed| {
+                    numbered_line_number(listed).is_some_and(|listed_line| listed_line >= line)
+                })
+                .unwrap_or(source_lines.len());
+            if source_lines
+                .get(position)
+                .is_some_and(|listed| numbered_line_number(listed) == Some(line))
+            {
+                source_lines[position] = source.clone();
+            } else {
+                source_lines.insert(position, source.clone());
+            }
+        }
+        let fallback_span = split_command_ranges(code).get(cursor.cmd_idx).cloned();
+        let relative_source_span = metadata
+            .and_then(ExecutionMetadata::source_span)
+            .or(fallback_span)
+            .filter(|span| span.start <= span.end && span.end <= code.len());
+        let command = relative_source_span
+            .as_ref()
+            .map_or_else(String::new, |span| code[span.clone()].trim().to_string());
+        let line_number_bytes = line.to_string().len();
+        let source_span = relative_source_span
+            .map(|span| line_number_bytes + span.start..line_number_bytes + span.end);
+        let statement = metadata
+            .and_then(ExecutionMetadata::visible_statement)
+            .unwrap_or(cursor.cmd_idx);
+
+        let mut variables = self
+            .numeric_variables
+            .iter()
+            .map(|(name, value)| DebugVariable {
+                name: self.debug_identifier_name(name),
+                value: DebugValue::Number(value),
+            })
+            .chain(
+                self.string_variables
+                    .iter()
+                    .map(|(name, value)| DebugVariable {
+                        name: self.debug_identifier_name(name),
+                        value: DebugValue::String(value.clone()),
+                    }),
+            )
+            .collect::<Vec<_>>();
+        variables.sort_by(|left, right| {
+            left.name
+                .to_ascii_uppercase()
+                .cmp(&right.name.to_ascii_uppercase())
+        });
+
+        let mut array_elements = self
+            .arrays
+            .iter()
+            .filter(|(name, _)| !self.array_aliases.contains_key(*name))
+            .filter_map(|(name, array)| self.debug_array_element(name, array))
+            .collect::<Vec<_>>();
+        array_elements.sort_by(|left, right| {
+            left.name
+                .to_ascii_uppercase()
+                .cmp(&right.name.to_ascii_uppercase())
+        });
+
+        let mut arrays = self
+            .arrays
+            .iter()
+            .filter(|(name, _)| !self.array_aliases.contains_key(*name))
+            .map(|(name, array)| self.debug_array_summary(name, None, array))
+            .collect::<Vec<_>>();
+        for (alias, source_name) in &self.array_aliases {
+            if let Some(array) = self.arrays.get(source_name) {
+                arrays.push(self.debug_array_summary(alias, Some(source_name), array));
+            }
+        }
+        arrays.sort_by(|left, right| {
+            left.name
+                .to_ascii_uppercase()
+                .cmp(&right.name.to_ascii_uppercase())
+        });
+
+        let mut stack = vec![DebugStackFrame {
+            kind: DebugFrameKind::Program,
+            name: None,
+            line: None,
+        }];
+        let timer_priorities = (0..self.timer_isr_markers.len())
+            .map(|index| {
+                self.timer_isr_stack
+                    .get(index + 1)
+                    .map_or(self.current_interrupt_priority, |state| state.priority)
+            })
+            .collect::<Vec<_>>();
+        let debugger_state = self.debugger_state.as_deref();
+        let mut saw_mouse = false;
+        let gosub_frames = self
+            .gosub_stack
+            .iter()
+            .enumerate()
+            .map(|(index, return_cursor)| {
+                let (kind, name) = if debugger_state
+                    .is_some_and(|state| state.mouse_isr_markers.contains(&index))
+                {
+                    saw_mouse = true;
+                    (DebugFrameKind::Mouse, Some("ON MOUSE".to_string()))
+                } else if let Some(timer_depth) = self
+                    .timer_isr_markers
+                    .iter()
+                    .position(|marker| *marker == index)
+                {
+                    (
+                        DebugFrameKind::Timer,
+                        Some(format!("Timer {}", timer_priorities[timer_depth])),
+                    )
+                } else {
+                    (DebugFrameKind::Gosub, None)
+                };
+                DebugStackFrame {
+                    kind,
+                    name,
+                    line: self.line_numbers_cache.get(return_cursor.line_idx).copied(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let routine_frames = debugger_state
+            .into_iter()
+            .flat_map(|state| state.active_routines.iter())
+            .map(|frame| {
+                (
+                    frame.gosub_base,
+                    DebugStackFrame {
+                        kind: frame.kind,
+                        name: Some(frame.name.to_string()),
+                        line: None,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut emitted_gosubs = 0usize;
+        for (gosub_base, routine) in routine_frames {
+            let gosub_base = gosub_base.min(gosub_frames.len());
+            if emitted_gosubs < gosub_base {
+                stack.extend(gosub_frames[emitted_gosubs..gosub_base].iter().cloned());
+            }
+            emitted_gosubs = emitted_gosubs.max(gosub_base);
+            stack.push(routine);
+        }
+        stack.extend(gosub_frames[emitted_gosubs..].iter().cloned());
+        if self.handling_mouse_event && !saw_mouse {
+            stack.push(DebugStackFrame {
+                kind: DebugFrameKind::Mouse,
+                name: Some("ON MOUSE".to_string()),
+                line: Some(line),
+            });
+        }
+        if let Some(frame) = stack.last_mut() {
+            frame.line = Some(line);
+        }
+
+        let now = Instant::now();
+        let mut timers = self
+            .timers
+            .iter()
+            .map(|timer| DebugTimerSnapshot {
+                number: timer.number,
+                target: timer.target,
+                repeat: timer.repeat,
+                active: timer.active,
+                interval: timer.interval,
+                remaining: timer.next_fire.saturating_duration_since(now),
+            })
+            .collect::<Vec<_>>();
+        timers.sort_by_key(|timer| timer.number);
+
+        DebugSnapshot {
+            reason,
+            location: DebugLocation {
+                line,
+                statement,
+                source_span,
+                source,
+                command,
+            },
+            source_lines,
+            variables,
+            array_elements,
+            arrays,
+            stack,
+            err: self.last_error.as_ref().map_or(0, |state| state.number),
+            erl: self.last_error.as_ref().map_or(0, |state| state.line),
+            timers,
+            data: self.debug_data_snapshot(),
+        }
+    }
+
+    #[cold]
+    fn debug_array_element(&self, name: &str, array: &ArrayValue) -> Option<DebugVariable> {
+        let write = array.last_debug_write.as_ref()?;
+        let written_key = self
+            .array_aliases
+            .get(&write.written_as)
+            .map(String::as_str)
+            .unwrap_or(write.written_as.as_str());
+        let visible_name = if written_key == name {
+            write.written_as.as_str()
+        } else {
+            name
+        };
+        let indexes = write
+            .indexes
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let value = match array.get(&write.indexes).ok()? {
+            Value::Number(value) => DebugValue::Number(value),
+            Value::Str(value) => DebugValue::String(value),
+            Value::ArrayRef(_) => return None,
+        };
+        Some(DebugVariable {
+            name: format!("{}({indexes})", self.debug_identifier_name(visible_name)),
+            value,
+        })
+    }
+
+    #[cold]
+    fn debug_data_snapshot(&self) -> DebugDataSnapshot {
+        if self.data.is_empty() {
+            return DebugDataSnapshot::Empty;
+        }
+        if self.data_pointer >= self.data.len() {
+            return DebugDataSnapshot::Exhausted {
+                position: self.data_pointer,
+                total: self.data.len(),
+            };
+        }
+        let Some((&line, &line_start)) = self
+            .data_line_starts
+            .iter()
+            .filter(|(_, start)| **start <= self.data_pointer)
+            .max_by_key(|(_, start)| **start)
+        else {
+            return DebugDataSnapshot::Exhausted {
+                position: self.data_pointer,
+                total: self.data.len(),
+            };
+        };
+        let value = match &self.data[self.data_pointer] {
+            Value::Number(value) => DebugValue::Number(*value),
+            Value::Str(value) => DebugValue::String(value.clone()),
+            Value::ArrayRef(_) => unreachable!("DATA cannot contain array references"),
+        };
+        DebugDataSnapshot::Next {
+            position: self.data_pointer,
+            line,
+            line_item: self.data_pointer - line_start + 1,
+            value,
+        }
+    }
+
+    #[cold]
+    fn debug_identifier_name(&self, name: &str) -> String {
+        self.identifier_case
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    #[cold]
+    fn debug_array_summary(
+        &self,
+        name: &str,
+        alias_of: Option<&str>,
+        array: &ArrayValue,
+    ) -> DebugArraySummary {
+        DebugArraySummary {
+            name: self.debug_identifier_name(name),
+            alias_of: alias_of.map(|target| self.debug_identifier_name(target)),
+            kind: if array.is_string() {
+                DebugArrayKind::String
+            } else {
+                DebugArrayKind::Number
+            },
+            dimensions: array.dims.clone(),
+            elements: array.data_len(),
+        }
+    }
+
+    #[cold]
+    fn debug_finished_cached_command(
+        &mut self,
+        cursor: &Cursor,
+        depth: usize,
+        repeated: bool,
+        cursor_changed: bool,
+        metadata: Option<&ExecutionMetadata>,
+        source_code: Option<&str>,
+    ) {
+        let Some(guard_index) = self.debugger_state.as_ref().and_then(|state| {
+            state
+                .resume_guards
+                .iter()
+                .position(|guard| guard == &(*cursor, depth))
+        }) else {
+            return;
+        };
+        let pause_still_pending = self
+            .pause_deadline
+            .is_some_and(|(pause_cursor, _)| pause_cursor == *cursor);
+        let still_waiting = self
+            .debug_wait_command(cursor, metadata, source_code)
+            .is_some()
+            && (repeated || cursor_changed || pause_still_pending);
+        if !still_waiting {
+            if let Some(state) = self.debugger_state.as_mut() {
+                state.resume_guards.remove(guard_index);
+            }
+        }
+    }
+
+    #[cold]
+    fn debug_wait_command(
+        &self,
+        cursor: &Cursor,
+        metadata: Option<&ExecutionMetadata>,
+        source_code: Option<&str>,
+    ) -> Option<DebugWaitCommand> {
+        let code = source_code.or_else(|| {
+            let line = self.line_numbers_cache.get(cursor.line_idx).copied()?;
+            self.program.get(line)
+        })?;
+        let span = metadata
+            .and_then(ExecutionMetadata::source_span)
+            .or_else(|| split_command_ranges(code).get(cursor.cmd_idx).cloned())?;
+        let command = code.get(span)?;
+        match command.split_whitespace().next() {
+            Some(word) if word.eq_ignore_ascii_case("PAUSE") => Some(DebugWaitCommand::Pause),
+            Some(word) if word.eq_ignore_ascii_case("FRAME") => Some(DebugWaitCommand::Frame),
+            _ => None,
+        }
+    }
+
+    #[cold]
+    fn shift_debugger_deadlines(&mut self, elapsed: Duration) {
+        if elapsed.is_zero() {
+            return;
+        }
+        for timer in &mut self.timers {
+            if let Some(next_fire) = timer.next_fire.checked_add(elapsed) {
+                timer.next_fire = next_fire;
+            }
+        }
+        if let Some((_, deadline)) = self.pause_deadline.as_mut() {
+            if let Some(shifted) = deadline.checked_add(elapsed) {
+                *deadline = shifted;
+            }
+        }
+        if let Some(last_frame) = self.last_frame_command_present.as_mut() {
+            if let Some(shifted) = last_frame.checked_add(elapsed) {
+                *last_frame = shifted;
+            }
+        }
+    }
+
     fn present_dirty_graphics_at_run_boundary(&mut self) -> BasicResult<()> {
         if self.should_present_dirty_graphics_at_run_boundary() {
             self.present_graphics_window()?;
         }
         Ok(())
+    }
+
+    fn present_graphics_window_for_debugger(&mut self) -> BasicResult<()> {
+        let handling_mouse_event = self.handling_mouse_event;
+        self.handling_mouse_event = true;
+        let result = self.present_graphics_window();
+        self.handling_mouse_event = handling_mouse_event;
+        result
     }
 
     fn should_present_dirty_graphics_at_run_boundary(&self) -> bool {
@@ -2896,6 +4074,7 @@ impl Interpreter {
         self.graphics_window_used_this_run && !closed_graphics_window
     }
 
+    #[inline(never)]
     fn poll_interrupts_and_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         self.check_user_interrupt(cursor)?;
         if self.timers.is_empty() {
@@ -3309,6 +4488,7 @@ impl Interpreter {
         }
     }
 
+    #[inline(always)]
     fn execute_cached_command(
         &mut self,
         command: &CachedCommand,
@@ -3348,16 +4528,26 @@ impl Interpreter {
             CachedCommand::TexturedQuad(compiled) => {
                 self.execute_compiled_textured_quad(compiled.as_ref())
             }
-            CachedCommand::If {
+            CachedCommand::InlineIfGuard {
                 condition,
-                then_branch,
-                else_branch,
-            } => self.execute_cached_if(
-                condition.as_ref(),
-                then_branch,
-                else_branch.as_ref(),
-                cursor,
-            ),
+                false_cmd_idx,
+                ..
+            } => {
+                if condition.eval(self).map_err(|mut err| {
+                    if err.line.is_none() {
+                        err.line = self.current_line;
+                    }
+                    err
+                })? == 0.0
+                {
+                    cursor.cmd_idx = *false_cmd_idx;
+                }
+                Ok(())
+            }
+            CachedCommand::InlineJump { target_cmd_idx } => {
+                cursor.cmd_idx = *target_cmd_idx;
+                Ok(())
+            }
             CachedCommand::BlockIf(condition) => {
                 self.execute_cached_block_if(condition.as_ref(), cursor)
             }
@@ -3431,7 +4621,23 @@ impl Interpreter {
                     Ok(())
                 }
             },
+            CachedCommand::InlineSubCall(command) => {
+                self.execute_cached_inline_sub_call(command, cursor)
+            }
         }
+    }
+
+    /// Keeps the large cached-command dispatch out of both cold debugger
+    /// loops. The normal interpreter still inlines the dispatcher directly.
+    #[cold]
+    #[inline(never)]
+    fn execute_cached_command_debug(
+        &mut self,
+        command: &CachedCommand,
+        cursor: &mut Cursor,
+        line_commands: &[String],
+    ) -> BasicResult<()> {
+        self.execute_cached_command(command, cursor, line_commands)
     }
 
     #[inline(never)]
@@ -3477,35 +4683,6 @@ impl Interpreter {
             if let Some(state) = self.timer_isr_stack.pop() {
                 self.current_interrupt_priority = state.priority;
                 self.interrupts_enabled = state.interrupts_enabled;
-            }
-        }
-    }
-
-    fn execute_cached_if(
-        &mut self,
-        condition: &CompiledNumberExpr,
-        then_branch: &CachedIfBranch,
-        else_branch: Option<&CachedIfBranch>,
-        cursor: &mut Cursor,
-    ) -> BasicResult<()> {
-        let selected = if condition.eval(self).map_err(|mut e| {
-            if e.line.is_none() {
-                e.line = self.current_line;
-            }
-            e
-        })? != 0.0
-        {
-            Some(then_branch)
-        } else {
-            else_branch
-        };
-        let Some(branch) = selected else {
-            return Ok(());
-        };
-        match branch {
-            CachedIfBranch::Line(line) => self.jump_to_line(*line, cursor),
-            CachedIfBranch::Commands(commands) => {
-                self.execute_cached_inline_commands(commands, cursor)
             }
         }
     }
@@ -3584,25 +4761,339 @@ impl Interpreter {
         self.jump_to_line_checked(target, cursor, false)
     }
 
-    fn execute_cached_inline_commands(
+    /// Executes one flattened inline IF while exposing its selected source
+    /// instructions to the debugger. This deliberately lives outside the hot
+    /// interpreter path: ordinary RUN keeps using `execute_cached_inline_if_fast`.
+    ///
+    /// `commands` and `metadata` are retained snapshots of the same execution
+    /// plan. In particular, a MERGE inside the clause may rebuild the global
+    /// caches, but the remainder of the already selected clause must continue
+    /// against the old plan just as it does without the debugger.
+    #[cold]
+    #[inline(never)]
+    fn execute_cached_inline_if_debug(
+        &mut self,
+        commands: &[Rc<CachedCommand>],
+        metadata: &[ExecutionMetadata],
+        source_line: i32,
+        source_code: &str,
+        cursor: &mut Cursor,
+    ) -> BasicResult<Option<CachedExecutionFailure>> {
+        let line_idx = cursor.line_idx;
+        let guard_idx = cursor.cmd_idx;
+        let guard = commands
+            .get(guard_idx)
+            .expect("inline IF guard must exist in its compiled line")
+            .as_ref();
+        let (condition, else_cmd_idx, end_cmd_idx) = match guard {
+            CachedCommand::InlineIfGuard {
+                condition,
+                else_cmd_idx,
+                end_cmd_idx,
+                ..
+            } => (condition, *else_cmd_idx, *end_cmd_idx),
+            _ => unreachable!("inline IF debug path requires a guard command"),
+        };
+
+        let condition_true = match condition.eval(self).map_err(|mut error| {
+            if error.line.is_none() {
+                error.line = self.current_line;
+            }
+            error
+        }) {
+            Ok(value) => value != 0.0,
+            Err(error) => {
+                return Ok(Some(CachedExecutionFailure {
+                    error,
+                    retry: *cursor,
+                    next: Cursor {
+                        line_idx,
+                        cmd_idx: guard_idx + 1,
+                    },
+                }));
+            }
+        };
+
+        let branch_start = if condition_true {
+            guard_idx + 1
+        } else {
+            else_cmd_idx.unwrap_or(end_cmd_idx)
+        };
+        *cursor = Cursor {
+            line_idx,
+            cmd_idx: branch_start,
+        };
+
+        while cursor.line_idx == line_idx && cursor.cmd_idx < end_cmd_idx {
+            let Some(command) = commands.get(cursor.cmd_idx).map(Rc::as_ref) else {
+                return Ok(None);
+            };
+            let command_metadata = metadata.get(cursor.cmd_idx);
+            let debugger_boundary = command_metadata.map_or_else(
+                || !command.is_hidden_execution_command(),
+                |metadata| metadata.debugger_boundary,
+            );
+            if debugger_boundary
+                && self.debug_before_cached_command(
+                    cursor,
+                    source_line,
+                    command_metadata,
+                    Some(source_code),
+                )? == DebugHookControl::Abort
+            {
+                return Err(debug_abort_error());
+            }
+
+            let debug_depth = self.run_depth + self.gosub_stack.len();
+            let before = *cursor;
+            let next = Cursor {
+                line_idx,
+                cmd_idx: cursor.cmd_idx + 1,
+            };
+            let internal_cursor_change = matches!(
+                command,
+                CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
+            );
+            let result = self.execute_cached_command_debug(command, cursor, &[]);
+            if let Err(error) = result {
+                if debugger_boundary {
+                    self.debug_finished_cached_command(
+                        &before,
+                        debug_depth,
+                        false,
+                        false,
+                        command_metadata,
+                        Some(source_code),
+                    );
+                }
+                return Ok(Some(CachedExecutionFailure {
+                    error,
+                    retry: before,
+                    next,
+                }));
+            }
+            if debugger_boundary {
+                self.debug_finished_cached_command(
+                    &before,
+                    debug_depth,
+                    self.repeat_current_command,
+                    *cursor != before,
+                    command_metadata,
+                    Some(source_code),
+                );
+            }
+
+            if self.repeat_current_command {
+                return Ok(None);
+            }
+            if self.end_requested
+                || self.stopped_cursor.is_some()
+                || self.function_return_requested
+                || self.sub_return_requested
+                || self.restart_run_loop
+            {
+                if *cursor == before {
+                    *cursor = next;
+                }
+                return Ok(None);
+            }
+
+            if *cursor != before {
+                if !(internal_cursor_change
+                    && cursor.line_idx == line_idx
+                    && cursor.cmd_idx >= branch_start
+                    && cursor.cmd_idx <= end_cmd_idx)
+                {
+                    return Ok(None);
+                }
+            } else {
+                *cursor = next;
+            }
+        }
+        Ok(None)
+    }
+
+    #[inline(always)]
+    fn execute_cached_inline_if_fast(
         &mut self,
         commands: &[Rc<CachedCommand>],
         cursor: &mut Cursor,
-    ) -> BasicResult<()> {
-        for command in commands {
-            let before = cursor.clone();
-            self.execute_cached_command(command.as_ref(), cursor, &[])?;
-            if self.repeat_current_command
-                || *cursor != before
-                || self.end_requested
+    ) -> BasicResult<Option<CachedExecutionFailure>> {
+        let line_idx = cursor.line_idx;
+        let guard_idx = cursor.cmd_idx;
+        let guard = commands
+            .get(guard_idx)
+            .expect("inline IF guard must exist in its compiled line")
+            .as_ref();
+        let (condition, then_end_cmd_idx, else_cmd_idx, end_cmd_idx, then_fast, else_fast) =
+            match guard {
+                CachedCommand::InlineIfGuard {
+                    condition,
+                    then_end_cmd_idx,
+                    else_cmd_idx,
+                    end_cmd_idx,
+                    then_fast,
+                    else_fast,
+                    ..
+                } => (
+                    condition,
+                    *then_end_cmd_idx,
+                    *else_cmd_idx,
+                    *end_cmd_idx,
+                    *then_fast,
+                    *else_fast,
+                ),
+                _ => unreachable!("inline IF fast path requires a guard command"),
+            };
+
+        let condition_true = match condition.eval(self).map_err(|mut error| {
+            if error.line.is_none() {
+                error.line = self.current_line;
+            }
+            error
+        }) {
+            Ok(value) => value != 0.0,
+            Err(error) => {
+                return Ok(Some(CachedExecutionFailure {
+                    error,
+                    retry: *cursor,
+                    next: Cursor {
+                        line_idx,
+                        cmd_idx: guard_idx + 1,
+                    },
+                }));
+            }
+        };
+
+        let (branch_start, branch_end, branch_fast) = if condition_true {
+            (guard_idx + 1, then_end_cmd_idx, then_fast)
+        } else {
+            let start = else_cmd_idx.unwrap_or(end_cmd_idx);
+            (start, end_cmd_idx, else_fast)
+        };
+        *cursor = Cursor {
+            line_idx,
+            cmd_idx: branch_start,
+        };
+
+        // A single assignment is by far the most common inline-IF body. Keep
+        // it on a straight path instead of constructing and advancing a slice
+        // iterator for one element.
+        if branch_fast && branch_end == branch_start + 1 {
+            let command = commands[branch_start].as_ref();
+            debug_assert!(command.is_fast_inline_leaf());
+            if let Err(error) = self.execute_cached_command(command, cursor, &[]) {
+                return Ok(Some(CachedExecutionFailure {
+                    error,
+                    retry: Cursor {
+                        line_idx,
+                        cmd_idx: branch_start,
+                    },
+                    next: Cursor {
+                        line_idx,
+                        cmd_idx: branch_start + 1,
+                    },
+                }));
+            }
+            if self.repeat_current_command {
+                cursor.cmd_idx = branch_start;
+                return Ok(None);
+            }
+            if self.end_requested
                 || self.stopped_cursor.is_some()
                 || self.function_return_requested
                 || self.sub_return_requested
             {
-                break;
+                cursor.cmd_idx = branch_start + 1;
+                return Ok(None);
             }
+            cursor.cmd_idx = end_cmd_idx;
+            return Ok(None);
         }
-        Ok(())
+
+        if branch_fast {
+            for (offset, command) in commands[branch_start..branch_end].iter().enumerate() {
+                let command_idx = branch_start + offset;
+                debug_assert!(command.is_fast_inline_leaf());
+                let result = self.execute_cached_command(command.as_ref(), cursor, &[]);
+                if let Err(error) = result {
+                    return Ok(Some(CachedExecutionFailure {
+                        error,
+                        retry: Cursor {
+                            line_idx,
+                            cmd_idx: command_idx,
+                        },
+                        next: Cursor {
+                            line_idx,
+                            cmd_idx: command_idx + 1,
+                        },
+                    }));
+                }
+                if self.repeat_current_command {
+                    cursor.cmd_idx = command_idx;
+                    return Ok(None);
+                }
+                if self.end_requested
+                    || self.stopped_cursor.is_some()
+                    || self.function_return_requested
+                    || self.sub_return_requested
+                {
+                    cursor.cmd_idx = command_idx + 1;
+                    return Ok(None);
+                }
+            }
+            cursor.cmd_idx = end_cmd_idx;
+            return Ok(None);
+        }
+
+        while cursor.line_idx == line_idx && cursor.cmd_idx < end_cmd_idx {
+            let Some(command) = commands.get(cursor.cmd_idx).map(Rc::as_ref) else {
+                return Ok(None);
+            };
+            let internal_cursor_change = matches!(
+                command,
+                CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
+            );
+            let before = *cursor;
+            let next = Cursor {
+                line_idx,
+                cmd_idx: cursor.cmd_idx + 1,
+            };
+            if let Err(error) = self.execute_cached_command(command, cursor, &[]) {
+                return Ok(Some(CachedExecutionFailure {
+                    error,
+                    retry: before,
+                    next,
+                }));
+            }
+
+            if self.repeat_current_command {
+                return Ok(None);
+            }
+            if self.end_requested
+                || self.stopped_cursor.is_some()
+                || self.function_return_requested
+                || self.sub_return_requested
+                || self.restart_run_loop
+            {
+                if *cursor == before {
+                    *cursor = next;
+                }
+                return Ok(None);
+            }
+            if *cursor != before {
+                if internal_cursor_change
+                    && cursor.line_idx == line_idx
+                    && cursor.cmd_idx >= branch_start
+                    && cursor.cmd_idx <= end_cmd_idx
+                {
+                    continue;
+                }
+                return Ok(None);
+            }
+            *cursor = next;
+        }
+        Ok(None)
     }
 
     fn execute_print(&mut self, args: &str) -> BasicResult<()> {
@@ -3934,6 +5425,7 @@ impl Interpreter {
         value: f64,
     ) -> BasicResult<()> {
         let current_line = self.current_line;
+        let capture_debug_write = self.debug_array_writes_enabled();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -3949,6 +5441,9 @@ impl Interpreter {
                 } else {
                     array.set_number(raw_indexes, value)
                 };
+                if result.is_ok() && capture_debug_write {
+                    array.remember_debug_write(name, raw_indexes);
+                }
                 return result.map_err(|mut e| {
                     if e.line.is_none() {
                         e.line = current_line;
@@ -3968,7 +5463,11 @@ impl Interpreter {
         if array.is_string() {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
-        array.set_number(&indexes, value).map_err(|mut e| {
+        let result = array.set_number(&indexes, value);
+        if result.is_ok() && capture_debug_write {
+            array.remember_debug_write(name, &indexes);
+        }
+        result.map_err(|mut e| {
             if e.line.is_none() {
                 e.line = current_line;
             }
@@ -4859,6 +6358,7 @@ impl Interpreter {
             return self.assign_mid_string(&lhs, value);
         }
         if let Some(open) = lhs.find('(') {
+            let capture_debug_write = self.debug_array_writes_enabled();
             let close = lhs.rfind(')').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let name = lhs[..open].trim().to_string();
             let indexes = split_arguments(&lhs[open + 1..close])
@@ -4882,6 +6382,9 @@ impl Interpreter {
                 }
                 e
             })?;
+            if capture_debug_write {
+                array.remember_debug_write(&name, &indexes);
+            }
             Ok(())
         } else {
             if lhs.ends_with('$') != matches!(value, Value::Str(_)) {
@@ -4960,6 +6463,7 @@ impl Interpreter {
         is_string: bool,
         value: Value,
     ) -> BasicResult<()> {
+        let capture_debug_write = self.debug_array_writes_enabled();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -4974,15 +6478,15 @@ impl Interpreter {
             if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
                 return Err(self.err(ErrorCode::TypeMismatch));
             }
-            if raw_indexes.len() == 1 {
-                return array.set_direct_1d(raw_indexes[0], value).map_err(|mut e| {
-                    if e.line.is_none() {
-                        e.line = self.current_line;
-                    }
-                    e
-                });
+            let result = if raw_indexes.len() == 1 {
+                array.set_direct_1d(raw_indexes[0], value)
+            } else {
+                array.set(raw_indexes, value)
+            };
+            if result.is_ok() && capture_debug_write {
+                array.remember_debug_write(name, raw_indexes);
             }
-            return array.set(raw_indexes, value).map_err(|mut e| {
+            return result.map_err(|mut e| {
                 if e.line.is_none() {
                     e.line = self.current_line;
                 }
@@ -5000,7 +6504,11 @@ impl Interpreter {
         if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
-        array.set(&indexes, value).map_err(|mut e| {
+        let result = array.set(&indexes, value);
+        if result.is_ok() && capture_debug_write {
+            array.remember_debug_write(name, &indexes);
+        }
+        result.map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -5284,7 +6792,7 @@ impl Interpreter {
         for (idx, sub) in subcommands.iter().enumerate() {
             let before = cursor.clone();
             if idx + 1 < subcommands.len() && first_word_is(sub, "GOSUB") {
-                self.execute_inline_gosub(sub[5..].trim())?;
+                self.execute_inline_gosub(sub[5..].trim(), false)?;
                 continue;
             }
             self.execute_command(&sub, cursor, line_commands)?;
@@ -5339,7 +6847,7 @@ impl Interpreter {
         for (idx, sub) in subcommands.iter().enumerate() {
             let before = cursor.clone();
             if idx + 1 < subcommands.len() && first_word_is(sub, "GOSUB") {
-                self.execute_inline_gosub(sub[5..].trim())?;
+                self.execute_inline_gosub(sub[5..].trim(), false)?;
                 continue;
             }
             self.execute_command(&sub, cursor, line_commands)?;
@@ -5404,39 +6912,41 @@ impl Interpreter {
         if let Some(branch) = self.next_if_branch_cache.get(cursor) {
             return Ok(branch.clone());
         }
-        let lines = self.program.line_numbers();
         let mut depth = 0i32;
-        for line_idx in cursor.line_idx..lines.len() {
-            let line_no = lines[line_idx];
-            let commands = if let Some(cached) = self.command_cache.get(&line_no) {
-                cached.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            } else {
-                split_commands(self.program.get(line_no).unwrap_or(""))
-            };
+        for line_idx in cursor.line_idx..self.compiled_line_cache.len() {
+            let commands = &self.compiled_line_cache[line_idx];
             let start_cmd = if line_idx == cursor.line_idx {
                 cursor.cmd_idx + 1
             } else {
                 0
             };
-            for (cmd_idx, cmd) in commands.iter().enumerate().skip(start_cmd) {
-                let kind = classify_if_branch_command(cmd);
-                if is_multiline_if_start(cmd) {
-                    depth += 1;
-                } else if matches!(kind, Some(IfBranchKind::EndIf)) {
-                    if depth == 0 {
-                        return Ok(IfBranch {
-                            cursor: Cursor { line_idx, cmd_idx },
-                            kind: IfBranchKind::EndIf,
-                        });
+            for (cmd_idx, command) in commands.iter().enumerate().skip(start_cmd) {
+                match classify_cached_structure(command.as_ref()) {
+                    Some(CachedStructureKind::IfStart) => depth += 1,
+                    Some(CachedStructureKind::EndIf) => {
+                        if depth == 0 {
+                            return Ok(IfBranch {
+                                cursor: Cursor { line_idx, cmd_idx },
+                                kind: IfBranchKind::EndIf,
+                            });
+                        }
+                        depth -= 1;
                     }
-                    depth -= 1;
-                } else if depth == 0 {
-                    if let Some(kind @ (IfBranchKind::ElseIf | IfBranchKind::Else)) = kind {
+                    Some(CachedStructureKind::ElseIf | CachedStructureKind::Else) if depth == 0 => {
+                        let kind = if matches!(
+                            classify_cached_structure(command.as_ref()),
+                            Some(CachedStructureKind::ElseIf)
+                        ) {
+                            IfBranchKind::ElseIf
+                        } else {
+                            IfBranchKind::Else
+                        };
                         return Ok(IfBranch {
                             cursor: Cursor { line_idx, cmd_idx },
                             kind,
                         });
                     }
+                    _ => {}
                 }
             }
         }
@@ -5447,31 +6957,27 @@ impl Interpreter {
         if let Some(target) = self.after_end_if_cache.get(cursor) {
             return Ok(target.clone());
         }
-        let lines = self.program.line_numbers();
         let mut depth = 0i32;
-        for line_idx in cursor.line_idx..lines.len() {
-            let line_no = lines[line_idx];
-            let commands = if let Some(cached) = self.command_cache.get(&line_no) {
-                cached.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            } else {
-                split_commands(self.program.get(line_no).unwrap_or(""))
-            };
+        for line_idx in cursor.line_idx..self.compiled_line_cache.len() {
+            let commands = &self.compiled_line_cache[line_idx];
             let start_cmd = if line_idx == cursor.line_idx {
                 cursor.cmd_idx + 1
             } else {
                 0
             };
-            for (cmd_idx, cmd) in commands.iter().enumerate().skip(start_cmd) {
-                if is_multiline_if_start(cmd) {
-                    depth += 1;
-                } else if matches!(classify_if_branch_command(cmd), Some(IfBranchKind::EndIf)) {
-                    if depth == 0 {
-                        return Ok(Cursor {
-                            line_idx,
-                            cmd_idx: cmd_idx + 1,
-                        });
+            for (cmd_idx, command) in commands.iter().enumerate().skip(start_cmd) {
+                match classify_cached_structure(command.as_ref()) {
+                    Some(CachedStructureKind::IfStart) => depth += 1,
+                    Some(CachedStructureKind::EndIf) => {
+                        if depth == 0 {
+                            return Ok(Cursor {
+                                line_idx,
+                                cmd_idx: cmd_idx + 1,
+                            });
+                        }
+                        depth -= 1;
                     }
-                    depth -= 1;
+                    _ => {}
                 }
             }
         }
@@ -5554,9 +7060,18 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute_inline_gosub(&mut self, target_expr: &str) -> BasicResult<()> {
+    fn execute_inline_gosub(&mut self, target_expr: &str, mouse_event: bool) -> BasicResult<()> {
         let line = parse_line_number_literal(target_expr)
             .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        self.execute_inline_gosub_line(line, mouse_event, None)
+    }
+
+    fn execute_inline_gosub_line(
+        &mut self,
+        line: i32,
+        mouse_event: bool,
+        suspended_return: Option<(i32, usize)>,
+    ) -> BasicResult<()> {
         let Some(index) = self.line_index(line) else {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         };
@@ -5567,15 +7082,94 @@ impl Interpreter {
         self.validate_function_jump(line, &target, true)?;
         let saved_current_line = self.current_line;
         let saved_gosub_len = self.gosub_stack.len();
+        let saved_mouse_marker_len = mouse_event.then(|| {
+            self.debugger_state.as_mut().and_then(|state| {
+                state.debugger.as_ref()?;
+                let saved_len = state.mouse_isr_markers.len();
+                state.mouse_isr_markers.push(saved_gosub_len);
+                Some(saved_len)
+            })
+        });
         self.gosub_stack.push(Cursor {
             line_idx: usize::MAX,
             cmd_idx: 0,
         });
         let result = self.run_from(target);
-        self.gosub_stack.truncate(saved_gosub_len);
+        let returned = self.gosub_stack.len() == saved_gosub_len;
+        match (&result, suspended_return) {
+            (Ok(RunOutcome::Stop), Some((return_line, return_cmd_idx))) if !returned => {
+                let return_cursor = Cursor {
+                    line_idx: self.line_index(return_line).unwrap_or(usize::MAX),
+                    cmd_idx: return_cmd_idx,
+                };
+                // The recursive Rust call cannot remain suspended across CONT.
+                // Replace its sentinel with the real BASIC return address so
+                // execution can unwind normally after the stopped subroutine.
+                self.gosub_stack[saved_gosub_len] = return_cursor;
+            }
+            (Ok(RunOutcome::End), Some(_)) if !returned => {
+                // Falling off the program (or END inside the subroutine) ends
+                // the whole run; it must not resume the caller's IF clause.
+                self.gosub_stack.truncate(saved_gosub_len);
+                self.end_requested = true;
+            }
+            _ => self.gosub_stack.truncate(saved_gosub_len),
+        }
+        if let Some(Some(saved_len)) = saved_mouse_marker_len {
+            if let Some(state) = self.debugger_state.as_mut() {
+                state.mouse_isr_markers.truncate(saved_len);
+            }
+        }
         self.current_line = saved_current_line;
         result?;
         Ok(())
+    }
+
+    #[inline(never)]
+    fn execute_cached_inline_sub_call(
+        &mut self,
+        command: &str,
+        cursor: &mut Cursor,
+    ) -> BasicResult<()> {
+        let return_line = self.current_line.unwrap_or_default();
+        let return_cmd_idx = cursor.cmd_idx + 1;
+        if first_word_is(command, "GOSUB") {
+            let line = parse_line_number_literal(command[5..].trim())
+                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+            self.execute_inline_gosub_line(line, false, Some((return_line, return_cmd_idx)))
+        } else {
+            self.execute_cached_inline_on_sub_call(command, cursor, return_line, return_cmd_idx)
+        }
+    }
+
+    #[inline(never)]
+    fn execute_cached_inline_on_sub_call(
+        &mut self,
+        command: &str,
+        cursor: &mut Cursor,
+        return_line: i32,
+        return_cmd_idx: usize,
+    ) -> BasicResult<()> {
+        if command
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("ON MOUSE ")
+        {
+            return self.execute_command(command, cursor, &[]);
+        }
+        let body = command[2..].trim();
+        let upper = body.to_ascii_uppercase();
+        let Some(pos) = upper.find(" GOSUB ") else {
+            return Err(self.err(ErrorCode::Syntax));
+        };
+        let selector = self.eval_number(body[..pos].trim())? as i32;
+        let targets = split_arguments(body[pos + 7..].trim());
+        if selector <= 0 || selector as usize > targets.len() {
+            return Ok(());
+        }
+        let line = parse_line_number_literal(&targets[selector as usize - 1])
+            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        self.execute_inline_gosub_line(line, false, Some((return_line, return_cmd_idx)))
     }
 
     fn execute_on_error(&mut self, command: &str) -> BasicResult<()> {
@@ -5707,33 +7301,27 @@ impl Interpreter {
         if let Some(target) = self.next_after_for_cache.get(cursor) {
             return Ok(target.clone());
         }
-        let lines = self.program.line_numbers();
         let mut depth = 0i32;
-        for line_idx in cursor.line_idx..lines.len() {
-            let line_no = lines[line_idx];
-            let commands = split_commands(self.program.get(line_no).unwrap_or(""));
+        for line_idx in cursor.line_idx..self.compiled_line_cache.len() {
+            let commands = &self.compiled_line_cache[line_idx];
             let start_cmd = if line_idx == cursor.line_idx {
                 cursor.cmd_idx + 1
             } else {
                 0
             };
-            for (cmd_idx, cmd) in commands.iter().enumerate().skip(start_cmd) {
-                let first = cmd
-                    .trim_start()
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_uppercase();
-                if first == "FOR" {
-                    depth += 1;
-                } else if first == "NEXT" {
-                    if depth == 0 {
-                        return Ok(Cursor {
-                            line_idx,
-                            cmd_idx: cmd_idx + 1,
-                        });
+            for (cmd_idx, command) in commands.iter().enumerate().skip(start_cmd) {
+                match classify_cached_structure(command.as_ref()) {
+                    Some(CachedStructureKind::For) => depth += 1,
+                    Some(CachedStructureKind::Next) => {
+                        if depth == 0 {
+                            return Ok(Cursor {
+                                line_idx,
+                                cmd_idx: cmd_idx + 1,
+                            });
+                        }
+                        depth -= 1;
                     }
-                    depth -= 1;
+                    _ => {}
                 }
             }
         }
@@ -5880,37 +7468,27 @@ impl Interpreter {
         if let Some(target) = self.wend_after_while_cache.get(cursor) {
             return Ok(target.clone());
         }
-        let lines = self.program.line_numbers();
         let mut depth = 0i32;
-        for line_idx in cursor.line_idx..lines.len() {
-            let line_no = lines[line_idx];
-            let commands = if let Some(cached) = self.command_cache.get(&line_no) {
-                cached.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            } else {
-                split_commands(self.program.get(line_no).unwrap_or(""))
-            };
+        for line_idx in cursor.line_idx..self.compiled_line_cache.len() {
+            let commands = &self.compiled_line_cache[line_idx];
             let start_cmd = if line_idx == cursor.line_idx {
                 cursor.cmd_idx + 1
             } else {
                 0
             };
-            for (cmd_idx, cmd) in commands.iter().enumerate().skip(start_cmd) {
-                let first = cmd
-                    .trim_start()
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_uppercase();
-                if first == "WHILE" {
-                    depth += 1;
-                } else if first == "WEND" {
-                    if depth == 0 {
-                        return Ok(Cursor {
-                            line_idx,
-                            cmd_idx: cmd_idx + 1,
-                        });
+            for (cmd_idx, command) in commands.iter().enumerate().skip(start_cmd) {
+                match classify_cached_structure(command.as_ref()) {
+                    Some(CachedStructureKind::While) => depth += 1,
+                    Some(CachedStructureKind::Wend) => {
+                        if depth == 0 {
+                            return Ok(Cursor {
+                                line_idx,
+                                cmd_idx: cmd_idx + 1,
+                            });
+                        }
+                        depth -= 1;
                     }
-                    depth -= 1;
+                    _ => {}
                 }
             }
         }
@@ -6068,6 +7646,7 @@ impl Interpreter {
     }
 
     fn execute_mat_read(&mut self, args: &str) -> BasicResult<()> {
+        let capture_debug_write = self.debug_array_writes_enabled();
         for target in split_arguments(args) {
             let name = target.trim().to_ascii_uppercase();
             if !is_basic_identifier(&name) {
@@ -6097,6 +7676,9 @@ impl Interpreter {
                     }
                     e
                 })?;
+                if capture_debug_write {
+                    array.remember_debug_write(&name, &indexes);
+                }
             }
         }
         Ok(())
@@ -6214,6 +7796,7 @@ impl Interpreter {
         indexes: &[i32],
         raw_token: &str,
     ) -> BasicResult<()> {
+        let capture_debug_write = self.debug_array_writes_enabled();
         let raw = raw_token.trim();
         let is_string = self
             .array_ref(name)
@@ -6236,15 +7819,20 @@ impl Interpreter {
             }
         };
 
+        let current_line = self.current_line;
         let Some(array) = self.array_mut(name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         array.set(indexes, value).map_err(|mut e| {
             if e.line.is_none() {
-                e.line = self.current_line;
+                e.line = current_line;
             }
             e
-        })
+        })?;
+        if capture_debug_write {
+            array.remember_debug_write(name, indexes);
+        }
+        Ok(())
     }
 
     fn fill_mat_input_defaults(
@@ -6253,6 +7841,7 @@ impl Interpreter {
         start_entry: usize,
         start_position: usize,
     ) {
+        let capture_debug_write = self.debug_array_writes_enabled();
         for (idx, entry) in entries.iter().enumerate().skip(start_entry) {
             let Some(array) = self.array_ref(&entry.name) else {
                 continue;
@@ -6270,7 +7859,9 @@ impl Interpreter {
             let name = self.array_lookup_key(&entry.name);
             for indexes in entry.positions.iter().skip(position) {
                 if let Some(array) = self.arrays.get_mut(name.as_ref()) {
-                    let _ = array.set(indexes, default.clone());
+                    if array.set(indexes, default.clone()).is_ok() && capture_debug_write {
+                        array.remember_debug_write(&entry.name, indexes);
+                    }
                 }
             }
         }
@@ -6468,7 +8059,7 @@ impl Interpreter {
                 self.return_array_for_active_function(&target);
                 Ok(())
             }
-            MatExprValue::Matrix(matrix) => {
+            MatExprValue::Matrix(mut matrix) => {
                 let returning_from_active_function = self
                     .active_function_name()
                     .is_some_and(|name| name.eq_ignore_ascii_case(&target));
@@ -6484,6 +8075,7 @@ impl Interpreter {
                 {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
+                matrix.clear_debug_write();
                 self.arrays.insert(target_key.into_owned(), matrix);
                 self.return_array_for_active_function(&target);
                 Ok(())
@@ -7081,6 +8673,7 @@ impl Interpreter {
 
     fn pause_user_input_ready(&mut self) -> BasicResult<bool> {
         if self.pause_uses_graphics_input() {
+            self.refocus_graphics_after_debug_if_needed();
             self.pump_graphics_window_now()?;
             let key_ready = self
                 .graphics_window
@@ -7473,13 +9066,10 @@ impl Interpreter {
     }
 
     fn cursor_after_cached_command(&self, mut cursor: Cursor) -> Cursor {
-        let Some(line) = self.program.line_numbers().get(cursor.line_idx).copied() else {
-            return cursor;
-        };
-        let len = self.command_cache.get(&line).map_or_else(
-            || split_commands(self.program.get(line).unwrap_or("")).len(),
-            Vec::len,
-        );
+        let len = self
+            .compiled_line_cache
+            .get(cursor.line_idx)
+            .map_or(0, |commands| commands.len());
         if cursor.cmd_idx >= len {
             cursor.line_idx += 1;
             cursor.cmd_idx = 0;
@@ -7873,7 +9463,7 @@ impl Interpreter {
             return Ok(());
         };
         self.handling_mouse_event = true;
-        let result = self.execute_inline_gosub(&target.to_string());
+        let result = self.execute_inline_gosub(&target.to_string(), true);
         self.handling_mouse_event = false;
         self.mouse_event_consumed = true;
         result
@@ -7934,12 +9524,27 @@ impl Interpreter {
             self.pump_graphics_window_now()?;
         }
         self.mark_graphics_window_used_by_current_run();
-        if first_graphics_use_by_run {
+        let refocus_after_debug = self.take_graphics_refocus_after_debug();
+        if first_graphics_use_by_run || refocus_after_debug {
             if let Some(window) = self.graphics_window.as_mut() {
                 window.focus();
             }
         }
         Ok(())
+    }
+
+    fn take_graphics_refocus_after_debug(&mut self) -> bool {
+        self.debugger_state
+            .as_mut()
+            .is_some_and(|state| std::mem::take(&mut state.refocus_graphics_on_use))
+    }
+
+    fn refocus_graphics_after_debug_if_needed(&mut self) {
+        if self.take_graphics_refocus_after_debug() {
+            if let Some(window) = self.graphics_window.as_mut() {
+                window.focus();
+            }
+        }
     }
 
     fn prepare_mouse_read(&mut self) -> BasicResult<()> {
@@ -8882,6 +10487,7 @@ impl Interpreter {
                 let range = trimmed[6..].trim();
                 let (start, end) = parse_delete_range(range)?;
                 self.program.delete_range(start, end);
+                self.remove_program_breakpoints(start, end);
                 self.invalidate_continuation_after_program_change();
             }
         }
@@ -9151,6 +10757,7 @@ impl Interpreter {
     fn clear_command_caches(&mut self) {
         self.command_cache.clear();
         self.compiled_command_cache.clear();
+        self.execution_source_cache.clear();
         self.compiled_line_cache =
             Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice());
         self.line_index_cache.clear();
@@ -9167,21 +10774,251 @@ impl Interpreter {
         self.line_numbers_cache = Rc::from(lines.clone().into_boxed_slice());
         let mut compiled_lines = Vec::with_capacity(lines.len());
         for (idx, line) in lines.into_iter().enumerate() {
-            let commands: Vec<Rc<str>> = split_commands(self.program.get(line).unwrap_or(""))
-                .into_iter()
-                .map(Rc::<str>::from)
-                .collect();
-            let compiled: Vec<Rc<CachedCommand>> = commands
+            let code = self.program.get(line).unwrap_or("");
+            let command_ranges = split_command_ranges(code);
+            let commands: Vec<Rc<str>> = command_ranges
                 .iter()
-                .map(|command| Rc::new(self.compile_cached_command(command.as_ref())))
+                .map(|range| Rc::<str>::from(&code[range.clone()]))
                 .collect();
+            let mut compiled = Vec::new();
+            let mut execution_sources = Vec::new();
+            let mut next_visible_statement = 0usize;
+            for (command, source_range) in commands.iter().zip(command_ranges) {
+                self.append_cached_commands_for_execution(
+                    command.as_ref(),
+                    source_range.start,
+                    true,
+                    &mut compiled,
+                    &mut execution_sources,
+                    &mut next_visible_statement,
+                );
+            }
             self.command_cache.insert(line, commands);
             self.compiled_command_cache.insert(line, compiled.clone());
+            self.execution_source_cache.insert(line, execution_sources);
             compiled_lines.push(Rc::from(compiled.into_boxed_slice()));
             self.line_index_cache.insert(line, idx);
         }
         self.compiled_line_cache = Rc::from(compiled_lines.into_boxed_slice());
         self.rebuild_block_target_caches();
+    }
+
+    fn append_cached_commands_for_execution(
+        &mut self,
+        command: &str,
+        command_source_start: usize,
+        debugger_boundary: bool,
+        compiled: &mut Vec<Rc<CachedCommand>>,
+        sources: &mut Vec<ExecutionMetadata>,
+        next_visible_statement: &mut usize,
+    ) {
+        let leading = command.len() - command.trim_start().len();
+        let trimmed = command.trim();
+        let trimmed_source_start = command_source_start + leading;
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("IF ") {
+            self.append_cached_execution_leaf(
+                trimmed,
+                trimmed_source_start,
+                debugger_boundary,
+                compiled,
+                sources,
+                next_visible_statement,
+            );
+            return;
+        }
+
+        let Some((condition_source, rest)) = split_if_condition_and_rest(trimmed, &upper) else {
+            self.append_cached_execution_leaf(
+                trimmed,
+                trimmed_source_start,
+                debugger_boundary,
+                compiled,
+                sources,
+                next_visible_statement,
+            );
+            return;
+        };
+        if rest.is_empty() {
+            self.append_cached_execution_leaf(
+                trimmed,
+                trimmed_source_start,
+                debugger_boundary,
+                compiled,
+                sources,
+                next_visible_statement,
+            );
+            return;
+        }
+        let Ok(condition) = compile_number_expression(condition_source) else {
+            self.append_cached_execution_leaf(
+                trimmed,
+                trimmed_source_start,
+                debugger_boundary,
+                compiled,
+                sources,
+                next_visible_statement,
+            );
+            return;
+        };
+
+        let (then_part, else_part) = split_else(rest);
+        let rest_source_start = trimmed_source_start + trimmed.len() - rest.len();
+        let guard_idx = compiled.len();
+        compiled.push(Rc::new(CachedCommand::Noop));
+        Self::push_visible_execution_metadata(
+            sources,
+            trimmed_source_start..trimmed_source_start + trimmed.len(),
+            debugger_boundary,
+            next_visible_statement,
+        );
+
+        self.append_cached_if_branch_for_execution(
+            then_part,
+            rest_source_start,
+            true,
+            compiled,
+            sources,
+            next_visible_statement,
+        );
+        let then_end_cmd_idx = compiled.len();
+
+        let else_cmd_idx = if let Some(else_part) = else_part {
+            let jump_idx = compiled.len();
+            compiled.push(Rc::new(CachedCommand::Noop));
+            sources.push(ExecutionMetadata::hidden());
+            let else_start = compiled.len();
+            let else_source_start = rest_source_start + rest.len() - else_part.len();
+            self.append_cached_if_branch_for_execution(
+                else_part,
+                else_source_start,
+                false,
+                compiled,
+                sources,
+                next_visible_statement,
+            );
+            let end = compiled.len();
+            compiled[jump_idx] = Rc::new(CachedCommand::InlineJump {
+                target_cmd_idx: end,
+            });
+            Some(else_start)
+        } else {
+            None
+        };
+        let end_cmd_idx = compiled.len();
+        let false_cmd_idx = else_cmd_idx.unwrap_or(end_cmd_idx);
+        let then_fast = compiled[guard_idx + 1..then_end_cmd_idx]
+            .iter()
+            .all(|command| command.is_fast_inline_leaf());
+        let else_fast = else_cmd_idx.is_none_or(|start| {
+            compiled[start..end_cmd_idx]
+                .iter()
+                .all(|command| command.is_fast_inline_leaf())
+        });
+        compiled[guard_idx] = Rc::new(CachedCommand::InlineIfGuard {
+            condition: Rc::new(condition),
+            false_cmd_idx,
+            then_end_cmd_idx,
+            else_cmd_idx,
+            end_cmd_idx,
+            then_fast,
+            else_fast,
+        });
+        debug_assert_eq!(compiled.len(), sources.len());
+    }
+
+    fn append_cached_if_branch_for_execution(
+        &mut self,
+        branch: &str,
+        branch_source_start: usize,
+        is_then_branch: bool,
+        compiled: &mut Vec<Rc<CachedCommand>>,
+        sources: &mut Vec<ExecutionMetadata>,
+        next_visible_statement: &mut usize,
+    ) {
+        let subcommand_ranges = split_command_ranges(branch);
+        let mut start = 0usize;
+        if let Some(first_range) = subcommand_ranges.first() {
+            let first = &branch[first_range.clone()];
+            if let Ok(line) = first.parse::<i32>() {
+                let goto = format!("GOTO {line}");
+                compiled.push(Rc::new(self.compile_cached_command(&goto)));
+                Self::push_visible_execution_metadata(
+                    sources,
+                    branch_source_start + first_range.start..branch_source_start + first_range.end,
+                    true,
+                    next_visible_statement,
+                );
+                if is_then_branch {
+                    return;
+                }
+                start = 1;
+            }
+        }
+        for (idx, source_range) in subcommand_ranges.iter().enumerate().skip(start) {
+            let command = &branch[source_range.clone()];
+            let command_source_start = branch_source_start + source_range.start;
+            // Python executes a non-final inline GOSUB as a nested call so the
+            // selected clause resumes locally. This distinction is observable
+            // when the call follows a MERGE.
+            let inline_sub_call = idx + 1 < subcommand_ranges.len()
+                && (first_word_is(command, "GOSUB")
+                    || (first_word_is(command, "ON")
+                        && command.to_ascii_uppercase().contains(" GOSUB ")));
+            if inline_sub_call {
+                compiled.push(Rc::new(CachedCommand::InlineSubCall(Rc::<str>::from(
+                    command,
+                ))));
+                Self::push_visible_execution_metadata(
+                    sources,
+                    command_source_start..command_source_start + command.len(),
+                    true,
+                    next_visible_statement,
+                );
+            } else {
+                self.append_cached_commands_for_execution(
+                    command,
+                    command_source_start,
+                    true,
+                    compiled,
+                    sources,
+                    next_visible_statement,
+                );
+            }
+        }
+    }
+
+    fn append_cached_execution_leaf(
+        &mut self,
+        command: &str,
+        command_source_start: usize,
+        debugger_boundary: bool,
+        compiled: &mut Vec<Rc<CachedCommand>>,
+        sources: &mut Vec<ExecutionMetadata>,
+        next_visible_statement: &mut usize,
+    ) {
+        compiled.push(Rc::new(self.compile_cached_command(command)));
+        Self::push_visible_execution_metadata(
+            sources,
+            command_source_start..command_source_start + command.len(),
+            debugger_boundary,
+            next_visible_statement,
+        );
+    }
+
+    fn push_visible_execution_metadata(
+        sources: &mut Vec<ExecutionMetadata>,
+        source_span: Range<usize>,
+        debugger_boundary: bool,
+        next_visible_statement: &mut usize,
+    ) {
+        let visible_statement = *next_visible_statement;
+        *next_visible_statement += 1;
+        sources.push(ExecutionMetadata::visible(
+            source_span,
+            visible_statement,
+            debugger_boundary,
+        ));
     }
 
     fn rebuild_block_target_caches(&mut self) {
@@ -9190,69 +11027,58 @@ impl Interpreter {
             last_branch: Cursor,
         }
 
-        let lines = self.line_numbers_cache.clone();
+        let compiled_lines = self.compiled_line_cache.clone();
         let mut for_stack = Vec::new();
         let mut while_stack = Vec::new();
         let mut if_stack: Vec<IfCacheFrame> = Vec::new();
-        for (line_idx, line_no) in lines.iter().copied().enumerate() {
-            let Some(commands) = self.command_cache.get(&line_no) else {
-                continue;
-            };
+        for (line_idx, commands) in compiled_lines.iter().enumerate() {
             for (cmd_idx, command) in commands.iter().enumerate() {
                 let cursor = Cursor { line_idx, cmd_idx };
-                if is_multiline_if_start(command) {
-                    if_stack.push(IfCacheFrame {
-                        branches: vec![cursor.clone()],
-                        last_branch: cursor,
-                    });
-                    continue;
-                }
-                if let Some(kind) = classify_if_branch_command(command) {
-                    if let Some(frame) = if_stack.last_mut() {
-                        match kind {
-                            IfBranchKind::ElseIf | IfBranchKind::Else => {
-                                self.next_if_branch_cache.insert(
-                                    frame.last_branch.clone(),
-                                    IfBranch {
-                                        cursor: cursor.clone(),
-                                        kind,
-                                    },
-                                );
-                                frame.branches.push(cursor.clone());
-                                frame.last_branch = cursor;
-                                continue;
-                            }
-                            IfBranchKind::EndIf => {
-                                let after = Cursor {
-                                    line_idx,
-                                    cmd_idx: cmd_idx + 1,
-                                };
-                                self.next_if_branch_cache.insert(
-                                    frame.last_branch.clone(),
-                                    IfBranch {
-                                        cursor: cursor.clone(),
-                                        kind,
-                                    },
-                                );
-                                let branches = frame.branches.clone();
-                                if_stack.pop();
-                                for branch in branches {
-                                    self.after_end_if_cache.insert(branch, after.clone());
-                                }
-                                continue;
+                match classify_cached_structure(command.as_ref()) {
+                    Some(CachedStructureKind::IfStart) => {
+                        if_stack.push(IfCacheFrame {
+                            branches: vec![cursor],
+                            last_branch: cursor,
+                        });
+                    }
+                    Some(CachedStructureKind::ElseIf | CachedStructureKind::Else) => {
+                        if let Some(frame) = if_stack.last_mut() {
+                            let kind = if matches!(
+                                classify_cached_structure(command.as_ref()),
+                                Some(CachedStructureKind::ElseIf)
+                            ) {
+                                IfBranchKind::ElseIf
+                            } else {
+                                IfBranchKind::Else
+                            };
+                            self.next_if_branch_cache
+                                .insert(frame.last_branch, IfBranch { cursor, kind });
+                            frame.branches.push(cursor);
+                            frame.last_branch = cursor;
+                        }
+                    }
+                    Some(CachedStructureKind::EndIf) => {
+                        if let Some(frame) = if_stack.last() {
+                            let after = Cursor {
+                                line_idx,
+                                cmd_idx: cmd_idx + 1,
+                            };
+                            self.next_if_branch_cache.insert(
+                                frame.last_branch,
+                                IfBranch {
+                                    cursor,
+                                    kind: IfBranchKind::EndIf,
+                                },
+                            );
+                            let branches = frame.branches.clone();
+                            if_stack.pop();
+                            for branch in branches {
+                                self.after_end_if_cache.insert(branch, after);
                             }
                         }
                     }
-                }
-                let first = command
-                    .trim_start()
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_uppercase();
-                match first.as_str() {
-                    "FOR" => for_stack.push(Cursor { line_idx, cmd_idx }),
-                    "NEXT" => {
+                    Some(CachedStructureKind::For) => for_stack.push(cursor),
+                    Some(CachedStructureKind::Next) => {
                         if let Some(start) = for_stack.pop() {
                             self.next_after_for_cache.insert(
                                 start,
@@ -9263,8 +11089,8 @@ impl Interpreter {
                             );
                         }
                     }
-                    "WHILE" => while_stack.push(Cursor { line_idx, cmd_idx }),
-                    "WEND" => {
+                    Some(CachedStructureKind::While) => while_stack.push(cursor),
+                    Some(CachedStructureKind::Wend) => {
                         if let Some(start) = while_stack.pop() {
                             self.wend_after_while_cache.insert(
                                 start,
@@ -9275,7 +11101,7 @@ impl Interpreter {
                             );
                         }
                     }
-                    _ => {}
+                    None => {}
                 }
             }
         }
@@ -9416,53 +11242,13 @@ impl Interpreter {
 
     fn compile_cached_if(&mut self, command: &str) -> Option<CachedCommand> {
         let upper = command.to_ascii_uppercase();
-        let (cond, rest) = if let Some((then_pos, then_end)) = find_then_keyword(&upper) {
-            (command[2..then_pos].trim(), command[then_end..].trim())
-        } else if let Some(goto_pos) = find_keyword_after_if(&upper, " GOTO ") {
-            (command[2..goto_pos].trim(), command[goto_pos + 1..].trim())
-        } else {
-            return None;
-        };
-        let condition = Rc::new(compile_number_expression(cond).ok()?);
-        if rest.is_empty() {
-            return Some(CachedCommand::BlockIf(condition));
-        }
-        let (then_part, else_part) = split_else(rest);
-        let then_branch = self.compile_cached_if_branch(then_part)?;
-        let else_branch = if let Some(branch) = else_part {
-            Some(self.compile_cached_if_branch(branch)?)
-        } else {
-            None
-        };
-        Some(CachedCommand::If {
-            condition,
-            then_branch,
-            else_branch,
-        })
-    }
-
-    fn compile_cached_if_branch(&mut self, branch: &str) -> Option<CachedIfBranch> {
-        let trimmed = branch.trim();
-        if trimmed.is_empty() {
-            return Some(CachedIfBranch::Commands(Vec::new()));
-        }
-        if let Ok(line) = trimmed.parse::<i32>() {
-            return Some(CachedIfBranch::Line(line));
-        }
-        let subcommands = split_commands(trimmed);
-        if subcommands
-            .iter()
-            .enumerate()
-            .any(|(idx, command)| idx + 1 < subcommands.len() && first_word_is(command, "GOSUB"))
-        {
+        let (cond, rest) = split_if_condition_and_rest(command, &upper)?;
+        if !rest.is_empty() {
             return None;
         }
-        Some(CachedIfBranch::Commands(
-            subcommands
-                .iter()
-                .map(|command| Rc::new(self.compile_cached_command(command)))
-                .collect(),
-        ))
+        compile_number_expression(cond)
+            .ok()
+            .map(|condition| CachedCommand::BlockIf(Rc::new(condition)))
     }
 
     fn compile_cached_on(&mut self, command: &str) -> Option<CachedCommand> {
@@ -9813,6 +11599,7 @@ impl Interpreter {
     fn read_inkey(&mut self) -> String {
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
+            self.refocus_graphics_after_debug_if_needed();
             if let Some(window) = self.graphics_window.as_mut() {
                 if let Some(code) = window.take_key_code() {
                     return char::from_u32(code as u32)
@@ -9842,6 +11629,7 @@ impl Interpreter {
     fn key_down(&mut self, code: u8) -> bool {
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
+            self.refocus_graphics_after_debug_if_needed();
             let _ = self.pump_graphics_window_now();
             return self
                 .graphics_window
@@ -10606,12 +12394,13 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(array) = self.array_ref(&source).cloned() else {
+                    let Some(mut array) = self.array_ref(&source).cloned() else {
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
+                    array.clear_debug_write();
                     set_array_binding_ref(&mut self.arrays, param, array);
                 }
             }
@@ -10635,12 +12424,13 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(array) = self.array_ref(&source).cloned() else {
+                    let Some(mut array) = self.array_ref(&source).cloned() else {
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
+                    array.clear_debug_write();
                     set_array_binding_ref(&mut self.arrays, param, array);
                 }
             }
@@ -10941,7 +12731,10 @@ impl Interpreter {
         let active = self.active_functions.pop();
         let mut return_value = active.and_then(|frame| frame.return_value);
         let return_array = if let Some(Value::ArrayRef(source)) = &return_value {
-            self.array_ref(source).cloned()
+            self.array_ref(source).cloned().map(|mut array| {
+                array.clear_debug_write();
+                array
+            })
         } else {
             None
         };
@@ -10958,13 +12751,13 @@ impl Interpreter {
         restore_string_bindings_ref(&mut self.string_variables, saved_string);
         restore_array_bindings_ref(&mut self.arrays, saved_arrays);
         self.restore_array_alias_bindings(saved_aliases);
+        run_result?;
         if let Some(array) = return_array {
             let array_name = name.to_string();
             self.arrays.insert(array_name.clone(), array);
             return_value = Some(Value::ArrayRef(array_name));
         }
 
-        run_result?;
         Ok(return_value.unwrap_or_else(|| Value::default_for_name(name.as_ref())))
     }
 }
@@ -14758,6 +16551,16 @@ fn numbered_line_code(source: &str) -> Option<&str> {
     }
 }
 
+fn numbered_line_number(source: &str) -> Option<i32> {
+    let text = source.trim_start();
+    let digit_end = text
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit())
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .last()?;
+    text[..digit_end].parse().ok()
+}
+
 fn record_identifier_case_forms(
     source: &str,
     cases: &mut HashMap<String, String>,
@@ -15690,6 +17493,46 @@ fn classify_if_branch_command(command: &str) -> Option<IfBranchKind> {
     }
 }
 
+fn classify_cached_structure(command: &CachedCommand) -> Option<CachedStructureKind> {
+    match command {
+        CachedCommand::BlockIf(_) => Some(CachedStructureKind::IfStart),
+        CachedCommand::BlockElseIf(_) => Some(CachedStructureKind::ElseIf),
+        CachedCommand::Else => Some(CachedStructureKind::Else),
+        CachedCommand::EndIf => Some(CachedStructureKind::EndIf),
+        CachedCommand::For(_) => Some(CachedStructureKind::For),
+        CachedCommand::Next(_) => Some(CachedStructureKind::Next),
+        CachedCommand::While(_) => Some(CachedStructureKind::While),
+        CachedCommand::Wend => Some(CachedStructureKind::Wend),
+        CachedCommand::Raw(source) => {
+            if is_multiline_if_start(source) {
+                return Some(CachedStructureKind::IfStart);
+            }
+            if let Some(branch) = classify_if_branch_command(source) {
+                return Some(match branch {
+                    IfBranchKind::ElseIf => CachedStructureKind::ElseIf,
+                    IfBranchKind::Else => CachedStructureKind::Else,
+                    IfBranchKind::EndIf => CachedStructureKind::EndIf,
+                });
+            }
+            match source
+                .trim_start()
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_ascii_uppercase()
+                .as_str()
+            {
+                "FOR" => Some(CachedStructureKind::For),
+                "NEXT" => Some(CachedStructureKind::Next),
+                "WHILE" => Some(CachedStructureKind::While),
+                "WEND" => Some(CachedStructureKind::Wend),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 fn is_multiline_if_start(command: &str) -> bool {
     let trimmed = command.trim();
     let upper = trimmed.to_ascii_uppercase();
@@ -15700,6 +17543,14 @@ fn is_multiline_if_start(command: &str) -> bool {
         return false;
     };
     trimmed[then_end..].trim().is_empty()
+}
+
+fn split_if_condition_and_rest<'a>(command: &'a str, upper: &str) -> Option<(&'a str, &'a str)> {
+    if let Some((then_pos, then_end)) = find_then_keyword(upper) {
+        return Some((command[2..then_pos].trim(), command[then_end..].trim()));
+    }
+    let goto_pos = find_keyword_after_if(upper, " GOTO ")?;
+    Some((command[2..goto_pos].trim(), command[goto_pos + 1..].trim()))
 }
 
 fn compile_block_elseif(command: &str) -> BasicResult<CompiledNumberExpr> {
@@ -15718,16 +17569,33 @@ fn compile_block_elseif(command: &str) -> BasicResult<CompiledNumberExpr> {
 }
 
 fn find_then_keyword(upper: &str) -> Option<(usize, usize)> {
-    let pos = upper.find(" THEN")?;
-    let end = pos + 5;
-    if upper[end..]
-        .chars()
-        .next()
-        .is_some_and(|ch| !ch.is_whitespace())
-    {
-        return None;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    for (idx, ch) in upper.char_indices().skip(2) {
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ if depth == 0 && upper[idx..].starts_with(" THEN") => {
+                let end = idx + 5;
+                if upper[end..]
+                    .chars()
+                    .next()
+                    .is_none_or(|ch| ch.is_whitespace() || ch == ':')
+                {
+                    return Some((idx, end));
+                }
+            }
+            _ => {}
+        }
     }
-    Some((pos, end))
+    None
 }
 
 fn find_keyword_after_if(upper: &str, keyword: &str) -> Option<usize> {
@@ -16871,4 +18739,730 @@ fn parse_data_number(item: &str) -> Option<f64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod debugger_runtime_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn debugger_with_breakpoints(
+        lines: impl IntoIterator<Item = i32>,
+        actions: impl IntoIterator<Item = DebugAction>,
+    ) -> Debugger {
+        let mut debugger = Debugger::scripted(actions);
+        debugger.replace_breakpoints(lines);
+        debugger
+    }
+
+    fn run_debugged(source: &str, debugger: Debugger) -> Interpreter {
+        let mut interpreter = Interpreter::new();
+        interpreter.program.load_text(source).unwrap();
+        interpreter.set_debugger(debugger);
+        assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+        interpreter
+    }
+
+    #[test]
+    fn execution_metadata_remains_compact_when_source_locations_are_enabled() {
+        assert!(std::mem::size_of::<ExecutionMetadata>() <= 16);
+    }
+
+    #[test]
+    fn debug_session_pauses_before_the_first_statement_and_persists_breakpoints() {
+        let pauses = Rc::new(RefCell::new(Vec::new()));
+        let recorded_pauses = Rc::clone(&pauses);
+        let debugger = Debugger::interactive(move |snapshot, breakpoints, _| {
+            recorded_pauses.borrow_mut().push(snapshot.clone());
+            breakpoints.insert(20);
+            Ok(DebugAction::Abort)
+        });
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text("10 A=1:PRINT \"RUN\"\n20 END")
+            .unwrap();
+
+        let (outcome, stopped_line) = interpreter.run_debug_session(debugger).unwrap();
+
+        assert_eq!(outcome, RunOutcome::End);
+        assert_eq!(stopped_line, Some(10));
+        assert_eq!(interpreter.current_line, None);
+        assert!(interpreter.debugger().is_none());
+        assert!(interpreter.numeric_variables.get("A").is_none());
+        assert!(interpreter.take_output().is_empty());
+        assert_eq!(
+            interpreter
+                .debugger_state
+                .as_ref()
+                .unwrap()
+                .editor_breakpoints,
+            HashSet::from([20])
+        );
+
+        let pauses = pauses.borrow();
+        assert_eq!(pauses.len(), 1);
+        assert_eq!(pauses[0].reason, DebugPauseReason::PauseRequested);
+        assert_eq!(
+            (pauses[0].location.line, pauses[0].location.statement),
+            (10, 0)
+        );
+        assert_eq!(pauses[0].source_lines, ["10 A=1:PRINT \"RUN\"", "20 END"]);
+    }
+
+    #[test]
+    fn debug_session_cleans_up_after_runtime_error() {
+        let debugger = Debugger::interactive(|_, breakpoints, _| {
+            breakpoints.insert(20);
+            Ok(DebugAction::Continue)
+        });
+        let mut interpreter = Interpreter::new();
+        interpreter.program.load_text("10 A=1/0\n20 END").unwrap();
+
+        let error = interpreter.run_debug_session(debugger).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::DivisionByZero);
+        assert_eq!(interpreter.current_line, None);
+        assert!(interpreter.debugger().is_none());
+        assert_eq!(
+            interpreter
+                .debugger_state
+                .as_ref()
+                .unwrap()
+                .editor_breakpoints,
+            HashSet::from([20])
+        );
+    }
+
+    #[test]
+    fn debug_session_detaches_at_stop_and_continues_without_the_debugger() {
+        let pause_count = Rc::new(Cell::new(0));
+        let recorded_pause_count = Rc::clone(&pause_count);
+        let debugger = Debugger::interactive(move |_, breakpoints, _| {
+            recorded_pause_count.set(recorded_pause_count.get() + 1);
+            breakpoints.insert(30);
+            Ok(DebugAction::Continue)
+        });
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text("10 A=1\n20 STOP\n30 B=2\n40 END")
+            .unwrap();
+
+        let (outcome, stopped_line) = interpreter.run_debug_session(debugger).unwrap();
+
+        assert_eq!(outcome, RunOutcome::Stop);
+        assert_eq!(stopped_line, Some(20));
+        assert_eq!(pause_count.get(), 1);
+        assert!(interpreter.debugger().is_none());
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&1.0));
+        assert_eq!(interpreter.numeric_variables.get("B"), None);
+
+        interpreter.process_immediate("CONT").unwrap();
+
+        assert_eq!(pause_count.get(), 1);
+        assert_eq!(interpreter.numeric_variables.get("B"), Some(&2.0));
+        assert!(interpreter.debugger().is_none());
+        assert_eq!(
+            interpreter
+                .debugger_state
+                .as_ref()
+                .unwrap()
+                .editor_breakpoints,
+            HashSet::from([30])
+        );
+    }
+
+    #[test]
+    fn debug_command_rejects_the_removed_graphics_argument() {
+        let mut interpreter = Interpreter::new();
+
+        let error = interpreter.process_immediate("DEBUG 32").unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::Syntax);
+        assert!(!interpreter.take_output().contains("Graphics debugging"));
+
+        interpreter.process_immediate("10 DEBUG").unwrap();
+        let error = interpreter.run_loaded().unwrap_err();
+        assert_eq!(error.code, ErrorCode::ImmediateCommand);
+        assert_eq!(error.line, Some(10));
+    }
+
+    #[test]
+    fn line_breakpoint_pauses_once_and_snapshot_contains_current_state() {
+        let interpreter = run_debugged(
+            "10 A=1:S$=\"ready\":DIM N(2),T$(1)\n20 A=A+1:B=2\n30 END",
+            debugger_with_breakpoints([20], [DebugAction::Continue]),
+        );
+        let snapshots = interpreter.debugger().unwrap().snapshots();
+        assert_eq!(snapshots.len(), 1, "a line breakpoint is not per colon");
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.reason, DebugPauseReason::Breakpoint);
+        assert_eq!(snapshot.location.line, 20);
+        assert_eq!(snapshot.location.statement, 0);
+        assert_eq!(snapshot.location.command, "A=A+1");
+        assert!(snapshot.variables.contains(&DebugVariable {
+            name: "A".to_string(),
+            value: DebugValue::Number(1.0),
+        }));
+        assert!(snapshot.variables.contains(&DebugVariable {
+            name: "S$".to_string(),
+            value: DebugValue::String("ready".to_string()),
+        }));
+        assert!(snapshot
+            .arrays
+            .iter()
+            .any(|array| array.name == "N" && array.dimensions == [2] && array.elements == 3));
+        assert!(snapshot.arrays.iter().any(|array| {
+            array.name == "T$" && array.kind == DebugArrayKind::String && array.dimensions == [1]
+        }));
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&2.0));
+        assert_eq!(interpreter.numeric_variables.get("B"), Some(&2.0));
+    }
+
+    #[test]
+    fn step_into_over_and_out_keep_multiline_call_frames_alive() {
+        let source = "10 DEF SUB WORK(P)\n20 LOCAL L\n30 L=P+1\n40 SUBEND\n50 A=4\n60 CALL WORK(A)\n70 B=9\n80 END";
+
+        let into = run_debugged(
+            source,
+            debugger_with_breakpoints([60], [DebugAction::StepInto, DebugAction::Continue]),
+        );
+        let into_snapshots = into.debugger().unwrap().snapshots();
+        assert_eq!(
+            into_snapshots
+                .iter()
+                .map(|snapshot| snapshot.location.line)
+                .collect::<Vec<_>>(),
+            [60, 20]
+        );
+        assert!(into_snapshots[1].stack.iter().any(
+            |frame| frame.kind == DebugFrameKind::Sub && frame.name.as_deref() == Some("WORK")
+        ));
+
+        let over = run_debugged(
+            source,
+            debugger_with_breakpoints([60], [DebugAction::StepOver, DebugAction::Continue]),
+        );
+        assert_eq!(
+            over.debugger()
+                .unwrap()
+                .snapshots()
+                .iter()
+                .map(|snapshot| snapshot.location.line)
+                .collect::<Vec<_>>(),
+            [60, 70]
+        );
+
+        let out = run_debugged(
+            source,
+            debugger_with_breakpoints([30], [DebugAction::StepOut, DebugAction::Continue]),
+        );
+        assert_eq!(
+            out.debugger()
+                .unwrap()
+                .snapshots()
+                .iter()
+                .map(|snapshot| snapshot.location.line)
+                .collect::<Vec<_>>(),
+            [30, 70]
+        );
+    }
+
+    #[test]
+    fn inline_if_branches_and_top_level_colon_statements_are_steppable() {
+        let mut debugger = Debugger::scripted([
+            DebugAction::StepInto,
+            DebugAction::StepInto,
+            DebugAction::StepInto,
+            DebugAction::StepInto,
+            DebugAction::Continue,
+        ]);
+        debugger.request_pause();
+        let interpreter = run_debugged("10 IF 1 THEN A=1:B=2\n20 C=3:D=4\n30 END", debugger);
+        let snapshots = interpreter.debugger().unwrap().snapshots();
+        let locations = snapshots
+            .iter()
+            .map(|snapshot| (snapshot.location.line, snapshot.location.statement))
+            .collect::<Vec<_>>();
+        assert_eq!(locations, [(10, 0), (10, 1), (10, 2), (20, 0), (20, 1)]);
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.location.command.as_str())
+                .collect::<Vec<_>>(),
+            ["IF 1 THEN A=1:B=2", "A=1", "B=2", "C=3", "D=4"]
+        );
+    }
+
+    #[test]
+    fn single_line_function_evaluation_is_atomic_for_stepping() {
+        let interpreter = run_debugged(
+            "10 DEF FNF(X)=X+1\n20 A=FNF(2)\n30 B=4\n40 END",
+            debugger_with_breakpoints([20], [DebugAction::StepInto, DebugAction::Continue]),
+        );
+        assert_eq!(
+            interpreter
+                .debugger()
+                .unwrap()
+                .snapshots()
+                .iter()
+                .map(|snapshot| snapshot.location.line)
+                .collect::<Vec<_>>(),
+            [20, 30]
+        );
+    }
+
+    #[test]
+    fn continuing_self_goto_rearms_its_line_breakpoint() {
+        let interpreter = run_debugged(
+            "10 GOTO 10",
+            debugger_with_breakpoints([10], [DebugAction::Continue, DebugAction::Abort]),
+        );
+        let snapshots = interpreter.debugger().unwrap().snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots
+            .iter()
+            .all(|snapshot| snapshot.location.line == 10));
+    }
+
+    #[test]
+    fn same_cursor_at_a_deeper_gosub_depth_is_a_new_breakpoint_hit() {
+        let interpreter = run_debugged(
+            "10 IF A=0 THEN A=1:GOSUB 10\n20 END",
+            debugger_with_breakpoints([10], [DebugAction::Continue, DebugAction::Abort]),
+        );
+        let snapshots = interpreter.debugger().unwrap().snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots
+            .iter()
+            .all(|snapshot| snapshot.location.line == 10));
+    }
+
+    #[test]
+    fn sub_array_alias_and_error_state_are_visible() {
+        let source = "10 DIM A(2)\n20 DEF SUB SHOW(P)\n30 LOCAL L$\n40 L$=\"local\"\n50 P(0)=1\n60 SUBEND\n70 CALL SHOW(A)\n80 END";
+        let interpreter = run_debugged(
+            source,
+            debugger_with_breakpoints([50], [DebugAction::Continue]),
+        );
+        let snapshot = &interpreter.debugger().unwrap().snapshots()[0];
+        assert_eq!((snapshot.err, snapshot.erl), (0, 0));
+        assert!(snapshot
+            .arrays
+            .iter()
+            .any(|array| { array.name == "P" && array.alias_of.as_deref() == Some("A") }));
+        assert!(snapshot.variables.contains(&DebugVariable {
+            name: "L$".to_string(),
+            value: DebugValue::String("local".to_string()),
+        }));
+
+        let mut with_error = Interpreter::new();
+        with_error.program.load_text("10 A=1").unwrap();
+        with_error.rebuild_command_cache();
+        with_error.last_error = Some(RuntimeErrorState {
+            number: 11,
+            line: 80,
+            retry: Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            },
+            next: Cursor {
+                line_idx: 1,
+                cmd_idx: 0,
+            },
+        });
+        let error_snapshot = with_error.build_debug_snapshot(
+            &Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Breakpoint,
+        );
+        assert_eq!((error_snapshot.err, error_snapshot.erl), (11, 80));
+    }
+
+    #[test]
+    fn debugger_pauses_do_not_enter_or_contaminate_on_error() {
+        let interpreter = run_debugged(
+            "10 ON ERROR GOTO 100\n20 A=1\n30 X=1/0\n40 AFTERERR=1\n50 END\n100 SEEN=ERR\n110 RESUME NEXT",
+            debugger_with_breakpoints(
+                [20, 100],
+                [DebugAction::Continue, DebugAction::Continue],
+            ),
+        );
+        let snapshots = interpreter.debugger().unwrap().snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].location.line, 20);
+        assert_eq!((snapshots[0].err, snapshots[0].erl), (0, 0));
+        assert_eq!(snapshots[1].location.line, 100);
+        assert_eq!((snapshots[1].err, snapshots[1].erl), (6, 30));
+        assert_eq!(interpreter.numeric_variables.get("SEEN"), Some(&6.0));
+        assert_eq!(interpreter.numeric_variables.get("AFTERERR"), Some(&1.0));
+    }
+
+    #[test]
+    fn modal_pause_time_does_not_advance_basic_timers() {
+        let mut debugger = Debugger::interactive(|_, _, _| {
+            std::thread::sleep(Duration::from_millis(80));
+            Ok(DebugAction::Continue)
+        });
+        debugger.set_breakpoint(20, true);
+        let interpreter = run_debugged(
+            "10 AFTER 2 GOSUB 100\n20 A=1\n30 A=A+1\n40 END\n100 FIRED=1\n110 RETURN",
+            debugger,
+        );
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&2.0));
+        assert_eq!(interpreter.numeric_variables.get("FIRED"), None);
+    }
+
+    #[test]
+    fn timer_interrupt_during_pause_does_not_retrigger_its_breakpoint() {
+        let interpreter = run_debugged(
+            "10 AFTER 1,1 GOSUB 100\n20 PAUSE 80\n30 END\n100 FIRED=FIRED+1\n110 RETURN",
+            debugger_with_breakpoints([20], [DebugAction::Continue]),
+        );
+        assert_eq!(interpreter.debugger().unwrap().snapshots().len(), 1);
+        assert_eq!(interpreter.numeric_variables.get("FIRED"), Some(&1.0));
+    }
+
+    #[test]
+    fn abort_terminates_without_executing_the_paused_command() {
+        let interpreter = run_debugged(
+            "10 A=1\n20 A=2\n30 END",
+            debugger_with_breakpoints([20], [DebugAction::Abort]),
+        );
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&1.0));
+    }
+
+    #[test]
+    fn abort_inside_sub_and_multiline_function_stops_the_outer_command() {
+        let sub = run_debugged(
+            "10 DEF SUB WORK\n20 LOCAL L\n30 L=1\n40 SUBEND\n50 A=1\n60 CALL WORK\n70 AFTERCALL=1\n80 END",
+            debugger_with_breakpoints([30], [DebugAction::Abort]),
+        );
+        assert_eq!(sub.numeric_variables.get("A"), Some(&1.0));
+        assert_eq!(sub.numeric_variables.get("L"), None);
+        assert_eq!(sub.numeric_variables.get("AFTERCALL"), None);
+
+        let function = run_debugged(
+            "10 DEF FNF(X)\n20 FNF=X+1\n30 FNEND\n40 RESULT=FNF(2)\n50 AFTERFN=1\n60 END",
+            debugger_with_breakpoints([20], [DebugAction::Abort]),
+        );
+        assert_eq!(function.numeric_variables.get("RESULT"), None);
+        assert_eq!(function.numeric_variables.get("AFTERFN"), None);
+    }
+
+    #[test]
+    fn snapshot_stack_interleaves_routines_gosubs_and_nested_timer_priorities() {
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text("10 A=1\n20 B=2\n30 C=3")
+            .unwrap();
+        interpreter.rebuild_command_cache();
+        interpreter.set_debugger(Debugger::scripted([]));
+        interpreter.active_subs.push(ActiveSubFrame {
+            name: Rc::from("OUTER"),
+        });
+        interpreter.sync_debug_routine_stack();
+        interpreter.gosub_stack.push(Cursor {
+            line_idx: 1,
+            cmd_idx: 0,
+        });
+        interpreter.active_functions.push(ActiveFunctionFrame {
+            name: Rc::from("FNNESTED"),
+            return_value: None,
+        });
+        interpreter.sync_debug_routine_stack();
+        let ordered = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 2,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Step,
+        );
+        assert_eq!(
+            ordered
+                .stack
+                .iter()
+                .map(|frame| frame.kind)
+                .collect::<Vec<_>>(),
+            [
+                DebugFrameKind::Program,
+                DebugFrameKind::Sub,
+                DebugFrameKind::Gosub,
+                DebugFrameKind::Function,
+            ]
+        );
+
+        interpreter.active_subs.clear();
+        interpreter.active_functions.clear();
+        interpreter.sync_debug_routine_stack();
+        interpreter.timer_isr_markers = vec![0, 1];
+        interpreter.timer_isr_stack = vec![
+            TimerInterruptState {
+                priority: -1,
+                interrupts_enabled: true,
+            },
+            TimerInterruptState {
+                priority: 1,
+                interrupts_enabled: true,
+            },
+        ];
+        interpreter.current_interrupt_priority = 3;
+        interpreter.gosub_stack.push(Cursor {
+            line_idx: 2,
+            cmd_idx: 0,
+        });
+        let timers = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 2,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Breakpoint,
+        );
+        assert_eq!(
+            timers
+                .stack
+                .iter()
+                .filter(|frame| frame.kind == DebugFrameKind::Timer)
+                .map(|frame| frame.name.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["Timer 1", "Timer 3"]
+        );
+
+        interpreter.timer_isr_markers.clear();
+        interpreter.timer_isr_stack.clear();
+        interpreter.current_interrupt_priority = -1;
+        interpreter.gosub_stack = vec![Cursor {
+            line_idx: usize::MAX,
+            cmd_idx: 0,
+        }];
+        let ordinary_inline = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 2,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Step,
+        );
+        assert_eq!(ordinary_inline.stack[1].kind, DebugFrameKind::Gosub);
+        interpreter
+            .debugger_state
+            .as_mut()
+            .unwrap()
+            .mouse_isr_markers
+            .push(0);
+        let mouse = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 2,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Step,
+        );
+        assert_eq!(mouse.stack[1].kind, DebugFrameKind::Mouse);
+    }
+
+    #[test]
+    fn snapshot_stack_preserves_routine_order_at_equal_gosub_depth() {
+        let mut interpreter = Interpreter::new();
+        interpreter.program.load_text("10 END").unwrap();
+        interpreter.rebuild_command_cache();
+        interpreter.set_debugger(Debugger::scripted([]));
+        interpreter.active_functions.push(ActiveFunctionFrame {
+            name: Rc::from("FNOUTER"),
+            return_value: None,
+        });
+        interpreter.sync_debug_routine_stack();
+        interpreter.active_subs.push(ActiveSubFrame {
+            name: Rc::from("INNER"),
+        });
+        interpreter.sync_debug_routine_stack();
+        let function_then_sub = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Step,
+        );
+        assert_eq!(
+            function_then_sub
+                .stack
+                .iter()
+                .map(|frame| frame.kind)
+                .collect::<Vec<_>>(),
+            [
+                DebugFrameKind::Program,
+                DebugFrameKind::Function,
+                DebugFrameKind::Sub,
+            ]
+        );
+
+        interpreter.active_functions.clear();
+        interpreter.active_subs.clear();
+        interpreter.sync_debug_routine_stack();
+        interpreter.active_subs.push(ActiveSubFrame {
+            name: Rc::from("OUTER"),
+        });
+        interpreter.sync_debug_routine_stack();
+        interpreter.active_functions.push(ActiveFunctionFrame {
+            name: Rc::from("FNINNER"),
+            return_value: None,
+        });
+        interpreter.sync_debug_routine_stack();
+        let sub_then_function = interpreter.build_debug_snapshot(
+            &Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            },
+            DebugPauseReason::Step,
+        );
+        assert_eq!(
+            sub_then_function
+                .stack
+                .iter()
+                .map(|frame| frame.kind)
+                .collect::<Vec<_>>(),
+            [
+                DebugFrameKind::Program,
+                DebugFrameKind::Sub,
+                DebugFrameKind::Function,
+            ]
+        );
+    }
+
+    #[test]
+    fn program_edits_remap_remove_and_clear_persistent_breakpoints() {
+        let editor_breakpoints = |interpreter: &Interpreter| {
+            interpreter
+                .debugger_state
+                .as_ref()
+                .map(|state| state.editor_breakpoints.clone())
+                .unwrap_or_default()
+        };
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text("10 A=1\n20 B=2\n30 C=3\n40 D=4")
+            .unwrap();
+        interpreter.replace_editor_breakpoints([20, 40].into_iter().collect());
+        interpreter.set_debugger(debugger_with_breakpoints([20], [DebugAction::Continue]));
+
+        interpreter.execute_renum("100,10,20,30").unwrap();
+        assert_eq!(
+            editor_breakpoints(&interpreter),
+            [100, 40].into_iter().collect()
+        );
+        assert_eq!(
+            interpreter
+                .debugger()
+                .unwrap()
+                .breakpoints()
+                .collect::<HashSet<_>>(),
+            [100].into_iter().collect()
+        );
+
+        interpreter.execute_delete_lines("40").unwrap();
+        assert_eq!(
+            editor_breakpoints(&interpreter),
+            [100].into_iter().collect()
+        );
+        interpreter.process_immediate("100").unwrap();
+        assert!(editor_breakpoints(&interpreter).is_empty());
+        assert_eq!(interpreter.debugger().unwrap().breakpoints().count(), 0);
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("replacement.bas");
+        std::fs::write(&path, "10 END\n").unwrap();
+        interpreter.load_file(&path).unwrap();
+        assert!(editor_breakpoints(&interpreter).is_empty());
+        assert_eq!(interpreter.debugger().unwrap().breakpoints().count(), 0);
+
+        interpreter.replace_editor_breakpoints([10].into_iter().collect());
+        interpreter.debugger_mut().unwrap().set_breakpoint(10, true);
+        interpreter.process_immediate("NEW").unwrap();
+        assert!(editor_breakpoints(&interpreter).is_empty());
+        assert_eq!(interpreter.debugger().unwrap().breakpoints().count(), 0);
+    }
+
+    #[test]
+    fn snapshot_source_lines_follow_a_program_merged_during_run() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("added.bas"), "100 ADDED=1\n110 END\n").unwrap();
+        let mut interpreter = Interpreter::new();
+        interpreter.root_dir = temp.path().to_path_buf();
+        interpreter.current_dir = temp.path().to_path_buf();
+        interpreter
+            .program
+            .load_text("10 MERGE \"added.bas\"\n20 GOTO 100\n30 END")
+            .unwrap();
+        interpreter.set_debugger(debugger_with_breakpoints([100], [DebugAction::Continue]));
+        assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+
+        let snapshot = &interpreter.debugger().unwrap().snapshots()[0];
+        assert_eq!(snapshot.location.line, 100);
+        assert!(snapshot
+            .source_lines
+            .iter()
+            .any(|line| line == "100 ADDED=1"));
+    }
+
+    #[test]
+    fn chain_merge_delete_does_not_reuse_a_deleted_line_breakpoint() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("replacement.bas"),
+            "20 NEWVALUE=1\n30 END\n",
+        )
+        .unwrap();
+        let mut interpreter = Interpreter::new();
+        interpreter.root_dir = temp.path().to_path_buf();
+        interpreter.current_dir = temp.path().to_path_buf();
+        interpreter
+            .program
+            .load_text("10 CHAIN MERGE \"replacement.bas\",20,DELETE 20-20\n20 OLDVALUE=1\n30 END")
+            .unwrap();
+        interpreter.replace_editor_breakpoints([20].into_iter().collect());
+        interpreter.set_debugger(debugger_with_breakpoints([20], []));
+
+        assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+        assert_eq!(
+            interpreter.numeric_variables.get("NEWVALUE").copied(),
+            Some(1.0)
+        );
+        assert!(interpreter
+            .debugger()
+            .unwrap()
+            .breakpoints()
+            .next()
+            .is_none());
+        assert!(interpreter
+            .debugger_state
+            .as_ref()
+            .unwrap()
+            .editor_breakpoints
+            .is_empty());
+    }
+
+    #[test]
+    fn graphics_refocus_after_a_debug_pause_is_one_shot_and_run_scoped() {
+        let mut interpreter = Interpreter::new();
+        interpreter.set_debugger(Debugger::scripted([]));
+        interpreter
+            .debugger_state
+            .as_mut()
+            .unwrap()
+            .refocus_graphics_on_use = true;
+
+        assert!(interpreter.take_graphics_refocus_after_debug());
+        assert!(!interpreter.take_graphics_refocus_after_debug());
+
+        interpreter
+            .debugger_state
+            .as_mut()
+            .unwrap()
+            .refocus_graphics_on_use = true;
+        interpreter.prepare_run();
+        assert!(!interpreter.take_graphics_refocus_after_debug());
+    }
 }

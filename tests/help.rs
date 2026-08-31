@@ -28,6 +28,31 @@ fn help_fill_lists_the_cursor_color_form() {
 }
 
 #[test]
+fn help_keeps_edit_and_debug_separate_without_becoming_a_manual() {
+    let mut interpreter = Interpreter::new();
+
+    interpreter.process_immediate("HELP EDIT").unwrap();
+    let output = interpreter.take_output();
+
+    assert!(output.starts_with("EDIT\nEDIT line\n"), "{output:?}");
+    assert!(output.contains("full-screen program editor"));
+    assert!(!output.contains("debugger"));
+    assert!(output.contains("Related: DEBUG, LIST, RENUM\n"));
+    assert!(output.lines().count() <= 6);
+
+    interpreter.process_immediate("HELP DEBUG").unwrap();
+    let output = interpreter.take_output();
+
+    assert!(output.starts_with("DEBUG\n"), "{output:?}");
+    assert!(output.contains("read-only debugger"));
+    assert!(output.contains("before the first statement"));
+    assert!(!output.contains("block_size"));
+    assert!(!output.contains("dirty-block"));
+    assert!(output.contains("Related: EDIT, RUN\n"));
+    assert!(output.lines().count() <= 4);
+}
+
+#[test]
 fn help_covers_optional_routine_parameters_local_arrays_and_exact_radix_widths() {
     let mut interpreter = Interpreter::new();
 

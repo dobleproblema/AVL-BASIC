@@ -32,7 +32,7 @@ Contents
 8.2 - Error handling
 9.  - "Immediate mode only" commands
 9.1 - Commands forbidden in immediate mode
-9.2 - Program editing (EDIT - RENUM - DELETE)
+9.2 - Program editing and debugging (EDIT - DEBUG - RENUM - DELETE)
 9.3 - Other immediate utilities
 9.4 - Saving and loading programs
 10. - Built-in functions
@@ -973,7 +973,6 @@ Quick notes
 - `TRON` shows the execution trace by lines; `TROFF` disables it.
 - `TRON` shows the current line number in the format `[n]`.
 - `DEG/RAD` affect both trigonometry and drawing angles.
-- `DEBUG [n]` enables/adjusts a "dirty blocks" overlay in the graphics window (for refresh debugging). With a number, it changes block size.
 
 Example (to obtain the expected output, `TRON` must have been executed beforehand)
 10 k=10
@@ -1076,7 +1075,7 @@ Complete table of error codes
 
 9. "Immediate mode only" commands
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DEBUG | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
@@ -1091,22 +1090,34 @@ Range formats
 3 `-m`       From the beginning to line `m`
 4 `n-`       From `n` to the end
 
-9.2 Program editing (`EDIT` - `RENUM` - `DELETE`)
+9.2 Program editing and debugging (`EDIT` - `DEBUG` - `RENUM` - `DELETE`)
 
 + EDIT                            In the Rust runtime, opens a full-screen editor for the program in memory
 + EDIT n                          Opens a line editor with the contents of line `n` prefilled
++ DEBUG                           In the Rust runtime, opens the read-only debugger and pauses before the first statement
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
 + RENUM [start[, step[, from[, to]]]] Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`, unlimited `to`.
 
 Notes on `EDIT`
-- `EDIT` with no line number lets you browse and modify the whole program. F12 applies changes in memory; Esc discards them. Use `SAVE` to write the program to disk.
+- `EDIT` with no line number lets you browse and modify the whole program. F12 applies changes in memory and exits; Esc discards them. Use `SAVE` to write the program to disk.
 - In the full-screen editor, the arrow keys, Home/End and PageUp/PageDown navigate the text; Ctrl+Home/Ctrl+End jump to the start/end of the program. Shift+arrows select text; F3 undoes, F4 redoes, F5 copies, F6 pastes, F7/F8 finds/replaces and F9 renumbers the visible buffer.
 - `EDIT n` allows modifying both the code and the line number. Enter applies the changes. If you leave only the number with no code, the line is deleted. Esc cancels and leaves the line unchanged.
-- It requires interactive terminal support; in environments without this support, `EDIT` is not available.
+- Full-screen `EDIT` requires interactive terminal support; in environments without this support, it is not available.
 - After applying the changes, the interpreter normalizes the line and updates variable styling throughout the program.
 - F7/F8 in the editor perform literal case-insensitive find/replace, with no regular expressions or wildcards. F8 starts at the beginning of the program. In the replace submenu, Enter replaces the selected match and finds the next one, F7 skips it, F8 replaces all remaining matches from the current selection, and Esc exits.
 - F9 in the editor renumbers all non-empty lines in visible order: it starts at the lowest line number present and uses the most frequent positive increment. If any line has no valid line number or line numbers are duplicated, it leaves the buffer unchanged.
+
+Notes on `DEBUG`
+- `DEBUG` takes no parameters. It opens the stored program in a read-only full-screen debugger and initially pauses immediately before the first statement. When execution ends or is aborted, it returns to immediate mode.
+- A red `●` in the gutter marks a breakpoint. While execution is paused, a bright-yellow `▶` appears immediately before the next statement (orange-red with the light theme), and an emerald `●` beside the line number identifies the execution line; a red `▶` in the gutter marks the viewed line when it differs from the execution line.
+- F5 continues (F1 is an alias), F2 toggles a breakpoint on the viewed line, F6 steps into, F7 steps over, F8 steps out, Tab/Shift+Tab scrolls the inspector, and Esc or Ctrl+C aborts execution.
+- The inspector shows the currently visible numeric and string variables, array dimensions and sizes (including parameter aliases), the active `GOSUB`/`SUB`/function/timer/mouse stack, `ERR`, `ERL`, timer state, and the next `DATA` item with its source line, 1-based position within that line, and value.
+- `VARIABLES` includes at most the most recently written scalar element of each array. A later write to the same array replaces that entry; whole-array `MAT` operations, `REDIM`, and `CLEAR` remove it. A `*` marks inspected variables and state entries that changed since the previous pause; a timer's natural countdown is not treated as a change. Values hidden by an outer scope are not exposed.
+- Breakpoints are line-based and stop before the first statement on that line. They remain available during the current interpreter session but are not stored in the `.bas` file; `RENUM` and F9 in `EDIT` remap them. Colon-separated top-level statements, the condition of an inline `IF`, and each statement in its selected `THEN` or `ELSE` branch can be stepped individually; single-line `DEF FN` expressions remain atomic.
+- Time spent stopped in the debugger does not advance BASIC timers or the deadlines used by `PAUSE` and `FRAME`. A debugger pause is not a BASIC error and does not invoke or alter `ON ERROR`.
+- If a timer interrupts `PAUSE` or `FRAME` while stepping, the debugger can stop again at the suspended statement when the interrupt returns. F7 runs the complete interrupt without showing its interior; continuing with F5 preserves normal execution.
+- `DEBUG` requires interactive terminal support; in environments without this support, it is not available.
 
 Notes on `DELETE`
 - With no arguments: deletes the whole program in memory.

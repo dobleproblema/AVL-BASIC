@@ -75,8 +75,11 @@ def measure(
         run_once(command, cwd, timeout)
     samples = [run_once(command, cwd, timeout) for _ in range(runs)]
     avg = statistics.fmean(samples)
+    median = statistics.median(samples)
+    mad = statistics.median(abs(sample - median) for sample in samples)
     print(
         f"{label:<8} min={min(samples):.4f}s "
+        f"median={median:.4f}s mad={mad:.4f}s "
         f"avg={avg:.4f}s max={max(samples):.4f}s runs={runs}"
     )
     return samples
