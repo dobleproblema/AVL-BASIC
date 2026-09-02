@@ -4,17 +4,9 @@ AVL BASIC ships with **115 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
-From the interpreter, type:
-
-```basic
-TOUR
-SAMPLES
-RUN "/samples/g-old-school.bas"
-```
-
-`TOUR` presents the 20 highlights below. `SAMPLES` lists
-the entire catalog. Neither command changes the current program or runs
-anything automatically.
+The 20 visual highlights below are followed by the complete
+115-program catalog. On GitHub, select any image or program name
+to inspect its BASIC source.
 
 ## Start here
 
@@ -397,7 +389,7 @@ demo.
 | <a id="sample-pimachin-modern"></a>[`pimachin-modern.bas`](pimachin-modern.bas) [★](#highlight-pimachin-modern) | Compute 1,000 digits of π with block arithmetic and structured, modern BASIC. | DEF SUB, LOCAL, arbitrary precision |
 | <a id="sample-powermul"></a>[`powermul.bas`](powermul.bas) | Computes arbitrary-precision integer powers by block multiplication. | DEF SUB, block multiplication, PRINT USING |
 
-★ Included in the 20-example tour.
+★ Featured in the 20-example gallery.
 
 ## Run from a shell
 

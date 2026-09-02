@@ -454,6 +454,7 @@ Quick notes
   * `SCREEN : ORIGIN : CLG` is also valid; after `SCREEN`, bare `ORIGIN` is idempotent.
 - `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
   * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
+  * During `DEBUG`, the graphics buffer is also presented at each debugger pause (see "Notes on DEBUG"). This inspection update does not execute `FRAME` or apply its FPS limiter.
 - `CLG` clears and presents the active viewport immediately. In animation loops
   that draw a complete frame before `FRAME`, this may show a mid-frame clear
   (flicker/tearing in the Rust backend). Use `CLG OFFSCREEN` in those loops:
@@ -1009,7 +1010,7 @@ Notes
 + RESUME                 Repeats the statement that caused the error.
 + RESUME NEXT            Continues at the next statement on the same line (if any) or on the next line.
 + RESUME n               Continues at the first statement of line `n`.
-+ ERROR n                Explicitly raises error `n`. For example, `ERROR 14` raises a syntax error.
++ ERROR n                Explicitly raises error `n`. For example, `ERROR 15` raises a syntax error.
 
 Flow and notes
 - Without a handler: on error, execution stops and reports: "Line <n>. <message>".
@@ -1027,8 +1028,8 @@ Example
 70 RESUME NEXT
 
 Complete table of error codes
-1  Statement not allowed inside a program.
-2  Statement not allowed in immediate mode.
+1  Instruction not allowed in a program.
+2  Instruction not allowed in immediate mode.
 3  Invalid line format.
 4  Invalid value.
 5  Invalid value type.
@@ -1037,52 +1038,63 @@ Complete table of error codes
 8  Undefined variable or function.
 9  Invalid name.
 10 Invalid line number.
-11 Target line does not exist.
-12 RETURN without matching GOSUB.
-13 Invalid return line.
-14 Syntax error.
-15 FOR without matching NEXT.
-16 NEXT without matching FOR.
-17 WHILE without matching WEND.
-18 WEND without matching WHILE.
-19 RESUME without ERROR.
-20 Expression must be numeric.
-21 Error while evaluating expression.
-22 Unknown data type.
-23 No more DATA to read.
-24 The line has no DATA for RESTORE.
-25 Invalid argument.
-26 Empty dimension expression.
-27 Error while generating array indices.
-28 Error in PRINT USING format.
-29 Number of inputs does not match number of variables.
-30 Incorrect number of arguments.
-31 Invalid index.
-32 Undefined index.
-33 Index out of range.
-34 Out of range.
-35 Error while evaluating function.
-36 Expression not allowed.
-37 Feature not supported in this environment.
-38 Missing quotes.
-39 File not found.
-40 Execution interrupted by the user.
-41 Only names with extension '.bas' are allowed.
-42 Only names with extension '.png' are allowed.
-43 Error during error handling.
-44 Error while combining files.
-45 There is no stopped program that can be continued.
+11 Invalid target line.
+12 Target line does not exist.
+13 RETURN without matching GOSUB.
+14 Invalid return line.
+15 Syntax error.
+16 FOR without matching NEXT.
+17 NEXT without matching FOR.
+18 WHILE without matching WEND.
+19 WEND without matching WHILE.
+20 RESUME without ERROR.
+21 Expression must be numeric.
+22 Error evaluating expression.
+23 Unknown data type.
+24 No more DATA to read.
+25 The line has no DATA for RESTORE.
+26 Invalid argument.
+27 Empty dimension expression.
+28 Error generating array indices.
+29 Error in PRINT USING format.
+30 Number of inputs does not match number of variables.
+31 Incorrect number of arguments.
+32 Invalid index.
+33 Undefined index.
+34 Index out of range.
+35 Out of range.
+36 Error evaluating function.
+37 Expression not allowed.
+38 Feature not supported in this environment.
+39 Missing quotes.
+40 File not found.
+41 Execution interrupted by user.
+42 Only names with extension '.bas' are allowed.
+43 Only names with extension '.png' are allowed.
+44 Error while handling errors.
+45 Error merging files.
+46 There is no stopped program to continue.
+47 Instruction not allowed inside a function.
+48 Malformed function.
+49 IF without matching END IF.
+50 ELSE without matching IF.
+51 END IF without matching IF.
+52 Invalid number of dimensions.
+53 MAT IDN requires a two-dimensional square matrix.
+54 Instruction not allowed inside a subroutine.
+55 Malformed subroutine.
+56 LOCAL must appear in the initial block of a function or subroutine.
 
 9. "Immediate mode only" commands
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DEBUG | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | QUIT | RENUM | RUN | SAVE | SYSTEM
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
 
 9.1 Commands forbidden in immediate mode:
 
-+ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR | FRAME
++ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | RESUME | RETURN | STOP
 
 Range formats
 1 `n`        Only line `n`
@@ -1112,6 +1124,10 @@ Notes on `DEBUG`
 - `DEBUG` takes no parameters. It opens the stored program in a read-only full-screen debugger and initially pauses immediately before the first statement. When execution ends or is aborted, it returns to immediate mode.
 - A red `●` in the gutter marks a breakpoint. While execution is paused, a bright-yellow `▶` appears immediately before the next statement (orange-red with the light theme), and an emerald `●` beside the line number identifies the execution line; a red `▶` in the gutter marks the viewed line when it differs from the execution line.
 - F5 continues (F1 is an alias), F2 toggles a breakpoint on the viewed line, F6 steps into, F7 steps over, F8 steps out, Tab/Shift+Tab scrolls the inspector, and Esc or Ctrl+C aborts execution.
+- With F6/F7/F8, the debugger screen is retained during steps that do not need the console. The normal output screen is restored immediately before console output (for example, `PRINT`, `CLS`, or `BEEP`) or console input through `INPUT`, `LINE INPUT`, or `MAT INPUT`. `INKEY$`, `KEYDOWN`, and `PAUSE` also restore that screen before polling or waiting for input. The next pause shows the debugger again. F5 still leaves the debugger screen immediately.
+- Preparing the graphics window, drawing, presenting, and reading the graphics buffer (for example, `TEST`, `TESTCHR$`, `SCREEN$`, or `SPRITE$`) do not switch the console screen. `GINPUT` uses only the graphics window and does not show the output console either. File I/O alone does not switch screens.
+- When the current program is using the graphics window, the current graphics buffer is presented automatically on entering each debugger pause. After F6, the next pause therefore shows the graphics changes made by the previous step without needing to add `FRAME`. With F7/F8, the accumulated result is presented at the next debugger stop. This inspection update does not execute `FRAME` or apply its FPS limiter; explicit `FRAME` and `FRAME fps` calls retain their normal behavior.
+- Window focus is independent of the screen shown in the console. During F6/F7/F8 stepping, configuring, drawing, or presenting an existing graphics window does not activate it; refocusing is reserved for input. The automatic refresh at each stop does not activate it either. `GINPUT` explicitly requests focus; `INKEY$`, `KEYDOWN`, and `PAUSE` restore graphics focus when using graphical input. F5 restores the normal focus policy; behavior outside `DEBUG` is unchanged. The operating system may briefly activate a newly created or recreated window.
 - The inspector shows the currently visible numeric and string variables, array dimensions and sizes (including parameter aliases), the active `GOSUB`/`SUB`/function/timer/mouse stack, `ERR`, `ERL`, timer state, and the next `DATA` item with its source line, 1-based position within that line, and value.
 - `VARIABLES` includes at most the most recently written scalar element of each array. A later write to the same array replaces that entry; whole-array `MAT` operations, `REDIM`, and `CLEAR` remove it. A `*` marks inspected variables and state entries that changed since the previous pause; a timer's natural countdown is not treated as a change. Values hidden by an outer scope are not exposed.
 - Breakpoints are line-based and stop before the first statement on that line. They remain available during the current interpreter session but are not stored in the `.bas` file; `RENUM` and F9 in `EDIT` remap them. Colon-separated top-level statements, the condition of an inline `IF`, and each statement in its selected `THEN` or `ELSE` branch can be stepped individually; single-line `DEF FN` expressions remain atomic.
@@ -1148,21 +1164,13 @@ RENUM 295,1,190,215 'Moves block 190-215 into the 295-298 gap.
 + `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
 + `CD "path"`                          Changes the current virtual directory within the interpreter root.
 + `HELP [topic]`                        Shows a compact syntax and parameter reference for a BASIC statement or built-in function.
-+ `TOUR`                               Presents 20 selected samples, what they demonstrate, and ready-to-copy `RUN` commands.
-+ `SAMPLES`                            Lists all 115 bundled programs grouped by category.
 
 Notes on `HELP`
 - `HELP topic` is case-insensitive and accepts compound topics such as `ON ERROR`, names ending in `$`, and documented aliases.
 - `HELP` with no topic shows its usage. Each entry contains only syntax, parameters, a short description and, when useful, related topics; use this manual for full details.
 - It is available only in immediate mode and is read-only: it does not change the current program, `CD`, variables, or a resumable `CONT` state.
 - `HELP` remains a valid identifier when used as a variable, for example `HELP=1`.
-
-Notes on `TOUR` / `SAMPLES`
-- They take no arguments and are available only in immediate mode.
-- Their names remain valid identifiers; only a complete immediate line invokes either command.
-- They are read-only: they do not change the current program, `CD`, variables, or a resumable `CONT` state.
-- Their catalog is embedded in the Rust executable, so it remains viewable even when the `samples/` directory is not available. In that case, AVL BASIC explains that the displayed `RUN "/samples/..."` commands need a package or checkout containing `samples/` under the virtual root.
-- The visual tour and complete annotated catalog are available in `samples/README.md`.
+- The complete HELP catalog is compiled into the executable and never requires an external catalog, manual, or sample directory at runtime.
 
 Notes on the `FILES` / `CAT` pattern
 - Quotes are mandatory; only `*` and `?` wildcards are allowed; paths and `..` are not allowed.
@@ -1176,7 +1184,6 @@ Notes on `CD`
 - Paths starting with `/` are interpreted from the virtual root; the rest are interpreted from the current virtual directory.
 - `CD` only changes the current virtual directory visible to the user. `LOAD`, `RUN` and `CHAIN` do not perform any implicit `CD`.
 - In this repository, the included examples are under `samples/`, and their supporting PNG files are under `samples/assets/`.
-- In local source builds, `cargo build` creates a `samples/` directory link next to the compiled executable. If your working directory is `target/release`, `CD "samples"` works by normal path resolution.
 
 9.4 Saving and loading programs
 

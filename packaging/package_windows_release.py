@@ -54,13 +54,12 @@ Run a bundled example:
 
 Inside AVL BASIC:
 
-    TOUR
-    SAMPLES
-    RUN "/samples/g-old-school.bas"
+    HELP RIGHT$
 
-TOUR presents 20 highlights with descriptions and ready-to-copy RUN commands.
-SAMPLES lists all 115 bundled programs by category. The complete visual gallery
-and annotated catalog are in samples\\README.md.
+HELP topic gives a compact syntax and parameter reminder. The interpreter itself
+is fully self-contained. The samples directory contains optional material
+distributed with this package for exploration; its visual gallery and annotated
+catalog are in samples\\README.md.
 
 This package uses the native Rust runtime. You do not need to install Rust or
 Cargo to use it.
@@ -69,7 +68,7 @@ Included files
 --------------
 
 - avl-basic.exe: native Windows interpreter
-- samples/: 115 BASIC programs, visual gallery, catalog, and assets
+- samples/: optional collection of 115 BASIC programs, gallery, catalog, and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
 - COPYING: GPLv3-or-later license

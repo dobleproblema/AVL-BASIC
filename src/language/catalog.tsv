@@ -1,0 +1,468 @@
+# AVL BASIC language catalog. This is build-time input; generated tables are embedded in the executable.
+# Do not duplicate these words, topics, contexts, error numbers, or messages in Rust source.
+
+[keywords]
+# Reserved/highlighted statement and grammar words, one per line.
+REM
+CLEAR
+CLS
+DATA
+DIM
+REDIM
+LET
+PRINT
+MAT
+ROW
+COL
+BASE
+USING
+INPUT
+GINPUT
+LINE
+RANDOMIZE
+ERROR
+GOTO
+IF
+THEN
+ELSE
+ELSEIF
+ENDIF
+FOR
+TO
+NEXT
+STEP
+RETURN
+GOSUB
+ON
+OFF
+DEF
+FN
+FNEND
+FNEXIT
+SUB
+SUBEND
+SUBEXIT
+CALL
+LOCAL
+READ
+RESTORE
+STOP
+END
+ZONE
+SAVE
+LOAD
+EDIT
+RENUM
+NEW
+WHILE
+WEND
+LIST
+RUN
+CONT
+RESUME
+TRON
+TROFF
+FILES
+CAT
+CD
+DELETE
+EXIT
+QUIT
+SYSTEM
+SWAP
+BEEP
+DEBUG
+MOVE
+MOVER
+PLOT
+PLOTR
+DRAW
+DRAWR
+CIRCLE
+CIRCLER
+RECTANGLE
+TRIANGLE
+TTRIANGLE
+INK
+FILL
+PAPER
+SCREEN
+CLG
+OFFSCREEN
+OPAQUE
+TRANSPARENT
+LDIR
+MASK
+DEG
+RAD
+FRAME
+ORIGIN
+SCALE
+PENWIDTH
+BIGFONT
+SMALLFONT
+LOCATE
+GPRINT
+LABEL
+XAXIS
+YAXIS
+CROSSAT
+GRAPH
+GRAPHRANGE
+PAUSE
+FCIRCLE
+FCIRCLER
+FRECTANGLE
+FTRIANGLE
+TRECTANGLE
+TQUAD
+BSAVE
+BLOAD
+MODE
+CHAIN
+MERGE
+AFTER
+EVERY
+DI
+EI
+CANCEL
+SPRITE
+COLMODE
+COLCOLOR
+COLRESET
+MOUSE
+LEFTDOWN
+LEFTUP
+LEFTDRAG
+RIGHTDOWN
+RIGHTUP
+RIGHTDRAG
+HITTEST
+CLOSE
+
+[topics]
+# kind<TAB>context<TAB>topic<TAB>aliases<TAB>syntax<TAB>parameters<TAB>summary<TAB>related<TAB>flags
+
+# Program flow and error handling
+statement	both	REM	'	REM text || ' text	text: Comment text	Ignores the rest of the line.	-	-
+statement	both	IF		IF condition GOTO line [ELSE clause] || IF condition THEN clause [ELSE clause] || IF condition THEN	condition: Numeric expression; line: Target line; clause: Line number or statements	Executes a branch when the condition is nonzero.	ELSEIF,ELSE,END IF	-
+statement	both	ELSEIF	ELSE IF	ELSEIF condition THEN || ELSE IF condition THEN	condition: Numeric expression	Starts another conditional branch in a block IF.	IF,ELSE,END IF	-
+statement	both	ELSE		ELSE	-	Starts the fallback branch of a block IF.	IF,ELSEIF,END IF	-
+statement	both	END IF	ENDIF	END IF || ENDIF	-	Ends a block IF.	IF,ELSEIF,ELSE	-
+statement	both	FOR		FOR variable = start TO end [STEP increment]	variable: Numeric control variable; start: Initial value; end: Final value; increment: Optional step value	Starts a counted loop.	NEXT,EXIT FOR	-
+statement	both	NEXT		NEXT [variable]	variable: Optional control variable	Advances or ends the current FOR loop.	FOR,EXIT FOR	-
+statement	both	EXIT FOR		EXIT FOR	-	Leaves the current FOR loop.	FOR,NEXT	-
+statement	both	WHILE		WHILE condition	condition: Numeric expression	Starts a loop that continues while the condition is nonzero.	WEND,EXIT WHILE	-
+statement	both	WEND		WEND	-	Ends the current WHILE loop.	WHILE,EXIT WHILE	-
+statement	both	EXIT WHILE		EXIT WHILE	-	Leaves the current WHILE loop.	WHILE,WEND	-
+statement	both	GOTO		GOTO line	line: Target line number	Jumps to a program line.	GOSUB,ON GOTO	-
+statement	program	GOSUB		GOSUB line	line: Subroutine line number	Calls a line-numbered subroutine.	RETURN,ON GOSUB	-
+statement	program	RETURN		RETURN	-	Returns from the most recent GOSUB or interrupt routine.	GOSUB	-
+statement	program	ON GOTO		ON selector GOTO line1,line2[,...]	selector: One-based target index; line1: First target line; line2: Additional target lines	Selects one of several GOTO targets.	GOTO,ON GOSUB	-
+statement	program	ON GOSUB		ON selector GOSUB line1,line2[,...]	selector: One-based target index; line1: First subroutine line; line2: Additional subroutine lines	Selects one of several GOSUB targets.	GOSUB,ON GOTO	-
+statement	program	ON ERROR		ON ERROR GOTO line || ON ERROR GOTO 0 || ON ERROR RESUME NEXT	line: Error-handler line	Installs, disables, or replaces the runtime error handler.	ERROR,RESUME,ERR,ERL	-
+statement	program	ERROR		ERROR number	number: BASIC error number	Raises the specified runtime error.	ON ERROR,RESUME,ERR	-
+statement	program	RESUME		RESUME || RESUME NEXT || RESUME line	line: Optional continuation line	Continues execution after a handled error.	ON ERROR,ERROR,ERL	-
+statement	program	STOP		STOP	-	Stops the program while preserving a resumable execution context.	CONT,END	-
+statement	immediate	CONT		CONT	-	Resumes a program stopped by STOP or Ctrl+C.	STOP,RUN	-
+statement	both	END		END	-	Ends program execution without preserving a continuation.	STOP	-
+
+# Data, variables, matrices, and routines
+statement	both	LET		LET target[=target...]=value || target[=target...]=value	target: Variable or array element; value: Assigned expression	Assigns one value to one or more variables.	SWAP,DIM	-
+statement	both	MID$ ASSIGNMENT		MID$(text$,position[,length]) = replacement$	text$: String variable; position: One-based start position; length: Optional number of characters; replacement$: Replacement text	Replaces part of a string variable.	MID$,LET	-
+statement	both	DIM		DIM array(bound1[,bound2...])[,array(...)]	array: Array name; bound1: Inclusive upper bound; bound2: Additional inclusive bounds	Creates one or more arrays.	REDIM,CLEAR	-
+statement	both	REDIM		REDIM array(bound1[,bound2...])[,array(...)]	array: Existing array; bound1: New inclusive upper bound; bound2: Additional bounds	Changes array bounds while preserving elements that still fit.	DIM,CLEAR	-
+statement	program	DATA		DATA constant1[,constant2...]	constant1: Numeric or string constant; constant2: Additional constants	Stores constants for sequential READ operations.	READ,RESTORE	-
+statement	both	READ		READ target1[,target2...]	target1: Variable or array element; target2: Additional targets	Reads values from DATA into variables.	DATA,RESTORE,MAT READ	-
+statement	both	RESTORE		RESTORE [line]	line: Optional DATA line number	Resets the DATA pointer globally or to a line.	DATA,READ	-
+statement	both	SWAP		SWAP variable1,variable2	variable1: First variable; variable2: Second variable	Exchanges two values of the same type.	LET	-
+statement	both	CLEAR		CLEAR	-	Clears runtime data while keeping the stored program.	CLEAR INPUT,NEW	-
+statement	both	CLEAR INPUT		CLEAR INPUT	-	Empties the keyboard and input-event buffers.	CLEAR,INKEY$	-
+statement	immediate	NEW		NEW	-	Clears the program and fully resets the interpreter.	CLEAR,LOAD	-
+statement	both	MAT		MAT destination = expression	destination: Numeric or string array; expression: One supported matrix operation	Assigns a scalar, array, or matrix result to an array.	MAT BASE,MAT PRINT,MAT INPUT,MAT READ	-
+statement	both	MAT BASE		MAT BASE base	base: Matrix traversal base 0 or 1	Selects the starting index used by MAT operations.	MAT,MAT PRINT,MAT INPUT,MAT READ	-
+statement	both	MAT PRINT		MAT PRINT [ROW|COL] array[;|, ...]	array: Array to print; ROW: Normal orientation; COL: Transposed display orientation	Prints arrays by rows or columns.	MAT PRINT USING,MAT	-
+statement	both	MAT PRINT USING		MAT PRINT USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask; array: Array to print	Prints arrays using a numeric format mask.	MAT PRINT,PRINT USING	-
+statement	both	MAT INPUT		MAT INPUT array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Reads console input into array elements.	MAT READ,INPUT	-
+statement	both	MAT READ		MAT READ array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Fills arrays sequentially from DATA.	MAT INPUT,DATA,READ	-
+statement	both	DEF FN		DEF FNname[(parameter,...)] = expression || DEF FNname[(parameter,...)]	name: Function name; parameter: Local value parameter; expression: Single-line return expression	Defines a single-line or multiline user function.	FNEND,EXIT FN,LOCAL	-
+statement	both	FNEND		FNEND	-	Ends a multiline DEF FN definition.	DEF FN,EXIT FN	-
+statement	both	EXIT FN	FNEXIT	EXIT FN || FNEXIT	-	Leaves a multiline function and returns its current value.	DEF FN,FNEND	-
+statement	both	DEF SUB		DEF SUB name[(parameter,...)]	name: Subroutine name; parameter: Local scalar or array parameter	Begins a named multiline subroutine definition.	CALL,SUBEND,EXIT SUB,LOCAL	-
+statement	both	CALL		CALL name[(argument,...)]	name: Defined subroutine name; argument: Scalar value or array	Calls a named DEF SUB subroutine.	DEF SUB,SUBEND	-
+statement	both	SUBEND		SUBEND	-	Ends a multiline DEF SUB definition.	DEF SUB,EXIT SUB	-
+statement	both	EXIT SUB	SUBEXIT	EXIT SUB || SUBEXIT	-	Leaves the current DEF SUB subroutine early.	DEF SUB,SUBEND	-
+statement	both	LOCAL		LOCAL name[(bound1[,bound2...])][,name...]	name: Local scalar or array; bound1: Inclusive upper bound; bound2: Additional bounds	Declares local storage at the start of a multiline routine.	DEF FN,DEF SUB	-
+
+# Console and graphics text
+statement	both	PRINT	?	PRINT [item[;|,item...]] || ? [item[;|,item...]]	item: Expression or print-only SPC or TAB item	Prints values to the console.	PRINT USING,ZONE,INPUT	-
+statement	both	PRINT USING		PRINT USING format$; item[;|,item...]	format$: Numeric format mask; item: Value to format or print	Prints values using a numeric format mask.	PRINT,MAT PRINT USING,GPRINT USING	-
+statement	both	ZONE		ZONE width	width: Print-zone width from 1 to 255	Sets the column width used by comma-separated output.	PRINT,GPRINT	-
+statement	both	INPUT		INPUT ["prompt"][,|;] target1[,target2...]	prompt: Optional prompt text; target1: Variable or array element; target2: Additional targets	Reads comma-separated values from the console.	LINE INPUT,GINPUT	-
+statement	both	LINE INPUT		LINE INPUT ["prompt"][,|;] target$	prompt: Optional prompt text; target$: String variable	Reads one complete console line into a string.	INPUT	-
+statement	both	CLS		CLS	-	Clears the console display.	-	-
+statement	both	LOCATE		LOCATE column,row	column: Text column; row: Text row	Moves the graphics text cursor.	GPRINT,GINPUT	-
+statement	both	GPRINT		GPRINT [item[;|,item...]]	item: Expression or print-only SPC or TAB item	Prints values in graphics text coordinates.	GPRINT USING,LOCATE,PRINT	-
+statement	both	GPRINT USING		GPRINT USING format$; item[;|,item...]	format$: Numeric format mask; item: Value to format or print	Prints formatted values in graphics text coordinates.	GPRINT,PRINT USING	-
+statement	both	GINPUT		GINPUT ["prompt"][,|;] target1[,target2...]	prompt: Optional graphics prompt; target1: Variable or array element; target2: Additional targets	Reads values through an editable field in the graphics window.	INPUT,LOCATE,GPRINT	-
+statement	both	LABEL		LABEL text$[,ink[,paper]]	text$: Text to draw; ink: Optional foreground color; paper: Optional background color	Draws one string from the graphics cursor.	LDIR,MOVE,GPRINT	-
+statement	both	LDIR		LDIR degrees	degrees: Finite clockwise angle, including decimals	Sets the drawing direction used by LABEL.	LABEL	-
+statement	both	BIGFONT		BIGFONT [TRANSPARENT|OPAQUE]	mode: Optional transparent or opaque background mode	Selects the 16 by 16 graphics font.	SMALLFONT,GPRINT,LABEL	-
+statement	both	SMALLFONT		SMALLFONT [TRANSPARENT|OPAQUE]	mode: Optional transparent or opaque background mode	Selects the 8 by 16 graphics font.	BIGFONT,GPRINT,LABEL	-
+
+# Graphics window, coordinates, and drawing
+statement	both	MODE		MODE width	width: Screen width 640, 800, or 1024	Selects a supported graphics resolution.	SCREEN,SCALE,ORIGIN	-
+statement	both	SCREEN		SCREEN || SCREEN graphics$	graphics$: Encoded full-screen graphics string	Resets graphics state or restores a captured screen.	SCREEN CLOSE,SCREEN$,BLOAD	-
+statement	both	SCREEN CLOSE		SCREEN CLOSE	-	Closes the graphics window and resets its state.	SCREEN	-
+statement	both	CLG		CLG	-	Clears and immediately presents the active viewport.	CLG OFFSCREEN,FRAME,PAPER	-
+statement	both	CLG OFFSCREEN		CLG OFFSCREEN	-	Clears the active viewport without presenting it.	CLG,FRAME	-
+statement	program	FRAME		FRAME [fps]	fps: Optional maximum frames per second	Presents the graphics buffer and optionally limits frame rate.	CLG OFFSCREEN	-
+statement	both	ORIGIN		ORIGIN || ORIGIN x,y || ORIGIN x,y,left,right,top,bottom	x,y: Physical origin; left,right,top,bottom: Physical viewport limits	Sets or resets the physical graphics origin and viewport.	SCALE	-
+statement	both	SCALE		SCALE || SCALE xmin,xmax,ymin,ymax[,border]	xmin: Minimum logical X; xmax: Maximum logical X; ymin: Minimum logical Y; ymax: Maximum logical Y; border: Optional physical margin	Enables a logical coordinate scale or returns to physical coordinates.	ORIGIN,GRAPHRANGE	-
+statement	both	MOVE		MOVE x,y	x: Absolute X coordinate; y: Absolute Y coordinate	Moves the graphics cursor without drawing.	MOVER,DRAW,LABEL	-
+statement	both	MOVER		MOVER dx,dy	dx: Relative X displacement; dy: Relative Y displacement	Moves the graphics cursor relative to its current position.	MOVE,DRAWR	-
+statement	both	PLOT		PLOT x,y[,color]	x: Absolute X coordinate; y: Absolute Y coordinate; color: Optional drawing color	Draws one pixel and moves the graphics cursor.	PLOTR,TEST	-
+statement	both	PLOTR		PLOTR dx,dy[,color]	dx: Relative X displacement; dy: Relative Y displacement; color: Optional drawing color	Draws one pixel relative to the graphics cursor.	PLOT	-
+statement	both	DRAW		DRAW x,y[,x2,y2[,color]]	x: Endpoint or first point X; y: Endpoint or first point Y; x2: Optional second point X; y2: Optional second point Y; color: Optional drawing color	Draws an absolute line or a line from the graphics cursor.	DRAWR,MOVE,MASK,PENWIDTH	-
+statement	both	DRAWR		DRAWR dx,dy[,color]	dx: Relative X displacement; dy: Relative Y displacement; color: Optional drawing color	Draws a line relative to the graphics cursor.	DRAW,MOVER,MASK,PENWIDTH	-
+statement	both	GRAPH		GRAPH expression[,step] || GRAPH expression$[,step]	expression: Formula in X; expression$: String containing a formula in X; step: Optional X increment	Plots a function over the active graph range.	GRAPHRANGE,XAXIS,YAXIS	-
+statement	both	GRAPHRANGE		GRAPHRANGE || GRAPHRANGE xmin,xmax,ymin,ymax	xmin: Plot minimum X; xmax: Plot maximum X; ymin: Plot minimum Y; ymax: Plot maximum Y	Overrides or resets the plotting rectangle used by GRAPH.	GRAPH,SCALE	-
+statement	both	PENWIDTH		PENWIDTH width	width: Line width 1, 2, or 4	Sets the width of drawn lines and outlines.	MASK,DRAW	-
+statement	both	MASK		MASK [pattern]	pattern: Optional eight-bit line pattern	Sets or resets the repeating pattern used for lines.	PENWIDTH,DRAW	-
+statement	both	CIRCLE		CIRCLE x,y,radius[,color[,aspect]] || CIRCLE x,y,radius,color,start,finish[,aspect]	x: Center X; y: Center Y; radius: Horizontal radius; color: Optional color; aspect: Optional vertical ratio; start: Start angle; finish: Finish angle	Draws a circle, ellipse, or arc.	CIRCLER,FCIRCLE	-
+statement	both	CIRCLER		CIRCLER dx,dy,radius[,color[,aspect]] || CIRCLER dx,dy,radius,color,start,finish[,aspect]	dx: Relative center X; dy: Relative center Y; radius: Horizontal radius; color: Optional color; aspect: Optional vertical ratio; start: Start angle; finish: Finish angle	Draws a relative circle, ellipse, or arc.	CIRCLE,FCIRCLER	-
+statement	both	FCIRCLE		FCIRCLE x,y,radius[,color[,aspect]] || FCIRCLE x,y,radius,color,start,finish[,aspect]	x: Center X; y: Center Y; radius: Horizontal radius; color: Optional color; aspect: Optional vertical ratio; start: Start angle; finish: Finish angle	Draws a filled circle, ellipse, or sector.	FCIRCLER,CIRCLE	-
+statement	both	FCIRCLER		FCIRCLER dx,dy,radius[,color[,aspect]] || FCIRCLER dx,dy,radius,color,start,finish[,aspect]	dx: Relative center X; dy: Relative center Y; radius: Horizontal radius; color: Optional color; aspect: Optional vertical ratio; start: Start angle; finish: Finish angle	Draws a relative filled circle, ellipse, or sector.	FCIRCLE,CIRCLER	-
+statement	both	RECTANGLE		RECTANGLE x0,y0,x1,y1[,color]	x0,y0: First corner; x1,y1: Opposite corner; color: Optional color	Draws a rectangle outline.	FRECTANGLE,TRECTANGLE	-
+statement	both	FRECTANGLE		FRECTANGLE x0,y0,x1,y1[,color]	x0,y0: First corner; x1,y1: Opposite corner; color: Optional color	Draws a filled rectangle.	RECTANGLE	-
+statement	both	TRIANGLE		TRIANGLE x0,y0,x1,y1,x2,y2[,color]	x0,y0 ... x2,y2: Three vertices; color: Optional color	Draws a triangle outline.	FTRIANGLE,TTRIANGLE	-
+statement	both	FTRIANGLE		FTRIANGLE x0,y0,x1,y1,x2,y2[,color]	x0,y0 ... x2,y2: Three vertices; color: Optional color	Draws a filled triangle.	TRIANGLE	-
+statement	both	TRECTANGLE		TRECTANGLE graphics$,x0,y0,x1,y1[,u0,v0,u1,v1]	graphics$: Texture source; x0,y0 and x1,y1: Destination corners; u0,v0 and u1,v1: Optional texture corners	Draws a texture-mapped rectangle.	TTRIANGLE,TQUAD,SPRITE	-
+statement	both	TTRIANGLE		TTRIANGLE graphics$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2	graphics$: Texture source; x0,y0 ... x2,y2: Destination vertices; u0,v0 ... u2,v2: Texture coordinates	Draws a texture-mapped triangle.	TRECTANGLE,TQUAD	-
+statement	both	TQUAD		TQUAD graphics$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3	graphics$: Texture source; x0,y0 ... x3,y3: Destination vertices; u0,v0 ... u3,v3: Texture coordinates	Draws a texture-mapped quadrilateral.	TRECTANGLE,TTRIANGLE	-
+statement	both	FILL		FILL || FILL color || FILL x,y || FILL x,y,color	x: Fill start X; y: Fill start Y; color: Optional fill color	Flood-fills a bounded area.	INK,PAPER	-
+statement	both	INK		INK color || INK red,green,blue	color: Palette index, RGB number, RGB text, or named color; red: Red component; green: Green component; blue: Blue component	Sets the foreground drawing color.	PAPER,RGB,RGB$	-
+statement	both	PAPER		PAPER color || PAPER red,green,blue	color: Palette index, RGB number, RGB text, or named color; red: Red component; green: Green component; blue: Blue component	Sets the graphics background color.	INK,CLG,RGB,RGB$	-
+statement	both	CROSSAT		CROSSAT || CROSSAT x,y	x: Preferred axis crossing X; y: Preferred axis crossing Y	Sets or clears the preferred crossing point for automatic axes.	XAXIS,YAXIS	-
+statement	both	XAXIS		XAXIS [ticks][,xmin,xmax][,side][,orientation][,subdivisions]	ticks: Major tick spacing; xmin: Axis minimum; xmax: Axis maximum; side: Label side; orientation: Label orientation; subdivisions: Minor divisions	Draws an automatic horizontal axis.	YAXIS,CROSSAT,SCALE	-
+statement	both	YAXIS		YAXIS [ticks][,ymin,ymax][,side][,subdivisions]	ticks: Major tick spacing; ymin: Axis minimum; ymax: Axis maximum; side: Label side; subdivisions: Minor divisions	Draws an automatic vertical axis.	XAXIS,CROSSAT,SCALE	-
+statement	both	BSAVE		BSAVE "filename.png"[,graphics$]	filename: PNG path; graphics$: Optional encoded graphics string	Saves the screen or a graphics string as a PNG file.	BLOAD,SCREEN$	-
+statement	both	BLOAD		BLOAD "filename.png"[,target$]	filename: PNG path; target$: Optional string variable	Loads a PNG into the screen or a graphics string variable.	BSAVE,SCREEN	-
+statement	both	SPRITE		SPRITE graphics$,x,y[,transparent[,id]]	graphics$: Encoded sprite image; x: Left X; y: Bottom Y; transparent: Optional transparent color; id: Optional collision identifier	Draws a sprite and optionally registers its collision identity.	SPRITE HITTEST,SPRITE MOVE,SPRITE DEL,COLMODE	-
+statement	both	SPRITE HITTEST		SPRITE HITTEST graphics$,x,y[,transparent[,id]]	graphics$: Encoded sprite image; x: Left X; y: Bottom Y; transparent: Optional transparent color; id: Optional collision identifier	Tests sprite collisions without drawing or changing the owner map.	SPRITE,COLMODE,COLCOLOR	-
+statement	both	SPRITE MOVE		SPRITE MOVE id,x,y[,transparent]	id: Registered sprite identifier; x: New left X; y: New bottom Y; transparent: Optional transparent color	Redraws a previously registered sprite at a new position.	SPRITE,SPRITE DEL,COLMODE	-
+statement	both	SPRITE DEL		SPRITE DEL id	id: Registered sprite identifier	Removes a sprite identifier from the collision map.	SPRITE,SPRITE MOVE,COLRESET	-
+statement	both	COLMODE		COLMODE mode	mode: Collision mode from 0 to 3	Selects color and sprite collision detection modes.	COLCOLOR,COLRESET,SPRITE	-
+statement	both	COLCOLOR		COLCOLOR [color]	color: Optional color to detect	Selects a collision color or any non-background color.	COLMODE,SPRITE HITTEST	-
+statement	both	COLRESET		COLRESET	-	Clears collision results and the sprite ownership map.	COLMODE,SPRITE DEL	-
+statement	both	MOUSE		MOUSE ON|OFF|1|0	state: ON or 1 to show and OFF or 0 to hide	Shows or hides the pointer in the graphics window.	ON MOUSE,MOUSEX,MOUSEY	-
+statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: Mouse event name; line: Handler subroutine line	Registers or disables a mouse-event subroutine.	MOUSE,RETURN,DI,EI	-
+
+# Timers, runtime state, and immediate utilities
+statement	both	AFTER		AFTER delay[,timer] GOSUB line	delay: Delay in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler subroutine line	Schedules a one-shot timer interrupt.	EVERY,CANCEL,REMAIN,DI,EI	-
+statement	both	EVERY		EVERY period[,timer] GOSUB line	period: Period in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler subroutine line	Schedules a repeating timer interrupt.	AFTER,CANCEL,REMAIN,DI,EI	-
+statement	both	CANCEL		CANCEL timer	timer: Timer number from 0 to 3	Disables a timer permanently.	AFTER,EVERY,REMAIN	-
+statement	both	DI		DI	-	Inhibits timer and mouse interrupts.	EI,AFTER,EVERY,ON MOUSE	-
+statement	both	EI		EI	-	Enables timer and mouse interrupts.	DI,AFTER,EVERY,ON MOUSE	-
+statement	both	RANDOMIZE		RANDOMIZE [seed]	seed: Optional random-number seed	Seeds the random-number generator.	RND	-
+statement	both	PAUSE		PAUSE [milliseconds]	milliseconds: Optional maximum wait time	Waits for a key or until the optional timeout expires.	INKEY$	-
+statement	both	BEEP		BEEP	-	Emits the console bell character.	-	-
+statement	both	TRON		TRON	-	Enables program line tracing.	TROFF	-
+statement	both	TROFF		TROFF	-	Disables program line tracing.	TRON	-
+statement	both	DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD	-
+statement	both	RAD		RAD	-	Selects radians for trigonometry and drawing angles.	DEG	-
+statement	immediate	DEBUG		DEBUG	-	Opens the read-only debugger and pauses before the first statement.	EDIT,RUN	-
+statement	immediate	RUN		RUN || RUN line || RUN "filename"	line: Optional starting line; filename: Optional BASIC program path	Starts the loaded program or loads and runs a program file.	CONT,LOAD	-
+statement	immediate	LIST		LIST [range]	range: Optional line or line range	Displays stored program lines.	EDIT,DELETE	-
+statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	DEBUG,LIST,RENUM	-
+statement	immediate	DELETE		DELETE [range]	range: Optional line or line range	Deletes selected program lines or the entire program.	LIST,NEW	-
+statement	immediate	RENUM		RENUM [start[,step[,from[,to]]]]	start: First new line number; step: New line increment; from: First old line; to: Last old line	Renumbers program lines and their references.	LIST,EDIT	-
+statement	immediate	SAVE		SAVE "filename"	filename: BASIC program path	Saves the stored program.	LOAD	-
+statement	immediate	LOAD		LOAD "filename"	filename: BASIC program path	Replaces the stored program with a file.	SAVE,RUN,NEW	-
+statement	both	MERGE		MERGE "filename"	filename: BASIC program path	Merges a file into the stored program while preserving runtime values.	CHAIN,CHAIN MERGE,LOAD	-
+statement	both	CHAIN		CHAIN "filename"[,line]	filename: BASIC program path; line: Optional starting line	Replaces the program and continues with preserved runtime values.	CHAIN MERGE,MERGE,RUN	-
+statement	both	CHAIN MERGE		CHAIN MERGE "filename"[,line][,DELETE first-last]	filename: BASIC program path; line: Optional starting line; first: First line to delete; last: Last line to delete	Optionally deletes lines, merges a file, and continues execution.	CHAIN,MERGE	-
+statement	immediate	FILES	CAT	FILES ["pattern"] || CAT ["pattern"]	pattern: Optional wildcard pattern	Lists matching files and all directories in the current virtual directory.	CD,LOAD	-
+statement	immediate	CD		CD "path"	path: Virtual directory path	Changes the current virtual directory.	FILES	-
+statement	immediate	EXIT	QUIT,SYSTEM	EXIT || QUIT || SYSTEM	-	Leaves the AVL-BASIC interpreter.	EXIT FOR,EXIT WHILE,EXIT FN,EXIT SUB	-
+metacommand	immediate	HELP		HELP [topic]	topic: Optional instruction or function name	Shows a brief syntax reminder for a language topic.	-	-
+
+# AVL-BASIC built-in functions, constants, MAT helpers, and named operators.
+# Numeric functions and constants
+function	expression	ABS		ABS(number)	number: numeric expression	Returns the absolute value.	SGN	builtin,pure
+function	expression	INT		INT(number)	number: numeric expression	Rounds down to the nearest integer.	FIX,ROUND	builtin,pure
+function	expression	FIX		FIX(number)	number: numeric expression	Truncates toward zero.	INT,ROUND	builtin,pure
+function	expression	SGN		SGN(number)	number: numeric expression	Returns -1, 0, or 1 according to the sign.	ABS	builtin,pure
+function	expression	FRAC		FRAC(number)	number: numeric expression	Returns the signed fractional part.	FIX	builtin,pure
+function	expression	ROUND		ROUND(number[, digits])	number: numeric expression; digits: optional decimal places, default 0	Rounds halves away from zero.	INT,FIX	builtin,pure
+function	expression	SQR		SQR(number)	number: non-negative numeric expression	Returns the square root.	EXP	builtin,pure
+function	expression	LOG		LOG(number)	number: positive numeric expression	Returns the natural logarithm.	LOG10,EXP	builtin,pure
+function	expression	LOG10		LOG10(number)	number: positive numeric expression	Returns the base-10 logarithm.	LOG,EXP	builtin,pure
+function	expression	EXP		EXP(number)	number: numeric expression	Returns e raised to the given power.	LOG	builtin,pure
+function	expression	SIN		SIN(angle)	angle: angle in the active DEG or RAD mode	Returns the sine.	COS,TAN,ASN	builtin,pure
+function	expression	COS		COS(angle)	angle: angle in the active DEG or RAD mode	Returns the cosine.	SIN,TAN,ACS	builtin,pure
+function	expression	TAN		TAN(angle)	angle: angle in the active DEG or RAD mode	Returns the tangent.	SIN,COS,ATN,COT	builtin,pure
+function	expression	ASN		ASN(number)	number: value from -1 to 1	Returns the arcsine in the active DEG or RAD mode.	SIN,ACS,ATN	builtin,pure
+function	expression	ACS		ACS(number)	number: value from -1 to 1	Returns the arccosine in the active DEG or RAD mode.	COS,ASN,ATN	builtin,pure
+function	expression	ATN		ATN(number)	number: numeric expression	Returns the arctangent in the active DEG or RAD mode.	TAN,ASN,ACS	builtin,pure
+function	expression	COT		COT(angle)	angle: angle in the active DEG or RAD mode	Returns the cotangent.	TAN	builtin,pure
+function	expression	RTD		RTD(radians)	radians: angle in radians	Converts radians to degrees without changing the angle mode.	DTR	builtin,pure
+function	expression	DTR		DTR(degrees)	degrees: angle in degrees	Converts degrees to radians without changing the angle mode.	RTD	builtin,pure
+function	expression	PI		PI	-	Returns the mathematical constant pi.	SIN,COS	builtin,pure,zero-arg,pi
+constant	expression	INF		INF	-	Represents positive infinity for open-ended numeric limits.	-	fast-constant
+function	expression	RND		RND	-	Returns a uniformly distributed number in the range [0,1).	RANDOMIZE	builtin,zero-arg
+function	expression	TIME		TIME	-	Returns seconds since the Unix epoch.	PAUSE	builtin,zero-arg
+function	expression	MIN		MIN(number[, number...])	number: one or more numeric expressions	Returns the smallest argument.	MAX	builtin,pure
+function	expression	MAX		MAX(number[, number...])	number: one or more numeric expressions	Returns the largest argument.	MIN	builtin,pure
+function	expression	VAL		VAL(text$)	text$: string beginning with a decimal, &H, or &X number	Converts the leading numeric text to a number.	STR$,BIN$,HEX$	builtin,pure
+
+# String functions
+function	expression	LEN		LEN(text$)	text$: string expression	Returns the number of characters.	LEFT$,RIGHT$,MID$	builtin,pure
+function	expression	INSTR		INSTR(text$, find$) || INSTR(start, text$, find$)	start: optional 1-based search position; text$: string to search; find$: substring to find	Returns the 1-based position of a substring, or 0.	LEFT$,RIGHT$,MID$	builtin,pure
+function	expression	ASC		ASC(text$)	text$: non-empty string expression	Returns the code of the first character.	CHR$	builtin,pure
+function	expression	CHR$		CHR$(code)	code: valid character code	Returns the character for a code.	ASC	builtin,pure
+function	expression	LEFT$		LEFT$(text$, length)	text$: string expression; length: nonnegative character count	Returns the leftmost characters; zero returns an empty string.	RIGHT$,MID$	builtin,pure
+function	expression	RIGHT$		RIGHT$(text$, length)	text$: string expression; length: nonnegative character count	Returns the rightmost characters; zero returns an empty string.	LEFT$,MID$	builtin,pure
+function	expression	MID$		MID$(text$, start[, length])	text$: string expression; start: 1-based position, at least 1; length: optional nonnegative character count	Returns characters from a position.	LEFT$,RIGHT$,INSTR	builtin,pure
+function	expression	STR$		STR$(number)	number: numeric expression	Converts a number to its compact display form.	VAL,DEC$	builtin,pure
+function	expression	BIN$		BIN$(number[, width])	number: integer value; width: optional exact bit width, truncating higher bits	Returns an uppercase binary representation without a prefix.	HEX$,VAL	builtin,pure
+function	expression	HEX$		HEX$(number[, width])	number: integer value; width: optional exact digit width, truncating higher bits	Returns an uppercase hexadecimal representation without a prefix.	BIN$,VAL	builtin,pure
+function	expression	DEC$		DEC$(number, format$)	number: numeric expression; format$: PRINT USING mask	Formats a number as a string.	STR$,PRINT	builtin,pure
+function	expression	UPPER$		UPPER$(text$)	text$: string expression	Converts ASCII letters to uppercase.	LOWER$	builtin,pure
+function	expression	LOWER$		LOWER$(text$)	text$: string expression	Converts ASCII letters to lowercase.	UPPER$	builtin,pure
+function	expression	SPACE$		SPACE$(length)	length: nonnegative number of spaces	Returns a string of spaces; zero returns an empty string.	STRING$	builtin,pure
+function	expression	STRING$		STRING$(length, character) || STRING$(length, code)	length: nonnegative repetition count; character: non-empty string supplying its first character; code: valid character code	Returns a repeated-character string; zero returns an empty string.	SPACE$,CHR$	builtin,pure
+function	expression	TRIM$		TRIM$(text$)	text$: string expression	Removes leading and trailing whitespace.	-	builtin,pure
+
+# Array and matrix functions
+function	expression	LBOUND	LBND	LBOUND(array[, dimension]) || LBND(array[, dimension])	array: array name; dimension: optional 1-based dimension, default 1 (LBND rounds it and accepts only 1D/2D arrays)	Returns the inclusive lower bound selected by MAT BASE.	UBOUND,MAT BASE	builtin,array-name
+function	expression	UBOUND	UBND	UBOUND(array[, dimension]) || UBND(array[, dimension])	array: array name; dimension: optional 1-based dimension, default 1 (UBND rounds it and accepts only 1D/2D arrays)	Returns the inclusive upper bound of a dimension.	LBOUND,DIM	builtin,array-name
+function	expression	DET		DET(array)	array: square numeric matrix name	Returns the determinant of the active MAT BASE block.	INV,MAT	builtin,array-name
+function	expression	ABSUM		ABSUM(array)	array: numeric array name	Returns the sum of the absolute element values.	SUM,FNORM	builtin,array-name
+function	expression	AMAX		AMAX(array)	array: numeric array name	Returns the largest element and records its position.	AMAXCOL,AMAXROW,AMIN	builtin,array-name
+function	expression	AMAXCOL		AMAXCOL	-	Returns the column recorded by the last successful AMAX.	AMAX,AMAXROW	builtin,zero-arg
+function	expression	AMAXROW		AMAXROW	-	Returns the row recorded by the last successful AMAX.	AMAX,AMAXCOL	builtin,zero-arg
+function	expression	AMIN		AMIN(array)	array: numeric array name	Returns the smallest element and records its position.	AMINCOL,AMINROW,AMAX	builtin,array-name
+function	expression	AMINCOL		AMINCOL	-	Returns the column recorded by the last successful AMIN.	AMIN,AMINROW	builtin,zero-arg
+function	expression	AMINROW		AMINROW	-	Returns the row recorded by the last successful AMIN.	AMIN,AMINCOL	builtin,zero-arg
+function	expression	CNORM		CNORM(array)	array: numeric array name	Returns the largest absolute column sum and records its column.	CNORMCOL,RNORM,FNORM	builtin,array-name
+function	expression	CNORMCOL		CNORMCOL	-	Returns the column recorded by the last successful CNORM.	CNORM	builtin,zero-arg
+function	expression	DOT		DOT(vector1, vector2)	vector1: numeric vector name; vector2: compatible numeric vector name	Returns the dot product of two vectors.	FNORM	builtin,array-name
+function	expression	FNORM		FNORM(array)	array: numeric array name	Returns the Frobenius norm.	CNORM,RNORM,ABSUM	builtin,array-name
+function	expression	MAXAB		MAXAB(array)	array: numeric array name	Returns the largest absolute element and records its position.	MAXABCOL,MAXABROW,ABSUM	builtin,array-name
+function	expression	MAXABCOL		MAXABCOL	-	Returns the column recorded by the last successful MAXAB.	MAXAB,MAXABROW	builtin,zero-arg
+function	expression	MAXABROW		MAXABROW	-	Returns the row recorded by the last successful MAXAB.	MAXAB,MAXABCOL	builtin,zero-arg
+function	expression	RNORM		RNORM(array)	array: numeric array name	Returns the largest absolute row sum and records its row.	RNORMROW,CNORM,FNORM	builtin,array-name
+function	expression	RNORMROW		RNORMROW	-	Returns the row recorded by the last successful RNORM.	RNORM	builtin,zero-arg
+function	expression	SUM		SUM(array)	array: numeric array name	Returns the algebraic sum of all elements.	ABSUM	builtin,array-name
+function	expression	ZER		MAT target = ZER	target: previously dimensioned numeric array	Fills a MAT destination with zeroes.	CON,IDN,MAT	mat-only
+function	expression	CON		MAT target = CON	target: previously dimensioned numeric array	Fills a MAT destination with ones.	ZER,IDN,MAT	mat-only
+function	expression	IDN		MAT target = IDN	target: previously dimensioned square numeric array	Fills a MAT destination with the identity matrix.	ZER,CON,MAT BASE	mat-only
+function	expression	TRN		MAT target = TRN(array)	target: destination array; array: two-dimensional numeric array name	Assigns the matrix transpose.	INV,MAT	builtin
+function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix name	Assigns the matrix inverse.	DET,TRN,MAT	builtin
+
+# Graphics, screen, and sprite functions
+function	expression	WIDTH		WIDTH	-	Returns the graphics window width in pixels.	HEIGHT	builtin,zero-arg
+function	expression	HEIGHT		HEIGHT	-	Returns the graphics window height in pixels.	WIDTH	builtin,zero-arg
+function	expression	XMIN		XMIN	-	Returns the active scale's minimum X coordinate.	XMAX,YMIN,YMAX,BORDER	builtin,zero-arg
+function	expression	XMAX		XMAX	-	Returns the active scale's maximum X coordinate.	XMIN,YMIN,YMAX,BORDER	builtin,zero-arg
+function	expression	YMIN		YMIN	-	Returns the active scale's minimum Y coordinate.	YMAX,XMIN,XMAX,BORDER	builtin,zero-arg
+function	expression	YMAX		YMAX	-	Returns the active scale's maximum Y coordinate.	YMIN,XMIN,XMAX,BORDER	builtin,zero-arg
+function	expression	BORDER		BORDER	-	Returns the active SCALE border in pixels.	XMIN,XMAX,YMIN,YMAX,SCALE	builtin,zero-arg
+function	expression	XPOS		XPOS	-	Returns the graphics cursor's X coordinate.	YPOS,MOVE	builtin,zero-arg
+function	expression	YPOS		YPOS	-	Returns the graphics cursor's Y coordinate.	XPOS,MOVE	builtin,zero-arg
+function	expression	HPOS		HPOS	-	Returns the graphics text cursor column.	VPOS,LOCATE	builtin,zero-arg
+function	expression	VPOS		VPOS	-	Returns the graphics text cursor row.	HPOS,LOCATE	builtin,zero-arg
+function	expression	RGB		RGB(color) || RGB(r, g, b)	color: palette index, packed RGB number, RGB string, or Tk color name; r: red component 0..255; g: green component 0..255; b: blue component 0..255	Returns a packed numeric RGB color.	RGB$,INK,PAPER	builtin
+function	expression	RGB$		RGB$(color) || RGB$(r, g, b)	color: palette index, packed RGB number, RGB string, or Tk color name; r: red component 0..255; g: green component 0..255; b: blue component 0..255	Returns a normalized "r,g,b" string.	RGB	builtin
+function	expression	TEST		TEST(x, y)	x: logical X coordinate; y: logical Y coordinate	Returns the pixel color at a graphics coordinate.	RGB,TESTCHR$	builtin
+function	expression	TESTCHR$		TESTCHR$ || TESTCHR$(column, row)	column: optional text column; row: optional text row	Returns the character recognized in a graphics text cell, or an empty string.	GPRINT,LOCATE,HPOS,VPOS	builtin,zero-arg
+function	expression	SCREEN$		SCREEN$	-	Captures the current graphics window as a graphics string.	SCREEN,SPRITE$,BSAVE,BLOAD	builtin,zero-arg
+function	expression	SPRITE$		SPRITE$(x1, y1, x2, y2)	x1: first logical X coordinate; y1: first logical Y coordinate; x2: opposite logical X coordinate; y2: opposite logical Y coordinate	Captures a rectangular graphics region as a sprite string.	SPRITE,SCREEN$	builtin
+function	expression	HIT		HIT	-	Returns -1 if the last SPRITE operation detected any collision, otherwise 0.	HITCOLOR,HITSPRITE,HITID,SPRITE	builtin,zero-arg
+function	expression	HITCOLOR		HITCOLOR	-	Returns the color detected by the last SPRITE operation, or 0.	HIT,SPRITE,COLCOLOR	builtin,zero-arg
+function	expression	HITSPRITE		HITSPRITE	-	Returns -1 if the last SPRITE operation detected another sprite, otherwise 0.	HIT,HITID,SPRITE	builtin,zero-arg
+function	expression	HITID		HITID	-	Returns the first collided sprite identifier, or 0.	HIT,HITSPRITE,SPRITE	builtin,zero-arg
+
+# Input, mouse, timers, errors, and system
+function	expression	INKEY$		INKEY$	-	Returns one pending discrete key press, or an empty string.	KEYDOWN,CLEAR INPUT	builtin,zero-arg
+function	expression	KEYDOWN		KEYDOWN(code)	code: normalized key code from 0 to 255	Returns -1 while the key is held down, otherwise 0.	INKEY$	builtin
+function	expression	MOUSEX		MOUSEX	-	Returns the mouse pointer's logical X coordinate.	MOUSEY,ON MOUSE	builtin,zero-arg
+function	expression	MOUSEY		MOUSEY	-	Returns the mouse pointer's logical Y coordinate.	MOUSEX,ON MOUSE	builtin,zero-arg
+function	expression	MOUSELEFT		MOUSELEFT	-	Returns -1 while the left mouse button is pressed, otherwise 0.	MOUSERIGHT,ON MOUSE	builtin,zero-arg
+function	expression	MOUSERIGHT		MOUSERIGHT	-	Returns -1 while the right mouse button is pressed, otherwise 0.	MOUSELEFT,ON MOUSE	builtin,zero-arg
+function	expression	MOUSEEVENT$		MOUSEEVENT$	-	Returns the name of the last received mouse event.	ON MOUSE,MOUSEX,MOUSEY	builtin,zero-arg
+function	expression	REMAIN		REMAIN(timer)	timer: timer number from 0 to 3	Returns the remaining timer count in 1/50-second ticks.	AFTER,EVERY,CANCEL	builtin
+function	expression	ERR		ERR	-	Returns the active runtime error number, or 0.	ERL,ON ERROR,RESUME	builtin,zero-arg
+function	expression	ERL		ERL	-	Returns the line of the active runtime error, or 0.	ERR,ON ERROR,RESUME	builtin,zero-arg
+function	expression	VERSION$		VERSION$	-	Returns the AVL-BASIC language version.	-	builtin,zero-arg
+
+# PRINT-only functions
+print-function	print	SPC		SPC(count)	count: number of spaces	Emits spaces inside a PRINT or GPRINT list.	TAB,PRINT,GPRINT	builtin,print-only
+print-function	print	TAB		TAB(column)	column: target output column	Advances to a column inside a PRINT or GPRINT list without moving backwards.	SPC,PRINT,GPRINT	builtin,print-only
+
+# Named expression operators
+operator	expression	MOD		left MOD right	left: numeric expression; right: nonzero numeric expression	Returns the floating-point remainder.	-	-
+operator	expression	AND		left AND right	left: numeric expression rounded to an integer; right: numeric expression rounded to an integer	Returns the bitwise AND.	OR,XOR,NOT	-
+operator	expression	OR		left OR right	left: numeric expression rounded to an integer; right: numeric expression rounded to an integer	Returns the bitwise OR.	AND,XOR,NOT	-
+operator	expression	XOR		left XOR right	left: numeric expression rounded to an integer; right: numeric expression rounded to an integer	Returns the bitwise exclusive OR.	AND,OR,NOT	-
+operator	expression	NOT		NOT number	number: numeric expression rounded to an integer	Returns the bitwise complement.	AND,OR,XOR	-
+
+[errors]
+# Rust variant<TAB>number<TAB>English runtime/manual message<TAB>Spanish manual message<TAB>Python variant
+ImmediateCommand	1	Instruction not allowed in a program.	Instrucción no permitida en un programa.	IMMEDIATE_COMMAND
+NonImmediateCommand	2	Instruction not allowed in immediate mode.	Instrucción no permitida en modo inmediato.	NON_IMMEDIATE_COMMAND
+InvalidLineFormat	3	Invalid line format.	Formato de línea no válido.	INVALID_FORMAT
+InvalidValue	4	Invalid value.	Valor no válido.	INVALID_VALUE
+TypeMismatch	5	Invalid value type.	Tipo de valor no válido.	TYPE_MISMATCH
+DivisionByZero	6	Division by zero.	División por cero.	DIVISION_BY_0
+Overflow	7	Numeric overflow.	Desbordamiento numérico.	OVERFLOW
+Undefined	8	Undefined variable or function.	Variable o función no definida.	UNDEFINED
+InvalidName	9	Invalid name.	Nombre no válido.	INVALID_NAME
+InvalidLineNumber	10	Invalid line number.	Número de línea no válido.	INVALID_LINE_NUMBER
+InvalidTargetLine	11	Invalid target line.	Línea de destino no válida.	INVALID_TARGET_LINE
+TargetLineNotFound	12	Target line does not exist.	La línea de destino no existe.	TARGET_LINE_NOT_FOUND
+ReturnWithoutGosub	13	RETURN without matching GOSUB.	RETURN sin GOSUB correspondiente.	RETURN_WITH_NO_GOSUB
+ReturnNotFound	14	Invalid return line.	Línea de retorno no válida.	RETURN_NOT_FOUND
+Syntax	15	Syntax error.	Error de sintaxis.	SYNTAX_ERROR
+ForWithoutNext	16	FOR without matching NEXT.	FOR sin NEXT correspondiente.	FOR_WITH_NO_NEXT
+NextWithoutFor	17	NEXT without matching FOR.	NEXT sin FOR correspondiente.	NEXT_WITH_NO_FOR
+WhileWithoutWend	18	WHILE without matching WEND.	WHILE sin WEND correspondiente.	WHILE_WITH_NO_WEND
+WendWithoutWhile	19	WEND without matching WHILE.	WEND sin WHILE correspondiente.	WEND_WITH_NO_WHILE
+ResumeWithoutError	20	RESUME without ERROR.	RESUME sin ERROR.	RESUME_WITH_NO_ERROR
+NumericExpression	21	Expression must be numeric.	La expresión debe ser numérica.	NUMERIC_EXPRESSION
+EvalError	22	Error evaluating expression.	Error al evaluar la expresión.	EVAL_ERROR
+UnknownType	23	Unknown data type.	Tipo de dato desconocido.	UNKNOWN_TYPE
+DataExhausted	24	No more DATA to read.	No hay más DATA para leer.	DATA_EXAUSTED
+NoData	25	The line has no DATA for RESTORE.	La línea no tiene DATA para RESTORE.	NO_DATA
+InvalidArgument	26	Invalid argument.	Argumento no válido.	INVALID_ARGUMENT
+NoDimension	27	Empty dimension expression.	Expresión de dimensión vacía.	NO_DIMENSION
+IndexError	28	Error generating array indices.	Error al generar índices del array.	INDEX_ERROR
+UsingFormat	29	Error in PRINT USING format.	Error en el formato PRINT USING.	USING_ERROR
+VarNumberMismatch	30	Number of inputs does not match number of variables.	El número de entradas no coincide con el número de variables.	VAR_NUMBER_MISMATCH
+ArgumentMismatch	31	Incorrect number of arguments.	Número de argumentos incorrecto.	ARGUMENT_MISMATCH
+InvalidIndex	32	Invalid index.	Índice no válido.	INVALID_INDEX
+UndefinedIndex	33	Undefined index.	Índice no definido.	INDEX_MISMATCH
+IndexOutOfRange	34	Index out of range.	Índice fuera de rango.	INDEX_OUT_OF_BOUNDS
+OutOfBounds	35	Out of range.	Fuera de rango.	OUT_OF_BOUNDS
+FunctionError	36	Error evaluating function.	Error al evaluar la función.	FUNCTION_ERROR
+ForbiddenExpression	37	Expression not allowed.	Expresión no permitida.	FORBIDDEN_EXPRESION
+Unsupported	38	Feature not supported in this environment.	Característica no soportada en este entorno.	UNSUPPORTED
+MissingQuotes	39	Missing quotes.	Faltan comillas.	QUOTES_MISSING
+FileNotFound	40	File not found.	Archivo no encontrado.	FILE_NOT_FOUND
+KeyboardInterrupt	41	Execution interrupted by user.	Ejecución interrumpida por el usuario.	KEYBOARD_INTERRUPT
+OnlyBasFiles	42	Only names with extension '.bas' are allowed.	Solo se admiten nombres con extensión '.bas'.	ONLY_BAS_FILES
+OnlyPngFiles	43	Only names with extension '.png' are allowed.	Solo se admiten nombres con extensión '.png'.	ONLY_PNG_FILES
+HandlerError	44	Error while handling errors.	Error durante la gestión de errores.	HANDLER_ERROR
+MergeError	45	Error merging files.	Error al combinar archivos.	MERGE_ERROR
+NoStoppedProgram	46	There is no stopped program to continue.	No hay un programa detenido que se pueda continuar.	NO_STOPPED_PROGRAM
+FunctionForbidden	47	Instruction not allowed inside a function.	Instrucción no permitida dentro de una función.	FUNCTION_FORBIDDEN
+FnEndWithoutDef	48	Malformed function.	Función mal formada.	FNEND_WITHOUT_DEF
+IfWithoutEndIf	49	IF without matching END IF.	IF sin END IF correspondiente.	IF_WITH_NO_ENDIF
+ElseWithoutIf	50	ELSE without matching IF.	ELSE sin IF correspondiente.	ELSE_WITH_NO_IF
+EndIfWithoutIf	51	END IF without matching IF.	END IF sin IF correspondiente.	ENDIF_WITH_NO_IF
+InvalidDimensions	52	Invalid number of dimensions.	Número de dimensiones no válido.	DIMENSION_MISMATCH
+MatIdnDimension	53	MAT IDN requires a two-dimensional square matrix.	MAT IDN requiere una matriz cuadrada bidimensional.	MAT_IDN_DIMENSION
+SubroutineForbidden	54	Instruction not allowed inside a subroutine.	Instrucción no permitida dentro de una subrutina.	SUBROUTINE_FORBIDDEN
+SubEndWithoutDef	55	Malformed subroutine.	Subrutina mal formada.	SUBEND_WITHOUT_DEF
+LocalNotAtStart	56	LOCAL must appear in the initial block of a function or subroutine.	LOCAL debe aparecer en el bloque inicial de una función o subrutina.	LOCAL_NOT_AT_START

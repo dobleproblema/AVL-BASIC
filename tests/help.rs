@@ -115,6 +115,16 @@ fn bare_and_unknown_help_topics_have_short_guidance() {
 }
 
 #[test]
+fn banner_advertises_only_the_self_contained_help() {
+    let mut interpreter = Interpreter::new();
+    interpreter.print_banner();
+    let banner = interpreter.take_output();
+    assert!(banner.contains("Type HELP <topic> for syntax and parameters.\n"));
+    assert!(!banner.contains("TOUR"));
+    assert!(!banner.contains("SAMPLES"));
+}
+
+#[test]
 fn help_name_remains_a_valid_variable() {
     let mut interpreter = Interpreter::new();
 
@@ -127,6 +137,28 @@ fn help_name_remains_a_valid_variable() {
     interpreter.process_immediate("20 PRINT HELP").unwrap();
     interpreter.process_immediate("RUN").unwrap();
     assert_eq!(interpreter.take_output(), " 7\n");
+}
+
+#[test]
+fn removed_showcase_commands_are_unknown_topics_and_valid_variables() {
+    for name in ["TOUR", "SAMPLES"] {
+        let mut interpreter = Interpreter::new();
+        let error = interpreter.process_immediate(name).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Syntax, "{name}");
+
+        interpreter.process_immediate(&format!("{name}=7")).unwrap();
+        interpreter
+            .process_immediate(&format!("PRINT {name}"))
+            .unwrap();
+        assert_eq!(interpreter.take_output(), " 7\n", "{name}");
+
+        interpreter
+            .process_immediate(&format!("HELP {name}"))
+            .unwrap();
+        assert!(interpreter
+            .take_output()
+            .starts_with(&format!("No HELP entry for {name}\n")));
+    }
 }
 
 #[test]

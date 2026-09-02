@@ -1310,154 +1310,17 @@ fn immediate_run_start_line_matches_python() {
 }
 
 #[test]
-fn error_codes_and_messages_match_python_oracle_table() {
-    let expected = [
-        (
-            1,
-            ErrorCode::ImmediateCommand,
-            "Instruction not allowed in a program.",
-        ),
-        (
-            2,
-            ErrorCode::NonImmediateCommand,
-            "Instruction not allowed in immediate mode.",
-        ),
-        (3, ErrorCode::InvalidLineFormat, "Invalid line format."),
-        (4, ErrorCode::InvalidValue, "Invalid value."),
-        (5, ErrorCode::TypeMismatch, "Invalid value type."),
-        (6, ErrorCode::DivisionByZero, "Division by zero."),
-        (7, ErrorCode::Overflow, "Numeric overflow."),
-        (8, ErrorCode::Undefined, "Undefined variable or function."),
-        (9, ErrorCode::InvalidName, "Invalid name."),
-        (10, ErrorCode::InvalidLineNumber, "Invalid line number."),
-        (11, ErrorCode::InvalidTargetLine, "Invalid target line."),
-        (
-            12,
-            ErrorCode::TargetLineNotFound,
-            "Target line does not exist.",
-        ),
-        (
-            13,
-            ErrorCode::ReturnWithoutGosub,
-            "RETURN without matching GOSUB.",
-        ),
-        (14, ErrorCode::ReturnNotFound, "Invalid return line."),
-        (15, ErrorCode::Syntax, "Syntax error."),
-        (16, ErrorCode::ForWithoutNext, "FOR without matching NEXT."),
-        (17, ErrorCode::NextWithoutFor, "NEXT without matching FOR."),
-        (
-            18,
-            ErrorCode::WhileWithoutWend,
-            "WHILE without matching WEND.",
-        ),
-        (
-            19,
-            ErrorCode::WendWithoutWhile,
-            "WEND without matching WHILE.",
-        ),
-        (20, ErrorCode::ResumeWithoutError, "RESUME without ERROR."),
-        (
-            21,
-            ErrorCode::NumericExpression,
-            "Expression must be numeric.",
-        ),
-        (22, ErrorCode::EvalError, "Error evaluating expression."),
-        (23, ErrorCode::UnknownType, "Unknown data type."),
-        (24, ErrorCode::DataExhausted, "No more DATA to read."),
-        (25, ErrorCode::NoData, "The line has no DATA for RESTORE."),
-        (26, ErrorCode::InvalidArgument, "Invalid argument."),
-        (27, ErrorCode::NoDimension, "Empty dimension expression."),
-        (28, ErrorCode::IndexError, "Error generating array indices."),
-        (29, ErrorCode::UsingFormat, "Error in PRINT USING format."),
-        (
-            30,
-            ErrorCode::VarNumberMismatch,
-            "Number of inputs does not match number of variables.",
-        ),
-        (
-            31,
-            ErrorCode::ArgumentMismatch,
-            "Incorrect number of arguments.",
-        ),
-        (32, ErrorCode::InvalidIndex, "Invalid index."),
-        (33, ErrorCode::UndefinedIndex, "Undefined index."),
-        (34, ErrorCode::IndexOutOfRange, "Index out of range."),
-        (35, ErrorCode::OutOfBounds, "Out of range."),
-        (36, ErrorCode::FunctionError, "Error evaluating function."),
-        (
-            37,
-            ErrorCode::ForbiddenExpression,
-            "Expression not allowed.",
-        ),
-        (
-            38,
-            ErrorCode::Unsupported,
-            "Feature not supported in this environment.",
-        ),
-        (39, ErrorCode::MissingQuotes, "Missing quotes."),
-        (40, ErrorCode::FileNotFound, "File not found."),
-        (
-            41,
-            ErrorCode::KeyboardInterrupt,
-            "Execution interrupted by user.",
-        ),
-        (
-            42,
-            ErrorCode::OnlyBasFiles,
-            "Only names with extension '.bas' are allowed.",
-        ),
-        (
-            43,
-            ErrorCode::OnlyPngFiles,
-            "Only names with extension '.png' are allowed.",
-        ),
-        (44, ErrorCode::HandlerError, "Error while handling errors."),
-        (45, ErrorCode::MergeError, "Error merging files."),
-        (
-            46,
-            ErrorCode::NoStoppedProgram,
-            "There is no stopped program to continue.",
-        ),
-        (
-            47,
-            ErrorCode::FunctionForbidden,
-            "Instruction not allowed inside a function.",
-        ),
-        (48, ErrorCode::FnEndWithoutDef, "Malformed function."),
-        (49, ErrorCode::IfWithoutEndIf, "IF without matching END IF."),
-        (50, ErrorCode::ElseWithoutIf, "ELSE without matching IF."),
-        (51, ErrorCode::EndIfWithoutIf, "END IF without matching IF."),
-        (
-            52,
-            ErrorCode::InvalidDimensions,
-            "Invalid number of dimensions.",
-        ),
-        (
-            53,
-            ErrorCode::MatIdnDimension,
-            "MAT IDN requires a two-dimensional square matrix.",
-        ),
-        (
-            54,
-            ErrorCode::SubroutineForbidden,
-            "Instruction not allowed inside a subroutine.",
-        ),
-        (55, ErrorCode::SubEndWithoutDef, "Malformed subroutine."),
-        (
-            56,
-            ErrorCode::LocalNotAtStart,
-            "LOCAL must appear in the initial block of a function or subroutine.",
-        ),
-    ];
-    for (number, code, message) in expected {
+fn generated_error_catalog_is_contiguous_and_round_trips() {
+    assert_eq!(ErrorCode::ALL.len(), 56);
+    for (index, code) in ErrorCode::ALL.iter().copied().enumerate() {
+        let number = i32::try_from(index + 1).unwrap();
         assert_eq!(code.number(), number);
         assert_eq!(ErrorCode::from_number(number), Some(code));
-        assert_eq!(code.message(), message);
+        assert!(!code.message().is_empty());
     }
     assert_eq!(ErrorCode::from_number(0), None);
     assert_eq!(ErrorCode::from_number(57), None);
 }
-
 #[test]
 fn immediate_and_program_only_command_errors_match_python() {
     let mut interp = Interpreter::new();

@@ -117,15 +117,13 @@ From BASIC immediate mode:
 
 ```basic
 HELP RIGHT$
-TOUR
-SAMPLES
-RUN "/samples/g-old-school.bas"
+RUN "samples/g-old-school.bas"
 ```
 
-`HELP topic` gives a compact syntax and parameter reminder. `TOUR` explains
-the 20 highlights and the techniques behind them. `SAMPLES` lists all 115
-bundled programs by category. `HELP`, `TOUR`, and `SAMPLES` are read-only: they
-do not replace the program in memory or run anything automatically.
+`HELP topic` gives a compact syntax and parameter reminder. Its complete
+catalog is compiled into the executable: the interpreter never needs the
+source catalog, this README, the manuals, or the sample tree at runtime. The
+115 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -171,13 +169,9 @@ The script uses `target/release/avl-basic` by default. You may pass another
 compiled executable as its first argument. It installs the binary under
 `~/.local/bin`, and the samples and visual catalog under
 `${XDG_DATA_HOME:-~/.local/share}/avl-basic`, without requiring root
-permissions. The desktop launcher starts in that data directory, so `TOUR`,
-`SAMPLES`, and their `/samples/...` commands work immediately. The launcher
-opens a terminal because AVL BASIC remains a console-first interpreter.
-
-For source builds, `cargo build` creates a `target/release/samples` directory
-link to the repository examples. If your working directory is `target/release`,
-`CD "samples"` works by normal path resolution.
+permissions. The desktop launcher starts in that data directory so the
+installed examples can be loaded by their normal paths. The launcher opens a
+terminal because AVL BASIC remains a console-first interpreter.
 
 ## Why It Is Interesting
 
@@ -191,24 +185,28 @@ adding a practical modern feature set:
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - embedded bitmap fonts for reproducible graphics text,
 - deterministic examples and regression tests for the native runtime,
-- a built-in `TOUR` and categorized `SAMPLES` catalog for discovering what is
-  already included.
+- a visual gallery and categorized sample catalog on GitHub for discovering
+  what is already included.
 
 The interpreter is console-first and line-numbered by design. It is meant to
 feel direct and teachable rather than like an IDE-centered dialect.
 
-## Embedded Fonts
+## Embedded Runtime Data
 
 AVL BASIC embeds its own small and large bitmap fonts in the Rust binary. The
 editable source is [`assets/fonts/avl-basic-fonts.txt`](assets/fonts/avl-basic-fonts.txt).
 `build.rs` validates that source and generates the Rust glyph tables during the
-build.
+build. It similarly validates [`src/language/catalog.tsv`](src/language/catalog.tsv)
+and turns its language topics, contexts, highlighting classes, and error codes
+into static Rust tables. Both catalogs are therefore part of the executable,
+not runtime files. Maintainers can run `python tools/check_python_error_catalog.py`
+to verify every error name, number, and English message against the Python oracle.
 
 ## Documentation
 
 - Full manual in English: [`MANUAL.txt`](MANUAL.txt)
 - Manual completo en español: [`MANUAL.es.txt`](MANUAL.es.txt)
-- Visual tour and complete sample catalog: [`samples/README.md`](samples/README.md)
+- Visual gallery and complete sample catalog: [`samples/README.md`](samples/README.md)
 - License: [`COPYING`](COPYING)
 
 ## Project Layout
@@ -220,6 +218,7 @@ build.
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source
+- [`src/language/catalog.tsv`](src/language/catalog.tsv): declarative language and error catalog
 - [`packaging/`](packaging/): release packaging scripts
 
 ## Release Packaging

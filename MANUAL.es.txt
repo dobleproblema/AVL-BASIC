@@ -454,6 +454,7 @@ Notas rápidas
   • `SCREEN : ORIGIN : CLG` también es válido; tras `SCREEN`, el `ORIGIN` sin argumentos es idempotente.
 - FRAME refresca la pantalla inmediatamente. Por defecto solo se refresca al terminar el programa.
   • Es decir, deberemos usar FRAME cada vez que queramos que el resultado de una instrucción gráfica se muestre en pantalla inmediatamente.
+  • Durante `DEBUG`, el búfer gráfico también se presenta en cada pausa del depurador (véanse las «Notas sobre DEBUG»). Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS.
 - `CLG` borra y presenta inmediatamente el viewport activo. En bucles de
   animación que dibujan un frame completo antes de `FRAME`, esto puede mostrar
   un borrado a mitad de frame (parpadeo/tearing en Rust). Usa `CLG OFFSCREEN`
@@ -1012,7 +1013,7 @@ Notas
 + RESUME                 Repite la instrucción que causó el error.
 + RESUME NEXT            Continúa en la siguiente instrucción de la misma línea (si existe) o en la siguiente línea.
 + RESUME n               Continúa en la primera instrucción de la línea n.
-+ ERROR n                Genera el error n de forma explícita. Por ejemplo, `ERROR 14` provoca un error de sintaxis.
++ ERROR n                Genera el error n de forma explícita. Por ejemplo, `ERROR 15` provoca un error de sintaxis.
 
 Flujo y notas
 - Sin procesador: ante un error, la ejecución se detiene e informa: “Línea <n>. <mensaje>”.
@@ -1034,58 +1035,69 @@ Tabla completa de códigos de error
 2  Instrucción no permitida en modo inmediato.
 3  Formato de línea no válido.
 4  Valor no válido.
-5  Valor de tipo no válido.
+5  Tipo de valor no válido.
 6  División por cero.
 7  Desbordamiento numérico.
 8  Variable o función no definida.
 9  Nombre no válido.
-10 Número de línea no valido.
-11 Línea de destino no existe.
-12 RETURN sin GOSUB correspondiente.
-13 Línea de retorno no válida.
-14 Error de sintaxis.
-15 FOR sin NEXT correspondiente.
-16 NEXT sin FOR correspondiente.
-17 WHILE sin WEND correspondiente.
-18 WEND sin WHILE correspondiente.
-19 RESUME sin ERROR.
-20 La expresión debe ser numérica.
-21 Error al evaluar la expresión.
-22 Tipo de dato desconocido.
-23 No hay más DATA para leer.
-24 La línea no tiene DATA para RESTORE.
-25 Argumento no válido.
-26 Expresión de dimensión vacía.
-27 Error al generar índices para el array.
-28 Error en formato PRINT USING.
-29 Número de entradas no coincide con número de variables.
-30 Número de argumentos incorrecto.
-31 Índice no válido.
-32 Índice no definido.
-33 Índice fuera de rango.
-34 Fuera de rango.
-35 Error al evaluar la función.
-36 Expresión no permitida.
-37 Característica no soportada en este entorno.
-38 Faltan comillas.
-39 Archivo no encontrado.
-40 Ejecución interrumpida por el usuario.
-41 Solo se admiten nombres con extensión '.bas'.
-42 Solo se admiten nombres con extensión '.png'.
-43 Error durante la gestión de errores.
-44 Error al combinar archivos.
-45 No hay un programa detenido que se pueda continuar.
+10 Número de línea no válido.
+11 Línea de destino no válida.
+12 La línea de destino no existe.
+13 RETURN sin GOSUB correspondiente.
+14 Línea de retorno no válida.
+15 Error de sintaxis.
+16 FOR sin NEXT correspondiente.
+17 NEXT sin FOR correspondiente.
+18 WHILE sin WEND correspondiente.
+19 WEND sin WHILE correspondiente.
+20 RESUME sin ERROR.
+21 La expresión debe ser numérica.
+22 Error al evaluar la expresión.
+23 Tipo de dato desconocido.
+24 No hay más DATA para leer.
+25 La línea no tiene DATA para RESTORE.
+26 Argumento no válido.
+27 Expresión de dimensión vacía.
+28 Error al generar índices del array.
+29 Error en el formato PRINT USING.
+30 El número de entradas no coincide con el número de variables.
+31 Número de argumentos incorrecto.
+32 Índice no válido.
+33 Índice no definido.
+34 Índice fuera de rango.
+35 Fuera de rango.
+36 Error al evaluar la función.
+37 Expresión no permitida.
+38 Característica no soportada en este entorno.
+39 Faltan comillas.
+40 Archivo no encontrado.
+41 Ejecución interrumpida por el usuario.
+42 Solo se admiten nombres con extensión '.bas'.
+43 Solo se admiten nombres con extensión '.png'.
+44 Error durante la gestión de errores.
+45 Error al combinar archivos.
+46 No hay un programa detenido que se pueda continuar.
+47 Instrucción no permitida dentro de una función.
+48 Función mal formada.
+49 IF sin END IF correspondiente.
+50 ELSE sin IF correspondiente.
+51 END IF sin IF correspondiente.
+52 Número de dimensiones no válido.
+53 MAT IDN requiere una matriz cuadrada bidimensional.
+54 Instrucción no permitida dentro de una subrutina.
+55 Subrutina mal formada.
+56 LOCAL debe aparecer en el bloque inicial de una función o subrutina.
 
 9. Comandos “solo inmediato”
 
-+ NEW | LIST | RUN | SAVE | LOAD | FILES | CAT | CD | CONT | RENUM | EDIT | DEBUG | DELETE | HELP | TOUR | SAMPLES | EXIT | SYSTEM | QUIT
++ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | QUIT | RENUM | RUN | SAVE | SYSTEM
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
 
 9.1 Comandos prohibidos en inmediato:
 
-+ DATA | RETURN | GOSUB | STOP | RESUME | ON ERROR | FRAME
++ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | RESUME | RETURN | STOP
 
 Formato de rangos
 1 `n`        Solo la línea n
@@ -1115,6 +1127,10 @@ Notas sobre DEBUG
 - `DEBUG` no admite parámetros. Abre el programa almacenado en un depurador de solo lectura a pantalla completa y se detiene inicialmente justo antes de la primera instrucción. Cuando la ejecución termina o se aborta, vuelve al modo inmediato.
 - Un `●` rojo en el margen señala un breakpoint. Mientras la ejecución está detenida, un `▶` amarillo brillante aparece inmediatamente antes de la próxima instrucción (naranja rojizo con el tema claro), y un `●` esmeralda junto al número identifica la línea de ejecución; un `▶` rojo en el margen señala la línea mostrada cuando es distinta de la línea de ejecución.
 - F5 continúa (F1 es un alias), F2 activa o desactiva un breakpoint en la línea mostrada, F6 entra en la rutina, F7 avanza por encima, F8 sale de ella, Tab/Shift+Tab desplaza el inspector y Esc o Ctrl+C aborta la ejecución.
+- Con F6/F7/F8, la pantalla del depurador se conserva durante los pasos que no necesitan la consola. La pantalla normal de salida se recupera justo antes de producir salida de consola (por ejemplo, `PRINT`, `CLS` o `BEEP`) o de solicitar entrada con `INPUT`, `LINE INPUT` o `MAT INPUT`. `INKEY$`, `KEYDOWN` y `PAUSE` también recuperan esa pantalla antes de consultar o esperar entrada. La siguiente pausa vuelve a mostrar el depurador. F5 sigue abandonando inmediatamente la pantalla del depurador.
+- La preparación de la ventana gráfica, el dibujo, la presentación y las lecturas del búfer gráfico (por ejemplo, `TEST`, `TESTCHR$`, `SCREEN$` o `SPRITE$`) no cambian la pantalla de la consola. `GINPUT` usa sólo la ventana gráfica y tampoco muestra la consola de salida. La E/S de archivos por sí sola no cambia de pantalla.
+- Cuando el programa está usando la ventana gráfica, el contenido actual del búfer gráfico se presenta automáticamente al entrar en cada pausa del depurador. Por tanto, tras F6, la siguiente pausa muestra los cambios gráficos realizados por el paso anterior sin necesidad de añadir `FRAME`. Con F7/F8, el resultado acumulado se presenta en el siguiente alto del depurador. Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS; las llamadas explícitas a `FRAME` y `FRAME fps` conservan su comportamiento normal.
+- El foco de ventana es independiente de la pantalla mostrada en la consola. Con F6/F7/F8, configurar, dibujar o presentar una ventana gráfica existente no la activa; el reenfoque queda reservado a la entrada. Tampoco la activa el refresco automático en cada parada. `GINPUT` solicita el foco explícitamente; `INKEY$`, `KEYDOWN` y `PAUSE` recuperan el foco gráfico cuando usan la entrada gráfica. F5 restablece la política normal de foco; fuera de `DEBUG` no hay cambios. Al crear o recrear una ventana, el sistema operativo puede activarla momentáneamente.
 - El inspector muestra las variables numéricas y literales visibles, las dimensiones y tamaños de las matrices (incluidos sus alias como parámetros), la pila activa de `GOSUB`/`SUB`/funciones/temporizadores/ratón, `ERR`, `ERL`, el estado de los temporizadores y el próximo elemento `DATA`, con su línea de origen, posición dentro de ella (contada desde 1) y valor.
 - `VARIABLES` incluye como máximo el último elemento escalar escrito de cada array. Una escritura posterior en el mismo array sustituye esa entrada; las operaciones `MAT` sobre el array completo, `REDIM` y `CLEAR` la eliminan. Un `*` marca las variables y estados inspeccionados que han cambiado desde la pausa anterior; la cuenta atrás natural de un temporizador no se considera un cambio. No muestra los valores de ámbitos exteriores que estén ocultos por el ámbito actual.
 - Los breakpoints pertenecen a líneas y detienen la ejecución antes de su primera instrucción. Se conservan durante la sesión actual del intérprete, pero no se guardan en el archivo `.bas`; `RENUM` y F9 en `EDIT` los remapean. Las instrucciones de nivel superior separadas por dos puntos, la condición de un `IF` en línea y cada instrucción de su rama `THEN` o `ELSE` seleccionada se recorren individualmente; las expresiones de `DEF FN` de una línea siguen siendo atómicas.
@@ -1151,21 +1167,13 @@ RENUM 295,1,190,215 'Mueve el bloque 190-215 al hueco 295-298.
 + `FILES "patrón"` | `CAT "patrón"`    Lista el contenido del directorio virtual actual.
 + `CD "ruta"`                          Cambia el directorio virtual actual dentro de la raíz del intérprete.
 + `HELP [tema]`                         Muestra una referencia compacta de sintaxis y parámetros para una sentencia o función integrada de BASIC.
-+ `TOUR`                               Presenta 20 ejemplos seleccionados, lo que demuestran y comandos `RUN` listos para copiar.
-+ `SAMPLES`                            Lista los 115 programas incluidos, agrupados por categoría.
 
 Notas sobre `HELP`
 - `HELP tema` no distingue mayúsculas/minúsculas y admite temas compuestos como `ON ERROR`, nombres terminados en `$` y alias documentados.
 - `HELP` sin tema muestra su forma de uso. Cada ficha contiene únicamente la sintaxis, los parámetros, una descripción breve y, cuando resulta útil, temas relacionados; para los detalles está este manual.
 - Solo está disponible en modo inmediato y es de solo lectura: no cambia el programa actual, el `CD`, las variables ni un estado reanudable con `CONT`.
 - `HELP` sigue siendo un identificador válido cuando se usa como variable, por ejemplo `HELP=1`.
-
-Notas sobre `TOUR` / `SAMPLES`
-- No admiten argumentos y solo están disponibles en modo inmediato.
-- Sus nombres siguen siendo identificadores válidos; solo una línea inmediata completa invoca cada comando.
-- Son de solo lectura: no cambian el programa actual, el `CD`, las variables ni un estado reanudable con `CONT`.
-- Su catálogo está incrustado en el ejecutable Rust, por lo que puede consultarse aunque no esté disponible el directorio `samples/`. En ese caso AVL BASIC explica que los comandos `RUN "/samples/..."` mostrados necesitan un paquete o copia del repositorio que contenga `samples/` bajo la raíz virtual.
-- El recorrido visual y el catálogo completo y comentado están disponibles en `samples/README.md`.
+- El catálogo completo de HELP se compila dentro del ejecutable y nunca necesita en tiempo de ejecución un catálogo externo, el manual ni el directorio de ejemplos.
 
 Notas sobre el patrón de FILES / CAT
 - Comillas obligatorias; solo comodines `*` y `?`; no se permiten rutas ni `..`.
@@ -1179,7 +1187,6 @@ Notas sobre CD
 - Las rutas con `/` al inicio se interpretan desde la raíz virtual; el resto, desde el directorio virtual actual.
 - `CD` solo cambia el directorio virtual actual visible para el usuario. `LOAD`, `RUN` y `CHAIN` no hacen ningún `CD` implícito.
 - En este repositorio, los ejemplos incluidos están en `samples/`, sus PNG de apoyo en `samples/assets/`.
-- En compilaciones locales desde fuente, `cargo build` crea un enlace de directorio `samples/` junto al ejecutable compilado. Si tu directorio de trabajo es `target/release`, `CD "samples"` funciona por resolución normal de rutas.
 
 9.4 Guardar y cargar programas
 

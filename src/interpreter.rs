@@ -13,13 +13,16 @@ use crate::expr::{
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::help;
+use crate::language;
 use crate::lexer::{split_command_ranges, split_commands, split_top_level, strip_comment};
 use crate::program::Program;
 use crate::reserved::is_reserved_identifier_name;
-use crate::showcase;
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, logical_round, round_half_away, Value};
-use crate::window::{focus_console_window, GraphicsInputEvent, GraphicsWindow, MouseSnapshot};
+use crate::window::{
+    focus_console_window, focus_console_window_for_debugger, GraphicsInputEvent, GraphicsWindow,
+    MouseSnapshot,
+};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -969,11 +972,14 @@ struct ActiveDebugRoutineFrame {
 #[derive(Debug, Default)]
 struct InterpreterDebuggerState {
     debugger: Option<Debugger>,
+    terminal: Option<console::DebugTerminalSession>,
     resume_guards: Vec<(Cursor, usize)>,
     editor_breakpoints: HashSet<i32>,
     mouse_isr_markers: Vec<usize>,
     active_routines: Vec<ActiveDebugRoutineFrame>,
     refocus_graphics_on_use: bool,
+    // Stepping and inspection keep drawing passive, without blocking input focus.
+    graphics_focus_on_input_only: bool,
 }
 
 #[derive(Debug)]
@@ -2077,27 +2083,49 @@ impl Interpreter {
     }
 
     pub fn set_debugger(&mut self, debugger: Debugger) {
+        self.set_debugger_with_terminal(debugger, None);
+    }
+
+    fn set_debugger_with_terminal(
+        &mut self,
+        debugger: Debugger,
+        terminal: Option<console::DebugTerminalSession>,
+    ) {
         self.clear_debug_array_writes();
-        let state = self
-            .debugger_state
-            .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()));
-        state.debugger = Some(debugger);
-        state.resume_guards.clear();
-        state.mouse_isr_markers.clear();
-        state.active_routines.clear();
-        state.refocus_graphics_on_use = false;
+        let previous_terminal = {
+            let state = self
+                .debugger_state
+                .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()));
+            let previous_terminal = state.terminal.take();
+            state.debugger = Some(debugger);
+            state.terminal = terminal;
+            state.resume_guards.clear();
+            state.mouse_isr_markers.clear();
+            state.active_routines.clear();
+            state.refocus_graphics_on_use = false;
+            state.graphics_focus_on_input_only = false;
+            previous_terminal
+        };
+        if let Some(terminal) = previous_terminal {
+            let _ = terminal.reveal_runtime_console();
+        }
     }
 
     pub fn clear_debugger(&mut self) -> Option<Debugger> {
-        let (debugger, remove_state) = {
+        let (debugger, terminal, remove_state) = {
             let state = self.debugger_state.as_mut()?;
             state.resume_guards.clear();
             state.mouse_isr_markers.clear();
             state.active_routines.clear();
             state.refocus_graphics_on_use = false;
+            state.graphics_focus_on_input_only = false;
             let debugger = state.debugger.take();
-            (debugger, state.editor_breakpoints.is_empty())
+            let terminal = state.terminal.take();
+            (debugger, terminal, state.editor_breakpoints.is_empty())
         };
+        if let Some(terminal) = terminal {
+            let _ = terminal.reveal_runtime_console();
+        }
         if remove_state {
             self.debugger_state = None;
         }
@@ -2190,9 +2218,7 @@ impl Interpreter {
             "This is free software under GPLv3 or later. You may redistribute it under its terms.",
         );
         self.write_line("This program comes with ABSOLUTELY NO WARRANTY. See COPYING.");
-        self.write_line(
-            "Type HELP <topic> for syntax, TOUR for highlights, or SAMPLES for the catalog.",
-        );
+        self.write_line("Type HELP <topic> for syntax and parameters.");
     }
 
     pub fn repl(&mut self) -> i32 {
@@ -2384,14 +2410,6 @@ impl Interpreter {
                     self.execute_help(arg)?;
                     return Ok(());
                 }
-            }
-            if let Some(arg) = immediate_arg(trimmed, &upper, "SAMPLES") {
-                self.execute_showcase(arg, false)?;
-                return Ok(());
-            }
-            if let Some(arg) = immediate_arg(trimmed, &upper, "TOUR") {
-                self.execute_showcase(arg, true)?;
-                return Ok(());
             }
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "SAVE") {
@@ -2657,26 +2675,6 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute_showcase(&mut self, args: &str, tour: bool) -> BasicResult<()> {
-        if !args.trim().is_empty() {
-            return Err(self.err(ErrorCode::Syntax));
-        }
-
-        let samples_available = self.root_dir.join("samples").is_dir();
-        let lines = if tour {
-            showcase::tour_lines(samples_available)
-        } else {
-            showcase::samples_lines(samples_available)
-        }
-        .map_err(|detail| self.err(ErrorCode::InvalidValue).with_detail(detail))?;
-
-        self.finish_output_line();
-        for line in lines {
-            self.write_line(&line);
-        }
-        Ok(())
-    }
-
     fn execute_help(&mut self, topic: &str) -> BasicResult<()> {
         let lines = help::render(topic)
             .map_err(|detail| self.err(ErrorCode::InvalidValue).with_detail(detail))?;
@@ -2887,6 +2885,8 @@ impl Interpreter {
 
         let ansi = self.ansi_output;
         let mut inspection_history = console::DebugInspectionHistory::default();
+        let terminal = console::DebugTerminalSession::new();
+        let pause_terminal = terminal.clone();
         let debugger = Debugger::interactive(move |snapshot, breakpoints, idle| {
             console::debug_fullscreen_with_idle_and_history(
                 &snapshot.source_lines,
@@ -2894,11 +2894,13 @@ impl Interpreter {
                 snapshot,
                 ansi,
                 None,
+                &pause_terminal,
                 &mut inspection_history,
                 || idle(),
             )
         });
-        let (outcome, stopped_line) = self.run_debug_session(debugger)?;
+        let (outcome, stopped_line) =
+            self.run_debug_session_with_terminal(debugger, Some(terminal))?;
         match outcome {
             RunOutcome::End => self.write_line("Debug session ended."),
             RunOutcome::Stop => {
@@ -2916,9 +2918,15 @@ impl Interpreter {
         Ok(())
     }
 
-    fn run_debug_session(
+    #[cfg(test)]
+    fn run_debug_session(&mut self, debugger: Debugger) -> BasicResult<(RunOutcome, Option<i32>)> {
+        self.run_debug_session_with_terminal(debugger, None)
+    }
+
+    fn run_debug_session_with_terminal(
         &mut self,
         mut debugger: Debugger,
+        terminal: Option<console::DebugTerminalSession>,
     ) -> BasicResult<(RunOutcome, Option<i32>)> {
         let mut breakpoints = self
             .debugger_state
@@ -2931,7 +2939,7 @@ impl Interpreter {
         breakpoints.extend(debugger.breakpoints());
         debugger.replace_breakpoints(breakpoints);
         debugger.request_pause();
-        self.set_debugger(debugger);
+        self.set_debugger_with_terminal(debugger, terminal);
 
         // Cleanup must also happen after a BASIC or debugger I/O error.
         let run_result = self.run_loaded();
@@ -3085,6 +3093,7 @@ impl Interpreter {
             state.resume_guards.clear();
             state.active_routines.clear();
             state.refocus_graphics_on_use = false;
+            state.graphics_focus_on_input_only = false;
         }
         self.current_line = None;
         self.graphics_window_closed_by_current_run = false;
@@ -3551,12 +3560,17 @@ impl Interpreter {
             return Ok(DebugHookControl::Run);
         };
 
+        // Inspection presents pending drawing but must not activate its window,
+        // including when a breakpoint interrupts an F5/Continue run.
+        if let Some(state) = self.debugger_state.as_mut() {
+            state.graphics_focus_on_input_only = true;
+        }
         let snapshot = self.build_debug_snapshot_at(cursor, line, metadata, source_code, reason);
         if self.current_run_uses_graphics_window() {
             let _ = self.present_graphics_window_for_debugger();
         }
         if self.graphics_window.is_some() {
-            focus_console_window(self.graphics_window.as_mut());
+            focus_console_window_for_debugger(self.graphics_window.as_mut());
         }
 
         let Some(mut debugger) = self
@@ -3590,6 +3604,7 @@ impl Interpreter {
             if let Some(state) = self.debugger_state.as_mut() {
                 state.resume_guards.clear();
                 state.refocus_graphics_on_use = false;
+                state.graphics_focus_on_input_only = false;
             }
             return Ok(DebugHookControl::Abort);
         }
@@ -3603,7 +3618,13 @@ impl Interpreter {
         if let Some(debugger) = state.debugger.as_mut() {
             debugger.arm_step(action, depth);
         }
-        state.refocus_graphics_on_use = self.graphics_window.is_some();
+        // A stepped routine may create its graphics window later. Keep the
+        // input focus request pending even when no window exists at this pause.
+        state.refocus_graphics_on_use = true;
+        state.graphics_focus_on_input_only = matches!(
+            action,
+            DebugAction::StepInto | DebugAction::StepOver | DebugAction::StepOut
+        );
         Ok(DebugHookControl::Run)
     }
 
@@ -4057,6 +4078,7 @@ impl Interpreter {
     }
 
     fn present_graphics_window_for_debugger(&mut self) -> BasicResult<()> {
+        // Show pending drawing at a pause without executing FRAME or mouse handlers.
         let handling_mouse_event = self.handling_mouse_event;
         self.handling_mouse_event = true;
         let result = self.present_graphics_window();
@@ -6166,6 +6188,7 @@ impl Interpreter {
 
         let line = match destination {
             InputDestination::Console => {
+                self.prepare_debug_console_io();
                 self.write(&prompt);
                 print!("{}", self.take_output());
                 let _ = io::stdout().flush();
@@ -6229,6 +6252,7 @@ impl Interpreter {
         if let Some(window) = self.graphics_window.as_mut() {
             window.focus();
             window.clear_transient_input();
+            let _ = self.take_graphics_refocus_after_debug();
         }
 
         let mut editor = GraphicsLineEditor::default();
@@ -6323,6 +6347,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
 
+        self.prepare_debug_console_io();
         if let Some(prompt) = prompt {
             self.write(prompt);
         }
@@ -7056,6 +7081,7 @@ impl Interpreter {
         }
         if self.graphics_window.is_some() && self.graphics_window_enabled {
             self.prepare_graphics_window_use_by_current_run()?;
+            self.refocus_graphics_after_debug_if_needed();
         }
         Ok(())
     }
@@ -7725,6 +7751,7 @@ impl Interpreter {
             let position = entries[entry_idx].position;
             let indexes = entries[entry_idx].positions[position].clone();
             if queue.is_empty() {
+                self.prepare_debug_console_io();
                 self.write(&self.mat_input_prompt(&name, &indexes));
                 print!("{}", self.take_output());
                 let _ = io::stdout().flush();
@@ -8591,6 +8618,7 @@ impl Interpreter {
     }
 
     fn execute_pause(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
+        self.prepare_debug_console_io();
         let running_program = self.run_depth > 0;
         if arg.trim().is_empty() {
             loop {
@@ -9202,7 +9230,7 @@ impl Interpreter {
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
             let mut window = GraphicsWindow::new(&self.graphics)?;
-            if self.current_line.is_some() {
+            if self.current_line.is_some() && self.graphics_drawing_may_focus() {
                 window.focus();
             }
             window.clear_transient_input();
@@ -9256,7 +9284,7 @@ impl Interpreter {
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
             let mut window = GraphicsWindow::new(&self.graphics)?;
-            if self.current_line.is_some() {
+            if self.current_line.is_some() && self.graphics_drawing_may_focus() {
                 window.focus();
             }
             window.clear_transient_input();
@@ -9524,13 +9552,22 @@ impl Interpreter {
             self.pump_graphics_window_now()?;
         }
         self.mark_graphics_window_used_by_current_run();
-        let refocus_after_debug = self.take_graphics_refocus_after_debug();
-        if first_graphics_use_by_run || refocus_after_debug {
-            if let Some(window) = self.graphics_window.as_mut() {
-                window.focus();
+        if self.graphics_drawing_may_focus() {
+            let refocus_after_debug = self.take_graphics_refocus_after_debug();
+            if first_graphics_use_by_run || refocus_after_debug {
+                if let Some(window) = self.graphics_window.as_mut() {
+                    window.focus();
+                }
             }
         }
         Ok(())
+    }
+
+    fn graphics_drawing_may_focus(&self) -> bool {
+        !self
+            .debugger_state
+            .as_ref()
+            .is_some_and(|state| state.graphics_focus_on_input_only)
     }
 
     fn take_graphics_refocus_after_debug(&mut self) -> bool {
@@ -9540,7 +9577,7 @@ impl Interpreter {
     }
 
     fn refocus_graphics_after_debug_if_needed(&mut self) {
-        if self.take_graphics_refocus_after_debug() {
+        if self.graphics_window.is_some() && self.take_graphics_refocus_after_debug() {
             if let Some(window) = self.graphics_window.as_mut() {
                 window.focus();
             }
@@ -9553,6 +9590,7 @@ impl Interpreter {
             && self.graphics_window.is_some()
         {
             self.prepare_graphics_window_use_by_current_run()?;
+            self.refocus_graphics_after_debug_if_needed();
         }
         Ok(())
     }
@@ -11510,11 +11548,30 @@ impl Interpreter {
         out
     }
 
+    fn prepare_debug_console_io(&mut self) {
+        let terminal = self
+            .debugger_state
+            .as_ref()
+            .and_then(|state| state.terminal.clone());
+        let revealed = terminal
+            .as_ref()
+            .is_some_and(|terminal| matches!(terminal.reveal_runtime_console(), Ok(true)));
+        if revealed {
+            focus_console_window_for_debugger(self.graphics_window.as_mut());
+            // A console reveal can happen after graphical input inside a single
+            // F7/F8 step. Preserve the next graphical input's chance to refocus.
+            if let Some(state) = self.debugger_state.as_mut() {
+                state.refocus_graphics_on_use = true;
+            }
+        }
+    }
+
     fn write(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
         if self.stream_output {
+            self.prepare_debug_console_io();
             print!("{text}");
         } else {
             self.output.push_str(text);
@@ -11524,6 +11581,7 @@ impl Interpreter {
 
     fn write_line(&mut self, text: &str) {
         if self.stream_output {
+            self.prepare_debug_console_io();
             println!("{text}");
             let _ = io::stdout().flush();
         } else {
@@ -11597,6 +11655,7 @@ impl Interpreter {
     }
 
     fn read_inkey(&mut self) -> String {
+        self.prepare_debug_console_io();
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
             self.refocus_graphics_after_debug_if_needed();
@@ -11627,6 +11686,7 @@ impl Interpreter {
     }
 
     fn key_down(&mut self, code: u8) -> bool {
+        self.prepare_debug_console_io();
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
             self.refocus_graphics_after_debug_if_needed();
@@ -16117,31 +16177,11 @@ fn immediate_arg<'a>(command: &'a str, upper_command: &str, word: &str) -> Optio
 }
 
 fn is_non_immediate_command(first: &str) -> bool {
-    matches!(
-        first,
-        "DATA" | "RETURN" | "GOSUB" | "STOP" | "RESUME" | "ON" | "ERROR" | "FRAME"
-    )
+    language::is_program_command_word(first)
 }
 
 fn is_immediate_only_command(first: &str, upper_command: &str) -> bool {
-    matches!(
-        first,
-        "NEW"
-            | "LIST"
-            | "RUN"
-            | "SAVE"
-            | "LOAD"
-            | "FILES"
-            | "CAT"
-            | "CD"
-            | "CONT"
-            | "RENUM"
-            | "DEBUG"
-            | "EDIT"
-            | "DELETE"
-            | "SYSTEM"
-            | "QUIT"
-    ) || matches!(upper_command, "SAMPLES" | "TOUR")
+    language::is_immediate_command_word(first)
         || (first == "HELP" && !is_assignment(upper_command))
         || (first == "EXIT"
             && !matches!(
@@ -18766,6 +18806,197 @@ mod debugger_runtime_tests {
     #[test]
     fn execution_metadata_remains_compact_when_source_locations_are_enabled() {
         assert!(std::mem::size_of::<ExecutionMetadata>() <= 16);
+    }
+
+    #[test]
+    fn debugger_terminal_hooks_distinguish_silent_work_from_observable_io() {
+        let terminal = console::DebugTerminalSession::recording_for_test();
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let mut interpreter = Interpreter::new();
+        interpreter.set_debugger_with_terminal(
+            Debugger::scripted([DebugAction::Abort]),
+            Some(terminal.clone()),
+        );
+
+        interpreter.assign("A", Value::number(1.0)).unwrap();
+        assert!(terminal.alternate_screen_active_for_test());
+
+        interpreter.stream_output = true;
+        interpreter.write("X");
+        assert!(terminal.primary_screen_restored_for_test());
+
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let _ = interpreter.read_inkey();
+        assert!(terminal.primary_screen_restored_for_test());
+
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let _ = interpreter.key_down(133);
+        assert!(terminal.primary_screen_restored_for_test());
+
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let mut cursor = Cursor {
+            line_idx: 0,
+            cmd_idx: 0,
+        };
+        interpreter.execute_pause("0", &mut cursor).unwrap();
+        assert!(terminal.primary_screen_restored_for_test());
+
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let _ = interpreter.clear_debugger();
+        assert!(terminal.primary_screen_restored_for_test());
+    }
+
+    #[test]
+    fn debugger_graphics_preparation_and_buffer_reads_keep_the_debugger_visible() {
+        let terminal = console::DebugTerminalSession::recording_for_test();
+        terminal.resume_action_for_test(DebugAction::StepInto);
+        let mut interpreter = Interpreter::new();
+        interpreter.set_debugger_with_terminal(
+            Debugger::scripted([DebugAction::Abort]),
+            Some(terminal.clone()),
+        );
+        interpreter.current_line = Some(10);
+        let state = interpreter.debugger_state.as_mut().unwrap();
+        state.refocus_graphics_on_use = true;
+        state.graphics_focus_on_input_only = true;
+
+        // Exercise the shared SCALE/CLG/FRAME preparation hook without a native window.
+        interpreter
+            .prepare_graphics_window_use_by_current_run()
+            .unwrap();
+        assert!(terminal.alternate_screen_active_for_test());
+        assert!(interpreter.current_run_uses_graphics_window());
+        assert!(!interpreter.graphics_drawing_may_focus());
+        assert!(
+            interpreter
+                .debugger_state
+                .as_ref()
+                .unwrap()
+                .refocus_graphics_on_use
+        );
+
+        for (name, coordinates) in [
+            ("SCREEN$", vec![]),
+            ("SPRITE$", vec![0.0, 0.0, 0.0, 0.0]),
+            ("TESTCHR$", vec![]),
+            ("TESTCHR$", vec![0.0, 0.0]),
+            ("TEST", vec![0.0, 0.0]),
+        ] {
+            let args = coordinates.into_iter().map(Value::number).collect();
+            interpreter.call_runtime_function(name, args).unwrap();
+            assert!(terminal.alternate_screen_active_for_test(), "{name}");
+        }
+
+        // A routine stepped over may not create its window until later. An
+        // input check without a window must not discard the pending focus.
+        interpreter.refocus_graphics_after_debug_if_needed();
+        assert!(interpreter.take_graphics_refocus_after_debug());
+
+        // Real console output must still reveal it after graphics activity.
+        interpreter.stream_output = true;
+        interpreter.write_line("Graphics inspected");
+        assert!(terminal.primary_screen_restored_for_test());
+    }
+
+    #[test]
+    fn debugger_graphics_focus_policy_follows_step_continue_and_abort_actions() {
+        for action in [
+            DebugAction::StepInto,
+            DebugAction::StepOver,
+            DebugAction::StepOut,
+            DebugAction::Continue,
+            DebugAction::Abort,
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.program.load_text("10 A=1\n20 END").unwrap();
+            let mut debugger = Debugger::scripted([action]);
+            debugger.request_pause();
+            interpreter.set_debugger(debugger);
+            interpreter.current_line = Some(10);
+            let cursor = Cursor {
+                line_idx: 0,
+                cmd_idx: 0,
+            };
+            let control = interpreter
+                .debug_before_cached_command(&cursor, 10, None, Some("A=1"))
+                .unwrap();
+            assert_eq!(
+                matches!(control, DebugHookControl::Abort),
+                action == DebugAction::Abort
+            );
+            let stepping = matches!(
+                action,
+                DebugAction::StepInto | DebugAction::StepOver | DebugAction::StepOut
+            );
+            assert_eq!(interpreter.graphics_drawing_may_focus(), !stepping);
+            assert_eq!(
+                interpreter
+                    .debugger_state
+                    .as_ref()
+                    .unwrap()
+                    .refocus_graphics_on_use,
+                action != DebugAction::Abort
+            );
+
+            interpreter
+                .prepare_graphics_window_use_by_current_run()
+                .unwrap();
+            // F5 restores the normal drawing path; steps leave the request for
+            // an input operation, even if the graphics window is not open yet.
+            assert_eq!(interpreter.take_graphics_refocus_after_debug(), stepping);
+        }
+    }
+
+    #[test]
+    fn debugger_console_reveal_rearms_graphics_input_focus_only_once() {
+        let terminal = console::DebugTerminalSession::recording_for_test();
+        terminal.resume_action_for_test(DebugAction::StepOver);
+        let mut interpreter = Interpreter::new();
+        interpreter.set_debugger_with_terminal(Debugger::scripted([]), Some(terminal.clone()));
+        interpreter.current_line = Some(10);
+        interpreter.graphics_window_used_this_run = true;
+        interpreter.stream_output = true;
+        let state = interpreter.debugger_state.as_mut().unwrap();
+        state.graphics_focus_on_input_only = true;
+        state.refocus_graphics_on_use = true;
+
+        // Model an input operation taking the pending request inside an F7/F8
+        // step, followed by PRINT returning focus to the output console.
+        assert!(interpreter.take_graphics_refocus_after_debug());
+        interpreter.write("X");
+        assert!(terminal.primary_screen_restored_for_test());
+        assert!(interpreter.take_graphics_refocus_after_debug());
+        assert!(!interpreter.take_graphics_refocus_after_debug());
+
+        // Already-visible console output neither refocuses nor rearms input.
+        interpreter.write("Y");
+        assert!(!interpreter.take_graphics_refocus_after_debug());
+        assert!(!interpreter.graphics_drawing_may_focus());
+    }
+
+    #[test]
+    fn debugger_graphics_focus_policy_does_not_leak_into_normal_runs() {
+        let mut interpreter = Interpreter::new();
+        assert!(interpreter.graphics_drawing_may_focus());
+        interpreter.set_debugger(Debugger::scripted([]));
+        assert!(interpreter.graphics_drawing_may_focus());
+
+        let state = interpreter.debugger_state.as_mut().unwrap();
+        state.graphics_focus_on_input_only = true;
+        state.refocus_graphics_on_use = true;
+        interpreter.prepare_run();
+        assert!(interpreter.graphics_drawing_may_focus());
+        assert!(!interpreter.take_graphics_refocus_after_debug());
+
+        // Editor breakpoints keep the boxed state alive after DEBUG ends.
+        let state = interpreter.debugger_state.as_mut().unwrap();
+        state.editor_breakpoints.insert(10);
+        state.graphics_focus_on_input_only = true;
+        state.refocus_graphics_on_use = true;
+        interpreter.clear_debugger();
+        assert!(interpreter.debugger_state.is_some());
+        assert!(interpreter.graphics_drawing_may_focus());
+        assert!(!interpreter.take_graphics_refocus_after_debug());
     }
 
     #[test]

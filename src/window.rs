@@ -10,7 +10,7 @@ use minifb::Icon;
 use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use std::cell::RefCell;
 use std::collections::VecDeque;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use std::ffi::c_void;
 use std::fmt;
 #[cfg(target_os = "linux")]
@@ -691,6 +691,78 @@ pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
 }
 
 #[cfg(windows)]
+pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWindow>) {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleWindow() -> *mut c_void;
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAncestor(hwnd: *mut c_void, flags: u32) -> *mut c_void;
+        fn GetClassNameW(hwnd: *mut c_void, class_name: *mut u16, max_count: i32) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
+        fn IsWindow(hwnd: *mut c_void) -> i32;
+        fn IsWindowVisible(hwnd: *mut c_void) -> i32;
+    }
+
+    let console_window = unsafe { GetConsoleWindow() };
+    if console_window.is_null() {
+        return;
+    }
+    // Preserve key-release handling even when the terminal is already active.
+    if let Some(window) = graphics_window {
+        window.settle_keyboard_before_console_focus();
+    }
+
+    let mut class_name = [0u16; 64];
+    let class_len = unsafe {
+        GetClassNameW(
+            console_window,
+            class_name.as_mut_ptr(),
+            class_name.len() as i32,
+        )
+    };
+    let class_name = &class_name[..class_len.max(0) as usize];
+    const GA_ROOTOWNER: u32 = 3;
+    let owner = unsafe { GetAncestor(console_window, GA_ROOTOWNER) };
+    let visible_owner = (!owner.is_null()
+        && unsafe { IsWindow(owner) != 0 && IsWindowVisible(owner) != 0 })
+    .then_some(owner);
+    let foreground = unsafe { GetForegroundWindow() };
+    if let Some(target) =
+        debugger_console_activation_target(console_window, class_name, visible_owner, foreground)
+    {
+        focus_window_handle(target);
+    }
+}
+
+#[cfg(any(windows, test))]
+fn debugger_console_activation_target(
+    console_window: *mut c_void,
+    class_name: &[u16],
+    visible_owner: Option<*mut c_void>,
+    foreground: *mut c_void,
+) -> Option<*mut c_void> {
+    if console_window.is_null() {
+        return None;
+    }
+    // A pseudoconsole's HWND is an internal helper, not the visible terminal.
+    // Keep classic consoles and unresolved hosts on their existing path.
+    let target = if class_name
+        .iter()
+        .copied()
+        .eq("PseudoConsoleWindow".encode_utf16())
+    {
+        visible_owner
+            .filter(|owner| !owner.is_null())
+            .unwrap_or(console_window)
+    } else {
+        console_window
+    };
+    (target != foreground).then_some(target)
+}
+
+#[cfg(windows)]
 fn focus_window_handle(hwnd: *mut c_void) {
     #[link(name = "kernel32")]
     extern "system" {
@@ -741,19 +813,73 @@ fn focus_window_handle(hwnd: *mut c_void) {
 pub fn focus_console_window(_graphics_window: Option<&mut GraphicsWindow>) {}
 
 #[cfg(not(windows))]
+pub fn focus_console_window_for_debugger(_graphics_window: Option<&mut GraphicsWindow>) {}
+
+#[cfg(not(windows))]
 fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        code_to_key, has_pending_pause_key, key_to_code, GraphicsInputCallback, GraphicsInputEvent,
-        InputEventQueue,
+        code_to_key, debugger_console_activation_target, has_pending_pause_key, key_to_code,
+        GraphicsInputCallback, GraphicsInputEvent, InputEventQueue,
     };
     use minifb::{InputCallback, Key};
     use std::collections::VecDeque;
+    use std::ffi::c_void;
 
     #[cfg(target_os = "linux")]
     use super::embedded_linux_window_icon_argb;
+
+    #[test]
+    fn debugger_console_focus_resolves_only_a_pseudoconsole_owner() {
+        let console = 1usize as *mut c_void;
+        let host = 2usize as *mut c_void;
+        let other = 3usize as *mut c_void;
+        for (class, owner, expected) in [
+            ("ConsoleWindowClass", Some(host), console),
+            ("PseudoConsoleWindow", Some(host), host),
+            ("PseudoConsoleWindow", None, console),
+            ("PseudoConsoleWindow", Some(std::ptr::null_mut()), console),
+            ("PseudoConsoleWindow", Some(console), console),
+            ("", Some(host), console),
+        ] {
+            let class = class.encode_utf16().collect::<Vec<_>>();
+            assert_eq!(
+                debugger_console_activation_target(console, &class, owner, other),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn debugger_console_focus_skips_only_the_exact_active_target() {
+        let console = 1usize as *mut c_void;
+        let host = 2usize as *mut c_void;
+        let other = 3usize as *mut c_void;
+        let pseudo = "PseudoConsoleWindow".encode_utf16().collect::<Vec<_>>();
+        let classic = "ConsoleWindowClass".encode_utf16().collect::<Vec<_>>();
+        assert_eq!(
+            debugger_console_activation_target(console, &pseudo, Some(host), host),
+            None
+        );
+        assert_eq!(
+            debugger_console_activation_target(console, &classic, None, console),
+            None
+        );
+        assert_eq!(
+            debugger_console_activation_target(console, &pseudo, Some(host), other),
+            Some(host)
+        );
+        assert_eq!(
+            debugger_console_activation_target(console, &pseudo, Some(host), console),
+            Some(host)
+        );
+        assert_eq!(
+            debugger_console_activation_target(std::ptr::null_mut(), &pseudo, Some(host), other),
+            None
+        );
+    }
 
     #[test]
     fn gui_arrow_codes_match_python_keydown_values() {

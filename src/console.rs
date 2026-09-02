@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use crate::keyboard::TerminalInputDecoder;
+use crate::language;
 use crate::lexer::split_command_ranges;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -8,11 +9,15 @@ use crossterm::terminal::{
     LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
+use std::cell::Cell;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -111,254 +116,6 @@ const LIGHT_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
     header: LIGHT_HEADER_STYLE,
     error: LIGHT_ERROR_STYLE,
 };
-
-const KEYWORDS: &[&str] = &[
-    "REM",
-    "CLEAR",
-    "CLS",
-    "DATA",
-    "DIM",
-    "REDIM",
-    "LET",
-    "PRINT",
-    "MAT",
-    "ROW",
-    "COL",
-    "BASE",
-    "USING",
-    "INPUT",
-    "GINPUT",
-    "LINE",
-    "RANDOMIZE",
-    "ERROR",
-    "GOTO",
-    "IF",
-    "THEN",
-    "ELSE",
-    "ELSEIF",
-    "ENDIF",
-    "FOR",
-    "TO",
-    "NEXT",
-    "STEP",
-    "RETURN",
-    "GOSUB",
-    "ON",
-    "OFF",
-    "DEF",
-    "FN",
-    "FNEND",
-    "FNEXIT",
-    "SUB",
-    "SUBEND",
-    "SUBEXIT",
-    "CALL",
-    "LOCAL",
-    "READ",
-    "RESTORE",
-    "STOP",
-    "END",
-    "ZONE",
-    "SAVE",
-    "LOAD",
-    "EDIT",
-    "RENUM",
-    "NEW",
-    "WHILE",
-    "WEND",
-    "LIST",
-    "RUN",
-    "CONT",
-    "RESUME",
-    "TRON",
-    "TROFF",
-    "FILES",
-    "CAT",
-    "CD",
-    "DELETE",
-    "EXIT",
-    "QUIT",
-    "SYSTEM",
-    "SWAP",
-    "BEEP",
-    "DEBUG",
-    "MOVE",
-    "MOVER",
-    "PLOT",
-    "PLOTR",
-    "DRAW",
-    "DRAWR",
-    "CIRCLE",
-    "CIRCLER",
-    "RECTANGLE",
-    "TRIANGLE",
-    "TTRIANGLE",
-    "INK",
-    "FILL",
-    "PAPER",
-    "SCREEN",
-    "CLG",
-    "OFFSCREEN",
-    "OPAQUE",
-    "TRANSPARENT",
-    "LDIR",
-    "MASK",
-    "DEG",
-    "RAD",
-    "FRAME",
-    "ORIGIN",
-    "SCALE",
-    "PENWIDTH",
-    "BIGFONT",
-    "SMALLFONT",
-    "LOCATE",
-    "GPRINT",
-    "LABEL",
-    "XAXIS",
-    "YAXIS",
-    "CROSSAT",
-    "GRAPH",
-    "GRAPHRANGE",
-    "PAUSE",
-    "FCIRCLE",
-    "FCIRCLER",
-    "FRECTANGLE",
-    "FTRIANGLE",
-    "TRECTANGLE",
-    "TQUAD",
-    "BSAVE",
-    "BLOAD",
-    "MODE",
-    "CHAIN",
-    "MERGE",
-    "AFTER",
-    "EVERY",
-    "DI",
-    "EI",
-    "CANCEL",
-    "SPRITE",
-    "COLMODE",
-    "COLCOLOR",
-    "COLRESET",
-    "MOUSE",
-    "LEFTDOWN",
-    "LEFTUP",
-    "LEFTDRAG",
-    "RIGHTDOWN",
-    "RIGHTUP",
-    "RIGHTDRAG",
-    "HITTEST",
-    "CLOSE",
-];
-
-const FUNCTIONS: &[&str] = &[
-    "ABS",
-    "INT",
-    "FIX",
-    "SGN",
-    "LEN",
-    "LBOUND",
-    "FRAC",
-    "SQR",
-    "LOG",
-    "LOG10",
-    "EXP",
-    "SIN",
-    "COS",
-    "TAN",
-    "ASN",
-    "ACS",
-    "ATN",
-    "COT",
-    "RTD",
-    "DTR",
-    "PI",
-    "MIN",
-    "MAX",
-    "INSTR",
-    "ASC",
-    "VAL",
-    "LEFT$",
-    "TEST",
-    "TESTCHR$",
-    "RIGHT$",
-    "MID$",
-    "STR$",
-    "CHR$",
-    "BIN$",
-    "HEX$",
-    "DEC$",
-    "UPPER$",
-    "LOWER$",
-    "SPACE$",
-    "STRING$",
-    "TRIM$",
-    "UBOUND",
-    "VERSION$",
-    "ROUND",
-    "RND",
-    "TIME",
-    "ERL",
-    "ERR",
-    "XPOS",
-    "YPOS",
-    "HPOS",
-    "VPOS",
-    "RGB",
-    "RGB$",
-    "INKEY$",
-    "KEYDOWN",
-    "SCREEN$",
-    "SPRITE$",
-    "WIDTH",
-    "HEIGHT",
-    "XMIN",
-    "XMAX",
-    "YMIN",
-    "YMAX",
-    "BORDER",
-    "REMAIN",
-    "HIT",
-    "HITCOLOR",
-    "HITSPRITE",
-    "HITID",
-    "ZER",
-    "CON",
-    "IDN",
-    "DET",
-    "TRN",
-    "INV",
-    "MOUSEX",
-    "MOUSEY",
-    "MOUSELEFT",
-    "MOUSERIGHT",
-    "MOUSEEVENT$",
-    "ABSUM",
-    "AMAX",
-    "AMAXCOL",
-    "AMAXROW",
-    "AMIN",
-    "AMINCOL",
-    "AMINROW",
-    "CNORM",
-    "CNORMCOL",
-    "DOT",
-    "FNORM",
-    "LBND",
-    "MAXAB",
-    "MAXABCOL",
-    "MAXABROW",
-    "RNORM",
-    "RNORMROW",
-    "SUM",
-    "UBND",
-];
-
-const PRINT_FUNCTIONS: &[&str] = &["SPC", "TAB"];
-
-const NUMERIC_CONSTANTS: &[&str] = &["INF"];
-
-const OPERATORS: &[&str] = &["MOD", "AND", "OR", "NOT", "XOR"];
 
 pub fn ansi_enabled() -> bool {
     if std::env::var_os("NO_COLOR").is_some() {
@@ -565,7 +322,6 @@ pub fn normalize_code(code: &str) -> String {
         result.push_str(comment);
     }
     match contextual_immediate {
-        Some(ContextualImmediateCommand::Showcase) => result.make_ascii_uppercase(),
         Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
         None => {}
     }
@@ -614,7 +370,6 @@ fn highlight_normalized_code(
     }
     let contextual_immediate = contextual_immediate_command(&line);
     match contextual_immediate {
-        Some(ContextualImmediateCommand::Showcase) => line.make_ascii_uppercase(),
         Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut line),
         None => {}
     }
@@ -665,7 +420,6 @@ fn normalize_code_for_editing_marked(code: &str) -> String {
         result.push_str(comment);
     }
     match contextual_immediate {
-        Some(ContextualImmediateCommand::Showcase) => result.make_ascii_uppercase(),
         Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
         None => {}
     }
@@ -1288,12 +1042,14 @@ pub fn debug_fullscreen_with_idle<I>(
 where
     I: FnMut() -> io::Result<()>,
 {
+    let terminal = DebugTerminalSession::new();
     debug_fullscreen_with_idle_and_changes(
         lines,
         breakpoints,
         snapshot,
         ansi,
         cases,
+        &terminal,
         &DebugPanelChanges::default(),
         idle,
     )
@@ -1305,6 +1061,7 @@ pub(crate) fn debug_fullscreen_with_idle_and_history<I>(
     snapshot: &crate::debugger::DebugSnapshot,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
+    terminal: &DebugTerminalSession,
     history: &mut DebugInspectionHistory,
     idle: I,
 ) -> io::Result<crate::debugger::DebugAction>
@@ -1318,6 +1075,7 @@ where
         snapshot,
         ansi,
         cases,
+        terminal,
         &changes,
         idle,
     );
@@ -1333,6 +1091,7 @@ fn debug_fullscreen_with_idle_and_changes<I>(
     snapshot: &crate::debugger::DebugSnapshot,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
+    terminal: &DebugTerminalSession,
     changes: &DebugPanelChanges,
     mut idle: I,
 ) -> io::Result<crate::debugger::DebugAction>
@@ -1347,7 +1106,7 @@ where
     }
 
     let _runtime_raw_suspend = suspend_runtime_raw_mode()?;
-    let _guard = FullscreenEditorGuard::enter()?;
+    let guard = terminal.enter_pause()?;
     let mut editor = BasicEditor::with_breakpoints(lines, breakpoints.clone());
     if let Some(line_index) = editor
         .lines
@@ -1392,7 +1151,9 @@ where
         if interrupt_requested() {
             clear_interrupt_requested();
             *breakpoints = editor.breakpoints;
-            return Ok(crate::debugger::DebugAction::Abort);
+            let action = crate::debugger::DebugAction::Abort;
+            guard.finish(action)?;
+            return Ok(action);
         }
         if !poll(Duration::from_millis(30))? {
             idle()?;
@@ -1408,6 +1169,7 @@ where
                         clear_interrupt_requested();
                     }
                     *breakpoints = editor.breakpoints;
+                    guard.finish(action)?;
                     return Ok(action);
                 }
                 match event.code {
@@ -1591,6 +1353,285 @@ fn debug_panel_page_size() -> usize {
     4
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DebugTerminalOperation {
+    EnableRawMode,
+    EnterAlternateScreen,
+    ShowCursor,
+    LeaveAlternateScreen,
+    DisableRawMode,
+}
+
+#[derive(Debug)]
+enum DebugTerminalBackend {
+    Real,
+    #[cfg(test)]
+    Recording(Rc<RefCell<Vec<DebugTerminalOperation>>>),
+}
+
+impl DebugTerminalBackend {
+    fn perform(&self, operation: DebugTerminalOperation) -> io::Result<()> {
+        #[cfg(test)]
+        if let Self::Recording(operations) = self {
+            operations.borrow_mut().push(operation);
+            return Ok(());
+        }
+
+        let mut stdout = io::stdout();
+        match operation {
+            DebugTerminalOperation::EnableRawMode => enable_raw_mode(),
+            DebugTerminalOperation::EnterAlternateScreen => {
+                execute!(stdout, EnterAlternateScreen)
+            }
+            DebugTerminalOperation::ShowCursor => execute!(stdout, Show),
+            DebugTerminalOperation::LeaveAlternateScreen => {
+                execute!(stdout, LeaveAlternateScreen)
+            }
+            DebugTerminalOperation::DisableRawMode => disable_raw_mode(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DebugTerminalInner {
+    alternate_screen: Cell<bool>,
+    debugger_raw_mode: Cell<bool>,
+    cursor_needs_show: Cell<bool>,
+    backend: DebugTerminalBackend,
+}
+
+impl DebugTerminalInner {
+    fn perform(&self, operation: DebugTerminalOperation) -> io::Result<()> {
+        self.backend.perform(operation)
+    }
+
+    fn restore(&self) -> io::Result<()> {
+        let mut first_error = None;
+        if self.cursor_needs_show.get() || self.alternate_screen.get() {
+            let show_result = self.perform(DebugTerminalOperation::ShowCursor);
+            if show_result.is_ok() {
+                self.cursor_needs_show.set(false);
+            }
+            remember_terminal_error(&mut first_error, show_result);
+        }
+        if self.alternate_screen.get() {
+            let leave_result = self.perform(DebugTerminalOperation::LeaveAlternateScreen);
+            if leave_result.is_ok() {
+                self.alternate_screen.set(false);
+            }
+            remember_terminal_error(&mut first_error, leave_result);
+        }
+        if self.debugger_raw_mode.get() {
+            let disable_result = self.perform(DebugTerminalOperation::DisableRawMode);
+            if disable_result.is_ok() {
+                self.debugger_raw_mode.set(false);
+            }
+            remember_terminal_error(&mut first_error, disable_result);
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for DebugTerminalInner {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+/// Terminal state shared by the interactive debugger and the interpreter.
+///
+/// The alternate screen can remain visible while a silent step executes, but
+/// the debugger's raw keyboard mode is always disabled before BASIC resumes.
+#[derive(Clone, Debug)]
+pub(crate) struct DebugTerminalSession {
+    inner: Rc<DebugTerminalInner>,
+}
+
+impl DebugTerminalSession {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Rc::new(DebugTerminalInner {
+                alternate_screen: Cell::new(false),
+                debugger_raw_mode: Cell::new(false),
+                cursor_needs_show: Cell::new(false),
+                backend: DebugTerminalBackend::Real,
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn recording() -> (Self, Rc<RefCell<Vec<DebugTerminalOperation>>>) {
+        let operations = Rc::new(RefCell::new(Vec::new()));
+        let session = Self {
+            inner: Rc::new(DebugTerminalInner {
+                alternate_screen: Cell::new(false),
+                debugger_raw_mode: Cell::new(false),
+                cursor_needs_show: Cell::new(false),
+                backend: DebugTerminalBackend::Recording(operations.clone()),
+            }),
+        };
+        (session, operations)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recording_for_test() -> Self {
+        Self::recording().0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resume_action_for_test(&self, action: crate::debugger::DebugAction) {
+        self.enter_pause().unwrap().finish(action).unwrap();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alternate_screen_active_for_test(&self) -> bool {
+        self.inner.alternate_screen.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn primary_screen_restored_for_test(&self) -> bool {
+        !self.inner.alternate_screen.get() && !self.inner.debugger_raw_mode.get()
+    }
+
+    fn enter_pause(&self) -> io::Result<DebugTerminalPauseGuard> {
+        if self.inner.debugger_raw_mode.get() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "debugger terminal is already paused",
+            ));
+        }
+
+        self.inner.perform(DebugTerminalOperation::EnableRawMode)?;
+        self.inner.debugger_raw_mode.set(true);
+
+        if !self.inner.alternate_screen.get() {
+            if let Err(err) = self
+                .inner
+                .perform(DebugTerminalOperation::EnterAlternateScreen)
+            {
+                let disable_result = self.inner.perform(DebugTerminalOperation::DisableRawMode);
+                if disable_result.is_ok() {
+                    self.inner.debugger_raw_mode.set(false);
+                }
+                return Err(err);
+            }
+            self.inner.alternate_screen.set(true);
+        }
+        self.inner.cursor_needs_show.set(true);
+
+        Ok(DebugTerminalPauseGuard {
+            terminal: self.clone(),
+            active: true,
+        })
+    }
+
+    /// Restores the primary screen before BASIC performs observable I/O.
+    /// Returns true only for the transition that actually revealed it.
+    pub(crate) fn reveal_runtime_console(&self) -> io::Result<bool> {
+        if !self.inner.alternate_screen.get() {
+            if self.inner.cursor_needs_show.get() {
+                if let Err(err) = self.inner.perform(DebugTerminalOperation::ShowCursor) {
+                    let _ = self.inner.restore();
+                    return Err(err);
+                }
+                self.inner.cursor_needs_show.set(false);
+            }
+            return Ok(false);
+        }
+        if self.inner.debugger_raw_mode.get() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "cannot reveal the runtime console while the debugger is paused",
+            ));
+        }
+
+        let mut first_error = None;
+        let show_result = self.inner.perform(DebugTerminalOperation::ShowCursor);
+        if show_result.is_ok() {
+            self.inner.cursor_needs_show.set(false);
+        }
+        remember_terminal_error(&mut first_error, show_result);
+        let leave_result = self
+            .inner
+            .perform(DebugTerminalOperation::LeaveAlternateScreen);
+        if leave_result.is_ok() {
+            self.inner.alternate_screen.set(false);
+        }
+        remember_terminal_error(&mut first_error, leave_result);
+        if let Some(err) = first_error {
+            let _ = self.inner.restore();
+            Err(err)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn finish_pause(&self, keep_alternate_screen: bool) -> io::Result<()> {
+        let mut first_error = None;
+        let show_result = self.inner.perform(DebugTerminalOperation::ShowCursor);
+        if show_result.is_ok() {
+            self.inner.cursor_needs_show.set(false);
+        }
+        remember_terminal_error(&mut first_error, show_result);
+        if !keep_alternate_screen && self.inner.alternate_screen.get() {
+            let leave_result = self
+                .inner
+                .perform(DebugTerminalOperation::LeaveAlternateScreen);
+            if leave_result.is_ok() {
+                self.inner.alternate_screen.set(false);
+            }
+            remember_terminal_error(&mut first_error, leave_result);
+        }
+        if self.inner.debugger_raw_mode.get() {
+            let disable_result = self.inner.perform(DebugTerminalOperation::DisableRawMode);
+            if disable_result.is_ok() {
+                self.inner.debugger_raw_mode.set(false);
+            }
+            remember_terminal_error(&mut first_error, disable_result);
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+fn remember_terminal_error(first_error: &mut Option<io::Error>, result: io::Result<()>) {
+    if first_error.is_none() {
+        if let Err(err) = result {
+            *first_error = Some(err);
+        }
+    }
+}
+
+fn debug_action_keeps_alternate_screen(action: crate::debugger::DebugAction) -> bool {
+    matches!(
+        action,
+        crate::debugger::DebugAction::StepInto
+            | crate::debugger::DebugAction::StepOver
+            | crate::debugger::DebugAction::StepOut
+    )
+}
+
+struct DebugTerminalPauseGuard {
+    terminal: DebugTerminalSession,
+    active: bool,
+}
+
+impl DebugTerminalPauseGuard {
+    fn finish(mut self, action: crate::debugger::DebugAction) -> io::Result<()> {
+        self.terminal
+            .finish_pause(debug_action_keeps_alternate_screen(action))?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for DebugTerminalPauseGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.terminal.inner.restore();
+        }
+    }
+}
+
 struct FullscreenEditorGuard;
 
 impl FullscreenEditorGuard {
@@ -1627,6 +1668,8 @@ const DEBUG_EXECUTION_ARROW_LIGHT_STYLE: &str = "\x1b[1m\x1b[38;5;202m";
 const DEBUG_CURRENT_LINE_DARK_STYLE: &str = "\x1b[48;5;236m";
 const DEBUG_CURRENT_LINE_LIGHT_STYLE: &str = "\x1b[48;5;254m";
 const DEBUG_PANEL_HEADER_STYLE: &str = "\x1b[1m\x1b[38;5;45m";
+const DEBUG_PANEL_CHANGED_DARK_STYLE: &str = "\x1b[1m\x1b[38;5;226m";
+const DEBUG_PANEL_CHANGED_LIGHT_STYLE: &str = "\x1b[1m\x1b[38;5;202m";
 const DEBUG_STATEMENT_PLACEHOLDER: char = '\u{E001}';
 const EDITOR_GUTTER_WIDTH: usize = 3;
 
@@ -3421,12 +3464,13 @@ fn render_fullscreen_debugger(
             let line = panel_lines
                 .get(*panel_scroll + panel_row)
                 .map_or("", String::as_str);
-            let line = fit_plain_text(line, layout.panel_cols);
-            if ansi && debug_panel_line_has_heading(&line) {
-                write!(stdout, "{DEBUG_PANEL_HEADER_STYLE}{line}{RESET}")?;
-            } else {
-                write!(stdout, "{line}")?;
-            }
+            let line = style_debug_panel_line_for_theme(
+                line,
+                layout.panel_cols,
+                ansi,
+                current_syntax_theme(),
+            );
+            write!(stdout, "{line}")?;
         }
     }
 
@@ -3444,11 +3488,79 @@ fn render_fullscreen_debugger(
     stdout.flush()
 }
 
-fn debug_panel_line_has_heading(line: &str) -> bool {
+fn debug_panel_cell_is_heading(cell: &[char]) -> bool {
     let headings = ["VARIABLES", "ARRAYS", "STACK", "STATE", "TIMERS", "DATA"];
-    line.split(" | ")
-        .map(str::trim)
-        .any(|column| headings.contains(&column))
+    let text = cell.iter().collect::<String>();
+    headings.contains(&text.trim())
+}
+
+fn debug_panel_column_count(width: usize) -> usize {
+    if width >= 96 {
+        3
+    } else if width >= 60 {
+        2
+    } else {
+        1
+    }
+}
+
+fn debug_panel_column_width(width: usize, count: usize) -> usize {
+    let count = count.max(1);
+    let gap_width = " | ".chars().count();
+    (width.saturating_sub(gap_width.saturating_mul(count.saturating_sub(1))) / count).max(1)
+}
+
+fn debug_panel_changed_style(theme: SyntaxTheme) -> &'static str {
+    match theme {
+        SyntaxTheme::Dark => DEBUG_PANEL_CHANGED_DARK_STYLE,
+        SyntaxTheme::Light => DEBUG_PANEL_CHANGED_LIGHT_STYLE,
+    }
+}
+
+fn style_debug_panel_line_for_theme(
+    line: &str,
+    width: usize,
+    ansi: bool,
+    theme: SyntaxTheme,
+) -> String {
+    let line = fit_plain_text(line, width);
+    if !ansi || width == 0 {
+        return line;
+    }
+
+    let chars = line.chars().collect::<Vec<_>>();
+    let count = debug_panel_column_count(width);
+    let column_width = debug_panel_column_width(width, count);
+    let gap_width = " | ".chars().count();
+    let mut rendered = String::with_capacity(line.len());
+    let mut copied = 0usize;
+
+    for column in 0..count {
+        let start = column.saturating_mul(column_width + gap_width);
+        if start >= chars.len() {
+            break;
+        }
+        rendered.extend(chars[copied..start].iter());
+        let end = (start + column_width).min(chars.len());
+        let cell = &chars[start..end];
+        let style = if cell.first() == Some(&'*') {
+            Some(debug_panel_changed_style(theme))
+        } else if debug_panel_cell_is_heading(cell) {
+            Some(DEBUG_PANEL_HEADER_STYLE)
+        } else {
+            None
+        };
+        if let Some(style) = style {
+            rendered.push_str(style);
+            rendered.extend(cell.iter());
+            rendered.push_str(RESET);
+        } else {
+            rendered.extend(cell.iter());
+        }
+        copied = end;
+    }
+    rendered.extend(chars[copied..].iter());
+    rendered
 }
 
 fn debug_panel_lines(snapshot: &crate::debugger::DebugSnapshot, width: usize) -> Vec<String> {
@@ -3579,30 +3691,30 @@ fn debug_panel_lines_with_changes(
         }
     });
 
-    let columns = if width >= 96 {
-        vec![values, stack, timers]
-    } else if width >= 60 {
-        let mut right = stack;
-        right.push(String::new());
-        right.extend(timers);
-        vec![values, right]
-    } else {
-        let mut all = values;
-        all.push(String::new());
-        all.extend(stack);
-        all.push(String::new());
-        all.extend(timers);
-        vec![all]
+    let columns = match debug_panel_column_count(width) {
+        3 => vec![values, stack, timers],
+        2 => {
+            let mut right = stack;
+            right.push(String::new());
+            right.extend(timers);
+            vec![values, right]
+        }
+        _ => {
+            let mut all = values;
+            all.push(String::new());
+            all.extend(stack);
+            all.push(String::new());
+            all.extend(timers);
+            vec![all]
+        }
     };
     join_debug_panel_columns(&columns, width.max(1))
 }
 
 fn join_debug_panel_columns(columns: &[Vec<String>], width: usize) -> Vec<String> {
     let gap = " | ";
-    let gap_width = gap.chars().count();
     let count = columns.len().max(1);
-    let available = width.saturating_sub(gap_width.saturating_mul(count.saturating_sub(1)));
-    let column_width = (available / count).max(1);
+    let column_width = debug_panel_column_width(width, count);
     let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
     (0..rows)
         .map(|row| {
@@ -4323,14 +4435,11 @@ fn normalize_main_code_for_editing_marked(code: &str) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextualImmediateCommand {
-    Showcase,
     Help,
 }
 
 fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand> {
-    if is_showcase_immediate_line(line) {
-        Some(ContextualImmediateCommand::Showcase)
-    } else if is_help_immediate_line(line) {
+    if is_help_immediate_line(line) {
         Some(ContextualImmediateCommand::Help)
     } else {
         None
@@ -4340,11 +4449,6 @@ fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand
 fn contextual_immediate_command_marked(line: &str) -> Option<ContextualImmediateCommand> {
     let unmarked: String = line.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
     contextual_immediate_command(&unmarked)
-}
-
-fn is_showcase_immediate_line(line: &str) -> bool {
-    let command = line.trim();
-    command.eq_ignore_ascii_case("TOUR") || command.eq_ignore_ascii_case("SAMPLES")
 }
 
 pub(crate) fn is_help_immediate_line(line: &str) -> bool {
@@ -4855,9 +4959,7 @@ fn highlight_main(
             }
             let word: String = chars[start..i].iter().collect();
             let upper = word.to_ascii_uppercase();
-            if contextual_immediate == Some(ContextualImmediateCommand::Showcase) {
-                push_styled(&mut out, palette.keyword, &upper);
-            } else if contextual_immediate == Some(ContextualImmediateCommand::Help)
+            if contextual_immediate == Some(ContextualImmediateCommand::Help)
                 && upper == "HELP"
                 && chars[..start].iter().all(|ch| ch.is_whitespace())
             {
@@ -4874,7 +4976,7 @@ fn highlight_main(
                     &chars[i..].iter().collect::<String>(),
                 );
                 return out;
-            } else if KEYWORDS.contains(&upper.as_str()) {
+            } else if language::is_keyword(&upper) {
                 push_styled(&mut out, palette.keyword, &upper);
                 if upper == "DEF" {
                     after_def = true;
@@ -5056,14 +5158,11 @@ fn push_styled(out: &mut String, style: &str, text: &str) {
 }
 
 fn is_known_word(word: &str) -> bool {
-    KEYWORDS.contains(&word) || is_non_reserved_known_word(word)
+    language::is_known_word(word)
 }
 
 fn is_non_reserved_known_word(word: &str) -> bool {
-    FUNCTIONS.contains(&word)
-        || PRINT_FUNCTIONS.contains(&word)
-        || NUMERIC_CONSTANTS.contains(&word)
-        || OPERATORS.contains(&word)
+    language::is_other_word(word)
 }
 
 pub fn is_known_basic_word(word: &str) -> bool {
@@ -5361,60 +5460,7 @@ mod tests {
     }
 
     #[test]
-    fn showcase_metacommands_are_capitalized_and_highlighted_only_as_complete_lines() {
-        for command in ["tour", "samples"] {
-            let upper = command.to_ascii_uppercase();
-            assert_eq!(normalize_code(command), upper);
-            assert_eq!(
-                normalize_code(&format!("  {command}  ")),
-                format!("  {upper}")
-            );
-            assert_eq!(
-                syntax_highlight(command, true),
-                format!("{KEYWORD_STYLE}{upper}{RESET}")
-            );
-            assert_eq!(
-                syntax_highlight_raw_with_cases(command, true, None),
-                format!("{KEYWORD_STYLE}{upper}{RESET}")
-            );
-
-            for cursor in 0..=command.chars().count() {
-                assert_eq!(
-                    syntax_highlight_editing_with_cases(command, cursor, false, None),
-                    upper
-                );
-            }
-        }
-
-        assert!(!is_known_basic_word("TOUR"));
-        assert!(!is_known_basic_word("SAMPLES"));
-
-        assert_eq!(normalize_code("samples=7"), "samples=7");
-        assert_eq!(normalize_code("10 tour=3"), "10 tour=3");
-        assert_eq!(normalize_code("print tour"), "PRINT tour");
-        assert_eq!(normalize_code("tour:"), "tour :");
-        assert_eq!(
-            normalize_code("tour ' not immediate"),
-            "tour ' not immediate"
-        );
-
-        for (source, identifier) in [
-            ("SAMPLES=7", "SAMPLES"),
-            ("10 TOUR=3", "TOUR"),
-            ("PRINT TOUR", "TOUR"),
-            ("10 TOUR", "TOUR"),
-            ("TOUR ' not immediate", "TOUR"),
-        ] {
-            let highlighted = syntax_highlight(source, true);
-            assert!(
-                !highlighted.contains(&format!("{KEYWORD_STYLE}{identifier}{RESET}")),
-                "unexpected metacommand highlighting for {source}: {highlighted:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn showcase_metacommand_display_overrides_a_matching_identifier_case_only_when_immediate() {
+    fn removed_showcase_commands_are_ordinary_identifiers() {
         let cases = HashMap::from([
             ("TOUR".to_string(), "tour".to_string()),
             ("SAMPLES".to_string(), "Samples".to_string()),
@@ -5422,16 +5468,20 @@ mod tests {
 
         assert_eq!(
             syntax_highlight_with_cases("tour", false, Some(&cases)),
-            "TOUR"
+            "tour"
         );
         assert_eq!(
             syntax_highlight_with_cases("samples", false, Some(&cases)),
-            "SAMPLES"
+            "Samples"
         );
         assert_eq!(
             syntax_highlight_with_cases("PRINT tour; samples", false, Some(&cases)),
             "PRINT tour; Samples"
         );
+        assert_eq!(normalize_code("tour"), "tour");
+        assert_eq!(normalize_code("samples"), "samples");
+        assert!(!is_known_basic_word("TOUR"));
+        assert!(!is_known_basic_word("SAMPLES"));
     }
 
     #[test]
@@ -5479,18 +5529,11 @@ mod tests {
 
     #[test]
     fn highlighted_functions_constants_and_operators_have_help_topics() {
-        for (group, words) in [
-            ("FUNCTIONS", FUNCTIONS),
-            ("PRINT_FUNCTIONS", PRINT_FUNCTIONS),
-            ("NUMERIC_CONSTANTS", NUMERIC_CONSTANTS),
-            ("OPERATORS", OPERATORS),
-        ] {
-            for word in words {
-                assert!(
-                    crate::help::has_topic(word),
-                    "{group} entry {word} has no HELP topic"
-                );
-            }
+        for word in language::other_words() {
+            assert!(
+                crate::help::has_topic(word),
+                "highlighted entry {word} has no HELP topic"
+            );
         }
     }
 
@@ -6395,6 +6438,113 @@ mod tests {
     }
 
     #[test]
+    fn debugger_keeps_alternate_screen_only_for_step_actions() {
+        use crate::debugger::DebugAction;
+
+        assert!(!debug_action_keeps_alternate_screen(DebugAction::Continue));
+        assert!(debug_action_keeps_alternate_screen(DebugAction::StepInto));
+        assert!(debug_action_keeps_alternate_screen(DebugAction::StepOver));
+        assert!(debug_action_keeps_alternate_screen(DebugAction::StepOut));
+        assert!(!debug_action_keeps_alternate_screen(DebugAction::Abort));
+    }
+
+    #[test]
+    fn debugger_terminal_retains_silent_steps_and_reveals_runtime_io_once() {
+        use crate::debugger::DebugAction;
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+
+        terminal
+            .enter_pause()
+            .unwrap()
+            .finish(DebugAction::StepInto)
+            .unwrap();
+        terminal
+            .enter_pause()
+            .unwrap()
+            .finish(DebugAction::StepOver)
+            .unwrap();
+        assert!(terminal.reveal_runtime_console().unwrap());
+        assert!(!terminal.reveal_runtime_console().unwrap());
+        terminal
+            .enter_pause()
+            .unwrap()
+            .finish(DebugAction::Continue)
+            .unwrap();
+
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                DisableRawMode,
+                EnableRawMode,
+                ShowCursor,
+                DisableRawMode,
+                ShowCursor,
+                LeaveAlternateScreen,
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                LeaveAlternateScreen,
+                DisableRawMode,
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_terminal_guard_restores_primary_screen_on_early_exit() {
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+        let guard = terminal.enter_pause().unwrap();
+        drop(guard);
+
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                LeaveAlternateScreen,
+                DisableRawMode,
+            ]
+        );
+        assert!(!terminal.inner.alternate_screen.get());
+        assert!(!terminal.inner.debugger_raw_mode.get());
+    }
+
+    #[test]
+    fn debugger_terminal_session_restores_an_idle_alternate_screen_on_drop() {
+        use crate::debugger::DebugAction;
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+        terminal
+            .enter_pause()
+            .unwrap()
+            .finish(DebugAction::StepOut)
+            .unwrap();
+        assert!(terminal.inner.alternate_screen.get());
+        assert!(!terminal.inner.debugger_raw_mode.get());
+
+        drop(terminal);
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                DisableRawMode,
+                ShowCursor,
+                LeaveAlternateScreen,
+            ]
+        );
+    }
+
+    #[test]
     fn debugger_panel_scroll_clamps_after_responsive_resize() {
         let snapshot = sample_debug_snapshot();
         let narrow = debug_layout(42, 24);
@@ -6581,9 +6731,166 @@ mod tests {
     }
 
     #[test]
-    fn debugger_panel_heading_detection_does_not_style_data_named_values() {
-        assert!(debug_panel_line_has_heading("VARIABLES        | DATA"));
-        assert!(!debug_panel_line_has_heading("  DATABASE = 1  |   (none)"));
+    fn debugger_panel_styles_headings_per_cell_without_leaking_into_values() {
+        let width = 60;
+        let column_width = debug_panel_column_width(width, 2);
+        let plain = fit_plain_text(
+            &format!(
+                "{} | {}",
+                fit_plain_text("ARRAYS", column_width),
+                fit_plain_text("  DATABASE = 1", column_width)
+            ),
+            width,
+        );
+        let styled = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
+
+        assert_eq!(styled.matches(DEBUG_PANEL_HEADER_STYLE).count(), 1);
+        assert_eq!(visible_width(&styled), width);
+        let (heading, value) = styled.split_once(" | ").unwrap();
+        assert!(heading.starts_with(DEBUG_PANEL_HEADER_STYLE));
+        assert!(heading.ends_with(RESET));
+        assert!(!value.contains(DEBUG_PANEL_HEADER_STYLE));
+        assert!(value.contains("DATABASE = 1"));
+    }
+
+    #[test]
+    fn debugger_panel_colors_only_changed_cells_and_keeps_plain_fallback() {
+        let snapshot = sample_debug_snapshot();
+        let changes = DebugPanelChanges {
+            variables: HashSet::from([String::from("I")]),
+            ..DebugPanelChanges::default()
+        };
+        let width = 120;
+        let plain = debug_panel_lines_with_changes(&snapshot, &changes, width)
+            .into_iter()
+            .find(|line| line.contains("* I = 4"))
+            .unwrap();
+
+        let fallback = style_debug_panel_line_for_theme(&plain, width, false, SyntaxTheme::Dark);
+        assert_eq!(fallback, plain);
+        assert!(!fallback.contains('\x1b'));
+
+        let dark = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
+        let light = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Light);
+        assert!(dark.contains(&format!("{DEBUG_PANEL_CHANGED_DARK_STYLE}* I = 4")));
+        assert!(light.contains(&format!("{DEBUG_PANEL_CHANGED_LIGHT_STYLE}* I = 4")));
+        assert!(!dark.contains(DEBUG_PANEL_CHANGED_LIGHT_STYLE));
+        assert!(!light.contains(DEBUG_PANEL_CHANGED_DARK_STYLE));
+        assert_eq!(dark.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(), 1);
+        assert_eq!(light.matches(DEBUG_PANEL_CHANGED_LIGHT_STYLE).count(), 1);
+        assert_eq!(visible_width(&dark), width);
+        assert_eq!(visible_width(&light), width);
+
+        let first_gap = dark.find(" | ").unwrap();
+        let first_reset = dark.find(RESET).unwrap();
+        assert!(
+            first_reset < first_gap,
+            "changed style leaked into the next cell"
+        );
+        assert!(!dark[first_gap..].contains(DEBUG_PANEL_CHANGED_DARK_STYLE));
+    }
+
+    #[test]
+    fn debugger_panel_colors_changed_cells_in_second_and_third_columns() {
+        let snapshot = sample_debug_snapshot();
+
+        let state_changes = DebugPanelChanges {
+            state: true,
+            ..DebugPanelChanges::default()
+        };
+        let two_column_width = 60;
+        let state_plain =
+            debug_panel_lines_with_changes(&snapshot, &state_changes, two_column_width)
+                .into_iter()
+                .find(|line| line.contains("* ERR=5 ERL=120"))
+                .unwrap();
+        let state_styled = style_debug_panel_line_for_theme(
+            &state_plain,
+            two_column_width,
+            true,
+            SyntaxTheme::Dark,
+        );
+        let first_gap = state_styled.find(" | ").unwrap();
+        let state_style = state_styled.find(DEBUG_PANEL_CHANGED_DARK_STYLE).unwrap();
+        assert!(state_style > first_gap);
+        assert_eq!(
+            state_styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(),
+            1
+        );
+        assert_eq!(visible_width(&state_styled), two_column_width);
+
+        let timer_changes = DebugPanelChanges {
+            timers: HashSet::from([1]),
+            ..DebugPanelChanges::default()
+        };
+        let three_column_width = 120;
+        let timer_plain =
+            debug_panel_lines_with_changes(&snapshot, &timer_changes, three_column_width)
+                .into_iter()
+                .find(|line| line.contains("* #1 EVERY"))
+                .unwrap();
+        let timer_styled = style_debug_panel_line_for_theme(
+            &timer_plain,
+            three_column_width,
+            true,
+            SyntaxTheme::Dark,
+        );
+        let second_gap = timer_styled.rfind(" | ").unwrap();
+        let timer_style = timer_styled.find(DEBUG_PANEL_CHANGED_DARK_STYLE).unwrap();
+        assert!(timer_style > second_gap);
+        assert_eq!(
+            timer_styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(),
+            1
+        );
+        assert_eq!(visible_width(&timer_styled), three_column_width);
+    }
+
+    #[test]
+    fn debugger_panel_change_style_ignores_separator_text_inside_values() {
+        use crate::debugger::{DebugValue, DebugVariable};
+
+        let mut snapshot = sample_debug_snapshot();
+        snapshot.variables = vec![DebugVariable {
+            name: String::from("NAME$"),
+            value: DebugValue::String(String::from("LEFT | RIGHT")),
+        }];
+        snapshot.array_elements.clear();
+        let changes = DebugPanelChanges {
+            variables: HashSet::from([String::from("NAME$")]),
+            ..DebugPanelChanges::default()
+        };
+        let width = 120;
+        let plain = debug_panel_lines_with_changes(&snapshot, &changes, width)
+            .into_iter()
+            .find(|line| line.contains("* NAME$"))
+            .unwrap();
+        let styled = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
+
+        assert!(styled.contains(&format!(
+            "{DEBUG_PANEL_CHANGED_DARK_STYLE}* NAME$ = \"LEFT | RIGHT\""
+        )));
+        assert_eq!(styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(), 1);
+        assert_eq!(visible_width(&styled), width);
+    }
+
+    #[test]
+    fn debugger_panel_change_style_survives_single_column_truncation() {
+        let fallback = style_debug_panel_line_for_theme(
+            "* VERY_LONG_VARIABLE = 123",
+            1,
+            false,
+            SyntaxTheme::Dark,
+        );
+        let styled = style_debug_panel_line_for_theme(
+            "* VERY_LONG_VARIABLE = 123",
+            1,
+            true,
+            SyntaxTheme::Dark,
+        );
+
+        assert_eq!(fallback, "*");
+        assert_eq!(styled, format!("{DEBUG_PANEL_CHANGED_DARK_STYLE}*{RESET}"));
+        assert_eq!(visible_width(&styled), 1);
     }
 
     #[test]
