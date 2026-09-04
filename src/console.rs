@@ -3,7 +3,7 @@ use crate::keyboard::TerminalInputDecoder;
 use crate::language;
 use crate::lexer::split_command_ranges;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
-use crossterm::event::{poll, read, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
     LeaveAlternateScreen,
@@ -1132,6 +1132,8 @@ where
     }
 
     let mut panel_scroll = 0usize;
+    let mut output_visible = false;
+    let mut view_keys = DebugViewKeys::default();
     let mut status = debug_status(
         snapshot,
         editor.current_line_number(),
@@ -1161,83 +1163,117 @@ where
         }
         match read()? {
             Event::Key(event) => {
-                if event.kind == KeyEventKind::Release {
+                if !view_keys.accepts(event) {
                     continue;
                 }
-                if let Some(action) = debug_action_for_key(event.code, event.modifiers) {
-                    if is_debugger_ctrl_c(event.code, event.modifiers) {
-                        clear_interrupt_requested();
+                if event.code == KeyCode::F(4) && event.modifiers.is_empty() {
+                    output_visible = !output_visible;
+                    guard.set_output_visible(output_visible)?;
+                    status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                } else if output_visible {
+                    match debug_output_key(event.code, event.modifiers) {
+                        DebugOutputKey::Return => {
+                            guard.set_output_visible(false)?;
+                            output_visible = false;
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        DebugOutputKey::Abort => {
+                            clear_interrupt_requested();
+                            *breakpoints = editor.breakpoints;
+                            let action = crate::debugger::DebugAction::Abort;
+                            guard.finish(action)?;
+                            return Ok(action);
+                        }
+                        DebugOutputKey::Ignore => {}
                     }
-                    *breakpoints = editor.breakpoints;
-                    guard.finish(action)?;
-                    return Ok(action);
-                }
-                match event.code {
-                    KeyCode::F(2) => {
-                        let message = match editor.toggle_breakpoint() {
-                            Ok((true, line)) => format!("Breakpoint set at {line}"),
-                            Ok((false, line)) => format!("Breakpoint cleared at {line}"),
-                            Err(message) => format!("Breakpoint failed: {message}"),
-                        };
-                        status =
-                            debug_status_message(snapshot, editor.current_line_number(), &message);
-                        *breakpoints = editor.breakpoints.clone();
+                } else {
+                    if let Some(action) = debug_action_for_key(event.code, event.modifiers) {
+                        if is_debugger_ctrl_c(event.code, event.modifiers) {
+                            clear_interrupt_requested();
+                        }
+                        *breakpoints = editor.breakpoints;
+                        guard.finish(action)?;
+                        return Ok(action);
                     }
-                    KeyCode::Up => {
-                        editor.move_up();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    match event.code {
+                        KeyCode::F(2) => {
+                            let message = match editor.toggle_breakpoint() {
+                                Ok((true, line)) => format!("Breakpoint set at {line}"),
+                                Ok((false, line)) => format!("Breakpoint cleared at {line}"),
+                                Err(message) => format!("Breakpoint failed: {message}"),
+                            };
+                            status = debug_status_message(
+                                snapshot,
+                                editor.current_line_number(),
+                                &message,
+                            );
+                            *breakpoints = editor.breakpoints.clone();
+                        }
+                        KeyCode::Up => {
+                            editor.move_up();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::Down => {
+                            editor.move_down();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::Left => {
+                            editor.scroll_debug_left();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::Right => {
+                            let layout = terminal_debug_layout();
+                            let view_line_len = debug_viewed_line_len(&editor, snapshot);
+                            editor.scroll_debug_right(layout.code_cols, view_line_len);
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::Home => {
+                            editor.move_document_start();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::End => {
+                            editor.move_document_end();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::PageUp => {
+                            editor.page_up();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::PageDown => {
+                            editor.page_down();
+                            status =
+                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                        }
+                        KeyCode::BackTab => {
+                            let layout = terminal_debug_layout();
+                            panel_scroll =
+                                advance_debug_panel_scroll(snapshot, layout, panel_scroll, true);
+                            status = debug_status(
+                                snapshot,
+                                editor.current_line_number(),
+                                layout.has_inspector(),
+                            );
+                        }
+                        KeyCode::Tab => {
+                            let layout = terminal_debug_layout();
+                            panel_scroll =
+                                advance_debug_panel_scroll(snapshot, layout, panel_scroll, false);
+                            status = debug_status(
+                                snapshot,
+                                editor.current_line_number(),
+                                layout.has_inspector(),
+                            );
+                        }
+                        _ => {}
                     }
-                    KeyCode::Down => {
-                        editor.move_down();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::Left => {
-                        editor.scroll_debug_left();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::Right => {
-                        let layout = terminal_debug_layout();
-                        let view_line_len = debug_viewed_line_len(&editor, snapshot);
-                        editor.scroll_debug_right(layout.code_cols, view_line_len);
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::Home => {
-                        editor.move_document_start();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::End => {
-                        editor.move_document_end();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::PageUp => {
-                        editor.page_up();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::PageDown => {
-                        editor.page_down();
-                        status = debug_status_for_terminal(snapshot, editor.current_line_number());
-                    }
-                    KeyCode::BackTab => {
-                        let layout = terminal_debug_layout();
-                        panel_scroll =
-                            advance_debug_panel_scroll(snapshot, layout, panel_scroll, true);
-                        status = debug_status(
-                            snapshot,
-                            editor.current_line_number(),
-                            layout.has_inspector(),
-                        );
-                    }
-                    KeyCode::Tab => {
-                        let layout = terminal_debug_layout();
-                        panel_scroll =
-                            advance_debug_panel_scroll(snapshot, layout, panel_scroll, false);
-                        status = debug_status(
-                            snapshot,
-                            editor.current_line_number(),
-                            layout.has_inspector(),
-                        );
-                    }
-                    _ => {}
                 }
             }
             Event::Resize(cols, rows) => {
@@ -1262,15 +1298,56 @@ where
             }
             _ => {}
         }
-        render_fullscreen_debugger(
-            &mut editor,
-            snapshot,
-            ansi,
-            cases,
-            &status,
-            &mut panel_scroll,
-            changes,
-        )?;
+        if !output_visible {
+            render_fullscreen_debugger(
+                &mut editor,
+                snapshot,
+                ansi,
+                cases,
+                &status,
+                &mut panel_scroll,
+                changes,
+            )?;
+        }
+    }
+}
+
+#[derive(Default)]
+struct DebugViewKeys {
+    f4_down: bool,
+    escape_down: bool,
+}
+
+impl DebugViewKeys {
+    fn accepts(&mut self, event: KeyEvent) -> bool {
+        let down = match event.code {
+            KeyCode::F(4) => &mut self.f4_down,
+            KeyCode::Esc => &mut self.escape_down,
+            _ => return event.kind != KeyEventKind::Release,
+        };
+        let was_down = *down;
+        *down = event.kind != KeyEventKind::Release;
+        // Crossterm's Windows backend reports repeated key-downs as Press,
+        // followed by Release. Legacy Unix terminals report only Press, so
+        // they must still accept separate presses without waiting for key-up.
+        event.kind == KeyEventKind::Press && !(cfg!(windows) && was_down)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum DebugOutputKey {
+    Return,
+    Abort,
+    Ignore,
+}
+
+fn debug_output_key(code: KeyCode, modifiers: KeyModifiers) -> DebugOutputKey {
+    if is_debugger_ctrl_c(code, modifiers) {
+        DebugOutputKey::Abort
+    } else if code == KeyCode::Esc {
+        DebugOutputKey::Return
+    } else {
+        DebugOutputKey::Ignore
     }
 }
 
@@ -1318,12 +1395,8 @@ fn debug_status(
 ) -> String {
     let location = debug_location_status(snapshot, viewed_line);
     let reason = debug_pause_reason_label(snapshot.reason);
-    let inspect = if has_inspector {
-        " Tab/Shift+Tab Inspect"
-    } else {
-        ""
-    };
-    format!("{reason} | {location} | F5 Go F6 Into F7 Over F8 Out Esc Abort F2 Break{inspect}")
+    let inspect = if has_inspector { " Tab Inspect" } else { "" };
+    format!("{reason} | {location} | F4 Output F5 Go F6 Into F7 Over F8 Out Esc Abort F2 Break{inspect}")
 }
 
 fn debug_status_for_terminal(
@@ -1616,6 +1689,33 @@ struct DebugTerminalPauseGuard {
 }
 
 impl DebugTerminalPauseGuard {
+    /// Switch views inside the same pause: keep raw input owned by the
+    /// debugger, leave BASIC suspended, and never print into its output.
+    fn set_output_visible(&self, visible: bool) -> io::Result<()> {
+        let inner = &self.terminal.inner;
+        if !inner.debugger_raw_mode.get() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "output inspection requires a paused debugger",
+            ));
+        }
+        if inner.alternate_screen.get() == !visible {
+            return Ok(());
+        }
+        if visible {
+            inner.perform(DebugTerminalOperation::ShowCursor)?;
+            inner.cursor_needs_show.set(false);
+            inner.perform(DebugTerminalOperation::LeaveAlternateScreen)?;
+            inner.alternate_screen.set(false);
+        } else {
+            inner.perform(DebugTerminalOperation::EnterAlternateScreen)?;
+            inner.alternate_screen.set(true);
+            inner.cursor_needs_show.set(true);
+        }
+        // On any error the enclosing pause guard still restores the terminal.
+        Ok(())
+    }
+
     fn finish(mut self, action: crate::debugger::DebugAction) -> io::Result<()> {
         self.terminal
             .finish_pause(debug_action_keeps_alternate_screen(action))?;
@@ -6039,6 +6139,10 @@ mod tests {
     fn debugger_uses_contiguous_function_keys_without_f10_or_f11() {
         use crate::debugger::DebugAction;
         assert_eq!(
+            debug_action_for_key(KeyCode::F(4), KeyModifiers::NONE),
+            None
+        );
+        assert_eq!(
             debug_action_for_key(KeyCode::F(1), KeyModifiers::NONE),
             Some(DebugAction::Continue)
         );
@@ -6422,14 +6526,16 @@ mod tests {
         let snapshot = sample_debug_snapshot();
         let with_panel = debug_status(&snapshot, Some(10), true);
         assert!(with_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
+        assert!(with_panel.contains("F4 Output"));
         assert!(with_panel.contains("F5 Go F6 Into F7 Over F8 Out"));
         assert!(!with_panel.contains("F10"));
         assert!(!with_panel.contains("F11"));
-        assert!(with_panel.contains("Tab/Shift+Tab Inspect"));
+        assert!(with_panel.contains("Tab Inspect"));
+        assert!(!with_panel.contains("Shift+Tab"));
 
         let without_panel = debug_status(&snapshot, Some(10), false);
         assert!(without_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
-        assert!(!without_panel.contains("Tab/Shift+Tab Inspect"));
+        assert!(!without_panel.contains("Tab Inspect"));
         assert_eq!(fit_plain_text(&without_panel, 20), "BREAKPOINT | Ln 20 S");
         assert!(
             debug_status_message(&snapshot, Some(10), "Breakpoint set at 10")
@@ -6446,6 +6552,162 @@ mod tests {
         assert!(debug_action_keeps_alternate_screen(DebugAction::StepOver));
         assert!(debug_action_keeps_alternate_screen(DebugAction::StepOut));
         assert!(!debug_action_keeps_alternate_screen(DebugAction::Abort));
+    }
+
+    #[test]
+    fn debugger_output_keys_cannot_resume_or_edit_the_program() {
+        assert_eq!(
+            debug_output_key(KeyCode::Esc, KeyModifiers::NONE),
+            DebugOutputKey::Return
+        );
+        for code in [KeyCode::Char('c'), KeyCode::Char('C')] {
+            assert_eq!(
+                debug_output_key(code, KeyModifiers::CONTROL),
+                DebugOutputKey::Abort
+            );
+        }
+        for code in [
+            KeyCode::F(1),
+            KeyCode::F(2),
+            KeyCode::F(5),
+            KeyCode::F(6),
+            KeyCode::F(7),
+            KeyCode::F(8),
+            KeyCode::Char('x'),
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::Up,
+        ] {
+            assert_eq!(
+                debug_output_key(code, KeyModifiers::NONE),
+                DebugOutputKey::Ignore,
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn debugger_view_keys_consume_releases_and_identifiable_repeats() {
+        let mut keys = DebugViewKeys::default();
+        for code in [KeyCode::F(4), KeyCode::Esc] {
+            let key = |kind| KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind);
+            assert!(keys.accepts(key(KeyEventKind::Press)));
+            assert!(!keys.accepts(key(KeyEventKind::Repeat)));
+            assert_eq!(keys.accepts(key(KeyEventKind::Press)), !cfg!(windows));
+            assert!(!keys.accepts(key(KeyEventKind::Release)));
+            assert!(keys.accepts(key(KeyEventKind::Press)));
+            assert!(!keys.accepts(key(KeyEventKind::Release)));
+        }
+        // Existing held-key stepping/navigation is unaffected.
+        assert!(keys.accepts(KeyEvent::new_with_kind(
+            KeyCode::F(6),
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat
+        )));
+    }
+
+    #[test]
+    fn debugger_output_view_switches_screens_without_releasing_input() {
+        use crate::debugger::DebugAction;
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+        let guard = terminal.enter_pause().unwrap();
+        // Keep the runtime-only API's existing pause protection.
+        assert!(terminal.reveal_runtime_console().is_err());
+        guard.set_output_visible(true).unwrap();
+        guard.set_output_visible(true).unwrap();
+        assert!(!terminal.inner.alternate_screen.get());
+        assert!(terminal.inner.debugger_raw_mode.get());
+        guard.set_output_visible(false).unwrap();
+        guard.set_output_visible(false).unwrap();
+        assert!(terminal.inner.alternate_screen.get());
+        assert!(terminal.inner.debugger_raw_mode.get());
+        guard.finish(DebugAction::StepInto).unwrap();
+        assert!(terminal.inner.alternate_screen.get());
+        assert!(!terminal.inner.debugger_raw_mode.get());
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                LeaveAlternateScreen,
+                EnterAlternateScreen,
+                ShowCursor,
+                DisableRawMode,
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_output_view_abort_does_not_reopen_the_debugger_screen() {
+        use crate::debugger::DebugAction;
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+        let guard = terminal.enter_pause().unwrap();
+        guard.set_output_visible(true).unwrap();
+        guard.finish(DebugAction::Abort).unwrap();
+        assert!(terminal.primary_screen_restored_for_test());
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                LeaveAlternateScreen,
+                ShowCursor,
+                DisableRawMode,
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_output_view_restores_terminal_on_error() {
+        use DebugTerminalOperation::*;
+
+        let (terminal, operations) = DebugTerminalSession::recording();
+        let failed_inspection = || -> io::Result<()> {
+            let guard = terminal.enter_pause()?;
+            guard.set_output_visible(true)?;
+            Err(io::Error::new(io::ErrorKind::Other, "input failed"))
+        };
+        assert!(failed_inspection().is_err());
+        assert!(terminal.primary_screen_restored_for_test());
+        assert_eq!(
+            operations.borrow().as_slice(),
+            [
+                EnableRawMode,
+                EnterAlternateScreen,
+                ShowCursor,
+                LeaveAlternateScreen,
+                DisableRawMode,
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_output_view_preserves_all_resume_actions() {
+        use crate::debugger::DebugAction;
+
+        for action in [
+            DebugAction::StepInto,
+            DebugAction::StepOver,
+            DebugAction::StepOut,
+            DebugAction::Continue,
+        ] {
+            let (terminal, _) = DebugTerminalSession::recording();
+            let guard = terminal.enter_pause().unwrap();
+            guard.set_output_visible(true).unwrap();
+            guard.set_output_visible(false).unwrap();
+            guard.finish(action).unwrap();
+            assert_eq!(
+                terminal.inner.alternate_screen.get(),
+                debug_action_keeps_alternate_screen(action)
+            );
+            assert!(!terminal.inner.debugger_raw_mode.get());
+        }
     }
 
     #[test]
