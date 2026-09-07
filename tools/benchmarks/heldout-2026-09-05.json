@@ -1,0 +1,12 @@
+{
+  "powermul": {
+    "group": "validation",
+    "source": "samples/powermul.bas",
+    "exponent": 10000
+  },
+  "unicode": {
+    "group": "validation",
+    "source": "tools/benchmarks/unicode-edit.bas",
+    "passes": 30000
+  }
+}

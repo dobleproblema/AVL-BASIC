@@ -1,0 +1,48 @@
+{
+  "raytracer": {
+    "group": "tuning",
+    "source": "samples/g-raytracer.bas",
+    "width": 640,
+    "height": 480
+  },
+  "pimachin": {
+    "group": "tuning",
+    "source": "samples/pimachin.bas",
+    "digits": 10000
+  },
+  "nqueens": {
+    "group": "tuning",
+    "source": "samples/nqueens.bas",
+    "size": 16,
+    "repeats": 16
+  },
+  "jelly": {
+    "group": "tuning",
+    "source": "samples/g-jelly.bas",
+    "points": 10000,
+    "frames": 320
+  },
+  "mandelbrot": {
+    "group": "tuning",
+    "source": "samples/g-fmandelbrot.bas",
+    "width": 640,
+    "height": 480,
+    "iterations": 80
+  },
+  "strings": {
+    "group": "tuning",
+    "source": "tools/benchmarks/record-strings.bas",
+    "records": 256,
+    "passes": 1000
+  },
+  "modern": {
+    "group": "validation",
+    "source": "samples/pimachin-modern.bas",
+    "digits": 10000
+  },
+  "matrices": {
+    "group": "validation",
+    "source": "tools/benchmarks/matrix-transform.bas",
+    "repeats": 150000
+  }
+}
