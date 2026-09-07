@@ -271,7 +271,7 @@ statement	both	TRON		TRON	-	Enables program line tracing.	TROFF	-
 statement	both	TROFF		TROFF	-	Disables program line tracing.	TRON	-
 statement	both	DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD	-
 statement	both	RAD		RAD	-	Selects radians for trigonometry and drawing angles.	DEG	-
-statement	immediate	DEBUG		DEBUG	-	Opens the read-only debugger and pauses before the first statement.	EDIT,RUN	-
+statement	immediate	DEBUG		DEBUG	-	Opens the visual debugger and pauses before the first statement.	EDIT,RUN	-
 statement	immediate	RUN		RUN || RUN line || RUN "filename"	line: Optional starting line; filename: Optional BASIC program path	Starts the loaded program or loads and runs a program file.	CONT,LOAD	-
 statement	immediate	LIST		LIST [range]	range: Optional line or line range	Displays stored program lines.	EDIT,DELETE	-
 statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	DEBUG,LIST,RENUM	-

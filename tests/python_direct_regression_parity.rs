@@ -54,3 +54,31 @@ fn python_direct_non_graphics_regressions_match() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn python_and_rust_if_call_state_prompt_fixtures_match_expected_results() {
+    if skip_without_python_oracle() {
+        return;
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let python_repo = PathBuf::from(std::env::var_os("AVL_BASIC_PY_REPO").unwrap());
+    let script = manifest_dir
+        .join("tools")
+        .join("check_if_call_state_parity.py");
+    let output = Command::new(python_command())
+        .arg(&script)
+        .arg("--rust")
+        .arg(rust_binary())
+        .arg("--python-basic")
+        .arg(python_repo.join("basic.py"))
+        .current_dir(&manifest_dir)
+        .output()
+        .expect("failed to run shared IF/call-state prompt fixtures");
+
+    assert!(
+        output.status.success(),
+        "Shared IF/call-state prompt fixtures failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

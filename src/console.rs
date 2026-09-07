@@ -18,6 +18,11 @@ use std::ffi::c_void;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::rc::Rc;
+
+mod inspector;
+mod navigation;
+use inspector::InspectorState;
+use navigation::DebugCodeSelection;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -984,6 +989,8 @@ struct DebugPanelChanges {
 #[derive(Debug, Default)]
 pub(crate) struct DebugInspectionHistory {
     previous: Option<DebugInspectionState>,
+    inspector: InspectorState,
+    view_keys: DebugViewKeys,
 }
 
 impl DebugInspectionHistory {
@@ -1043,61 +1050,88 @@ where
     I: FnMut() -> io::Result<()>,
 {
     let terminal = DebugTerminalSession::new();
+    let mut inspector = InspectorState::default();
+    let mut view_keys = DebugViewKeys::default();
+    let mut snapshot = snapshot.clone();
+    let mut access = ReadOnlyDebugPauseAccess(idle);
     debug_fullscreen_with_idle_and_changes(
         lines,
         breakpoints,
-        snapshot,
+        &mut snapshot,
         ansi,
         cases,
         &terminal,
-        &DebugPanelChanges::default(),
-        idle,
+        &mut DebugPanelChanges::default(),
+        &mut inspector,
+        &mut access,
+        &mut view_keys,
     )
 }
 
-pub(crate) fn debug_fullscreen_with_idle_and_history<I>(
-    lines: &[String],
-    breakpoints: &mut HashSet<i32>,
+struct ReadOnlyDebugPauseAccess<I>(I);
+
+impl<I: FnMut() -> io::Result<()>> crate::debugger::DebugPauseAccess
+    for ReadOnlyDebugPauseAccess<I>
+{
+    fn idle(&mut self) -> io::Result<()> {
+        (self.0)()
+    }
+
+    fn set_variable(
+        &mut self,
+        _: &crate::debugger::DebugEditTarget,
+        _: crate::debugger::DebugValue,
+    ) -> Result<crate::debugger::DebugSnapshot, String> {
+        Err("This debugger session is read-only".into())
+    }
+}
+
+pub(crate) fn debug_fullscreen_editable_with_history(
     snapshot: &crate::debugger::DebugSnapshot,
+    breakpoints: &mut HashSet<i32>,
     ansi: bool,
-    cases: Option<&HashMap<String, String>>,
     terminal: &DebugTerminalSession,
     history: &mut DebugInspectionHistory,
-    idle: I,
-) -> io::Result<crate::debugger::DebugAction>
-where
-    I: FnMut() -> io::Result<()>,
-{
-    let changes = history.changes(snapshot);
+    access: &mut dyn crate::debugger::DebugPauseAccess,
+) -> io::Result<crate::debugger::DebugAction> {
+    let mut changes = history.changes(snapshot);
+    let lines = &snapshot.source_lines;
+    let mut snapshot = snapshot.clone();
+    history.inspector.set_editable(true);
     let result = debug_fullscreen_with_idle_and_changes(
         lines,
         breakpoints,
-        snapshot,
+        &mut snapshot,
         ansi,
-        cases,
+        None,
         terminal,
-        &changes,
-        idle,
+        &mut changes,
+        &mut history.inspector,
+        access,
+        &mut history.view_keys,
     );
-    if result.is_ok() {
-        history.remember(snapshot);
+    if matches!(result, Ok(crate::debugger::DebugAction::Restart)) {
+        // Keep pins, folding and inspector navigation, but not comparisons
+        // against values belonging to the execution we are abandoning.
+        history.previous = None;
+    } else if result.is_ok() {
+        history.remember(&snapshot);
     }
     result
 }
 
-fn debug_fullscreen_with_idle_and_changes<I>(
+fn debug_fullscreen_with_idle_and_changes(
     lines: &[String],
     breakpoints: &mut HashSet<i32>,
-    snapshot: &crate::debugger::DebugSnapshot,
+    snapshot: &mut crate::debugger::DebugSnapshot,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
     terminal: &DebugTerminalSession,
-    changes: &DebugPanelChanges,
-    mut idle: I,
-) -> io::Result<crate::debugger::DebugAction>
-where
-    I: FnMut() -> io::Result<()>,
-{
+    changes: &mut DebugPanelChanges,
+    inspector: &mut InspectorState,
+    access: &mut dyn crate::debugger::DebugPauseAccess,
+    view_keys: &mut DebugViewKeys,
+) -> io::Result<crate::debugger::DebugAction> {
     if !interactive_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -1131,22 +1165,23 @@ where
         editor.top_line = line_index.saturating_sub(layout.code_rows / 2);
     }
 
-    let mut panel_scroll = 0usize;
-    let mut output_visible = false;
-    let mut view_keys = DebugViewKeys::default();
-    let mut status = debug_status(
-        snapshot,
+    let mut navigation = DebugCodeSelection::new(&access.statement_targets());
+    navigation.sync_line(
         editor.current_line_number(),
-        terminal_debug_layout().has_inspector(),
+        snapshot.location.source_span.as_ref(),
     );
+    let mut output_visible = false;
+    let mut edit_paste = DebugEditPasteGuard::default();
+    let mut status_message = None;
     render_fullscreen_debugger(
         &mut editor,
         snapshot,
         ansi,
         cases,
-        &status,
-        &mut panel_scroll,
+        status_message.as_deref(),
+        inspector,
         changes,
+        &navigation,
     )?;
 
     loop {
@@ -1158,25 +1193,53 @@ where
             return Ok(action);
         }
         if !poll(Duration::from_millis(30))? {
-            idle()?;
+            access.idle()?;
             continue;
         }
         match read()? {
             Event::Key(event) => {
-                if !view_keys.accepts(event) {
+                if !view_keys.accepts_with_edit(event, inspector.is_editing()) {
                     continue;
                 }
-                if event.code == KeyCode::F(4) && event.modifiers.is_empty() {
+                if inspector.is_editing() {
+                    // Editing is a subview of this same synchronous pause. No
+                    // execution key, panel navigation or output toggle escapes it.
+                    if is_debugger_ctrl_c(event.code, event.modifiers) {
+                        clear_interrupt_requested();
+                        *breakpoints = editor.breakpoints;
+                        let action = crate::debugger::DebugAction::Abort;
+                        guard.finish(action)?;
+                        return Ok(action);
+                    }
+                    let layout = terminal_debug_layout();
+                    if layout.has_inspector() || event.code == KeyCode::Esc {
+                        if let Some((target, value)) = inspector.handle_edit_key(event) {
+                            match access.set_variable(&target, value) {
+                                Ok(updated) => {
+                                    record_debug_edit_changes(changes, snapshot, &updated);
+                                    *snapshot = updated;
+                                    inspector.edit_committed();
+                                }
+                                Err(message) => inspector.edit_failed(message),
+                            }
+                        }
+                    }
+                    status_message = None;
+                } else if debug_toggles_output(
+                    event.code,
+                    event.modifiers,
+                    inspector.focused,
+                    output_visible,
+                ) {
                     output_visible = !output_visible;
                     guard.set_output_visible(output_visible)?;
-                    status = debug_status_for_terminal(snapshot, editor.current_line_number());
+                    status_message = None;
                 } else if output_visible {
                     match debug_output_key(event.code, event.modifiers) {
                         DebugOutputKey::Return => {
                             guard.set_output_visible(false)?;
                             output_visible = false;
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
+                            status_message = None;
                         }
                         DebugOutputKey::Abort => {
                             clear_interrupt_requested();
@@ -1188,7 +1251,9 @@ where
                         DebugOutputKey::Ignore => {}
                     }
                 } else {
-                    if let Some(action) = debug_action_for_key(event.code, event.modifiers) {
+                    if let Some(action) =
+                        debug_action_for_panel(event.code, event.modifiers, inspector.focused)
+                    {
                         if is_debugger_ctrl_c(event.code, event.modifiers) {
                             clear_interrupt_requested();
                         }
@@ -1196,83 +1261,98 @@ where
                         guard.finish(action)?;
                         return Ok(action);
                     }
-                    match event.code {
-                        KeyCode::F(2) => {
-                            let message = match editor.toggle_breakpoint() {
-                                Ok((true, line)) => format!("Breakpoint set at {line}"),
-                                Ok((false, line)) => format!("Breakpoint cleared at {line}"),
-                                Err(message) => format!("Breakpoint failed: {message}"),
-                            };
-                            status = debug_status_message(
+                    status_message = None;
+                    let layout = terminal_debug_layout();
+                    if matches!(event.code, KeyCode::Tab | KeyCode::BackTab) {
+                        inspector.focused = layout.has_inspector() && !inspector.focused;
+                    } else if inspector.focused {
+                        if event.code == KeyCode::Enter && event.modifiers.is_empty() {
+                            inspector.begin_edit(
                                 snapshot,
-                                editor.current_line_number(),
-                                &message,
+                                changes,
+                                layout.panel_cols,
+                                layout.panel_rows,
                             );
-                            *breakpoints = editor.breakpoints.clone();
-                        }
-                        KeyCode::Up => {
-                            editor.move_up();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::Down => {
-                            editor.move_down();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::Left => {
-                            editor.scroll_debug_left();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::Right => {
-                            let layout = terminal_debug_layout();
-                            let view_line_len = debug_viewed_line_len(&editor, snapshot);
-                            editor.scroll_debug_right(layout.code_cols, view_line_len);
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::Home => {
-                            editor.move_document_start();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::End => {
-                            editor.move_document_end();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::PageUp => {
-                            editor.page_up();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::PageDown => {
-                            editor.page_down();
-                            status =
-                                debug_status_for_terminal(snapshot, editor.current_line_number());
-                        }
-                        KeyCode::BackTab => {
-                            let layout = terminal_debug_layout();
-                            panel_scroll =
-                                advance_debug_panel_scroll(snapshot, layout, panel_scroll, true);
-                            status = debug_status(
+                        } else {
+                            inspector.handle_key(
+                                event.code,
                                 snapshot,
-                                editor.current_line_number(),
-                                layout.has_inspector(),
+                                changes,
+                                layout.panel_cols,
+                                layout.panel_rows,
                             );
                         }
-                        KeyCode::Tab => {
-                            let layout = terminal_debug_layout();
-                            panel_scroll =
-                                advance_debug_panel_scroll(snapshot, layout, panel_scroll, false);
-                            status = debug_status(
-                                snapshot,
-                                editor.current_line_number(),
-                                layout.has_inspector(),
-                            );
+                    } else {
+                        let mut reveal_selection = false;
+                        match event.code {
+                            KeyCode::F(2) => {
+                                let message = match editor.toggle_breakpoint() {
+                                    Ok((true, line)) => format!("Breakpoint set at {line}"),
+                                    Ok((false, line)) => format!("Breakpoint cleared at {line}"),
+                                    Err(message) => format!("Breakpoint failed: {message}"),
+                                };
+                                status_message = Some(message);
+                                *breakpoints = editor.breakpoints.clone();
+                            }
+                            KeyCode::F(3) if event.modifiers.is_empty() => {
+                                let result = navigation.selected().map_or_else(
+                                    || Err("Select a complete executable statement".to_string()),
+                                    |target| access.set_next(target),
+                                );
+                                match result {
+                                    Ok(updated) => {
+                                        *snapshot = updated;
+                                        navigation.replace_targets(&access.statement_targets());
+                                        status_message = Some("Next statement set".into());
+                                        reveal_selection = true;
+                                    }
+                                    Err(message) => {
+                                        status_message =
+                                            Some(format!("Cannot set next: {message}"));
+                                    }
+                                }
+                            }
+                            KeyCode::Up => {
+                                editor.move_up();
+                                reveal_selection = true;
+                            }
+                            KeyCode::Down => {
+                                editor.move_down();
+                                reveal_selection = true;
+                            }
+                            KeyCode::Left if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                                editor.scroll_debug_left();
+                            }
+                            KeyCode::Right if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                                let view_line_len = debug_viewed_line_len(&editor, snapshot);
+                                editor.scroll_debug_right(layout.code_cols, view_line_len);
+                            }
+                            KeyCode::Left | KeyCode::Right => {
+                                navigation.move_on_line(event.code == KeyCode::Right);
+                                reveal_selection = true;
+                            }
+                            KeyCode::Home => {
+                                editor.move_document_start();
+                                reveal_selection = true;
+                            }
+                            KeyCode::End => {
+                                editor.move_document_end();
+                                reveal_selection = true;
+                            }
+                            KeyCode::PageUp => {
+                                editor.page_up();
+                                reveal_selection = true;
+                            }
+                            KeyCode::PageDown => {
+                                editor.page_down();
+                                reveal_selection = true;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        navigation.sync_line(editor.current_line_number(), None);
+                        if reveal_selection {
+                            reveal_debug_selection(&mut editor, &navigation, layout.code_cols);
+                        }
                     }
                 }
             }
@@ -1289,40 +1369,125 @@ where
                         false,
                     );
                 }
-                panel_scroll = clamp_debug_panel_scroll(snapshot, layout, panel_scroll);
-                status = debug_status(
-                    snapshot,
-                    editor.current_line_number(),
-                    layout.has_inspector(),
-                );
+                if !layout.has_inspector() && !inspector.is_editing() {
+                    inspector.focused = false;
+                }
+                if !inspector.focused {
+                    reveal_debug_selection(&mut editor, &navigation, layout.code_cols);
+                }
+                status_message = None;
+            }
+            Event::Paste(text) if inspector.is_editing() => {
+                if terminal_debug_layout().has_inspector() {
+                    inspector.handle_edit_paste(&text);
+                }
             }
             _ => {}
         }
+        edit_paste.set_enabled(inspector.is_editing())?;
         if !output_visible {
             render_fullscreen_debugger(
                 &mut editor,
                 snapshot,
                 ansi,
                 cases,
-                &status,
-                &mut panel_scroll,
+                status_message.as_deref(),
+                inspector,
                 changes,
+                &navigation,
             )?;
         }
     }
 }
 
+/// Bracketed paste keeps pasted newlines and escape sequences inside the value
+/// buffer instead of interpreting them as debugger commands.
 #[derive(Default)]
+struct DebugEditPasteGuard {
+    enabled: bool,
+    unsupported: bool,
+}
+
+impl DebugEditPasteGuard {
+    fn set_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.set_enabled_with(enabled, |enabled| {
+            if enabled {
+                execute!(io::stdout(), crossterm::event::EnableBracketedPaste)
+            } else {
+                execute!(io::stdout(), crossterm::event::DisableBracketedPaste)
+            }
+        })
+    }
+
+    fn set_enabled_with(
+        &mut self,
+        enabled: bool,
+        mut perform: impl FnMut(bool) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.unsupported && self.enabled != enabled {
+            match perform(enabled) {
+                Ok(()) => self.enabled = enabled,
+                // The legacy Windows console has no bracketed-paste command.
+                // That optional capability must not prevent keyboard editing.
+                Err(error) if enabled && error.kind() == io::ErrorKind::Unsupported => {
+                    self.unsupported = true;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DebugEditPasteGuard {
+    fn drop(&mut self) {
+        let _ = self.set_enabled(false);
+    }
+}
+
+fn record_debug_edit_changes(
+    changes: &mut DebugPanelChanges,
+    before: &crate::debugger::DebugSnapshot,
+    after: &crate::debugger::DebugSnapshot,
+) {
+    let history = DebugInspectionHistory {
+        previous: Some(DebugInspectionState::from_snapshot(before)),
+        ..DebugInspectionHistory::default()
+    };
+    let edited = history.changes(after);
+    // Preserve highlights from the last BASIC instruction, adding the values
+    // changed by the user. The next pause uses the committed snapshot as baseline.
+    changes.variables.extend(edited.variables);
+    changes.arrays.extend(edited.arrays);
+}
+
+#[derive(Debug, Default)]
 struct DebugViewKeys {
+    f3_down: bool,
+    f9_down: bool,
     f4_down: bool,
     escape_down: bool,
+    tab_down: bool,
+    enter_down: bool,
+    space_down: bool,
 }
 
 impl DebugViewKeys {
+    fn accepts_with_edit(&mut self, event: KeyEvent, editing: bool) -> bool {
+        let accepted = self.accepts(event);
+        accepted
+            || (editing && event.code == KeyCode::Char(' ') && event.kind != KeyEventKind::Release)
+    }
+
     fn accepts(&mut self, event: KeyEvent) -> bool {
         let down = match event.code {
+            KeyCode::F(3) => &mut self.f3_down,
             KeyCode::F(4) => &mut self.f4_down,
+            KeyCode::F(9) => &mut self.f9_down,
             KeyCode::Esc => &mut self.escape_down,
+            KeyCode::Tab | KeyCode::BackTab => &mut self.tab_down,
+            KeyCode::Enter => &mut self.enter_down,
+            KeyCode::Char(' ') => &mut self.space_down,
             _ => return event.kind != KeyEventKind::Release,
         };
         let was_down = *down;
@@ -1351,6 +1516,24 @@ fn debug_output_key(code: KeyCode, modifiers: KeyModifiers) -> DebugOutputKey {
     }
 }
 
+fn debug_toggles_output(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    inspector_focused: bool,
+    output_visible: bool,
+) -> bool {
+    code == KeyCode::F(4) && modifiers.is_empty() && (output_visible || !inspector_focused)
+}
+
+fn debug_action_for_panel(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    inspector_focused: bool,
+) -> Option<crate::debugger::DebugAction> {
+    debug_action_for_key(code, modifiers)
+        .filter(|action| !inspector_focused || *action == crate::debugger::DebugAction::Abort)
+}
+
 fn debug_action_for_key(
     code: KeyCode,
     modifiers: KeyModifiers,
@@ -1361,6 +1544,7 @@ fn debug_action_for_key(
         KeyCode::F(6) => Some(DebugAction::StepInto),
         KeyCode::F(7) => Some(DebugAction::StepOver),
         KeyCode::F(8) => Some(DebugAction::StepOut),
+        KeyCode::F(9) if modifiers.is_empty() => Some(DebugAction::Restart),
         KeyCode::Char('c' | 'C') if modifiers.contains(KeyModifiers::CONTROL) => {
             Some(DebugAction::Abort)
         }
@@ -1373,57 +1557,93 @@ fn is_debugger_ctrl_c(code: KeyCode, modifiers: KeyModifiers) -> bool {
     matches!(code, KeyCode::Char('c' | 'C')) && modifiers.contains(KeyModifiers::CONTROL)
 }
 
-fn debug_location_status(
-    snapshot: &crate::debugger::DebugSnapshot,
-    viewed_line: Option<i32>,
-) -> String {
-    let mut location = format!(
+fn debug_location_status(snapshot: &crate::debugger::DebugSnapshot) -> String {
+    format!(
         "Ln {} Stmt {}",
         snapshot.location.line,
         snapshot.location.statement + 1
-    );
-    if let Some(line) = viewed_line.filter(|line| *line != snapshot.location.line) {
-        location.push_str(&format!(" View {line}"));
-    }
-    location
+    )
 }
 
 fn debug_status(
     snapshot: &crate::debugger::DebugSnapshot,
-    viewed_line: Option<i32>,
     has_inspector: bool,
+    inspector: &InspectorState,
+    width: usize,
 ) -> String {
-    let location = debug_location_status(snapshot, viewed_line);
+    if inspector.is_editing() {
+        let actions = if has_inspector {
+            "EDIT | Enter Apply Esc Cancel"
+        } else {
+            "Resize to edit | Esc Cancel"
+        };
+        if actions.chars().count() > width {
+            return if has_inspector {
+                "Enter OK Esc"
+            } else {
+                "Resize | Esc"
+            }
+            .into();
+        }
+        return match inspector.edit_status() {
+            Some(message) => format!("{actions} | {message}"),
+            None => actions.into(),
+        };
+    }
+    let location = debug_location_status(snapshot);
     let reason = debug_pause_reason_label(snapshot.reason);
-    let inspect = if has_inspector { " Tab Inspect" } else { "" };
-    format!("{reason} | {location} | F4 Output F5 Go F6 Into F7 Over F8 Out Esc Abort F2 Break{inspect}")
+    let focus = if has_inspector && inspector.focused {
+        let hint = inspector.status_hint();
+        let hint = if hint.is_empty() {
+            String::new()
+        } else {
+            format!("{hint} ")
+        };
+        let inspect = format!("INSPECT | Tab Code {hint}↑↓←→ PgUp/PgDn Scroll Esc Abort");
+        let full = format!("{reason} | {location} | {inspect}");
+        for status in [
+            full,
+            inspect,
+            format!("INSPECT | Tab Code {hint}↑↓←→ PgUp/PgDn Esc"),
+            format!("Tab Code {hint}Esc"),
+        ] {
+            if status.chars().count() <= width {
+                return status;
+            }
+        }
+        return String::from("Tab Code Esc");
+    } else if has_inspector {
+        String::from("CODE | Tab Inspect F2 Break")
+    } else {
+        String::from("CODE | F2 Break")
+    };
+    let full = format!(
+        "{reason} | {location} | {focus} | F3 Set next F4 Output F5 Go F6 Into F7 Over F8 Out F9 Restart Esc Abort"
+    );
+    if full.chars().count() <= width {
+        return full;
+    }
+    let compact_actions = "F2 Brk F3 Set F4 Out F5 Go F6/F7/F8 Step F9 Restart Esc";
+    let tab = if has_inspector { "Tab Inspect " } else { "" };
+    for status in [
+        format!("{location} | CODE | {tab}{compact_actions}"),
+        format!("{location} | {tab}F2 Brk F3 Set F4 Out F5 Go F6/7/8 F9 Rst Esc"),
+        format!("{location} | {tab}F3 Set F5 Go F6/7/8 F9 Rst Esc"),
+        format!("{tab}F3 Set F9 Rst Esc"),
+    ] {
+        if status.chars().count() <= width {
+            return status;
+        }
+    }
+    "Esc".into()
 }
 
-fn debug_status_for_terminal(
-    snapshot: &crate::debugger::DebugSnapshot,
-    viewed_line: Option<i32>,
-) -> String {
-    debug_status(
-        snapshot,
-        viewed_line,
-        terminal_debug_layout().has_inspector(),
-    )
-}
-
-fn debug_status_message(
-    snapshot: &crate::debugger::DebugSnapshot,
-    viewed_line: Option<i32>,
-    message: &str,
-) -> String {
+fn debug_status_message(snapshot: &crate::debugger::DebugSnapshot, message: &str) -> String {
     format!(
         "{} | {} | {message}",
         debug_pause_reason_label(snapshot.reason),
-        debug_location_status(snapshot, viewed_line)
+        debug_location_status(snapshot)
     )
-}
-
-fn debug_panel_page_size() -> usize {
-    4
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1680,6 +1900,7 @@ fn debug_action_keeps_alternate_screen(action: crate::debugger::DebugAction) -> 
         crate::debugger::DebugAction::StepInto
             | crate::debugger::DebugAction::StepOver
             | crate::debugger::DebugAction::StepOut
+            | crate::debugger::DebugAction::Restart
     )
 }
 
@@ -3247,6 +3468,71 @@ fn reveal_debug_statement(
     Some(statement_col)
 }
 
+fn reveal_debug_selection(editor: &mut BasicEditor, selection: &DebugCodeSelection, width: usize) {
+    let Some(line) = editor.lines.get(editor.cursor_line) else {
+        return;
+    };
+    if !selection
+        .selected()
+        .is_some_and(|target| Some(target.line) == editor_line_number(line))
+    {
+        return;
+    }
+    let source: String = line.iter().collect();
+    let Some(span) = selection.selected_char_span(&source) else {
+        return;
+    };
+    editor.cursor_col = span.start;
+    if span.start < editor.left_col
+        || span.start.saturating_add(2) > editor.left_col.saturating_add(width)
+    {
+        let max_left = line.len().saturating_add(2).saturating_sub(width);
+        editor.left_col = span.start.saturating_sub(width / 3).min(max_left);
+    }
+}
+
+fn apply_debug_selection_style(
+    rendered: &str,
+    ranges: &[std::ops::Range<usize>],
+    ansi: bool,
+) -> String {
+    if !ansi || ranges.is_empty() {
+        return rendered.to_string();
+    }
+    let mut result = String::with_capacity(rendered.len() + 32);
+    let mut chars = rendered.chars().peekable();
+    let mut column = 0;
+    let mut underlined = false;
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            result.push(ch);
+            result.push(chars.next().unwrap());
+            for code in chars.by_ref() {
+                result.push(code);
+                if ('@'..='~').contains(&code) {
+                    // Syntax and execution styles may reset SGR attributes.
+                    if code == 'm' && underlined {
+                        result.push_str("\x1b[4m");
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        let selected = ranges.iter().any(|range| range.contains(&column));
+        if selected != underlined {
+            result.push_str(if selected { "\x1b[4m" } else { "\x1b[24m" });
+            underlined = selected;
+        }
+        result.push(ch);
+        column += 1;
+    }
+    if underlined {
+        result.push_str("\x1b[24m");
+    }
+    result
+}
+
 fn debug_source_window(
     line: &[char],
     left_col: usize,
@@ -3423,55 +3709,24 @@ fn terminal_debug_layout() -> DebugLayout {
     debug_layout(cols.max(1) as usize, rows.max(1) as usize)
 }
 
-fn clamp_debug_panel_scroll(
-    snapshot: &crate::debugger::DebugSnapshot,
-    layout: DebugLayout,
-    panel_scroll: usize,
-) -> usize {
-    if !layout.has_inspector() {
-        return 0;
-    }
-    let panel_lines = debug_panel_lines(snapshot, layout.panel_cols);
-    panel_scroll.min(panel_lines.len().saturating_sub(layout.panel_rows))
-}
-
-fn advance_debug_panel_scroll(
-    snapshot: &crate::debugger::DebugSnapshot,
-    layout: DebugLayout,
-    panel_scroll: usize,
-    backwards: bool,
-) -> usize {
-    if !layout.has_inspector() {
-        return 0;
-    }
-    let page = debug_panel_page_size();
-    if backwards {
-        panel_scroll.saturating_sub(page)
-    } else {
-        let lines = debug_panel_lines(snapshot, layout.panel_cols);
-        let max_scroll = lines.len().saturating_sub(layout.panel_rows);
-        if max_scroll == 0 || panel_scroll >= max_scroll {
-            0
-        } else {
-            panel_scroll.saturating_add(page).min(max_scroll)
-        }
-    }
-}
-
 fn render_fullscreen_debugger(
     editor: &mut BasicEditor,
     snapshot: &crate::debugger::DebugSnapshot,
     ansi: bool,
     cases: Option<&HashMap<String, String>>,
-    status: &str,
-    panel_scroll: &mut usize,
+    status_message: Option<&str>,
+    inspector: &mut InspectorState,
     changes: &DebugPanelChanges,
+    navigation: &DebugCodeSelection,
 ) -> io::Result<()> {
     let (cols, rows) = size().unwrap_or((80, 24));
     let cols = cols.max(1) as usize;
     let rows = rows.max(1) as usize;
     let layout = debug_layout(cols, rows);
-    *panel_scroll = clamp_debug_panel_scroll(snapshot, layout, *panel_scroll);
+    if !layout.has_inspector() && !inspector.is_editing() {
+        inspector.focused = false;
+    }
+    let panel = inspector.panel(snapshot, changes, layout.panel_cols, layout.panel_rows);
     let view_line_len = debug_viewed_line_len(editor, snapshot);
     editor.ensure_debug_view_visible(layout.code_cols, layout.code_rows, view_line_len);
     let render_cases = editor_identifier_cases(&editor.lines, cases);
@@ -3489,7 +3744,7 @@ fn render_fullscreen_debugger(
                     ansi,
                     line_number.is_some_and(|line| editor.breakpoints.contains(&line)),
                     current,
-                    editor.top_line + screen_row == editor.cursor_line,
+                    !inspector.focused && editor.top_line + screen_row == editor.cursor_line,
                 );
                 write!(stdout, "{gutter}")?;
                 rendered_width += layout.gutter_width;
@@ -3522,6 +3777,35 @@ fn render_fullscreen_debugger(
             } else {
                 rendered
             };
+            let rendered =
+                if !inspector.focused && editor.top_line + screen_row == editor.cursor_line {
+                    navigation
+                        .selected()
+                        .filter(|target| Some(target.line) == line_number)
+                        .map_or(rendered.clone(), |target| {
+                            let source: String = line.iter().collect();
+                            let marker = if current {
+                                debug_statement_column(
+                                    line,
+                                    snapshot.location.statement,
+                                    snapshot.location.source_span.as_ref(),
+                                )
+                                .map(|column| (column, 2))
+                            } else {
+                                None
+                            };
+                            let ranges = navigation::visible_statement_ranges(
+                                &source,
+                                &target.source_span,
+                                editor.left_col,
+                                layout.code_cols,
+                                marker,
+                            );
+                            apply_debug_selection_style(&rendered, &ranges, ansi)
+                        })
+                } else {
+                    rendered
+                };
             rendered_width += visible_width(&rendered);
             write!(stdout, "{rendered}")?;
         } else if layout.gutter_width > 0 {
@@ -3538,7 +3822,8 @@ fn render_fullscreen_debugger(
     }
 
     if layout.has_inspector() {
-        let panel_lines = debug_panel_lines_with_changes(snapshot, changes, layout.panel_cols);
+        let panel_lines = panel.render_lines(ansi, current_syntax_theme());
+        let blank = " ".repeat(layout.panel_cols);
         for panel_row in 0..layout.panel_rows {
             let screen_row = layout.panel_y + panel_row;
             if screen_row >= layout.status_row {
@@ -3562,14 +3847,8 @@ fn render_fullscreen_debugger(
                 )
             )?;
             let line = panel_lines
-                .get(*panel_scroll + panel_row)
-                .map_or("", String::as_str);
-            let line = style_debug_panel_line_for_theme(
-                line,
-                layout.panel_cols,
-                ansi,
-                current_syntax_theme(),
-            );
+                .get(inspector.scroll + panel_row)
+                .map_or(blank.as_str(), String::as_str);
             write!(stdout, "{line}")?;
         }
     }
@@ -3578,20 +3857,36 @@ fn render_fullscreen_debugger(
         stdout,
         MoveTo(0, layout.status_row.min(u16::MAX as usize) as u16)
     )?;
-    let status_text = fit_plain_text(status, cols);
+    let status = if let Some(message) = status_message.filter(|_| !inspector.is_editing()) {
+        debug_status_message(snapshot, message)
+    } else {
+        debug_status(snapshot, layout.has_inspector(), inspector, cols)
+    };
+    let status_text = fit_plain_text(&status, cols);
     if ansi {
         let status_text = style_editor_status_keys(&status_text);
         write!(stdout, "{STATUS_BAR_STYLE}{status_text}{RESET}")?;
     } else {
         write!(stdout, "{status_text}")?;
     }
+    if layout.has_inspector() {
+        if let Some((x, y)) = panel.edit_cursor() {
+            if x < layout.panel_cols
+                && y >= inspector.scroll
+                && y - inspector.scroll < layout.panel_rows
+            {
+                let screen_y = layout.panel_y + y - inspector.scroll;
+                if screen_y < layout.status_row {
+                    queue!(
+                        stdout,
+                        MoveTo((layout.panel_x + x) as u16, screen_y as u16),
+                        Show
+                    )?;
+                }
+            }
+        }
+    }
     stdout.flush()
-}
-
-fn debug_panel_cell_is_heading(cell: &[char]) -> bool {
-    let headings = ["VARIABLES", "ARRAYS", "STACK", "STATE", "TIMERS", "DATA"];
-    let text = cell.iter().collect::<String>();
-    headings.contains(&text.trim())
 }
 
 fn debug_panel_column_count(width: usize) -> usize {
@@ -3617,52 +3912,7 @@ fn debug_panel_changed_style(theme: SyntaxTheme) -> &'static str {
     }
 }
 
-fn style_debug_panel_line_for_theme(
-    line: &str,
-    width: usize,
-    ansi: bool,
-    theme: SyntaxTheme,
-) -> String {
-    let line = fit_plain_text(line, width);
-    if !ansi || width == 0 {
-        return line;
-    }
-
-    let chars = line.chars().collect::<Vec<_>>();
-    let count = debug_panel_column_count(width);
-    let column_width = debug_panel_column_width(width, count);
-    let gap_width = " | ".chars().count();
-    let mut rendered = String::with_capacity(line.len());
-    let mut copied = 0usize;
-
-    for column in 0..count {
-        let start = column.saturating_mul(column_width + gap_width);
-        if start >= chars.len() {
-            break;
-        }
-        rendered.extend(chars[copied..start].iter());
-        let end = (start + column_width).min(chars.len());
-        let cell = &chars[start..end];
-        let style = if cell.first() == Some(&'*') {
-            Some(debug_panel_changed_style(theme))
-        } else if debug_panel_cell_is_heading(cell) {
-            Some(DEBUG_PANEL_HEADER_STYLE)
-        } else {
-            None
-        };
-        if let Some(style) = style {
-            rendered.push_str(style);
-            rendered.extend(cell.iter());
-            rendered.push_str(RESET);
-        } else {
-            rendered.extend(cell.iter());
-        }
-        copied = end;
-    }
-    rendered.extend(chars[copied..].iter());
-    rendered
-}
-
+#[cfg(test)]
 fn debug_panel_lines(snapshot: &crate::debugger::DebugSnapshot, width: usize) -> Vec<String> {
     debug_panel_lines_with_changes(snapshot, &DebugPanelChanges::default(), width)
 }
@@ -3675,159 +3925,15 @@ fn debug_panel_change_prefix(changed: bool) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn debug_panel_lines_with_changes(
     snapshot: &crate::debugger::DebugSnapshot,
     changes: &DebugPanelChanges,
     width: usize,
 ) -> Vec<String> {
-    let mut values = vec![String::from("VARIABLES")];
-    if snapshot.variables.is_empty() && snapshot.array_elements.is_empty() {
-        values.push(String::from("  (none)"));
-    } else {
-        values.extend(
-            snapshot
-                .variables
-                .iter()
-                .chain(snapshot.array_elements.iter())
-                .map(|variable| {
-                    format!(
-                        "{}{} = {}",
-                        debug_panel_change_prefix(
-                            changes
-                                .variables
-                                .contains(&variable.name.to_ascii_uppercase())
-                        ),
-                        variable.name,
-                        format_debug_value(&variable.value)
-                    )
-                }),
-        );
-    }
-    values.push(String::from("ARRAYS"));
-    if snapshot.arrays.is_empty() {
-        values.push(String::from("  (none)"));
-    } else {
-        values.extend(snapshot.arrays.iter().map(|array| {
-            let dimensions = array
-                .dimensions
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            let alias = array
-                .alias_of
-                .as_deref()
-                .map_or_else(String::new, |target| format!(" -> {target}"));
-            format!(
-                "{}{}{}({}) {} [{}]",
-                debug_panel_change_prefix(
-                    changes.arrays.contains(&array.name.to_ascii_uppercase())
-                ),
-                array.name,
-                alias,
-                dimensions,
-                debug_array_kind_label(array.kind),
-                array.elements
-            )
-        }));
-    }
-
-    let mut stack = vec![String::from("STACK")];
-    if snapshot.stack.is_empty() {
-        stack.push(String::from("  (none)"));
-    } else {
-        stack.extend(snapshot.stack.iter().enumerate().map(|(index, frame)| {
-            let name = frame.name.as_deref().unwrap_or("");
-            let line = frame
-                .line
-                .map_or_else(String::new, |line| format!(" @{line}"));
-            let separator = if name.is_empty() { "" } else { " " };
-            format!(
-                "  {index}: {}{separator}{name}{line}",
-                debug_frame_kind_label(frame.kind),
-            )
-        }));
-    }
-    stack.push(String::from("STATE"));
-    stack.push(format!(
-        "{}ERR={} ERL={}",
-        debug_panel_change_prefix(changes.state),
-        snapshot.err,
-        snapshot.erl
-    ));
-
-    let mut timers = vec![String::from("TIMERS")];
-    if snapshot.timers.is_empty() {
-        timers.push(String::from("  (none)"));
-    } else {
-        timers.extend(snapshot.timers.iter().map(|timer| {
-            format!(
-                "{}#{} {} -> {} {} {}/{}ms",
-                debug_panel_change_prefix(changes.timers.contains(&timer.number)),
-                timer.number,
-                if timer.repeat { "EVERY" } else { "AFTER" },
-                timer.target,
-                if timer.active { "active" } else { "stopped" },
-                timer.remaining.as_millis(),
-                timer.interval.as_millis()
-            )
-        }));
-    }
-    timers.push(String::from("DATA"));
-    timers.push(match &snapshot.data {
-        crate::debugger::DebugDataSnapshot::Empty => String::from("  (none)"),
-        crate::debugger::DebugDataSnapshot::Next {
-            line,
-            line_item,
-            value,
-            ..
-        } => format!(
-            "{}Ln {line} Item {line_item}: {}",
-            debug_panel_change_prefix(changes.data),
-            format_debug_value(value)
-        ),
-        crate::debugger::DebugDataSnapshot::Exhausted { .. } => {
-            format!("{}(end)", debug_panel_change_prefix(changes.data))
-        }
-    });
-
-    let columns = match debug_panel_column_count(width) {
-        3 => vec![values, stack, timers],
-        2 => {
-            let mut right = stack;
-            right.push(String::new());
-            right.extend(timers);
-            vec![values, right]
-        }
-        _ => {
-            let mut all = values;
-            all.push(String::new());
-            all.extend(stack);
-            all.push(String::new());
-            all.extend(timers);
-            vec![all]
-        }
-    };
-    join_debug_panel_columns(&columns, width.max(1))
-}
-
-fn join_debug_panel_columns(columns: &[Vec<String>], width: usize) -> Vec<String> {
-    let gap = " | ";
-    let count = columns.len().max(1);
-    let column_width = debug_panel_column_width(width, count);
-    let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
-    (0..rows)
-        .map(|row| {
-            let joined = columns
-                .iter()
-                .map(|column| {
-                    fit_plain_text(column.get(row).map_or("", String::as_str), column_width)
-                })
-                .collect::<Vec<_>>()
-                .join(gap);
-            fit_plain_text(&joined, width)
-        })
-        .collect()
+    InspectorState::default()
+        .panel(snapshot, changes, width, usize::MAX)
+        .render_lines(false, SyntaxTheme::Dark)
 }
 
 fn format_debug_value(value: &crate::debugger::DebugValue) -> String {
@@ -4076,6 +4182,14 @@ fn status_key_token_len(chars: &[char], start: usize) -> Option<usize> {
     }
     if chars.get(start..start + 3) == Some(&['E', 's', 'c']) {
         return Some(3);
+    }
+    if chars.get(start..start + 5) == Some(&['E', 'n', 't', 'e', 'r'])
+        || chars.get(start..start + 5) == Some(&['S', 'p', 'a', 'c', 'e'])
+    {
+        return Some(5);
+    }
+    if chars.get(start..start + 9) == Some(&['P', 'g', 'U', 'p', '/', 'P', 'g', 'D', 'n']) {
+        return Some(9);
     }
     status_function_key_token_len(chars, start)
 }
@@ -6044,7 +6158,7 @@ mod tests {
     #[test]
     fn status_bar_styles_help_keys_without_changing_width() {
         let plain =
-            "F12 Apply Esc Cancel F3/F4 Undo/Redo F9 Renum Tab/Shift+Tab Inspect Ln 1 Col 1";
+            "F12 Apply Esc Cancel F3/F4 Undo/Redo F9 Renum Tab/Shift+Tab Inspect Enter Collapse Space Pin Ln 1 Col 1";
         let styled = style_editor_status_keys(plain);
 
         assert_eq!(visible_width(&styled), plain.chars().count());
@@ -6056,6 +6170,12 @@ mod tests {
         )));
         assert!(styled.contains(&format!(
             "{STATUS_KEY_STYLE}Tab/Shift+Tab{STATUS_KEY_END_STYLE} Inspect"
+        )));
+        assert!(styled.contains(&format!(
+            "{STATUS_KEY_STYLE}Enter{STATUS_KEY_END_STYLE} Collapse"
+        )));
+        assert!(styled.contains(&format!(
+            "{STATUS_KEY_STYLE}Space{STATUS_KEY_END_STYLE} Pin"
         )));
     }
 
@@ -6199,7 +6319,7 @@ mod tests {
         );
         assert_eq!(
             debug_action_for_key(KeyCode::F(9), KeyModifiers::NONE),
-            None
+            Some(DebugAction::Restart)
         );
         let help = BasicEditor::default_help();
         assert!(help.contains("F5/F6 Copy/Paste"));
@@ -6524,8 +6644,10 @@ mod tests {
     #[test]
     fn debugger_status_starts_with_pause_reason_and_only_advertises_visible_inspector() {
         let snapshot = sample_debug_snapshot();
-        let with_panel = debug_status(&snapshot, Some(10), true);
-        assert!(with_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
+        let mut inspector = InspectorState::default();
+        let with_panel = debug_status(&snapshot, true, &inspector, 200);
+        assert!(with_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 | CODE | Tab Inspect"));
+        assert!(with_panel.contains("Ln 20 Stmt 2"));
         assert!(with_panel.contains("F4 Output"));
         assert!(with_panel.contains("F5 Go F6 Into F7 Over F8 Out"));
         assert!(!with_panel.contains("F10"));
@@ -6533,25 +6655,216 @@ mod tests {
         assert!(with_panel.contains("Tab Inspect"));
         assert!(!with_panel.contains("Shift+Tab"));
 
-        let without_panel = debug_status(&snapshot, Some(10), false);
-        assert!(without_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |"));
+        let without_panel = debug_status(&snapshot, false, &inspector, 200);
+        assert!(without_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 | CODE | F2 Break"));
         assert!(!without_panel.contains("Tab Inspect"));
-        assert_eq!(fit_plain_text(&without_panel, 20), "BREAKPOINT | Ln 20 S");
-        assert!(
-            debug_status_message(&snapshot, Some(10), "Breakpoint set at 10")
-                .starts_with("BREAKPOINT | Ln 20 Stmt 2 View 10 |")
-        );
+        inspector.focused = true;
+        inspector.panel(&snapshot, &DebugPanelChanges::default(), 40, 20);
+        let inspecting = debug_status(&snapshot, true, &inspector, 200);
+        assert!(inspecting.contains("INSPECT | Tab Code Space Collapse ↑↓←→"));
+        let compact = debug_status(&snapshot, true, &inspector, 80);
+        assert!(compact.chars().count() <= 80);
+        assert!(compact.contains("Tab Code Space Collapse ↑↓←→"));
+        for status in [&inspecting, &compact] {
+            assert!(status.contains("PgUp/PgDn Scroll Esc Abort"));
+            for action in ["F1", "F2", "F4", "F5", "F6", "F7", "F8", "Enter"] {
+                assert!(
+                    !status.contains(action),
+                    "{action} was advertised in {status}"
+                );
+            }
+        }
+        for width in [60, 40, 30, 12] {
+            let status = debug_status(&snapshot, true, &inspector, width);
+            assert!(status.chars().count() <= width, "{width}: {status}");
+            assert!(status.contains("Tab Code"));
+            assert!(status.ends_with("Esc"));
+        }
+        assert!(debug_status_message(&snapshot, "Breakpoint set at 10")
+            .starts_with("BREAKPOINT | Ln 20 Stmt 2 |"));
     }
 
     #[test]
-    fn debugger_keeps_alternate_screen_only_for_step_actions() {
+    fn debugger_status_omits_view_and_selection_fields() {
+        let snapshot = sample_debug_snapshot();
+        let mut inspector = InspectorState::default();
+        for width in [80, 100, 120, 200] {
+            let status = debug_status(&snapshot, true, &inspector, width);
+            assert!(status.chars().count() <= width, "{width}: {status}");
+            for text in ["Ln 20 Stmt 2", "Tab Inspect", "F3", "F9", "Esc"] {
+                assert!(status.contains(text), "Missing {text}: {status}");
+            }
+            for has_inspector in [true, false] {
+                let status = debug_status(&snapshot, has_inspector, &inspector, width);
+                assert!(!status.contains("View"), "{status}");
+                assert!(!status.contains("Sel"), "{status}");
+            }
+        }
+        inspector.focused = true;
+        let status = debug_status(&snapshot, true, &inspector, 120);
+        for text in ["View", "Sel", "F3", "F9"] {
+            assert!(
+                !status.contains(text),
+                "CODE control leaked into INSPECT: {status}"
+            );
+        }
+        let message = debug_status_message(&snapshot, "Next statement set");
+        assert!(message.contains("Ln 20 Stmt 2"));
+        assert!(!message.contains("View"));
+        assert!(!message.contains("Sel"));
+    }
+
+    #[test]
+    fn debugger_selection_underline_survives_syntax_resets_without_leaking() {
+        let source = format!("A{RESET}BC{KEYWORD_STYLE}DE{RESET}FGH");
+        let ranges = [1..3, 5..7];
+        let rendered = apply_debug_selection_style(&source, &ranges, true);
+        assert_eq!(visible_width(&source), visible_width(&rendered));
+        assert_eq!(apply_debug_selection_style(&source, &ranges, false), source);
+        let mut chars = rendered.chars().peekable();
+        let mut underlined = false;
+        let mut marked = String::new();
+        let mut plain = String::new();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next();
+                let mut sgr = String::new();
+                for code in chars.by_ref() {
+                    sgr.push(code);
+                    if ('@'..='~').contains(&code) {
+                        break;
+                    }
+                }
+                match sgr.as_str() {
+                    "4m" => underlined = true,
+                    "0m" | "24m" => underlined = false,
+                    _ => {}
+                }
+            } else {
+                plain.push(ch);
+                if underlined {
+                    marked.push(ch);
+                }
+            }
+        }
+        assert_eq!(plain, "ABCDEFGH");
+        assert_eq!(marked, "BCFG");
+        assert!(!underlined);
+    }
+
+    #[test]
+    fn debugger_selected_statement_is_revealed_without_changing_breakpoints() {
+        use crate::debugger::DebugStatementTarget;
+        let source = format!("10 A$=\"{}\":B=2:C=3", "ñ".repeat(100));
+        let start = source.find("B=2").unwrap();
+        let mut navigation = DebugCodeSelection::new(&[DebugStatementTarget {
+            line: 10,
+            source_span: start..start + 3,
+        }]);
+        navigation.sync_line(Some(10), None);
+        let mut editor = BasicEditor::with_breakpoints(&[source.clone()], HashSet::from([10]));
+        reveal_debug_selection(&mut editor, &navigation, 25);
+        assert_eq!(editor.cursor_col, source[..start].chars().count());
+        assert!(editor.left_col <= editor.cursor_col);
+        assert!(editor.cursor_col + 2 <= editor.left_col + 25);
+        assert_eq!(editor.breakpoints, HashSet::from([10]));
+    }
+
+    #[test]
+    fn debugger_status_advertises_scrolling_when_no_visible_entry_has_an_action() {
+        let mut inspector = InspectorState::default();
+        inspector.focused = true;
+        let status = debug_status(&sample_debug_snapshot(), true, &inspector, 80);
+        assert!(status.contains("PgUp/PgDn Scroll"));
+        assert!(status.chars().count() <= 80);
+        assert!(!status.contains("Enter"));
+        assert!(!status.contains("Space"));
+        assert!(status.contains("Esc Abort"));
+        assert!(!status.contains("F4"));
+        assert!(!status.contains("F5"));
+        assert!(style_editor_status_keys(&status).contains(&format!(
+            "{STATUS_KEY_STYLE}PgUp/PgDn{STATUS_KEY_END_STYLE} Scroll"
+        )));
+    }
+
+    #[test]
+    fn debugger_keeps_alternate_screen_for_steps_and_restart() {
         use crate::debugger::DebugAction;
 
         assert!(!debug_action_keeps_alternate_screen(DebugAction::Continue));
         assert!(debug_action_keeps_alternate_screen(DebugAction::StepInto));
         assert!(debug_action_keeps_alternate_screen(DebugAction::StepOver));
         assert!(debug_action_keeps_alternate_screen(DebugAction::StepOut));
+        assert!(debug_action_keeps_alternate_screen(DebugAction::Restart));
         assert!(!debug_action_keeps_alternate_screen(DebugAction::Abort));
+    }
+
+    #[test]
+    fn debugger_inspector_cannot_resume_or_show_output_but_can_always_abort() {
+        use crate::debugger::DebugAction;
+        for code in [
+            KeyCode::F(1),
+            KeyCode::F(5),
+            KeyCode::F(6),
+            KeyCode::F(7),
+            KeyCode::F(8),
+            KeyCode::F(9),
+        ] {
+            for modifiers in [
+                KeyModifiers::NONE,
+                KeyModifiers::SHIFT,
+                KeyModifiers::CONTROL,
+            ] {
+                assert_eq!(
+                    debug_action_for_panel(code, modifiers, true),
+                    None,
+                    "{code:?}"
+                );
+                assert_eq!(
+                    debug_action_for_panel(code, modifiers, false),
+                    debug_action_for_key(code, modifiers),
+                );
+            }
+        }
+        for (code, modifiers) in [
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL),
+            (
+                KeyCode::Char('C'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+        ] {
+            for focused in [false, true] {
+                assert_eq!(
+                    debug_action_for_panel(code, modifiers, focused),
+                    Some(DebugAction::Abort)
+                );
+            }
+        }
+        assert!(!debug_toggles_output(
+            KeyCode::F(4),
+            KeyModifiers::NONE,
+            true,
+            false
+        ));
+        assert!(debug_toggles_output(
+            KeyCode::F(4),
+            KeyModifiers::NONE,
+            false,
+            false
+        ));
+        assert!(debug_toggles_output(
+            KeyCode::F(4),
+            KeyModifiers::NONE,
+            false,
+            true
+        ));
+        assert!(!debug_toggles_output(
+            KeyCode::F(4),
+            KeyModifiers::CONTROL,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -6574,6 +6887,7 @@ mod tests {
             KeyCode::F(7),
             KeyCode::F(8),
             KeyCode::Char('x'),
+            KeyCode::Char(' '),
             KeyCode::Enter,
             KeyCode::Tab,
             KeyCode::Up,
@@ -6589,7 +6903,16 @@ mod tests {
     #[test]
     fn debugger_view_keys_consume_releases_and_identifiable_repeats() {
         let mut keys = DebugViewKeys::default();
-        for code in [KeyCode::F(4), KeyCode::Esc] {
+        for code in [
+            KeyCode::F(3),
+            KeyCode::F(4),
+            KeyCode::F(9),
+            KeyCode::Esc,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Enter,
+            KeyCode::Char(' '),
+        ] {
             let key = |kind| KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind);
             assert!(keys.accepts(key(KeyEventKind::Press)));
             assert!(!keys.accepts(key(KeyEventKind::Repeat)));
@@ -6604,6 +6927,47 @@ mod tests {
             KeyModifiers::NONE,
             KeyEventKind::Repeat
         )));
+    }
+
+    #[test]
+    fn debugger_paste_capability_is_optional_and_restored_after_editing() {
+        let mut guard = DebugEditPasteGuard::default();
+        let mut operations = Vec::new();
+        for enabled in [true, true, false, false, true, false] {
+            guard
+                .set_enabled_with(enabled, |enabled| {
+                    operations.push(enabled);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert_eq!(operations, [true, false, true, false]);
+        let mut attempts = 0;
+        for enabled in [true, true, false, true, false] {
+            guard
+                .set_enabled_with(enabled, |_| {
+                    attempts += 1;
+                    Err(io::ErrorKind::Unsupported.into())
+                })
+                .unwrap();
+        }
+        assert_eq!(attempts, 1);
+        assert!(!guard.enabled);
+        assert!(guard.unsupported);
+    }
+
+    #[test]
+    fn debugger_inline_text_accepts_space_repeats_but_not_repeated_confirmation() {
+        let mut keys = DebugViewKeys::default();
+        let key = |code, kind| KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind);
+        assert!(keys.accepts_with_edit(key(KeyCode::Char(' '), KeyEventKind::Press), true));
+        assert!(keys.accepts_with_edit(key(KeyCode::Char(' '), KeyEventKind::Repeat), true));
+        assert!(!keys.accepts_with_edit(key(KeyCode::Char(' '), KeyEventKind::Release), true));
+        assert!(!keys.accepts_with_edit(key(KeyCode::Char(' '), KeyEventKind::Repeat), false));
+        assert!(keys.accepts_with_edit(key(KeyCode::Enter, KeyEventKind::Press), false));
+        assert!(!keys.accepts_with_edit(key(KeyCode::Enter, KeyEventKind::Repeat), true));
+        assert!(!keys.accepts_with_edit(key(KeyCode::Enter, KeyEventKind::Release), true));
+        assert!(keys.accepts_with_edit(key(KeyCode::Enter, KeyEventKind::Press), true));
     }
 
     #[test]
@@ -6807,37 +7171,6 @@ mod tests {
     }
 
     #[test]
-    fn debugger_panel_scroll_clamps_after_responsive_resize() {
-        let snapshot = sample_debug_snapshot();
-        let narrow = debug_layout(42, 24);
-        let scrolled = clamp_debug_panel_scroll(&snapshot, narrow, usize::MAX);
-        assert!(scrolled > 0);
-
-        let wide = debug_layout(120, 24);
-        let clamped = clamp_debug_panel_scroll(&snapshot, wide, scrolled);
-        let wide_lines = debug_panel_lines(&snapshot, wide.panel_cols);
-        assert!(clamped <= wide_lines.len().saturating_sub(wide.panel_rows));
-    }
-
-    #[test]
-    fn debugger_panel_tab_reaches_the_last_page_then_wraps() {
-        let snapshot = sample_debug_snapshot();
-        let layout = debug_layout(42, 24);
-        let lines = debug_panel_lines(&snapshot, layout.panel_cols);
-        let max_scroll = lines.len().saturating_sub(layout.panel_rows);
-        assert!(max_scroll > 0);
-
-        assert_eq!(
-            advance_debug_panel_scroll(&snapshot, layout, max_scroll, false),
-            0
-        );
-        assert_eq!(
-            advance_debug_panel_scroll(&snapshot, layout, max_scroll, true),
-            max_scroll.saturating_sub(debug_panel_page_size())
-        );
-    }
-
-    #[test]
     fn debugger_horizontal_scroll_is_read_only_and_bounded() {
         let lines = vec![format!("10 PRINT {}", "X".repeat(80))];
         let mut editor = BasicEditor::new(&lines);
@@ -6906,6 +7239,68 @@ mod tests {
         assert!(narrow_text.contains("DATA"));
         assert!(!narrow_text.contains("LOCATION"));
         assert!(!narrow_text.contains("PRINT I"));
+    }
+
+    #[test]
+    fn debugger_edits_extend_highlights_and_become_the_next_pause_baseline() {
+        use crate::debugger::DebugValue;
+        let before = sample_debug_snapshot();
+        let mut after = before.clone();
+        after.variables[0].value = DebugValue::Number(42.0);
+        after.array_elements[0].value = DebugValue::Number(99.0);
+        let mut changes = DebugPanelChanges::default();
+        changes.variables.insert("NAME$".into());
+        changes.state = true;
+        record_debug_edit_changes(&mut changes, &before, &after);
+        assert_eq!(
+            changes.variables,
+            HashSet::from(["I".into(), "NAME$".into(), "P(7,3)".into()])
+        );
+        assert!(changes.state);
+        assert!(!changes.data);
+        let mut history = DebugInspectionHistory::default();
+        history.remember(&after);
+        assert_eq!(history.changes(&after), DebugPanelChanges::default());
+
+        let mut unchanged = DebugPanelChanges::default();
+        record_debug_edit_changes(&mut unchanged, &after, &after);
+        assert_eq!(unchanged, DebugPanelChanges::default());
+    }
+
+    #[test]
+    fn debugger_inline_edit_status_only_offers_edit_actions_even_when_hidden() {
+        let snapshot = sample_debug_snapshot();
+        let changes = DebugPanelChanges::default();
+        let mut inspector = InspectorState::default();
+        inspector.focused = true;
+        inspector.set_editable(true);
+        for _ in 0..10 {
+            if inspector.begin_edit(&snapshot, &changes, 42, 30) {
+                break;
+            }
+            inspector.handle_key(KeyCode::Down, &snapshot, &changes, 42, 30);
+        }
+        assert!(inspector.is_editing());
+        for width in [12, 40, 80, 120] {
+            let status = debug_status(&snapshot, true, &inspector, width);
+            assert!(status.contains("Enter"));
+            assert!(status.contains("Esc"));
+            assert!(!status.contains("Tab"));
+            assert!(!status.contains("Abort"));
+            assert!(!status.contains("F6"));
+            assert!(status.chars().count() <= width);
+            let hidden = debug_status(&snapshot, false, &inspector, width);
+            assert!(hidden.contains("Resize"));
+            assert!(hidden.contains("Esc"));
+            assert!(!hidden.contains("Enter"));
+        }
+        inspector.edit_failed("Invalid number".into());
+        let status = debug_status(&snapshot, true, &inspector, 120);
+        assert!(status.contains("Invalid number"));
+        assert!(status.contains("Esc Cancel"));
+        inspector.handle_edit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!inspector.is_editing());
+        assert!(debug_status(&snapshot, true, &inspector, 200).contains("Esc Abort"));
     }
 
     #[test]
@@ -6993,124 +7388,82 @@ mod tests {
     }
 
     #[test]
-    fn debugger_panel_styles_headings_per_cell_without_leaking_into_values() {
-        let width = 60;
-        let column_width = debug_panel_column_width(width, 2);
-        let plain = fit_plain_text(
-            &format!(
-                "{} | {}",
-                fit_plain_text("ARRAYS", column_width),
-                fit_plain_text("  DATABASE = 1", column_width)
-            ),
-            width,
+    fn debugger_panel_styles_semantic_headings_without_leaking_into_values() {
+        let snapshot = sample_debug_snapshot();
+        let panel =
+            InspectorState::default().panel(&snapshot, &DebugPanelChanges::default(), 120, 30);
+        let lines = panel.render_lines(true, SyntaxTheme::Dark);
+        assert!(lines.iter().all(|line| visible_width(line) == 120));
+        assert_eq!(
+            lines.join("\n").matches(DEBUG_PANEL_HEADER_STYLE).count(),
+            7
         );
-        let styled = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
-
-        assert_eq!(styled.matches(DEBUG_PANEL_HEADER_STYLE).count(), 1);
-        assert_eq!(visible_width(&styled), width);
-        let (heading, value) = styled.split_once(" | ").unwrap();
-        assert!(heading.starts_with(DEBUG_PANEL_HEADER_STYLE));
-        assert!(heading.ends_with(RESET));
-        assert!(!value.contains(DEBUG_PANEL_HEADER_STYLE));
-        assert!(value.contains("DATABASE = 1"));
+        for line in lines {
+            for cell in line.split(" | ") {
+                if cell.contains("I = 4") || cell.contains("NAME$ =") {
+                    assert!(!cell.contains(DEBUG_PANEL_HEADER_STYLE));
+                }
+                if cell.contains(DEBUG_PANEL_HEADER_STYLE) {
+                    assert!(cell.ends_with(RESET) || cell.trim_end().ends_with(RESET));
+                }
+            }
+        }
     }
 
     #[test]
-    fn debugger_panel_colors_only_changed_cells_and_keeps_plain_fallback() {
+    fn debugger_panel_colors_changed_cells_in_each_column_and_keeps_plain_fallback() {
+        fn strip_ansi(text: &str) -> String {
+            let mut chars = text.chars();
+            let mut plain = String::new();
+            while let Some(ch) = chars.next() {
+                if ch == '\x1b' {
+                    for code in chars.by_ref() {
+                        if code == 'm' {
+                            break;
+                        }
+                    }
+                } else {
+                    plain.push(ch);
+                }
+            }
+            plain
+        }
         let snapshot = sample_debug_snapshot();
         let changes = DebugPanelChanges {
             variables: HashSet::from([String::from("I")]),
-            ..DebugPanelChanges::default()
-        };
-        let width = 120;
-        let plain = debug_panel_lines_with_changes(&snapshot, &changes, width)
-            .into_iter()
-            .find(|line| line.contains("* I = 4"))
-            .unwrap();
-
-        let fallback = style_debug_panel_line_for_theme(&plain, width, false, SyntaxTheme::Dark);
-        assert_eq!(fallback, plain);
-        assert!(!fallback.contains('\x1b'));
-
-        let dark = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
-        let light = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Light);
-        assert!(dark.contains(&format!("{DEBUG_PANEL_CHANGED_DARK_STYLE}* I = 4")));
-        assert!(light.contains(&format!("{DEBUG_PANEL_CHANGED_LIGHT_STYLE}* I = 4")));
-        assert!(!dark.contains(DEBUG_PANEL_CHANGED_LIGHT_STYLE));
-        assert!(!light.contains(DEBUG_PANEL_CHANGED_DARK_STYLE));
-        assert_eq!(dark.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(), 1);
-        assert_eq!(light.matches(DEBUG_PANEL_CHANGED_LIGHT_STYLE).count(), 1);
-        assert_eq!(visible_width(&dark), width);
-        assert_eq!(visible_width(&light), width);
-
-        let first_gap = dark.find(" | ").unwrap();
-        let first_reset = dark.find(RESET).unwrap();
-        assert!(
-            first_reset < first_gap,
-            "changed style leaked into the next cell"
-        );
-        assert!(!dark[first_gap..].contains(DEBUG_PANEL_CHANGED_DARK_STYLE));
-    }
-
-    #[test]
-    fn debugger_panel_colors_changed_cells_in_second_and_third_columns() {
-        let snapshot = sample_debug_snapshot();
-
-        let state_changes = DebugPanelChanges {
             state: true,
-            ..DebugPanelChanges::default()
-        };
-        let two_column_width = 60;
-        let state_plain =
-            debug_panel_lines_with_changes(&snapshot, &state_changes, two_column_width)
-                .into_iter()
-                .find(|line| line.contains("* ERR=5 ERL=120"))
-                .unwrap();
-        let state_styled = style_debug_panel_line_for_theme(
-            &state_plain,
-            two_column_width,
-            true,
-            SyntaxTheme::Dark,
-        );
-        let first_gap = state_styled.find(" | ").unwrap();
-        let state_style = state_styled.find(DEBUG_PANEL_CHANGED_DARK_STYLE).unwrap();
-        assert!(state_style > first_gap);
-        assert_eq!(
-            state_styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(),
-            1
-        );
-        assert_eq!(visible_width(&state_styled), two_column_width);
-
-        let timer_changes = DebugPanelChanges {
             timers: HashSet::from([1]),
             ..DebugPanelChanges::default()
         };
-        let three_column_width = 120;
-        let timer_plain =
-            debug_panel_lines_with_changes(&snapshot, &timer_changes, three_column_width)
-                .into_iter()
-                .find(|line| line.contains("* #1 EVERY"))
-                .unwrap();
-        let timer_styled = style_debug_panel_line_for_theme(
-            &timer_plain,
-            three_column_width,
-            true,
-            SyntaxTheme::Dark,
-        );
-        let second_gap = timer_styled.rfind(" | ").unwrap();
-        let timer_style = timer_styled.find(DEBUG_PANEL_CHANGED_DARK_STYLE).unwrap();
-        assert!(timer_style > second_gap);
-        assert_eq!(
-            timer_styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(),
-            1
-        );
-        assert_eq!(visible_width(&timer_styled), three_column_width);
+        for width in [1, 42, 60, 120] {
+            let panel = InspectorState::default().panel(&snapshot, &changes, width, 30);
+            let plain = panel.render_lines(false, SyntaxTheme::Dark);
+            assert!(!plain.join("\n").contains('\x1b'));
+            for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+                let styled = panel.render_lines(true, theme);
+                assert!(styled.iter().all(|line| visible_width(line) == width));
+                assert_eq!(
+                    styled
+                        .join("\n")
+                        .matches(debug_panel_changed_style(theme))
+                        .count(),
+                    3,
+                );
+                for (rendered, plain) in styled.iter().zip(&plain) {
+                    assert_eq!(strip_ansi(rendered), *plain);
+                    if width == 120 && rendered.contains("* I = 4") {
+                        let first_gap = rendered.find(" | ").unwrap();
+                        assert!(rendered[..first_gap].contains(debug_panel_changed_style(theme)));
+                        assert!(!rendered[first_gap..].contains(debug_panel_changed_style(theme)));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
     fn debugger_panel_change_style_ignores_separator_text_inside_values() {
         use crate::debugger::{DebugValue, DebugVariable};
-
         let mut snapshot = sample_debug_snapshot();
         snapshot.variables = vec![DebugVariable {
             name: String::from("NAME$"),
@@ -7121,38 +7474,13 @@ mod tests {
             variables: HashSet::from([String::from("NAME$")]),
             ..DebugPanelChanges::default()
         };
-        let width = 120;
-        let plain = debug_panel_lines_with_changes(&snapshot, &changes, width)
-            .into_iter()
-            .find(|line| line.contains("* NAME$"))
-            .unwrap();
-        let styled = style_debug_panel_line_for_theme(&plain, width, true, SyntaxTheme::Dark);
-
-        assert!(styled.contains(&format!(
-            "{DEBUG_PANEL_CHANGED_DARK_STYLE}* NAME$ = \"LEFT | RIGHT\""
-        )));
+        let lines = InspectorState::default()
+            .panel(&snapshot, &changes, 120, 30)
+            .render_lines(true, SyntaxTheme::Dark);
+        let styled = lines.iter().find(|line| line.contains("* NAME$")).unwrap();
+        assert!(styled.contains("* NAME$ = \"LEFT | RIGHT\""));
         assert_eq!(styled.matches(DEBUG_PANEL_CHANGED_DARK_STYLE).count(), 1);
-        assert_eq!(visible_width(&styled), width);
-    }
-
-    #[test]
-    fn debugger_panel_change_style_survives_single_column_truncation() {
-        let fallback = style_debug_panel_line_for_theme(
-            "* VERY_LONG_VARIABLE = 123",
-            1,
-            false,
-            SyntaxTheme::Dark,
-        );
-        let styled = style_debug_panel_line_for_theme(
-            "* VERY_LONG_VARIABLE = 123",
-            1,
-            true,
-            SyntaxTheme::Dark,
-        );
-
-        assert_eq!(fallback, "*");
-        assert_eq!(styled, format!("{DEBUG_PANEL_CHANGED_DARK_STYLE}*{RESET}"));
-        assert_eq!(visible_width(&styled), 1);
+        assert_eq!(visible_width(styled), 120);
     }
 
     #[test]

@@ -18,10 +18,16 @@ AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
 program, inspect it with `LIST`, and continue from the prompt.
 
 `EDIT` opens the full-screen program editor. `DEBUG` opens the same source in a
-read-only debugger and pauses before the first statement. It provides line
+visual debugger and pauses before the first statement. It provides line
 breakpoints, step into/over/out, and a live view of variables, arrays, the call
 stack, errors, and timers, including the exact next statement and values
-changed since the previous pause.
+changed since the previous pause. Inspector categories can be collapsed, and
+scalars and arrays can be pinned for focused tracking, entirely from the keyboard.
+Each pinned array follows its last-written element. Press Enter on an inspector
+value to edit a scalar or the displayed array element in place, without resuming
+execution. In the code panel, F3 sets the next complete statement within a compatible
+execution context; F9 restarts from the beginning while retaining breakpoints and
+inspector preferences. The BASIC source remains read-only while debugging.
 
 <p align="center">
   <img src="README-console.png" alt="AVL BASIC interactive session showing the welcome screen, CD, LOAD, and LIST" width="900">
@@ -180,7 +186,7 @@ adding a practical modern feature set:
 
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
-- syntax-preserving program editing and listing, plus a separate read-only debugger,
+- syntax-preserving program editing and listing, plus a separate visual debugger,
 - `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - embedded bitmap fonts for reproducible graphics text,

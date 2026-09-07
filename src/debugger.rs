@@ -11,6 +11,7 @@ pub enum DebugAction {
     StepInto,
     StepOver,
     StepOut,
+    Restart,
     Abort,
 }
 
@@ -129,6 +130,45 @@ pub struct DebugSnapshot {
     pub data: DebugDataSnapshot,
 }
 
+/// A visible debugger value, with concrete array indices rather than expressions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DebugEditTarget {
+    Scalar(String),
+    ArrayElement { name: String, indexes: Vec<i32> },
+}
+
+/// A complete statement in the numbered source line (UTF-8 byte offsets).
+/// Inline THEN/ELSE children are deliberately not navigation targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugStatementTarget {
+    pub line: i32,
+    pub source_span: Range<usize>,
+}
+
+/// Restricted access to a live interpreter during one synchronous debugger pause.
+/// Editing a value never evaluates BASIC or resumes the program. Validation
+/// errors are returned to the debugger UI, without entering BASIC error handling.
+pub trait DebugPauseAccess {
+    fn idle(&mut self) -> io::Result<()>;
+    fn set_variable(
+        &mut self,
+        target: &DebugEditTarget,
+        value: DebugValue,
+    ) -> Result<DebugSnapshot, String>;
+
+    fn set_scalar(&mut self, name: &str, value: DebugValue) -> Result<DebugSnapshot, String> {
+        self.set_variable(&DebugEditTarget::Scalar(name.to_string()), value)
+    }
+
+    fn statement_targets(&self) -> Vec<DebugStatementTarget> {
+        Vec::new()
+    }
+
+    fn set_next(&mut self, _target: &DebugStatementTarget) -> Result<DebugSnapshot, String> {
+        Err("Changing the next statement is not supported".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DebugStep {
     Into,
@@ -143,6 +183,15 @@ enum DebugPauseHandler {
                 &DebugSnapshot,
                 &mut HashSet<i32>,
                 &mut dyn FnMut() -> io::Result<()>,
+            ) -> io::Result<DebugAction>,
+        >,
+    ),
+    InteractiveEditable(
+        Box<
+            dyn FnMut(
+                &DebugSnapshot,
+                &mut HashSet<i32>,
+                &mut dyn DebugPauseAccess,
             ) -> io::Result<DebugAction>,
         >,
     ),
@@ -167,6 +216,7 @@ impl fmt::Debug for Debugger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let handler = match &self.handler {
             DebugPauseHandler::Interactive(_) => "interactive",
+            DebugPauseHandler::InteractiveEditable(_) => "interactive_editable",
             DebugPauseHandler::Scripted { .. } => "scripted",
         };
         f.debug_struct("Debugger")
@@ -192,6 +242,25 @@ impl Debugger {
             pause_requested: false,
             step: None,
             handler: DebugPauseHandler::Interactive(Box::new(handler)),
+        }
+    }
+
+    /// Creates a synchronous pause handler that can edit existing visible values.
+    /// The access object is only valid during the callback; returning an action
+    /// is still the only way to resume or abort execution.
+    pub fn interactive_editable(
+        handler: impl FnMut(
+                &DebugSnapshot,
+                &mut HashSet<i32>,
+                &mut dyn DebugPauseAccess,
+            ) -> io::Result<DebugAction>
+            + 'static,
+    ) -> Self {
+        Self {
+            breakpoints: HashSet::new(),
+            pause_requested: false,
+            step: None,
+            handler: DebugPauseHandler::InteractiveEditable(Box::new(handler)),
         }
     }
 
@@ -245,14 +314,16 @@ impl Debugger {
     pub fn snapshots(&self) -> &[DebugSnapshot] {
         match &self.handler {
             DebugPauseHandler::Scripted { snapshots, .. } => snapshots,
-            DebugPauseHandler::Interactive(_) => &[],
+            DebugPauseHandler::Interactive(_) | DebugPauseHandler::InteractiveEditable(_) => &[],
         }
     }
 
     pub fn take_snapshots(&mut self) -> Vec<DebugSnapshot> {
         match &mut self.handler {
             DebugPauseHandler::Scripted { snapshots, .. } => std::mem::take(snapshots),
-            DebugPauseHandler::Interactive(_) => Vec::new(),
+            DebugPauseHandler::Interactive(_) | DebugPauseHandler::InteractiveEditable(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -267,11 +338,14 @@ impl Debugger {
     pub(crate) fn pause(
         &mut self,
         snapshot: &DebugSnapshot,
-        idle: &mut dyn FnMut() -> io::Result<()>,
+        access: &mut dyn DebugPauseAccess,
     ) -> io::Result<DebugAction> {
         match &mut self.handler {
             DebugPauseHandler::Interactive(handler) => {
-                handler(snapshot, &mut self.breakpoints, idle)
+                handler(snapshot, &mut self.breakpoints, &mut || access.idle())
+            }
+            DebugPauseHandler::InteractiveEditable(handler) => {
+                handler(snapshot, &mut self.breakpoints, access)
             }
             DebugPauseHandler::Scripted { actions, snapshots } => {
                 snapshots.push(snapshot.clone());
@@ -282,7 +356,7 @@ impl Debugger {
 
     pub(crate) fn arm_step(&mut self, action: DebugAction, depth: usize) {
         self.step = match action {
-            DebugAction::Continue | DebugAction::Abort => None,
+            DebugAction::Continue | DebugAction::Restart | DebugAction::Abort => None,
             DebugAction::StepInto => Some(DebugStep::Into),
             DebugAction::StepOver => Some(DebugStep::Over { depth }),
             DebugAction::StepOut => Some(DebugStep::Out { depth }),
@@ -307,6 +381,22 @@ impl Debugger {
 mod tests {
     use super::*;
 
+    struct NoEdits;
+
+    impl DebugPauseAccess for NoEdits {
+        fn idle(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn set_variable(
+            &mut self,
+            _: &DebugEditTarget,
+            _: DebugValue,
+        ) -> Result<DebugSnapshot, String> {
+            Err("Not editable".into())
+        }
+    }
+
     #[test]
     fn scripted_debugger_records_snapshots_and_defaults_to_abort() {
         let mut debugger = Debugger::scripted([DebugAction::Continue]);
@@ -330,7 +420,7 @@ mod tests {
             data: DebugDataSnapshot::Empty,
         };
 
-        let mut idle = || Ok(());
+        let mut idle = NoEdits;
         assert_eq!(
             debugger.pause(&snapshot, &mut idle).unwrap(),
             DebugAction::Continue

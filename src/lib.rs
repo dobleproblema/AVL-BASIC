@@ -16,9 +16,9 @@ pub mod value;
 pub mod window;
 
 pub use debugger::{
-    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugFrameKind,
-    DebugLocation, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugTimerSnapshot,
-    DebugValue, DebugVariable, Debugger,
+    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugEditTarget,
+    DebugFrameKind, DebugLocation, DebugPauseAccess, DebugPauseReason, DebugSnapshot,
+    DebugStackFrame, DebugStatementTarget, DebugTimerSnapshot, DebugValue, DebugVariable, Debugger,
 };
 pub use error::{BasicError, BasicResult, ErrorCode};
 pub use graphics::Graphics;

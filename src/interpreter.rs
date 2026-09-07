@@ -1,8 +1,8 @@
 use crate::console;
 use crate::debugger::{
-    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugFrameKind,
-    DebugLocation, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugTimerSnapshot,
-    DebugValue, DebugVariable, Debugger,
+    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugEditTarget,
+    DebugFrameKind, DebugLocation, DebugPauseAccess, DebugPauseReason, DebugSnapshot,
+    DebugStackFrame, DebugStatementTarget, DebugTimerSnapshot, DebugValue, DebugVariable, Debugger,
 };
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::expr::{
@@ -44,6 +44,9 @@ const PRINT_ZONE_DEFAULT: usize = 22;
 const PRINT_ZONE_MIN: usize = 1;
 const PRINT_ZONE_MAX: usize = 255;
 const DEBUG_ABORT_DETAIL: &str = "__AVL_DEBUG_ABORT__";
+const DEBUG_RESTART_DETAIL: &str = "__AVL_DEBUG_RESTART__";
+
+mod debug_navigation;
 
 #[derive(Debug, Clone)]
 struct FastHasher(u64);
@@ -412,6 +415,7 @@ pub enum RunOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DebugHookControl {
     Run,
+    Relocate(Cursor),
     Abort,
 }
 
@@ -512,6 +516,14 @@ impl GraphicsLineEditor {
 struct Cursor {
     line_idx: usize,
     cmd_idx: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GosubFrame {
+    return_cursor: Cursor,
+    // IF frames below this depth belong to suspended callers. Source ranges
+    // alone cannot identify them when calls are nested or recursive.
+    if_depth: usize,
 }
 
 #[derive(Debug)]
@@ -967,6 +979,8 @@ struct ActiveDebugRoutineFrame {
     kind: DebugFrameKind,
     name: Rc<str>,
     gosub_base: usize,
+    for_base: usize,
+    while_base: usize,
 }
 
 #[derive(Debug, Default)]
@@ -974,12 +988,94 @@ struct InterpreterDebuggerState {
     debugger: Option<Debugger>,
     terminal: Option<console::DebugTerminalSession>,
     resume_guards: Vec<(Cursor, usize)>,
+    resume_relocated: Option<(Cursor, usize)>,
     editor_breakpoints: HashSet<i32>,
     mouse_isr_markers: Vec<usize>,
     active_routines: Vec<ActiveDebugRoutineFrame>,
+    control_scopes: Vec<debug_navigation::DebugControlScope>,
     refocus_graphics_on_use: bool,
     // Stepping and inspection keep drawing passive, without blocking input focus.
     graphics_focus_on_input_only: bool,
+}
+
+struct InterpreterDebugPause<'a> {
+    interpreter: &'a mut Interpreter,
+    cursor: Cursor,
+    line: i32,
+    metadata: Option<ExecutionMetadata>,
+    source_code: Option<&'a str>,
+    initial_snapshot: &'a DebugSnapshot,
+}
+
+impl DebugPauseAccess for InterpreterDebugPause<'_> {
+    fn idle(&mut self) -> io::Result<()> {
+        self.interpreter.pump_graphics_window_for_editor()
+    }
+
+    fn set_variable(
+        &mut self,
+        target: &DebugEditTarget,
+        value: DebugValue,
+    ) -> Result<DebugSnapshot, String> {
+        match target {
+            DebugEditTarget::Scalar(name) => {
+                self.interpreter.debug_set_existing_scalar(name, value)?
+            }
+            DebugEditTarget::ArrayElement { name, indexes } => {
+                self.interpreter
+                    .debug_set_displayed_array_element(name, indexes, value)?;
+            }
+        }
+        Ok(self.snapshot())
+    }
+
+    fn statement_targets(&self) -> Vec<DebugStatementTarget> {
+        self.interpreter.debug_statement_targets()
+    }
+
+    fn set_next(&mut self, target: &DebugStatementTarget) -> Result<DebugSnapshot, String> {
+        if self
+            .interpreter
+            .line_numbers_cache
+            .get(self.cursor.line_idx)
+            .copied()
+            != Some(self.line)
+            || self
+                .source_code
+                .is_some_and(|source| self.interpreter.program.get(self.line) != Some(source))
+        {
+            return Err("Cannot move the next statement after its source has changed".into());
+        }
+        let cursor = self.interpreter.debug_validate_next(self.cursor, target)?;
+        // All validation is read-only. Keep the new cursor inside this pause;
+        // the execution loop receives it only when the callback resumes.
+        self.cursor = cursor;
+        self.line = target.line;
+        self.metadata = self
+            .interpreter
+            .execution_source_cache
+            .get(&self.line)
+            .and_then(|entries| entries.get(cursor.cmd_idx))
+            .copied();
+        self.source_code = None;
+        Ok(self.snapshot())
+    }
+}
+
+impl InterpreterDebugPause<'_> {
+    fn snapshot(&self) -> DebugSnapshot {
+        let mut snapshot = self.interpreter.build_debug_snapshot_at(
+            &self.cursor,
+            self.line,
+            self.metadata.as_ref(),
+            self.source_code,
+            self.initial_snapshot.reason,
+        );
+        // Deadlines are shifted once when this entire pause ends. Repainting
+        // after an edit must keep the already displayed timer values frozen.
+        snapshot.timers.clone_from(&self.initial_snapshot.timers);
+        snapshot
+    }
 }
 
 #[derive(Debug)]
@@ -1918,7 +2014,10 @@ pub struct Interpreter {
     for_stack: Vec<ForFrame>,
     while_stack: Vec<WhileFrame>,
     if_stack: Vec<Cursor>,
-    gosub_stack: Vec<Cursor>,
+    gosub_stack: Vec<GosubFrame>,
+    // Named routines have their own IF stack but share the GOSUB stack.
+    // Frames before this base belong to a different, suspended IF stack.
+    if_gosub_base: usize,
     pending_if_branch: Option<Cursor>,
     timers: Vec<BasicTimer>,
     timer_isr_stack: Vec<TimerInterruptState>,
@@ -2020,6 +2119,7 @@ impl Interpreter {
             while_stack: Vec::new(),
             if_stack: Vec::new(),
             gosub_stack: Vec::new(),
+            if_gosub_base: 0,
             pending_if_branch: None,
             timers: Vec::new(),
             timer_isr_stack: Vec::new(),
@@ -2100,8 +2200,10 @@ impl Interpreter {
             state.debugger = Some(debugger);
             state.terminal = terminal;
             state.resume_guards.clear();
+            state.resume_relocated = None;
             state.mouse_isr_markers.clear();
             state.active_routines.clear();
+            state.control_scopes.clear();
             state.refocus_graphics_on_use = false;
             state.graphics_focus_on_input_only = false;
             previous_terminal
@@ -2115,8 +2217,10 @@ impl Interpreter {
         let (debugger, terminal, remove_state) = {
             let state = self.debugger_state.as_mut()?;
             state.resume_guards.clear();
+            state.resume_relocated = None;
             state.mouse_isr_markers.clear();
             state.active_routines.clear();
+            state.control_scopes.clear();
             state.refocus_graphics_on_use = false;
             state.graphics_focus_on_input_only = false;
             let debugger = state.debugger.take();
@@ -2319,19 +2423,61 @@ impl Interpreter {
     }
 
     pub fn run_loaded_from(&mut self, start_line: Option<i32>) -> BasicResult<RunOutcome> {
-        self.prepare_run();
-        self.rebuild_data();
-        self.rebuild_command_cache();
-        let line_idx = if let Some(line) = start_line {
-            self.line_index(line)
-                .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?
+        let mut start_line = start_line;
+        loop {
+            self.prepare_run();
+            self.rebuild_data();
+            self.rebuild_command_cache();
+            let line_idx = if let Some(line) = start_line {
+                self.line_index(line)
+                    .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?
+            } else {
+                0
+            };
+            let result = self.run_from(Cursor {
+                line_idx,
+                cmd_idx: 0,
+            });
+            if self.prepare_debug_restart(&result) {
+                start_line = None;
+                continue;
+            }
+            return normalize_debug_abort(result);
+        }
+    }
+
+    fn prepare_debug_restart(&mut self, result: &BasicResult<RunOutcome>) -> bool {
+        if self.run_depth != 0
+            || !result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.detail.as_deref() == Some(DEBUG_RESTART_DETAIL))
+        {
+            return false;
+        }
+        // Called outside every nested BASIC/Rust invocation: saved local
+        // bindings have already been restored before the fresh run clears them.
+        self.functions.clear();
+        self.single_line_function_cache.clear();
+        self.subs.clear();
+        self.fn_line_owner.clear();
+        self.sub_line_owner.clear();
+        self.expression_cache.clear();
+        if let Some(debugger) = self.debugger_mut() {
+            debugger.request_pause();
+        }
+        true
+    }
+
+    fn finish_debug_continuation(
+        &mut self,
+        result: BasicResult<RunOutcome>,
+    ) -> BasicResult<RunOutcome> {
+        if self.prepare_debug_restart(&result) {
+            self.run_loaded()
         } else {
-            0
-        };
-        normalize_debug_abort(self.run_from(Cursor {
-            line_idx,
-            cmd_idx: 0,
-        }))
+            normalize_debug_abort(result)
+        }
     }
 
     pub fn process_immediate(&mut self, line: &str) -> BasicResult<()> {
@@ -2434,7 +2580,8 @@ impl Interpreter {
                 .clone()
                 .ok_or_else(|| BasicError::new(ErrorCode::NoStoppedProgram))?;
             self.stopped_cursor = None;
-            normalize_debug_abort(self.run_from(cursor))?;
+            let result = self.run_from(cursor);
+            self.finish_debug_continuation(result)?;
             return Ok(());
         }
         let commands = split_commands(trimmed);
@@ -2534,16 +2681,21 @@ impl Interpreter {
         if self.stopped_cursor.is_none() {
             return Err(self.err(ErrorCode::NoStoppedProgram));
         }
+        let target = Cursor {
+            line_idx,
+            cmd_idx: 0,
+        };
+        // Resuming at a different line has the same IF-scope rules as GOTO
+        // during execution; CONT alone must leave the stack untouched.
+        self.reconcile_if_stack_for_jump(&target)?;
         self.stopped_cursor = None;
         self.end_requested = false;
         self.function_return_requested = false;
         self.sub_return_requested = false;
         self.repeat_current_command = false;
         self.restart_run_loop = false;
-        let result = normalize_debug_abort(self.run_from(Cursor {
-            line_idx,
-            cmd_idx: 0,
-        }));
+        let result = self.run_from(target);
+        let result = self.finish_debug_continuation(result);
         self.current_line = None;
         result?;
         Ok(())
@@ -2887,16 +3039,14 @@ impl Interpreter {
         let mut inspection_history = console::DebugInspectionHistory::default();
         let terminal = console::DebugTerminalSession::new();
         let pause_terminal = terminal.clone();
-        let debugger = Debugger::interactive(move |snapshot, breakpoints, idle| {
-            console::debug_fullscreen_with_idle_and_history(
-                &snapshot.source_lines,
-                breakpoints,
+        let debugger = Debugger::interactive_editable(move |snapshot, breakpoints, access| {
+            console::debug_fullscreen_editable_with_history(
                 snapshot,
+                breakpoints,
                 ansi,
-                None,
                 &pause_terminal,
                 &mut inspection_history,
-                || idle(),
+                access,
             )
         });
         let (outcome, stopped_line) =
@@ -3053,6 +3203,7 @@ impl Interpreter {
         self.while_stack.clear();
         self.if_stack.clear();
         self.gosub_stack.clear();
+        self.if_gosub_base = 0;
         self.pending_if_branch = None;
         self.timers.clear();
         self.timer_isr_stack.clear();
@@ -3060,6 +3211,7 @@ impl Interpreter {
         if let Some(state) = self.debugger_state.as_mut() {
             state.mouse_isr_markers.clear();
             state.active_routines.clear();
+            state.control_scopes.clear();
         }
         self.current_interrupt_priority = -1;
         self.mouse_handlers.clear();
@@ -3091,6 +3243,7 @@ impl Interpreter {
         self.program_structure_changed = false;
         if let Some(state) = self.debugger_state.as_mut() {
             state.resume_guards.clear();
+            state.resume_relocated = None;
             state.active_routines.clear();
             state.refocus_graphics_on_use = false;
             state.graphics_focus_on_input_only = false;
@@ -3287,7 +3440,11 @@ impl Interpreter {
             cursor.line_idx += 1;
             cursor.cmd_idx = 0;
         }
-        if let Some(frame) = self.if_stack.last() {
+        if let Some(frame) = self
+            .if_stack
+            .last()
+            .filter(|_| cursor.line_idx != usize::MAX)
+        {
             let line = lines
                 .get(frame.line_idx)
                 .copied()
@@ -3326,16 +3483,20 @@ impl Interpreter {
                 self.write(&console::trace_text(self.ansi_output, line_no));
             }
             while cursor.cmd_idx < commands_len {
+                let relocating = self.debugger_state.as_ref().is_some_and(|state| {
+                    state.resume_relocated
+                        == Some((cursor, self.run_depth + self.gosub_stack.len()))
+                });
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
                     || !self.timers.is_empty()
                     || console::interrupt_requested();
-                if poll_now {
+                if poll_now && !relocating {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
                         continue 'run_loop;
                     }
                     runtime_poll_skip = RUNTIME_POLL_COMMAND_SKIP;
-                } else {
+                } else if runtime_poll_skip != 0 {
                     runtime_poll_skip -= 1;
                 }
                 if self.end_requested {
@@ -3357,16 +3518,23 @@ impl Interpreter {
                     || !command.is_hidden_execution_command(),
                     |metadata| metadata.debugger_boundary,
                 );
-                if debugger_boundary
-                    && self.debug_before_cached_command(
+                if debugger_boundary {
+                    match self.debug_before_cached_command(
                         &cursor,
                         line_no,
                         command_metadata.as_ref(),
                         None,
-                    )? == DebugHookControl::Abort
-                {
-                    self.present_dirty_graphics_at_run_boundary()?;
-                    return Err(debug_abort_error());
+                    )? {
+                        DebugHookControl::Run => {}
+                        DebugHookControl::Relocate(target) => {
+                            cursor = target;
+                            continue 'run_loop;
+                        }
+                        DebugHookControl::Abort => {
+                            self.present_dirty_graphics_at_run_boundary()?;
+                            return Err(debug_abort_error());
+                        }
+                    }
                 }
                 let debug_depth = self.run_depth + self.gosub_stack.len();
                 let before = cursor.clone();
@@ -3404,6 +3572,15 @@ impl Interpreter {
                             next,
                         })
                 };
+                // An inline helper must be abandoned even when navigation
+                // selected the guard of that very same source line.
+                if self
+                    .debugger_state
+                    .as_ref()
+                    .is_some_and(|state| state.resume_relocated.is_some())
+                {
+                    continue 'run_loop;
+                }
                 if let Some(failure) = failure {
                     if debugger_boundary {
                         self.debug_finished_cached_command(
@@ -3497,7 +3674,11 @@ impl Interpreter {
             cursor.line_idx += 1;
             cursor.cmd_idx = 0;
         }
-        if let Some(frame) = self.if_stack.last() {
+        if let Some(frame) = self
+            .if_stack
+            .last()
+            .filter(|_| cursor.line_idx != usize::MAX)
+        {
             let line = lines
                 .get(frame.line_idx)
                 .copied()
@@ -3521,7 +3702,20 @@ impl Interpreter {
         source_code: Option<&str>,
     ) -> BasicResult<DebugHookControl> {
         self.sync_debug_routine_stack();
+        self.sync_debug_control_scope();
         let depth = self.run_depth + self.gosub_stack.len();
+        if self.debugger_state.as_mut().is_some_and(|state| {
+            if state.resume_relocated == Some((*cursor, depth)) {
+                state.resume_relocated = None;
+                true
+            } else {
+                false
+            }
+        }) {
+            // The selected action is already armed. Execute the relocated
+            // command once before testing StepInto/Over again.
+            return Ok(DebugHookControl::Run);
+        }
         let resume_guarded = self
             .debugger_state
             .as_ref()
@@ -3582,9 +3776,17 @@ impl Interpreter {
         };
         let paused_at = Instant::now();
         let _runtime_raw_suspend = console::suspend_runtime_raw_mode().ok();
-        let pause_result = {
-            let mut idle = || self.pump_graphics_window_for_editor();
-            debugger.pause(&snapshot, &mut idle)
+        let (pause_result, resume_cursor) = {
+            let mut access = InterpreterDebugPause {
+                interpreter: self,
+                cursor: *cursor,
+                line,
+                metadata: metadata.copied(),
+                source_code,
+                initial_snapshot: &snapshot,
+            };
+            let result = debugger.pause(&snapshot, &mut access);
+            (result, access.cursor)
         };
         let paused_for = paused_at.elapsed();
         self.shift_debugger_deadlines(paused_for);
@@ -3600,9 +3802,15 @@ impl Interpreter {
                 BasicError::new(ErrorCode::InvalidValue).with_detail(format!("Debugger: {err}"))
             }
         })?;
+        if action == DebugAction::Restart {
+            return Err(
+                BasicError::new(ErrorCode::KeyboardInterrupt).with_detail(DEBUG_RESTART_DETAIL)
+            );
+        }
         if action == DebugAction::Abort {
             if let Some(state) = self.debugger_state.as_mut() {
                 state.resume_guards.clear();
+                state.resume_relocated = None;
                 state.refocus_graphics_on_use = false;
                 state.graphics_focus_on_input_only = false;
             }
@@ -3612,8 +3820,8 @@ impl Interpreter {
             .debugger_state
             .as_mut()
             .expect("debugger state must exist while execution is paused");
-        if !state.resume_guards.contains(&(*cursor, depth)) {
-            state.resume_guards.push((*cursor, depth));
+        if !state.resume_guards.contains(&(resume_cursor, depth)) {
+            state.resume_guards.push((resume_cursor, depth));
         }
         if let Some(debugger) = state.debugger.as_mut() {
             debugger.arm_step(action, depth);
@@ -3625,7 +3833,78 @@ impl Interpreter {
             action,
             DebugAction::StepInto | DebugAction::StepOver | DebugAction::StepOut
         );
-        Ok(DebugHookControl::Run)
+        if resume_cursor != *cursor {
+            state.resume_relocated = Some((resume_cursor, depth));
+            Ok(DebugHookControl::Relocate(resume_cursor))
+        } else {
+            Ok(DebugHookControl::Run)
+        }
+    }
+
+    #[cold]
+    fn debug_set_existing_scalar(&mut self, name: &str, value: DebugValue) -> Result<(), String> {
+        let name = name.to_ascii_uppercase();
+        if name.ends_with('$') {
+            if !self.string_variables.contains_key(&name) {
+                return Err("This scalar variable is no longer available.".into());
+            }
+            let DebugValue::String(value) = value else {
+                return Err("A string variable requires text.".into());
+            };
+            self.invalidate_texture_cache_for(&name);
+            *self.string_variables.get_mut(&name).unwrap() = value;
+        } else {
+            let Some(slot) = self.numeric_variables.get_mut(&name) else {
+                return Err("This scalar variable is no longer available.".into());
+            };
+            let DebugValue::Number(value) = value else {
+                return Err("A numeric variable requires a number.".into());
+            };
+            if !value.is_finite() {
+                return Err("The number must be finite.".into());
+            }
+            // Update the existing slot so cached expressions and FOR/NEXT
+            // continue to refer to exactly the same visible binding.
+            *slot = value;
+        }
+        Ok(())
+    }
+
+    #[cold]
+    fn debug_set_displayed_array_element(
+        &mut self,
+        name: &str,
+        indexes: &[i32],
+        value: DebugValue,
+    ) -> Result<(), String> {
+        let name = name.to_ascii_uppercase();
+        let Some(array) = self.array_mut(&name) else {
+            return Err("This array element is no longer available.".into());
+        };
+        if !array
+            .last_debug_write
+            .as_ref()
+            .is_some_and(|write| write.indexes == indexes)
+        {
+            return Err("Only the displayed array element can be edited.".into());
+        }
+        let value = match value {
+            DebugValue::Number(value) => {
+                if !value.is_finite() {
+                    return Err("The number must be finite.".into());
+                }
+                Value::Number(value)
+            }
+            DebugValue::String(value) => Value::Str(value),
+        };
+        // This does not create or resize arrays. The ordinary setter validates
+        // type and bounds before changing the existing physical array cell.
+        array
+            .set(indexes, value)
+            .map_err(|err| err.display_for_basic())?;
+        // Keep the instruction's original writer name: editing a pinned A(7)
+        // must not rename the currently displayed alias P(7) in VARIABLES.
+        Ok(())
     }
 
     #[cold]
@@ -3639,6 +3918,30 @@ impl Interpreter {
 
         let target_subs = self.active_subs.len();
         let target_functions = self.active_functions.len();
+        // Consecutive sibling FN calls in one expression have no intervening
+        // caller command hook. Equal depths do not imply equal routine names.
+        let mut seen_subs = 0;
+        let mut seen_functions = 0;
+        let matching_prefix = state
+            .active_routines
+            .iter()
+            .take_while(|frame| {
+                let active = if frame.kind == DebugFrameKind::Sub {
+                    let active = self.active_subs.get(seen_subs).map(|active| &active.name);
+                    seen_subs += 1;
+                    active
+                } else {
+                    let active = self
+                        .active_functions
+                        .get(seen_functions)
+                        .map(|active| &active.name);
+                    seen_functions += 1;
+                    active
+                };
+                active == Some(&frame.name)
+            })
+            .count();
+        state.active_routines.truncate(matching_prefix);
         let mut tracked_subs = state
             .active_routines
             .iter()
@@ -3671,6 +3974,8 @@ impl Interpreter {
                 kind,
                 name,
                 gosub_base: self.gosub_stack.len(),
+                for_base: self.for_stack.len(),
+                while_base: self.while_stack.len(),
             });
         }
     }
@@ -3803,7 +4108,7 @@ impl Interpreter {
             .gosub_stack
             .iter()
             .enumerate()
-            .map(|(index, return_cursor)| {
+            .map(|(index, frame)| {
                 let (kind, name) = if debugger_state
                     .is_some_and(|state| state.mouse_isr_markers.contains(&index))
                 {
@@ -3824,7 +4129,10 @@ impl Interpreter {
                 DebugStackFrame {
                     kind,
                     name,
-                    line: self.line_numbers_cache.get(return_cursor.line_idx).copied(),
+                    line: self
+                        .line_numbers_cache
+                        .get(frame.return_cursor.line_idx)
+                        .copied(),
                 }
             })
             .collect::<Vec<_>>();
@@ -4004,6 +4312,10 @@ impl Interpreter {
         metadata: Option<&ExecutionMetadata>,
         source_code: Option<&str>,
     ) {
+        // Observe returns as well as entries, including consecutive calls from
+        // a single expression. This bookkeeping exists only in debugger loops.
+        self.sync_debug_routine_stack();
+        self.sync_debug_control_scope();
         let Some(guard_index) = self.debugger_state.as_ref().and_then(|state| {
             state
                 .resume_guards
@@ -4224,7 +4536,7 @@ impl Interpreter {
             "RESUME" => self.execute_resume(command[6..].trim(), cursor),
             "GOTO" => self.jump_to(command[4..].trim(), cursor),
             "GOSUB" => {
-                self.gosub_stack.push(Cursor {
+                self.push_gosub_return(Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 });
@@ -4283,6 +4595,7 @@ impl Interpreter {
                 self.for_stack.clear();
                 self.while_stack.clear();
                 self.gosub_stack.clear();
+                self.if_gosub_base = 0;
                 self.data_pointer = 0;
                 Ok(())
             }
@@ -4589,7 +4902,7 @@ impl Interpreter {
                 self.jump_to_cached_line_checked(*line, target.as_ref(), cursor, false)
             }
             CachedCommand::GosubConst { line, target } => {
-                self.gosub_stack.push(Cursor {
+                self.push_gosub_return(Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 });
@@ -4682,15 +4995,35 @@ impl Interpreter {
         Ok(())
     }
 
+    #[inline]
+    fn push_gosub_return(&mut self, return_cursor: Cursor) {
+        self.gosub_stack.push(GosubFrame {
+            return_cursor,
+            if_depth: self.if_stack.len(),
+        });
+    }
+
+    #[inline]
+    fn protected_if_depth(&self) -> usize {
+        if self.gosub_stack.len() > self.if_gosub_base {
+            self.gosub_stack.last().unwrap().if_depth
+        } else {
+            0
+        }
+    }
+
     fn execute_return(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
-        let ret = self
+        if self.gosub_stack.len() <= self.if_gosub_base {
+            return Err(self.err(ErrorCode::ReturnWithoutGosub));
+        }
+        let frame = self
             .gosub_stack
             .pop()
             .ok_or_else(|| self.err(ErrorCode::ReturnWithoutGosub))?;
-        if !self.if_stack.is_empty() {
-            self.reconcile_if_stack_for_jump(&ret)?;
-        }
-        *cursor = ret;
+        // RETURN closes only the callee's IF blocks. The caller can itself be
+        // suspended in a different source region, including recursive calls.
+        self.if_stack.truncate(frame.if_depth);
+        *cursor = frame.return_cursor;
         self.restore_timer_interrupt_if_returned();
         Ok(())
     }
@@ -4774,7 +5107,7 @@ impl Interpreter {
         }
         let target = targets[selector as usize - 1];
         if gosub {
-            self.gosub_stack.push(Cursor {
+            self.push_gosub_return(Cursor {
                 line_idx: cursor.line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             });
@@ -4855,15 +5188,20 @@ impl Interpreter {
                 || !command.is_hidden_execution_command(),
                 |metadata| metadata.debugger_boundary,
             );
-            if debugger_boundary
-                && self.debug_before_cached_command(
+            if debugger_boundary {
+                match self.debug_before_cached_command(
                     cursor,
                     source_line,
                     command_metadata,
                     Some(source_code),
-                )? == DebugHookControl::Abort
-            {
-                return Err(debug_abort_error());
+                )? {
+                    DebugHookControl::Run => {}
+                    DebugHookControl::Relocate(target) => {
+                        *cursor = target;
+                        return Ok(None);
+                    }
+                    DebugHookControl::Abort => return Err(debug_abort_error()),
+                }
             }
 
             let debug_depth = self.run_depth + self.gosub_stack.len();
@@ -6903,7 +7241,8 @@ impl Interpreter {
     }
 
     fn execute_end_if(&mut self, _cursor: &mut Cursor) -> BasicResult<()> {
-        if self.if_stack.pop().is_some() {
+        if self.if_stack.len() > self.protected_if_depth() {
+            self.if_stack.pop();
             Ok(())
         } else {
             Err(self.err(ErrorCode::EndIfWithoutIf))
@@ -6928,6 +7267,9 @@ impl Interpreter {
     }
 
     fn skip_after_matching_end_if(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
+        if self.if_stack.len() <= self.protected_if_depth() {
+            return Err(self.err(ErrorCode::ElseWithoutIf));
+        }
         *cursor = self.find_after_matching_end_if(cursor)?;
         self.if_stack.pop();
         Ok(())
@@ -7029,7 +7371,7 @@ impl Interpreter {
         let target = parse_line_number_literal(&targets[selector as usize - 1])
             .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
         if kind == "GOSUB" {
-            self.gosub_stack.push(Cursor {
+            self.push_gosub_return(Cursor {
                 line_idx: cursor.line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             });
@@ -7116,7 +7458,7 @@ impl Interpreter {
                 Some(saved_len)
             })
         });
-        self.gosub_stack.push(Cursor {
+        self.push_gosub_return(Cursor {
             line_idx: usize::MAX,
             cmd_idx: 0,
         });
@@ -7131,7 +7473,7 @@ impl Interpreter {
                 // The recursive Rust call cannot remain suspended across CONT.
                 // Replace its sentinel with the real BASIC return address so
                 // execution can unwind normally after the stopped subroutine.
-                self.gosub_stack[saved_gosub_len] = return_cursor;
+                self.gosub_stack[saved_gosub_len].return_cursor = return_cursor;
             }
             (Ok(RunOutcome::End), Some(_)) if !returned => {
                 // Falling off the program (or END inside the subroutine) ends
@@ -8837,7 +9179,7 @@ impl Interpreter {
             interrupts_enabled: self.interrupts_enabled,
         });
         self.current_interrupt_priority = priority;
-        self.gosub_stack.push(*cursor);
+        self.push_gosub_return(*cursor);
         self.timer_isr_markers.push(base_depth);
         *cursor = target_cursor;
         Ok(true)
@@ -10620,7 +10962,9 @@ impl Interpreter {
             return Ok(());
         }
         self.validate_function_jump(line, &target, allow_function_subroutine)?;
-        if !self.if_stack.is_empty() {
+        // GOSUB suspends the caller's blocks. Non-returning jumps reconcile
+        // only the current call's blocks, never those of suspended callers.
+        if !allow_function_subroutine && !self.if_stack.is_empty() {
             self.reconcile_if_stack_for_jump(&target)?;
         }
         if target == *cursor {
@@ -10761,8 +11105,13 @@ impl Interpreter {
     }
 
     fn reconcile_if_stack_for_jump(&mut self, target: &Cursor) -> BasicResult<()> {
-        let mut keep = Vec::new();
-        for frame in self.if_stack.iter() {
+        let protected = self.protected_if_depth();
+        if protected == self.if_stack.len() {
+            return Ok(());
+        }
+        let mut keep = Vec::with_capacity(self.if_stack.len());
+        keep.extend_from_slice(&self.if_stack[..protected]);
+        for frame in self.if_stack[protected..].iter() {
             let after = self.find_after_matching_end_if(frame)?;
             if cursor_after(target, frame) && cursor_before(target, &after) {
                 keep.push(frame.clone());
@@ -12697,6 +13046,7 @@ impl Interpreter {
         let saved_while_len = self.while_stack.len();
         let saved_gosub_len = self.gosub_stack.len();
         let saved_if_stack = std::mem::take(&mut self.if_stack);
+        let saved_if_gosub_base = std::mem::replace(&mut self.if_gosub_base, saved_gosub_len);
         let saved_pending_if = self.pending_if_branch.take();
         let previous_sub_return = self.sub_return_requested;
         self.sub_return_requested = false;
@@ -12713,6 +13063,7 @@ impl Interpreter {
         self.while_stack.truncate(saved_while_len);
         self.gosub_stack.truncate(saved_gosub_len);
         self.if_stack = saved_if_stack;
+        self.if_gosub_base = saved_if_gosub_base.min(self.gosub_stack.len());
         self.pending_if_branch = saved_pending_if;
         self.current_line = saved_current_line;
         self.sub_return_requested = previous_sub_return;
@@ -12779,6 +13130,7 @@ impl Interpreter {
         let saved_while_len = self.while_stack.len();
         let saved_gosub_len = self.gosub_stack.len();
         let saved_if_stack = std::mem::take(&mut self.if_stack);
+        let saved_if_gosub_base = std::mem::replace(&mut self.if_gosub_base, saved_gosub_len);
         let saved_pending_if = self.pending_if_branch.take();
         let previous_function_return = self.function_return_requested;
         self.function_return_requested = false;
@@ -12803,6 +13155,7 @@ impl Interpreter {
         self.while_stack.truncate(saved_while_len);
         self.gosub_stack.truncate(saved_gosub_len);
         self.if_stack = saved_if_stack;
+        self.if_gosub_base = saved_if_gosub_base.min(self.gosub_stack.len());
         self.pending_if_branch = saved_pending_if;
         self.current_line = saved_current_line;
         self.function_return_requested = previous_function_return;
@@ -13533,6 +13886,50 @@ mod interpreter_tests {
         assert!(interp
             .process_immediate("TRECTANGLE T$,10,10,30,30")
             .is_err());
+    }
+
+    #[test]
+    fn debugger_string_edits_refresh_scalar_and_array_textures() {
+        for array in [false, true] {
+            let mut interp = Interpreter::new();
+            interp.graphics_window_enabled = false;
+            let (setup, variable, target) = if array {
+                (
+                    "DIM T$(1):T$(0)=\"2x2:ff000000ff000000ffffffff\"",
+                    "T$(0)",
+                    DebugEditTarget::ArrayElement {
+                        name: "T$".into(),
+                        indexes: vec![0],
+                    },
+                )
+            } else {
+                (
+                    "T$=\"2x2:ff000000ff000000ffffffff\"",
+                    "T$",
+                    DebugEditTarget::Scalar("T$".into()),
+                )
+            };
+            interp.program.load_text(&format!(
+                "10 {setup}\n20 TRECTANGLE {variable},10,10,30,30\n30 TRECTANGLE {variable},10,10,30,30\n40 END"
+            )).unwrap();
+            let mut debugger = Debugger::interactive_editable(move |snapshot, _, access| {
+                assert!(access
+                    .set_variable(&target, DebugValue::Number(1.0))
+                    .is_err());
+                let fresh = access
+                    .set_variable(
+                        &target,
+                        DebugValue::String("2x2:111111111111222222222222".into()),
+                    )
+                    .unwrap();
+                assert_eq!(snapshot.location, fresh.location);
+                Ok(DebugAction::Continue)
+            });
+            debugger.set_breakpoint(30, true);
+            interp.set_debugger(debugger);
+            assert_eq!(interp.run_loaded().unwrap(), RunOutcome::End);
+            assert_eq!(interp.graphics.test(15.0, 15.0), 0x222222, "array={array}");
+        }
     }
 
     #[test]
@@ -19348,6 +19745,69 @@ mod debugger_runtime_tests {
     }
 
     #[test]
+    fn debugger_value_edits_keep_timer_snapshots_frozen_and_shift_all_deadlines_once() {
+        let mut interpreter = Interpreter::new();
+        interpreter.program.load_text("10 A=A+1\n20 END").unwrap();
+        interpreter.rebuild_command_cache();
+        interpreter.numeric_variables.insert("A".into(), 1.0);
+        let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+            std::thread::sleep(Duration::from_millis(15));
+            for value in [2.0, 3.0, 4.0] {
+                let fresh = access.set_scalar("A", DebugValue::Number(value)).unwrap();
+                assert_eq!(fresh.timers, snapshot.timers);
+                assert_eq!(fresh.location, snapshot.location);
+                assert!(fresh.variables.iter().any(|variable| {
+                    variable.name == "A" && variable.value == DebugValue::Number(value)
+                }));
+                access.idle().unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(15));
+            Ok(DebugAction::Continue)
+        });
+        debugger.request_pause();
+        interpreter.set_debugger(debugger);
+        let cursor = Cursor {
+            line_idx: 0,
+            cmd_idx: 0,
+        };
+        let base = Instant::now();
+        let deadline = base + Duration::from_secs(1);
+        interpreter.timers.push(BasicTimer {
+            number: 1,
+            interval: Duration::from_secs(1),
+            next_fire: deadline,
+            target: 20,
+            repeat: true,
+            active: true,
+        });
+        interpreter.pause_deadline = Some((cursor, deadline));
+        interpreter.last_frame_command_present = Some(base);
+        let started = Instant::now();
+        assert!(matches!(
+            interpreter
+                .debug_before_cached_command(&cursor, 10, None, None)
+                .unwrap(),
+            DebugHookControl::Run
+        ));
+        let whole_call = started.elapsed();
+        let shifted_by = interpreter.timers[0].next_fire.duration_since(deadline);
+        assert!(shifted_by >= Duration::from_millis(30));
+        assert!(
+            shifted_by <= whole_call,
+            "Deadlines were shifted more than once"
+        );
+        assert_eq!(
+            interpreter.pause_deadline,
+            Some((cursor, deadline + shifted_by))
+        );
+        assert_eq!(
+            interpreter.last_frame_command_present,
+            Some(base + shifted_by)
+        );
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&4.0));
+    }
+
+    #[test]
     fn timer_interrupt_during_pause_does_not_retrigger_its_breakpoint() {
         let interpreter = run_debugged(
             "10 AFTER 1,1 GOSUB 100\n20 PAUSE 80\n30 END\n100 FIRED=FIRED+1\n110 RETURN",
@@ -19397,7 +19857,7 @@ mod debugger_runtime_tests {
             name: Rc::from("OUTER"),
         });
         interpreter.sync_debug_routine_stack();
-        interpreter.gosub_stack.push(Cursor {
+        interpreter.push_gosub_return(Cursor {
             line_idx: 1,
             cmd_idx: 0,
         });
@@ -19442,7 +19902,7 @@ mod debugger_runtime_tests {
             },
         ];
         interpreter.current_interrupt_priority = 3;
-        interpreter.gosub_stack.push(Cursor {
+        interpreter.push_gosub_return(Cursor {
             line_idx: 2,
             cmd_idx: 0,
         });
@@ -19466,10 +19926,11 @@ mod debugger_runtime_tests {
         interpreter.timer_isr_markers.clear();
         interpreter.timer_isr_stack.clear();
         interpreter.current_interrupt_priority = -1;
-        interpreter.gosub_stack = vec![Cursor {
+        interpreter.gosub_stack.clear();
+        interpreter.push_gosub_return(Cursor {
             line_idx: usize::MAX,
             cmd_idx: 0,
-        }];
+        });
         let ordinary_inline = interpreter.build_debug_snapshot(
             &Cursor {
                 line_idx: 2,

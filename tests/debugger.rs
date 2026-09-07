@@ -1,6 +1,6 @@
 use avl_basic::{
-    DebugAction, DebugDataSnapshot, DebugFrameKind, DebugPauseReason, DebugSnapshot, DebugValue,
-    Debugger, ErrorCode, Interpreter, RunOutcome,
+    DebugAction, DebugDataSnapshot, DebugEditTarget, DebugFrameKind, DebugPauseReason,
+    DebugSnapshot, DebugValue, Debugger, ErrorCode, Interpreter, RunOutcome,
 };
 use std::collections::BTreeSet;
 
@@ -78,6 +78,312 @@ fn array_element<'a>(snapshot: &'a DebugSnapshot, name: &str) -> Option<&'a Debu
         .iter()
         .find(|variable| variable.name.eq_ignore_ascii_case(name))
         .map(|variable| &variable.value)
+}
+
+#[test]
+fn debugger_edits_refresh_the_same_inline_pause_without_executing_or_evaluating_basic() {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    let mut debugger = Debugger::interactive_editable(move |snapshot, _, access| {
+        let call = observed.get();
+        observed.set(call + 1);
+        match call {
+            0 => Ok(DebugAction::StepInto),
+            1 => {
+                assert_eq!(snapshot.location.command, "A=A+1");
+                let fresh = access.set_scalar("a", DebugValue::Number(40.0)).unwrap();
+                assert_eq!(numeric_value(&fresh, "A"), Some(40.0));
+                assert_eq!(numeric_value(&fresh, "B"), None);
+                let fresh = access
+                    .set_scalar("s$", DebugValue::String("RND:INKEY$:A=999".into()))
+                    .unwrap();
+                assert_eq!(fresh.location, snapshot.location);
+                assert_eq!(fresh.reason, snapshot.reason);
+                assert_eq!(fresh.source_lines, snapshot.source_lines);
+                assert_eq!(fresh.stack, snapshot.stack);
+                assert_eq!(fresh.data, snapshot.data);
+                assert_eq!(fresh.arrays, snapshot.arrays);
+                assert_eq!(fresh.array_elements, snapshot.array_elements);
+                assert_eq!((fresh.err, fresh.erl), (snapshot.err, snapshot.erl));
+                assert_eq!(numeric_value(&fresh, "A"), Some(40.0));
+                access.idle().unwrap();
+                Ok(DebugAction::StepInto)
+            }
+            2 => {
+                assert_eq!(snapshot.location.command, "B=99");
+                assert_eq!(numeric_value(snapshot, "A"), Some(41.0));
+                Ok(DebugAction::Continue)
+            }
+            _ => panic!("An edit unexpectedly caused another pause"),
+        }
+    });
+    debugger.set_breakpoint(20, true);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 A=1:S$=\"before\":DIM A(1):A(0)=7\n20 IF 1 THEN A=A+1:B=99 ELSE A=9\n30 PRINT A:PRINT S$\n40 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(calls.get(), 3);
+    assert_eq!(interpreter.take_output(), " 41\nRND:INKEY$:A=999\n");
+}
+
+#[test]
+fn invalid_debugger_edits_are_atomic_and_never_enter_or_replace_on_error() {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    let mut debugger = Debugger::interactive_editable(move |snapshot, _, access| {
+        observed.set(observed.get() + 1);
+        for (name, value) in [
+            ("A", DebugValue::String("wrong".into())),
+            ("S$", DebugValue::Number(3.0)),
+            ("A", DebugValue::Number(f64::NAN)),
+            ("A", DebugValue::Number(f64::INFINITY)),
+            ("A", DebugValue::Number(f64::NEG_INFINITY)),
+            ("M", DebugValue::Number(1.0)),
+            ("M(0)", DebugValue::Number(1.0)),
+            ("M(RND)", DebugValue::Number(1.0)),
+            ("MISSING", DebugValue::Number(1.0)),
+            ("MID$(S$,1)", DebugValue::String("x".into())),
+        ] {
+            assert!(access.set_scalar(name, value).is_err(), "{name}");
+            let unchanged = access.set_scalar("A", DebugValue::Number(1.0)).unwrap();
+            assert_eq!(
+                &unchanged, snapshot,
+                "Rejected edit changed BASIC state: {name}"
+            );
+        }
+        match snapshot.location.line {
+            30 => assert_eq!((snapshot.err, snapshot.erl), (0, 0)),
+            100 => assert_eq!((snapshot.err, snapshot.erl), (6, 30)),
+            40 => assert_eq!(numeric_value(snapshot, "SEEN"), Some(6.0)),
+            _ => panic!("Unexpected error handler or pause"),
+        }
+        Ok(DebugAction::Continue)
+    });
+    debugger.replace_breakpoints([30, 40, 100]);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 ON ERROR GOTO 100\n20 A=1:S$=\"old\":DIM M(1):M(0)=7\n30 Z=1/0\n40 PRINT A;S$\n50 END\n100 SEEN=ERR\n110 RESUME NEXT",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(calls.get(), 3);
+    assert_eq!(interpreter.take_output(), " 1 old\n");
+}
+
+#[test]
+fn editing_for_variable_updates_the_existing_cached_slot() {
+    let mut debugger = Debugger::interactive_editable(|snapshot, breakpoints, access| {
+        assert_eq!(numeric_value(snapshot, "I"), Some(1.0));
+        let fresh = access.set_scalar("I", DebugValue::Number(3.0)).unwrap();
+        assert_eq!(numeric_value(&fresh, "I"), Some(3.0));
+        breakpoints.clear();
+        Ok(DebugAction::Continue)
+    });
+    debugger.set_breakpoint(20, true);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 FOR I=1 TO 3\n20 COUNT=COUNT+1\n30 COPY=I:NEXT I\n40 PRINT I;COUNT;COPY\n50 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(interpreter.take_output(), " 4  1  3\n");
+}
+
+#[test]
+fn debugger_edits_only_the_visible_local_scalar_bindings() {
+    let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+        if snapshot.location.line == 60 {
+            assert_eq!(numeric_value(snapshot, "L"), Some(2.0));
+            access.set_scalar("L", DebugValue::Number(12.0)).unwrap();
+            let fresh = access
+                .set_scalar("S$", DebugValue::String("edited".into()))
+                .unwrap();
+            assert_eq!(fresh.array_elements, snapshot.array_elements);
+            assert!(access.set_scalar("P", DebugValue::Number(9.0)).is_err());
+        } else {
+            assert_eq!(snapshot.location.line, 100);
+            assert_eq!(numeric_value(snapshot, "L"), Some(99.0));
+            assert_eq!(
+                array_element(snapshot, "A(0)"),
+                Some(&DebugValue::Number(12.0))
+            );
+        }
+        Ok(DebugAction::Continue)
+    });
+    debugger.replace_breakpoints([60, 100]);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 DEF SUB WORK(P)\n20 LOCAL L\n30 LOCAL S$\n40 LOCAL L(1)\n50 L=2:S$=\"local\":L(0)=7\n60 SEEN=L:TEXT$=S$:P(0)=L\n70 SUBEND\n80 L=99:S$=\"global\":DIM A(1)\n90 CALL WORK(A)\n100 PRINT L;S$:PRINT SEEN;TEXT$:PRINT A(0)\n110 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(interpreter.take_output(), " 99 global\n 12 edited\n 12\n");
+}
+
+#[test]
+fn editable_function_parameters_and_locals_restore_their_outer_bindings() {
+    let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+        assert_eq!(numeric_value(snapshot, "X"), Some(3.0));
+        access.set_scalar("X", DebugValue::Number(10.0)).unwrap();
+        access.set_scalar("L", DebugValue::Number(7.0)).unwrap();
+        Ok(DebugAction::Continue)
+    });
+    debugger.set_breakpoint(40, true);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 DEF FNF(X)\n20 LOCAL L\n30 L=X+1\n40 FNF=L*2\n50 FNEND\n60 X=99:L=88\n70 RESULT=FNF(3)\n80 PRINT RESULT;X;L\n90 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(interpreter.take_output(), " 14  99  88\n");
+}
+
+#[test]
+fn debugger_array_edits_use_concrete_displayed_cells_and_current_aliases() {
+    let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+        if snapshot.location.line == 40 {
+            assert_eq!(
+                array_element(snapshot, "P(1,2)"),
+                Some(&DebugValue::Number(7.0))
+            );
+            // The same cell can be displayed through a pin for the physical
+            // name A, although the latest write was made through parameter P.
+            let fresh = access
+                .set_variable(
+                    &DebugEditTarget::ArrayElement {
+                        name: "a".into(),
+                        indexes: vec![1, 2],
+                    },
+                    DebugValue::Number(23.0),
+                )
+                .unwrap();
+            assert_eq!(
+                array_element(&fresh, "P(1,2)"),
+                Some(&DebugValue::Number(23.0))
+            );
+            assert_eq!(array_element(&fresh, "A(1,2)"), None);
+            assert_eq!(numeric_value(&fresh, "A"), Some(99.0));
+            let fresh = access
+                .set_variable(
+                    &DebugEditTarget::ArrayElement {
+                        name: "P".into(),
+                        indexes: vec![1, 2],
+                    },
+                    DebugValue::Number(24.0),
+                )
+                .unwrap();
+            assert_eq!(
+                array_element(&fresh, "P(1,2)"),
+                Some(&DebugValue::Number(24.0))
+            );
+            for target in [
+                DebugEditTarget::ArrayElement {
+                    name: "P".into(),
+                    indexes: vec![0, 0],
+                },
+                DebugEditTarget::ArrayElement {
+                    name: "P".into(),
+                    indexes: vec![999, 2],
+                },
+                DebugEditTarget::ArrayElement {
+                    name: "P".into(),
+                    indexes: vec![-1, 2],
+                },
+                DebugEditTarget::ArrayElement {
+                    name: "P".into(),
+                    indexes: vec![1],
+                },
+                DebugEditTarget::ArrayElement {
+                    name: "MISSING".into(),
+                    indexes: vec![1],
+                },
+            ] {
+                assert!(access
+                    .set_variable(&target, DebugValue::Number(1.0))
+                    .is_err());
+                let unchanged = access.set_scalar("A", DebugValue::Number(99.0)).unwrap();
+                assert_eq!(unchanged, fresh);
+            }
+        } else {
+            assert_eq!(snapshot.location.line, 90);
+            assert!(access
+                .set_variable(
+                    &DebugEditTarget::ArrayElement {
+                        name: "P".into(),
+                        indexes: vec![1, 2]
+                    },
+                    DebugValue::Number(1.0),
+                )
+                .is_err());
+            assert_eq!(
+                array_element(snapshot, "A(1,2)"),
+                Some(&DebugValue::Number(24.0))
+            );
+        }
+        Ok(DebugAction::Continue)
+    });
+    debugger.replace_breakpoints([40, 90]);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 DEF SUB WORK(P)\n20 LOCAL L\n30 A=99:P(1,2)=7\n40 L=P(1,2)\n50 SUBEND\n60 DIM A(2,3)\n80 CALL WORK(A)\n90 PRINT A;A(1,2)\n100 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(interpreter.take_output(), " 99  24\n");
+}
+
+#[test]
+fn debugger_array_edit_validation_is_atomic_for_strings_and_no_recent_write() {
+    let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+        let target = DebugEditTarget::ArrayElement {
+            name: "S$".into(),
+            indexes: vec![1],
+        };
+        if snapshot.location.line == 20 {
+            assert!(access
+                .set_variable(&target, DebugValue::Number(1.0))
+                .is_err());
+            let fresh = access
+                .set_variable(&target, DebugValue::String("typed:INKEY$".into()))
+                .unwrap();
+            assert_eq!(
+                array_element(&fresh, "S$(1)"),
+                Some(&DebugValue::String("typed:INKEY$".into()))
+            );
+            let numeric = DebugEditTarget::ArrayElement {
+                name: "A".into(),
+                indexes: vec![0],
+            };
+            for value in [
+                DebugValue::Number(f64::NAN),
+                DebugValue::Number(f64::INFINITY),
+                DebugValue::String("bad".into()),
+            ] {
+                assert!(access.set_variable(&numeric, value).is_err());
+            }
+            let unchanged = access
+                .set_variable(&target, DebugValue::String("typed:INKEY$".into()))
+                .unwrap();
+            assert_eq!(unchanged, fresh);
+        } else {
+            assert_eq!(snapshot.location.line, 40);
+            let numeric = DebugEditTarget::ArrayElement {
+                name: "A".into(),
+                indexes: vec![0],
+            };
+            assert!(access
+                .set_variable(&numeric, DebugValue::Number(3.0))
+                .is_err());
+            assert!(snapshot
+                .array_elements
+                .iter()
+                .all(|value| value.name != "A(0)"));
+        }
+        Ok(DebugAction::Continue)
+    });
+    debugger.replace_breakpoints([20, 40]);
+    let (mut interpreter, outcome) = run_scripted(
+        "10 DIM S$(2),A(2):S$(1)=\"old\":A(0)=7\n20 PRINT S$(1)\n30 MAT A=ZER\n40 PRINT A(0)\n50 END",
+        debugger,
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    assert_eq!(interpreter.take_output(), "typed:INKEY$\n 0\n");
 }
 
 #[test]
@@ -331,12 +637,29 @@ fn array_element_snapshot_uses_an_active_alias_then_returns_to_the_outer_name() 
         Some(&DebugValue::Number(7.0))
     );
     assert_eq!(snapshots[1].array_elements.len(), 1);
+    // The inspector can resolve a pinned array through its current alias using
+    // only the snapshot, without retaining the alias after its scope ends.
+    assert!(snapshots[1]
+        .arrays
+        .iter()
+        .any(|array| { array.name.eq_ignore_ascii_case("A") && array.alias_of.is_none() }));
+    assert!(snapshots[1].arrays.iter().any(|array| {
+        array.name.eq_ignore_ascii_case("P")
+            && array
+                .alias_of
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("A"))
+    }));
     assert_eq!(
         array_element(&snapshots[2], "A(1)"),
         Some(&DebugValue::Number(7.0))
     );
     assert_eq!(array_element(&snapshots[2], "P(1)"), None);
     assert_eq!(snapshots[2].array_elements.len(), 1);
+    assert!(!snapshots[2]
+        .arrays
+        .iter()
+        .any(|array| array.name.eq_ignore_ascii_case("P")));
 }
 
 #[test]
