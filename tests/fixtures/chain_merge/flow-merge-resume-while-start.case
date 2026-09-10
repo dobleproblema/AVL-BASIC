@@ -1,0 +1,17 @@
+[commands]
+10 N=0
+20 WHILE N<3
+30 IF N=0 THEN MERGE "part"
+40 N=N+1
+50 PRINT "N=";N
+60 WEND
+70 PRINT "DONE"
+RUN
+[output]
+N= 1
+N= 2
+N= 3
+DONE
+[input part.bas]
+5 PRINT "WRONG FIRST":END
+25 REM inserted before the active MERGE

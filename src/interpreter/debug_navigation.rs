@@ -117,6 +117,43 @@ pub(super) struct DebugControlScope {
     branches: Vec<Cursor>,
 }
 
+impl DebugControlScope {
+    pub(super) fn preserve_return_plans(&mut self, frames: &[GosubFrame]) {
+        for (snapshot, frame) in self.identity.gosubs.iter_mut().zip(frames) {
+            if snapshot.return_cursor == frame.return_cursor && snapshot.if_depth == frame.if_depth
+            {
+                snapshot.return_plan = frame.return_plan.clone();
+            }
+        }
+    }
+
+    pub(super) fn relocate(
+        &mut self,
+        relocate: &impl Fn(&mut Cursor),
+        line_index: &impl Fn(i32) -> usize,
+    ) {
+        for frame in &mut self.identity.gosubs {
+            if let Some(plan) = &frame.return_plan {
+                frame.return_cursor.line_idx = line_index(plan.line);
+            } else {
+                relocate(&mut frame.return_cursor);
+            }
+        }
+        if let Some((_, line, retry, next)) = &mut self.identity.error {
+            retry.line_idx = line_index(*line);
+            next.line_idx = line_index(*line);
+        }
+        for cursor in self
+            .fors
+            .iter_mut()
+            .chain(&mut self.whiles)
+            .chain(&mut self.branches)
+        {
+            relocate(cursor);
+        }
+    }
+}
+
 fn for_header(frame: &ForFrame) -> Cursor {
     Cursor {
         line_idx: frame.resume.line_idx,
@@ -738,7 +775,7 @@ mod tests {
         let caller_return = interpreter.cursor_for_line(30).unwrap();
         interpreter.if_stack.push(caller_if);
         interpreter.push_gosub_return(caller_return);
-        let outer_frame = interpreter.gosub_stack[0];
+        let outer_frame = interpreter.gosub_stack[0].clone();
         // Model the exact IF-stack replacement at DEF FN / SUB entry.
         interpreter.if_gosub_base = interpreter.gosub_stack.len();
         interpreter.if_stack = vec![local_if];
@@ -746,7 +783,7 @@ mod tests {
         let mut cursor = interpreter.cursor_for_line(110).unwrap();
         interpreter.jump_to_line(200, &mut cursor).unwrap();
         assert!(interpreter.if_stack.is_empty());
-        assert_eq!(interpreter.gosub_stack, [outer_frame]);
+        assert_eq!(interpreter.gosub_stack, [outer_frame.clone()]);
 
         interpreter.if_stack.push(local_if);
         let local_return = interpreter.cursor_for_line(120).unwrap();
@@ -756,7 +793,7 @@ mod tests {
         assert_eq!(interpreter.if_stack, [local_if]);
         interpreter.execute_return(&mut cursor).unwrap();
         assert_eq!(cursor, local_return);
-        assert_eq!(interpreter.gosub_stack, [outer_frame]);
+        assert_eq!(interpreter.gosub_stack, [outer_frame.clone()]);
         assert_eq!(interpreter.protected_if_depth(), 0);
         let unchanged_cursor = cursor;
         assert_eq!(

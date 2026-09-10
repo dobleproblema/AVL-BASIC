@@ -520,13 +520,30 @@ struct Cursor {
     cmd_idx: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct GosubFrame {
     return_cursor: Cursor,
+    return_plan: Option<Rc<RetainedLinePlan>>,
     // IF frames below this depth belong to suspended callers. Source ranges
     // alone cannot identify them when calls are nested or recursive.
     if_depth: usize,
 }
+
+#[derive(Debug)]
+struct RetainedLinePlan {
+    line: i32,
+    source: Rc<str>,
+    commands: Rc<[Rc<CachedCommand>]>,
+    metadata: Vec<ExecutionMetadata>,
+}
+
+impl PartialEq for RetainedLinePlan {
+    fn eq(&self, other: &Self) -> bool {
+        self.line == other.line && Rc::ptr_eq(&self.commands, &other.commands)
+    }
+}
+
+impl Eq for RetainedLinePlan {}
 
 #[derive(Debug)]
 struct CachedExecutionFailure {
@@ -1191,6 +1208,7 @@ struct RuntimeErrorState {
     line: i32,
     retry: Cursor,
     next: Cursor,
+    plan: Option<Rc<RetainedLinePlan>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2022,6 +2040,8 @@ pub struct Interpreter {
     while_stack: Vec<WhileFrame>,
     if_stack: Vec<Cursor>,
     gosub_stack: Vec<GosubFrame>,
+    active_line_plan: Option<Rc<RetainedLinePlan>>,
+    return_line_plan: Option<Rc<RetainedLinePlan>>,
     // Named routines have their own IF stack but share the GOSUB stack.
     // Frames before this base belong to a different, suspended IF stack.
     if_gosub_base: usize,
@@ -2072,7 +2092,6 @@ pub struct Interpreter {
     repeat_current_command: bool,
     restart_run_loop: bool,
     program_transfer_generation: u64,
-    program_structure_changed: bool,
     run_depth: usize,
     test_interrupt_requested: bool,
     current_line: Option<i32>,
@@ -2132,6 +2151,8 @@ impl Interpreter {
             while_stack: Vec::new(),
             if_stack: Vec::new(),
             gosub_stack: Vec::new(),
+            active_line_plan: None,
+            return_line_plan: None,
             if_gosub_base: 0,
             pending_if_branch: None,
             timers: Vec::new(),
@@ -2180,7 +2201,6 @@ impl Interpreter {
             repeat_current_command: false,
             restart_run_loop: false,
             program_transfer_generation: 0,
-            program_structure_changed: false,
             run_depth: 0,
             test_interrupt_requested: false,
             current_line: None,
@@ -2769,6 +2789,7 @@ impl Interpreter {
 
     fn invalidate_continuation_after_program_change(&mut self) {
         self.stopped_cursor = None;
+        self.return_line_plan = None;
     }
 
     fn execute_immediate_run(&mut self, arg: &str) -> BasicResult<()> {
@@ -2813,6 +2834,7 @@ impl Interpreter {
         // during execution; CONT alone must leave the stack untouched.
         self.reconcile_if_stack_for_jump(&target)?;
         self.stopped_cursor = None;
+        self.return_line_plan = None;
         self.end_requested = false;
         self.function_return_requested = false;
         self.sub_return_requested = false;
@@ -3328,6 +3350,8 @@ impl Interpreter {
         self.while_stack.clear();
         self.if_stack.clear();
         self.gosub_stack.clear();
+        self.active_line_plan = None;
+        self.return_line_plan = None;
         self.if_gosub_base = 0;
         self.pending_if_branch = None;
         self.timers.clear();
@@ -3365,7 +3389,6 @@ impl Interpreter {
         self.sub_return_requested = false;
         self.repeat_current_command = false;
         self.restart_run_loop = false;
-        self.program_structure_changed = false;
         if let Some(state) = self.debugger_state.as_mut() {
             state.resume_guards.clear();
             state.resume_relocated = None;
@@ -3403,6 +3426,8 @@ impl Interpreter {
 
     fn run_from(&mut self, cursor: Cursor) -> BasicResult<RunOutcome> {
         let was_top_level = self.run_depth == 0;
+        let caller_plan = self.active_line_plan.clone();
+        let caller_generation = self.program_transfer_generation;
         self.run_depth += 1;
         let _runtime_raw = if was_top_level {
             console::enter_runtime_raw_mode().ok()
@@ -3416,6 +3441,9 @@ impl Interpreter {
         };
         let closed_graphics_window = self.graphics_window_closed_by_current_run;
         self.run_depth -= 1;
+        if !was_top_level && caller_generation == self.program_transfer_generation {
+            self.active_line_plan = caller_plan;
+        }
         if self.run_depth == 0 {
             let resumable_interrupt = result.as_ref().err().is_some_and(|error| {
                 error.code == ErrorCode::KeyboardInterrupt
@@ -3452,15 +3480,22 @@ impl Interpreter {
         let mut compiled_lines = self.compiled_line_cache.clone();
         let mut runtime_poll_skip = 0u8;
         'run_loop: loop {
-            if cursor.line_idx >= lines.len() {
+            let returning = self.return_line_plan.take();
+            if cursor.line_idx >= lines.len() && returning.is_none() {
                 break;
             }
-            let line_no = lines[cursor.line_idx];
-            let commands_len = compiled_lines
-                .get(cursor.line_idx)
-                .map_or(0usize, |commands| commands.len());
+            let line_no = returning
+                .as_ref()
+                .map_or_else(|| lines[cursor.line_idx], |plan| plan.line);
+            let line_commands = returning.as_ref().map_or_else(
+                || compiled_lines[cursor.line_idx].clone(),
+                |plan| plan.commands.clone(),
+            );
+            let commands_len = line_commands.len();
+            let mut merged_line = returning.is_some();
+            self.active_line_plan = returning;
             if cursor.cmd_idx >= commands_len {
-                cursor.line_idx += 1;
+                cursor.line_idx = lines.partition_point(|number| *number <= line_no);
                 cursor.cmd_idx = 0;
                 continue;
             }
@@ -3489,18 +3524,15 @@ impl Interpreter {
                     self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
-                let command = compiled_lines[cursor.line_idx][cursor.cmd_idx].as_ref();
+                let command = line_commands[cursor.cmd_idx].as_ref();
                 let inline_if = matches!(command, CachedCommand::InlineIfGuard { .. });
-                let before = cursor.clone();
-                let next = Cursor {
+                let mut before = cursor;
+                let mut next = Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 };
-                let failure = if inline_if {
-                    self.execute_cached_inline_if_fast(
-                        &compiled_lines[before.line_idx],
-                        &mut cursor,
-                    )?
+                let mut failure = if inline_if {
+                    self.execute_cached_inline_if_fast(&line_commands, &mut cursor)?
                 } else {
                     self.execute_cached_command(command, &mut cursor, &[])
                         .err()
@@ -3510,6 +3542,17 @@ impl Interpreter {
                             next,
                         })
                 };
+                if !Rc::ptr_eq(&lines, &self.line_numbers_cache) && !self.restart_run_loop {
+                    merged_line = true;
+                    before.line_idx = self.merge_line_index(line_no);
+                    next.line_idx = before.line_idx;
+                    if let Some(failure) = failure.as_mut() {
+                        failure.retry.line_idx = before.line_idx;
+                        failure.next.line_idx = before.line_idx;
+                    }
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
+                }
                 if let Some(failure) = failure {
                     let CachedExecutionFailure {
                         error: err,
@@ -3529,7 +3572,7 @@ impl Interpreter {
                         return Err(err);
                     }
                     if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
-                        if cursor.line_idx != before.line_idx {
+                        if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
                             continue 'run_loop;
                         }
                         continue;
@@ -3556,10 +3599,8 @@ impl Interpreter {
                     compiled_lines = self.compiled_line_cache.clone();
                     continue 'run_loop;
                 }
-                if self.program_structure_changed {
-                    self.program_structure_changed = false;
-                    lines = self.line_numbers_cache.clone();
-                    compiled_lines = self.compiled_line_cache.clone();
+                if self.return_line_plan.is_some() {
+                    continue 'run_loop;
                 }
                 if self.repeat_current_command {
                     self.repeat_current_command = false;
@@ -3567,20 +3608,26 @@ impl Interpreter {
                     continue;
                 }
                 if inline_if {
-                    if cursor.line_idx != before.line_idx {
+                    if cursor.line_idx != before.line_idx
+                        || (merged_line && cursor.cmd_idx <= before.cmd_idx)
+                    {
                         continue 'run_loop;
                     }
                     continue;
                 }
                 if cursor != before {
-                    if cursor.line_idx != before.line_idx {
+                    if cursor.line_idx != before.line_idx || merged_line {
                         continue 'run_loop;
                     }
                     continue;
                 }
                 cursor = next;
             }
-            cursor.line_idx += 1;
+            cursor.line_idx = if merged_line {
+                lines.partition_point(|number| *number <= line_no)
+            } else {
+                cursor.line_idx + 1
+            };
             cursor.cmd_idx = 0;
         }
         if let Some(frame) = self
@@ -3609,15 +3656,35 @@ impl Interpreter {
         let mut compiled_lines = self.compiled_line_cache.clone();
         let mut runtime_poll_skip = 0u8;
         'run_loop: loop {
-            if cursor.line_idx >= lines.len() {
+            let returning = self.return_line_plan.take();
+            if cursor.line_idx >= lines.len() && returning.is_none() {
                 break;
             }
-            let line_no = lines[cursor.line_idx];
-            let commands_len = compiled_lines
-                .get(cursor.line_idx)
-                .map_or(0usize, |commands| commands.len());
+            let line_no = returning
+                .as_ref()
+                .map_or_else(|| lines[cursor.line_idx], |plan| plan.line);
+            let line_commands = returning.as_ref().map_or_else(
+                || compiled_lines[cursor.line_idx].clone(),
+                |plan| plan.commands.clone(),
+            );
+            let line_metadata = returning.as_ref().map_or_else(
+                || {
+                    self.execution_source_cache
+                        .get(&line_no)
+                        .cloned()
+                        .unwrap_or_default()
+                },
+                |plan| plan.metadata.clone(),
+            );
+            let line_source = returning.as_ref().map_or_else(
+                || Rc::<str>::from(self.program.get(line_no).unwrap_or("")),
+                |plan| plan.source.clone(),
+            );
+            let commands_len = line_commands.len();
+            let mut merged_line = returning.is_some();
+            self.active_line_plan = returning;
             if cursor.cmd_idx >= commands_len {
-                cursor.line_idx += 1;
+                cursor.line_idx = lines.partition_point(|number| *number <= line_no);
                 cursor.cmd_idx = 0;
                 continue;
             }
@@ -3650,13 +3717,9 @@ impl Interpreter {
                     self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
-                let command = compiled_lines[cursor.line_idx][cursor.cmd_idx].as_ref();
+                let command = line_commands[cursor.cmd_idx].as_ref();
                 let inline_if = matches!(command, CachedCommand::InlineIfGuard { .. });
-                let command_metadata = self
-                    .execution_source_cache
-                    .get(&line_no)
-                    .and_then(|metadata| metadata.get(cursor.cmd_idx))
-                    .cloned();
+                let command_metadata = line_metadata.get(cursor.cmd_idx).cloned();
                 let debugger_boundary = command_metadata.as_ref().map_or_else(
                     || !command.is_hidden_execution_command(),
                     |metadata| metadata.debugger_boundary,
@@ -3666,7 +3729,7 @@ impl Interpreter {
                         &cursor,
                         line_no,
                         command_metadata.as_ref(),
-                        None,
+                        Some(line_source.as_ref()),
                     )? {
                         DebugHookControl::Run => {}
                         DebugHookControl::Relocate(target) => {
@@ -3680,23 +3743,17 @@ impl Interpreter {
                     }
                 }
                 let debug_depth = self.run_depth + self.gosub_stack.len();
-                let before = cursor.clone();
-                let next = Cursor {
+                let mut before = cursor;
+                let mut next = Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 };
-                let failure = if inline_if {
-                    let inline_metadata = self
-                        .execution_source_cache
-                        .get(&line_no)
-                        .cloned()
-                        .unwrap_or_default();
-                    let inline_source = Rc::<str>::from(self.program.get(line_no).unwrap_or(""));
+                let mut failure = if inline_if {
                     let result = self.execute_cached_inline_if_debug(
-                        &compiled_lines[before.line_idx],
-                        &inline_metadata,
+                        &line_commands,
+                        &line_metadata,
                         line_no,
-                        inline_source.as_ref(),
+                        line_source.as_ref(),
                         &mut cursor,
                     );
                     match result {
@@ -3715,6 +3772,17 @@ impl Interpreter {
                             next,
                         })
                 };
+                if !Rc::ptr_eq(&lines, &self.line_numbers_cache) && !self.restart_run_loop {
+                    merged_line = true;
+                    before.line_idx = self.merge_line_index(line_no);
+                    next.line_idx = before.line_idx;
+                    if let Some(failure) = failure.as_mut() {
+                        failure.retry.line_idx = before.line_idx;
+                        failure.next.line_idx = before.line_idx;
+                    }
+                    lines = self.line_numbers_cache.clone();
+                    compiled_lines = self.compiled_line_cache.clone();
+                }
                 // An inline helper must be abandoned even when navigation
                 // selected the guard of that very same source line.
                 if self
@@ -3732,7 +3800,7 @@ impl Interpreter {
                             false,
                             false,
                             command_metadata.as_ref(),
-                            None,
+                            Some(line_source.as_ref()),
                         );
                     }
                     let CachedExecutionFailure {
@@ -3753,7 +3821,7 @@ impl Interpreter {
                         return Err(err);
                     }
                     if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
-                        if cursor.line_idx != before.line_idx {
+                        if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
                             continue 'run_loop;
                         }
                         continue;
@@ -3767,7 +3835,7 @@ impl Interpreter {
                         self.repeat_current_command,
                         cursor != before,
                         command_metadata.as_ref(),
-                        None,
+                        Some(line_source.as_ref()),
                     );
                 }
                 if self.end_requested {
@@ -3790,10 +3858,8 @@ impl Interpreter {
                     compiled_lines = self.compiled_line_cache.clone();
                     continue 'run_loop;
                 }
-                if self.program_structure_changed {
-                    self.program_structure_changed = false;
-                    lines = self.line_numbers_cache.clone();
-                    compiled_lines = self.compiled_line_cache.clone();
+                if self.return_line_plan.is_some() {
+                    continue 'run_loop;
                 }
                 if self.repeat_current_command {
                     self.repeat_current_command = false;
@@ -3801,20 +3867,26 @@ impl Interpreter {
                     continue;
                 }
                 if inline_if {
-                    if cursor.line_idx != before.line_idx {
+                    if cursor.line_idx != before.line_idx
+                        || (merged_line && cursor.cmd_idx <= before.cmd_idx)
+                    {
                         continue 'run_loop;
                     }
                     continue;
                 }
                 if cursor != before {
-                    if cursor.line_idx != before.line_idx {
+                    if cursor.line_idx != before.line_idx || merged_line {
                         continue 'run_loop;
                     }
                     continue;
                 }
                 cursor = next;
             }
-            cursor.line_idx += 1;
+            cursor.line_idx = if merged_line {
+                lines.partition_point(|number| *number <= line_no)
+            } else {
+                cursor.line_idx + 1
+            };
             cursor.cmd_idx = 0;
         }
         if let Some(frame) = self
@@ -4583,6 +4655,7 @@ impl Interpreter {
         let running_program = self.run_depth > 0;
         if running_program {
             self.stopped_cursor = Some(cursor.clone());
+            self.return_line_plan = self.retain_current_line();
         }
         self.end_requested = false;
         self.function_return_requested = false;
@@ -4697,7 +4770,7 @@ impl Interpreter {
             "REDIM" => self.execute_redim(command[5..].trim()),
             "MAT" => self.execute_mat(command[3..].trim(), cursor),
             "LOCAL" => self.execute_local(),
-            "MERGE" => self.execute_merge(command[5..].trim()),
+            "MERGE" => self.execute_merge(command[5..].trim(), cursor),
             "CHAIN" if upper.starts_with("CHAIN MERGE") => {
                 self.execute_chain_merge(command[11..].trim(), cursor)
             }
@@ -4794,6 +4867,7 @@ impl Interpreter {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
                 });
+                self.return_line_plan = self.retain_current_line();
                 Ok(())
             }
             "TRON" => {
@@ -5150,10 +5224,36 @@ impl Interpreter {
 
     #[inline]
     fn push_gosub_return(&mut self, return_cursor: Cursor) {
+        let return_plan = (return_cursor.line_idx != usize::MAX)
+            .then(|| self.active_line_plan.clone())
+            .flatten();
         self.gosub_stack.push(GosubFrame {
             return_cursor,
+            return_plan,
             if_depth: self.if_stack.len(),
         });
+    }
+
+    fn retain_current_line(&self) -> Option<Rc<RetainedLinePlan>> {
+        if let Some(plan) = &self.active_line_plan {
+            return Some(plan.clone());
+        }
+        let line = self.current_line?;
+        self.retain_stored_line(line)
+    }
+
+    fn retain_stored_line(&self, line: i32) -> Option<Rc<RetainedLinePlan>> {
+        let index = self.line_index(line)?;
+        Some(Rc::new(RetainedLinePlan {
+            line,
+            source: Rc::from(self.program.get(line)?),
+            commands: self.compiled_line_cache.get(index)?.clone(),
+            metadata: self
+                .execution_source_cache
+                .get(&line)
+                .cloned()
+                .unwrap_or_default(),
+        }))
     }
 
     #[inline]
@@ -5177,6 +5277,10 @@ impl Interpreter {
         // suspended in a different source region, including recursive calls.
         self.if_stack.truncate(frame.if_depth);
         *cursor = frame.return_cursor;
+        if let Some(plan) = frame.return_plan {
+            cursor.line_idx = self.merge_line_index(plan.line);
+            self.return_line_plan = Some(plan);
+        }
         self.restore_timer_interrupt_if_returned();
         Ok(())
     }
@@ -5287,7 +5391,7 @@ impl Interpreter {
         source_code: &str,
         cursor: &mut Cursor,
     ) -> BasicResult<Option<CachedExecutionFailure>> {
-        let line_idx = cursor.line_idx;
+        let mut line_idx = cursor.line_idx;
         let guard_idx = cursor.cmd_idx;
         let guard = commands
             .get(guard_idx)
@@ -5358,8 +5462,9 @@ impl Interpreter {
             }
 
             let debug_depth = self.run_depth + self.gosub_stack.len();
-            let before = *cursor;
-            let next = Cursor {
+            let old_lines = self.line_numbers_cache.clone();
+            let mut before = *cursor;
+            let mut next = Cursor {
                 line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             };
@@ -5368,6 +5473,11 @@ impl Interpreter {
                 CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
             );
             let result = self.execute_cached_command_debug(command, cursor, &[]);
+            if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
+                line_idx = self.merge_line_index(source_line);
+                before.line_idx = line_idx;
+                next.line_idx = line_idx;
+            }
             if let Err(error) = result {
                 if debugger_boundary {
                     self.debug_finished_cached_command(
@@ -5432,7 +5542,8 @@ impl Interpreter {
         commands: &[Rc<CachedCommand>],
         cursor: &mut Cursor,
     ) -> BasicResult<Option<CachedExecutionFailure>> {
-        let line_idx = cursor.line_idx;
+        let mut line_idx = cursor.line_idx;
+        let source_line = self.current_line;
         let guard_idx = cursor.cmd_idx;
         let guard = commands
             .get(guard_idx)
@@ -5567,12 +5678,21 @@ impl Interpreter {
                 command,
                 CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
             );
-            let before = *cursor;
-            let next = Cursor {
+            let old_lines = self.line_numbers_cache.clone();
+            let mut before = *cursor;
+            let mut next = Cursor {
                 line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             };
-            if let Err(error) = self.execute_cached_command(command, cursor, &[]) {
+            let result = self.execute_cached_command(command, cursor, &[]);
+            if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
+                if let Some(line) = source_line {
+                    line_idx = self.merge_line_index(line);
+                    before.line_idx = line_idx;
+                    next.line_idx = line_idx;
+                }
+            }
+            if let Err(error) = result {
                 return Ok(Some(CachedExecutionFailure {
                     error,
                     retry: before,
@@ -7840,6 +7960,7 @@ impl Interpreter {
         };
         self.validate_function_jump(line, &target, true)?;
         let saved_current_line = self.current_line;
+        let saved_line_plan = self.retain_current_line();
         let saved_gosub_len = self.gosub_stack.len();
         let saved_transfer_generation = self.program_transfer_generation;
         let saved_mouse_marker_len = mouse_event.then(|| {
@@ -7868,13 +7989,14 @@ impl Interpreter {
         match (&result, suspended_return) {
             (Ok(RunOutcome::Stop), Some((return_line, return_cmd_idx))) if !returned => {
                 let return_cursor = Cursor {
-                    line_idx: self.line_index(return_line).unwrap_or(usize::MAX),
+                    line_idx: self.merge_line_index(return_line),
                     cmd_idx: return_cmd_idx,
                 };
                 // The recursive Rust call cannot remain suspended across CONT.
                 // Replace its sentinel with the real BASIC return address so
                 // execution can unwind normally after the stopped subroutine.
                 self.gosub_stack[saved_gosub_len].return_cursor = return_cursor;
+                self.gosub_stack[saved_gosub_len].return_plan = saved_line_plan.clone();
             }
             (Ok(RunOutcome::End), Some(_)) if !returned => {
                 // Falling off the program (or END inside the subroutine) ends
@@ -7890,6 +8012,7 @@ impl Interpreter {
             }
         }
         self.current_line = saved_current_line;
+        self.active_line_plan = saved_line_plan;
         result?;
         Ok(())
     }
@@ -7902,13 +8025,18 @@ impl Interpreter {
     ) -> BasicResult<()> {
         let return_line = self.current_line.unwrap_or_default();
         let return_cmd_idx = cursor.cmd_idx + 1;
-        if first_word_is(command, "GOSUB") {
+        let old_lines = self.line_numbers_cache.clone();
+        let result = if first_word_is(command, "GOSUB") {
             let line = parse_line_number_literal(command[5..].trim())
                 .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
             self.execute_inline_gosub_line(line, false, Some((return_line, return_cmd_idx)))
         } else {
             self.execute_cached_inline_on_sub_call(command, cursor, return_line, return_cmd_idx)
+        };
+        if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
+            cursor.line_idx = self.merge_line_index(return_line);
         }
+        result
     }
 
     #[inline(never)]
@@ -7997,8 +8125,10 @@ impl Interpreter {
         let arg = arg.trim();
         if arg.is_empty() || arg == "0" {
             *cursor = state.retry;
+            self.return_line_plan = state.plan.clone();
         } else if arg.eq_ignore_ascii_case("NEXT") {
             *cursor = state.next;
+            self.return_line_plan = state.plan.clone();
         } else {
             let line = parse_line_number_literal(arg)
                 .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
@@ -11414,23 +11544,124 @@ impl Interpreter {
         }
     }
 
-    fn execute_merge(&mut self, args: &str) -> BasicResult<()> {
+    fn execute_merge(&mut self, args: &str, cursor: &mut Cursor) -> BasicResult<()> {
         let parts = split_arguments(args);
         if parts.is_empty() {
             return Err(self.err(ErrorCode::Syntax));
         }
         let path = self.resolve_bas_path_expr(&parts[0])?;
         let text = read_validated_program_text(&path)?;
+        let old_lines = self.line_numbers_cache.clone();
+        if self.run_depth != 0 && self.active_line_plan.is_none() {
+            self.active_line_plan = self.retain_current_line();
+        }
+        // Capture suspended callers before their source can be replaced. This
+        // work belongs to MERGE; ordinary GOSUB calls keep their small frames.
+        let saved_returns: Vec<_> = self
+            .gosub_stack
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| frame.return_plan.is_none())
+            .filter_map(|(index, frame)| {
+                let line = *old_lines.get(frame.return_cursor.line_idx)?;
+                Some((index, self.retain_stored_line(line)?))
+            })
+            .collect();
         self.program.merge_text(&text)?;
+        for (index, plan) in saved_returns {
+            self.gosub_stack[index].return_plan = Some(plan);
+        }
+        if let Some(state) = self.debugger_state.as_mut() {
+            for scope in &mut state.control_scopes {
+                scope.preserve_return_plans(&self.gosub_stack);
+            }
+        }
         self.refresh_identifier_case_from_program();
         self.rebuild_data();
         self.data_pointer = 0;
         self.rebuild_command_cache();
+        if self.run_depth != 0 {
+            self.relocate_merge_control(&old_lines);
+            // The current line's decoded tail survives even if MERGE removes
+            // its stored source. Its successor is selected by BASIC line number.
+            if let Some(line) = self.current_line {
+                cursor.line_idx = self.merge_line_index(line);
+            }
+        }
         self.ensure_routine_catalog()?;
         self.expression_cache.clear();
-        self.program_structure_changed = true;
         self.invalidate_continuation_after_program_change();
         Ok(())
+    }
+
+    fn merge_line_index(&self, line: i32) -> usize {
+        self.line_numbers_cache
+            .partition_point(|number| *number < line)
+    }
+
+    fn relocate_merge_control(&mut self, old_lines: &[i32]) {
+        let new_lines = &self.line_numbers_cache;
+        let relocate = |cursor: &mut Cursor| {
+            if cursor.line_idx == usize::MAX {
+                return;
+            }
+            let Some(line) = old_lines.get(cursor.line_idx) else {
+                cursor.line_idx = new_lines.len();
+                cursor.cmd_idx = 0;
+                return;
+            };
+            cursor.line_idx = new_lines.partition_point(|number| number < line);
+            if new_lines.get(cursor.line_idx) != Some(line) {
+                cursor.cmd_idx = 0;
+            }
+        };
+        for frame in &mut self.for_stack {
+            relocate(&mut frame.resume);
+        }
+        for frame in &mut self.while_stack {
+            relocate(&mut frame.header);
+            relocate(&mut frame.resume);
+        }
+        for frame in &mut self.if_stack {
+            relocate(frame);
+        }
+        for frame in &mut self.gosub_stack {
+            if let Some(plan) = &frame.return_plan {
+                frame.return_cursor.line_idx =
+                    new_lines.partition_point(|number| *number < plan.line);
+            } else {
+                relocate(&mut frame.return_cursor);
+            }
+        }
+        if let Some(cursor) = &mut self.pending_if_branch {
+            relocate(cursor);
+        }
+        if let Some(error) = &mut self.last_error {
+            if let Some(plan) = &error.plan {
+                let index = new_lines.partition_point(|number| *number < plan.line);
+                error.retry.line_idx = index;
+                error.next.line_idx = index;
+            } else {
+                relocate(&mut error.retry);
+                relocate(&mut error.next);
+            }
+        }
+        if let Some((cursor, _)) = &mut self.pause_deadline {
+            relocate(cursor);
+        }
+        if let Some(state) = self.debugger_state.as_mut() {
+            for (cursor, _) in &mut state.resume_guards {
+                relocate(cursor);
+            }
+            if let Some((cursor, _)) = &mut state.resume_relocated {
+                relocate(cursor);
+            }
+            for scope in &mut state.control_scopes {
+                scope.relocate(&relocate, &|line| {
+                    new_lines.partition_point(|number| *number < line)
+                });
+            }
+        }
     }
 
     fn execute_chain(&mut self, args: &str, cursor: &mut Cursor) -> BasicResult<()> {
@@ -11537,6 +11768,8 @@ impl Interpreter {
         self.while_stack.clear();
         self.if_stack.clear();
         self.gosub_stack.clear();
+        self.active_line_plan = None;
+        self.return_line_plan = None;
         self.if_gosub_base = 0;
         self.pending_if_branch = None;
         self.timers.clear();
@@ -11559,7 +11792,6 @@ impl Interpreter {
         self.sub_return_requested = false;
         self.repeat_current_command = false;
         self.restart_run_loop = false;
-        self.program_structure_changed = false;
         if let Some(state) = self.debugger_state.as_mut() {
             state.resume_guards.clear();
             state.resume_relocated = None;
@@ -11601,7 +11833,9 @@ impl Interpreter {
         cursor: &mut Cursor,
         allow_function_subroutine: bool,
     ) -> BasicResult<()> {
-        let target = if let Some(target) = cached_target {
+        let target = if let Some(target) = cached_target
+            .filter(|target| self.line_numbers_cache.get(target.line_idx) == Some(&line))
+        {
             target.clone()
         } else {
             let Some(index) = self.line_index(line) else {
@@ -11690,11 +11924,17 @@ impl Interpreter {
         }
         let line = err.line.or(self.current_line).unwrap_or(0);
         let number = basic_error_number(&err);
+        let plan = self.retain_current_line();
         self.last_error = Some(RuntimeErrorState {
             number,
             line,
             retry,
-            next: self.cursor_after_cached_command(next),
+            next: if plan.is_some() {
+                next
+            } else {
+                self.cursor_after_cached_command(next)
+            },
+            plan,
         });
         if self.handling_error {
             return Err(BasicError::new(err.code).with_detail(format!(
@@ -11705,6 +11945,7 @@ impl Interpreter {
         if self.error_resume_next {
             if let Some(state) = &self.last_error {
                 *cursor = state.next.clone();
+                self.return_line_plan = state.plan.clone();
             }
             self.handling_error = false;
             self.last_error = None;
@@ -20760,6 +21001,7 @@ mod debugger_runtime_tests {
         with_error.program.load_text("10 A=1").unwrap();
         with_error.rebuild_command_cache();
         with_error.last_error = Some(RuntimeErrorState {
+            plan: None,
             number: 11,
             line: 80,
             retry: Cursor {

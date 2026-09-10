@@ -1,0 +1,11 @@
+[commands]
+10 FOR I=1 TO 3:MERGE "part":PRINT "I=";I:NEXT I
+20 PRINT "DONE"
+RUN
+[output]
+I= 1
+I= 2
+I= 3
+DONE
+[input part.bas]
+5 REM inserted before the entire active FOR line

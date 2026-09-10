@@ -315,7 +315,7 @@ fn resume_next_after_missing_numeric_targets_continues_after_if() {
 }
 
 #[test]
-fn merge_inside_then_clause_preserves_the_python_continuation_when_lines_shift() {
+fn merge_inside_then_clause_continues_once_when_earlier_lines_are_inserted() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("insert.bas"), "5 REM INSERTED\n").unwrap();
     let mut interpreter = loaded_interpreter(
@@ -328,7 +328,7 @@ fn merge_inside_then_clause_preserves_the_python_continuation_when_lines_shift()
 
     interpreter.process_immediate("RUN").unwrap();
 
-    assert_eq!(interpreter.take_output(), "AFTER\n 2\n");
+    assert_eq!(interpreter.take_output(), "AFTER\n 1\n");
 }
 
 #[test]
@@ -346,7 +346,7 @@ fn inactive_debugger_preserves_merge_continuation_inside_then_clause() {
 
     interpreter.process_immediate("RUN").unwrap();
 
-    assert_eq!(interpreter.take_output(), "AFTER\n 2\n");
+    assert_eq!(interpreter.take_output(), "AFTER\n 1\n");
     assert!(interpreter.debugger().unwrap().snapshots().is_empty());
 }
 

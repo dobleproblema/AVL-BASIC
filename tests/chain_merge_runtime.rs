@@ -245,6 +245,56 @@ fn merge_restarts_data_after_overwriting_a_data_line() {
 }
 
 #[test]
+fn merge_retains_changed_source_across_calls_errors_and_stop() {
+    let cases = [
+        (
+            "10 MERGE \"child\":CALL WORK:GOSUB 100:PRINT \"TAIL\"\n20 PRINT \"DONE\":END\n100 PRINT \"SUB\":RETURN\n200 DEF SUB WORK\n210 PRINT \"WORK\"\n220 SUBEND",
+            "WORK\nSUB\nTAIL\nDONE\n",
+        ),
+        (
+            "5 ON ERROR GOTO 100\n10 ERROR 15:PRINT \"TAIL\"\n20 PRINT \"DONE\":END\n100 MERGE \"child\":PRINT ERL:RESUME NEXT",
+            " 10\nTAIL\nDONE\n",
+        ),
+    ];
+    for debugger in [false, true] {
+        for child in ["10\n", "10 PRINT \"REPLACEMENT\"\n"] {
+            for (source, expected) in cases {
+                let (_directory, mut interpreter) = setup(source, child);
+                if debugger {
+                    interpreter.set_debugger(Debugger::scripted([]));
+                }
+                interpreter.run_loaded().unwrap();
+                assert_eq!(interpreter.take_output(), expected);
+            }
+            let (_directory, mut interpreter) = setup(
+                "10 MERGE \"child\":STOP:PRINT \"TAIL\"\n20 PRINT \"DONE\":END",
+                child,
+            );
+            if debugger {
+                interpreter.set_debugger(Debugger::scripted([]));
+            }
+            assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::Stop);
+            interpreter.take_output();
+            interpreter.process_immediate("CONT").unwrap();
+            assert_eq!(interpreter.take_output(), "TAIL\nDONE\n");
+        }
+    }
+}
+
+#[test]
+fn goto_after_merge_uses_the_new_source_at_the_same_line_number() {
+    for debugger in [false, true] {
+        let (_directory, mut interpreter) =
+            setup("10 MERGE \"child\":GOTO 10\n20 END", "10 PRINT \"NEW\":END");
+        if debugger {
+            interpreter.set_debugger(Debugger::scripted([]));
+        }
+        interpreter.run_loaded().unwrap();
+        assert_eq!(interpreter.take_output(), "NEW\n");
+    }
+}
+
+#[test]
 fn restore_a_deleted_data_line_reports_no_data() {
     let (_directory, mut interpreter) = setup("10 DATA 1\n20 END", "200 END\n300 DATA 9");
     interpreter

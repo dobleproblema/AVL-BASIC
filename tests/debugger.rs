@@ -1907,14 +1907,10 @@ fn inline_if_source_spans_survive_merge_inserting_earlier_lines() {
             (10, "DONE=1"),
             (10, "MERGE \"insert.bas\""),
             (10, "PRINT \"AFTER\""),
-            (
-                10,
-                "IF DONE=0 THEN DONE=1:MERGE \"insert.bas\":PRINT \"AFTER\"",
-            ),
             (20, "END"),
         ]
     );
-    assert_eq!(snapshots[4].reason, DebugPauseReason::Breakpoint);
+    assert_eq!(snapshots[4].reason, DebugPauseReason::Step);
     assert_eq!(source_fragment(&snapshots[3]), "PRINT \"AFTER\"");
     assert!(snapshots[3]
         .source_lines
