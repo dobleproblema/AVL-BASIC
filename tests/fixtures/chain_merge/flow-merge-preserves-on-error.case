@@ -1,0 +1,14 @@
+[commands]
+10 ON ERROR GOTO 100
+20 MERGE "new.bas"
+30 ERROR 6
+40 PRINT "DONE"
+50 END
+100 PRINT "HANDLED"
+110 RESUME NEXT
+RUN
+[output]
+HANDLED
+DONE
+[input new.bas]
+5 REM inserted before the active error handler

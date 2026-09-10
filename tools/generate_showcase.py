@@ -441,7 +441,7 @@ def build_readme_hero() -> Path:
     )
     draw.text(
         (1240, 118),
-        "20 highlights · 115 programs",
+        f"20 highlights · {sum(1 for _ in SAMPLES.glob('*.bas'))} programs",
         font=load_font(19, bold=True),
         fill="#7ee787",
     )

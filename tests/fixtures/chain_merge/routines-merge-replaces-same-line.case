@@ -1,0 +1,12 @@
+[commands]
+10 PRINT FNF(2)
+20 END
+100 DEF FNF(X)=X+1
+RUN
+MERGE "new.bas"
+RUN
+[output]
+3
+ 12
+[input new.bas]
+100 DEF FNF(X)=X+10

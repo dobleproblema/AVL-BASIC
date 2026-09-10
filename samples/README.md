@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **115 runnable programs**. They are not filler or API
+AVL BASIC ships with **119 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-115-program catalog. On GitHub, select any image or program name
+119-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -217,8 +217,9 @@ python tools/generate_showcase.py
 - **Learn collisions, then build a game:** `g-balls.bas` + `g-sprite5.bas` →
   `g-arkanoid.bas`.
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
+- **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 115 programs
+## Full catalog — 119 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -375,11 +376,23 @@ demo.
 | <a id="sample-inkey"></a>[`inkey.bas`](inkey.bas) | Displays console key input and numeric codes. | INKEY$, ASC, console input |
 | <a id="sample-interrupts"></a>[`interrupts.bas`](interrupts.bas) | Scheduled callbacks race to guess a random letter. | EVERY, AFTER, callbacks |
 
-### Console algorithms and language features (9)
+### Sequential data files (3)
+
+Each example creates or replaces its own named demonstration file beside the
+program, then reads it back.
+
+| Sample | What it demonstrates | Techniques |
+|---|---|---|
+| <a id="sample-f-scores"></a>[`f-scores.bas`](f-scores.bas) | Saves scores, appends one player, and reads every record. | OPEN, WRITE #, INPUT #, EOF, CLOSE |
+| <a id="sample-f-text"></a>[`f-text.bas`](f-text.bas) | Writes a formatted report and appends to an unfinished line. | PRINT #, USING, APPEND, LINE INPUT # |
+| <a id="sample-f-records"></a>[`f-records.bas`](f-records.bas) | Recovers quotes, commas, line breaks, empty strings, and numeric precision. | CSV quoting, CHR$, WRITE #, INPUT # |
+
+### Console algorithms and language features (10)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-subsample"></a>[`g-subsample.bas`](g-subsample.bas) | Demonstrates DEF SUB locals, shared names, and scope failure. | DEF SUB, LOCAL, scope |
+| <a id="sample-routines"></a>[`routines.bas`](routines.bas) | Calls procedures and functions declared below the main program. | DEF SUB, DEF FN, FNEND, CALL |
 | <a id="sample-loan"></a>[`loan.bas`](loan.bas) | Console loan calculator with first-year amortization table. | INPUT, DEF FN, formatted output |
 | <a id="sample-matrix"></a>[`matrix.bas`](matrix.bas) | Inverts, transposes, multiplies, and prints a matrix. | MAT INV, MAT TRN, DET |
 | <a id="sample-nqueens"></a>[`nqueens.bas`](nqueens.bas) | Backtracking solves and prints a sixteen-queen board. | backtracking, arrays, formatted output |

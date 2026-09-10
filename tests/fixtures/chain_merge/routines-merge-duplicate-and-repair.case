@@ -1,0 +1,14 @@
+[commands]
+10 PRINT FNF(2)
+20 END
+100 DEF FNF(X)=X+1
+MERGE "new.bas"
+RUN
+DELETE 200-200
+RUN
+[output]
+Line 200. Duplicate routine definition.
+Line 200. Duplicate routine definition.
+ 3
+[input new.bas]
+200 DEF FNF(X)=X+10

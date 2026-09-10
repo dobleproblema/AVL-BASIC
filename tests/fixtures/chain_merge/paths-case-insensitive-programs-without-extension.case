@@ -1,0 +1,17 @@
+[commands]
+CD "work"
+RUN "programs/mAiN"
+OPEN "marker.txt" FOR INPUT AS #1
+LINE INPUT #1,A$
+PRINT A$
+CLOSE #1
+[output]
+CASE-MATCHED
+WORK
+[input work/programs/Main.BAS]
+10 CHAIN "sTeP"
+[input work/programs/Step.BAS]
+10 PRINT "CASE-MATCHED"
+20 END
+[input work/marker.txt]
+WORK

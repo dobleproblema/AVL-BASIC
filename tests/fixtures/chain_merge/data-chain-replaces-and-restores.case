@@ -1,0 +1,23 @@
+[commands]
+10 READ A$
+20 PRINT A$
+30 CHAIN "next"
+100 DATA "source-one","source-two"
+RUN
+[output]
+source-one
+target-one
+target-one
+target-two
+[input next.bas]
+10 READ B$
+20 PRINT B$
+30 RESTORE
+40 READ C$
+50 PRINT C$
+60 RESTORE 200
+70 READ D$
+80 PRINT D$
+90 END
+100 DATA "target-one"
+200 DATA "target-two"

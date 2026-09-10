@@ -4758,6 +4758,22 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                 out.push_str("REM");
                 out.extend(chars[i..].iter());
                 return out;
+            } else if upper == "DATA" && token_boundary(&chars, start, i) {
+                // DATA fields are literal text, including unquoted words. New
+                // keywords must never change stored data (e.g. "días" -> "díAS").
+                out.push_str("DATA");
+                let mut quoted = false;
+                while i < chars.len() {
+                    let ch = chars[i];
+                    if ch == ':' && !quoted {
+                        break;
+                    }
+                    if ch == '"' {
+                        quoted = !quoted;
+                    }
+                    out.push(ch);
+                    i += 1;
+                }
             } else if is_known_word(&upper) && token_boundary(&chars, start, i) {
                 out.push_str(&upper);
                 if matches!(

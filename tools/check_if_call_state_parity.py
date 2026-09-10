@@ -90,7 +90,9 @@ def comparable(output: str) -> list[str]:
 def check(label: str, command: list[str], case: Case, timeout: float) -> tuple[str, str, str | None]:
     commands = [case.source, f'PRINT "{BEGIN}"', "RUN"]
     if case.stopped:
-        commands.extend([case.immediate, case.continuation])
+        if case.immediate:
+            commands.append(case.immediate)
+        commands.append(case.continuation)
     commands.extend([f'PRINT "{END}"', "QUIT", ""])
     environment = {
         **os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",

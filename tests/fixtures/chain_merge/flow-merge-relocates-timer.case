@@ -1,0 +1,16 @@
+[commands]
+10 DI
+20 AFTER 1,3 GOSUB 100
+30 MERGE "new.bas"
+40 EI
+50 PAUSE 60
+60 PRINT "DONE"
+70 END
+100 PRINT "TICK"
+110 RETURN
+RUN
+[output]
+TICK
+DONE
+[input new.bas]
+90 PRINT "WRONG":END

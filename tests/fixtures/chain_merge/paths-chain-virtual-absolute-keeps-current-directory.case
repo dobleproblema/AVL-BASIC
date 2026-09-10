@@ -1,0 +1,24 @@
+[commands]
+CD "work"
+LOAD "/source/main"
+RUN
+OPEN "marker.txt" FOR INPUT AS #1
+LINE INPUT #1,A$
+PRINT A$
+CLOSE #1
+[output]
+TARGET
+WORK
+[input source/main.bas]
+10 CHAIN "/target/next"
+[input target/next.bas]
+10 OPEN "marker.txt" FOR INPUT AS #1
+20 LINE INPUT #1,A$
+30 PRINT A$
+40 END
+[input source/marker.txt]
+SOURCE
+[input target/marker.txt]
+TARGET
+[input work/marker.txt]
+WORK

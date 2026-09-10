@@ -28,6 +28,51 @@ fn help_fill_lists_the_cursor_color_form() {
 }
 
 #[test]
+fn help_distinguishes_data_file_channels_from_console_and_graphics() {
+    let mut interpreter = Interpreter::new();
+
+    for (topic, syntax, detail) in [
+        (
+            "OPEN",
+            "OPEN filename$ FOR INPUT|OUTPUT|APPEND AS #channel",
+            "UTF-8",
+        ),
+        ("CLOSE", "CLOSE [#channel[,#channel...]]", "data files"),
+        ("PRINT #", "PRINT #channel,", "channel's own print column"),
+        (
+            "WRITE",
+            "WRITE #channel[,expression...]",
+            "doubled embedded quotes",
+        ),
+        (
+            "INPUT #",
+            "INPUT #channel, target1[,target2...]",
+            "not BASIC expressions",
+        ),
+        (
+            "LINE INPUT #",
+            "LINE INPUT #channel, target$",
+            "physical text line",
+        ),
+        ("EOF", "EOF(channel)", "without consuming input"),
+    ] {
+        interpreter
+            .process_immediate(&format!("HELP {topic}"))
+            .unwrap();
+        let output = interpreter.take_output();
+        assert!(output.starts_with(syntax), "{topic}: {output}");
+        assert!(output.contains(detail), "{topic}: {output}");
+    }
+
+    interpreter.process_immediate("HELP SCREEN CLOSE").unwrap();
+    assert!(interpreter.take_output().contains("graphics window"));
+    interpreter.process_immediate("HELP INPUT").unwrap();
+    assert!(interpreter.take_output().contains("from the console"));
+    interpreter.process_immediate("HELP WRITE #").unwrap();
+    assert!(interpreter.take_output().starts_with("WRITE #channel"));
+}
+
+#[test]
 fn help_keeps_edit_and_debug_separate_without_becoming_a_manual() {
     let mut interpreter = Interpreter::new();
 
@@ -44,7 +89,7 @@ fn help_keeps_edit_and_debug_separate_without_becoming_a_manual() {
     let output = interpreter.take_output();
 
     assert!(output.starts_with("DEBUG\n"), "{output:?}");
-    assert!(output.contains("visual debugger"));
+    assert!(output.contains("full-screen debugger"));
     assert!(output.contains("before the first statement"));
     assert!(!output.contains("block_size"));
     assert!(!output.contains("dirty-block"));

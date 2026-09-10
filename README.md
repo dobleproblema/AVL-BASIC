@@ -6,11 +6,17 @@
 
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
 line-numbered programs, immediate mode, an integrated full-screen editor and
-debugger, structured control flow, matrix operations, sprites, mouse and
-keyboard input, and a complete built-in graphics environment.
+debugger, structured control flow, matrix operations, sequential data files,
+sprites, mouse and keyboard input, and a complete built-in graphics environment.
 
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
+
+Save scores, settings and reports with `OPEN`, `PRINT #`, `WRITE #`, `INPUT #`,
+`LINE INPUT #`, `EOF` and `CLOSE`. Sequential files use UTF-8 and support both
+plain text and recoverable CSV records. Start with the compact examples for
+[scores](samples/f-scores.bas), [text and append](samples/f-text.bas), and
+[CSV records](samples/f-records.bas); manual section 5.2 defines the syntax.
 
 ## Interactive by design
 
@@ -18,7 +24,7 @@ AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
 program, inspect it with `LIST`, and continue from the prompt.
 
 `EDIT` opens the full-screen program editor. `DEBUG` opens the same source in a
-visual debugger and pauses before the first statement. It provides line
+full-screen debugger and pauses before the first statement. It provides line
 breakpoints, step into/over/out, and a live view of variables, arrays, the call
 stack, errors, and timers, including the exact next statement and values
 changed since the previous pause. Inspector categories can be collapsed, and
@@ -93,7 +99,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 115-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 119-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -129,7 +135,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-115 sample programs and their visual gallery are optional companion material.
+119 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -186,7 +192,7 @@ adding a practical modern feature set:
 
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
-- syntax-preserving program editing and listing, plus a separate visual debugger,
+- syntax-preserving program editing and listing, plus a separate full-screen debugger,
 - `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - embedded bitmap fonts for reproducible graphics text,
@@ -220,7 +226,7 @@ to verify every error name, number, and English message against the Python oracl
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
 - [`tools/`](tools/): maintainer validation and benchmark tools
-- [`samples/`](samples/): 115 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 119 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

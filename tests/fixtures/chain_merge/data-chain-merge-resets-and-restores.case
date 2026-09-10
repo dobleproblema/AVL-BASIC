@@ -1,0 +1,18 @@
+[commands]
+10 READ A$
+20 PRINT A$
+30 CHAIN MERGE "part",100
+400 DATA "original-one","original-two"
+RUN
+[output]
+original-one
+merged-first|original-one
+original-one
+[input part.bas]
+100 READ B$,C$
+110 PRINT B$;"|";C$
+120 RESTORE 400
+130 READ D$
+140 PRINT D$
+150 END
+300 DATA "merged-first"

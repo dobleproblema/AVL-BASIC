@@ -1,0 +1,15 @@
+10 ' Write a report and append text. Replaces f-text.txt.
+20 F$="f-text.txt"
+30 OPEN F$ FOR OUTPUT AS #1
+40 PRINT #1,"SESSION REPORT"
+50 PRINT #1,"Total: ";USING "0.00";12.5
+60 PRINT #1,"Status: ";
+70 CLOSE #1
+80 OPEN F$ FOR APPEND AS #1
+90 PRINT #1,"complete"
+100 CLOSE #1
+110 OPEN F$ FOR INPUT AS #1
+120 WHILE NOT EOF(1)
+130 LINE INPUT #1,T$ : PRINT T$
+140 WEND
+150 CLOSE #1

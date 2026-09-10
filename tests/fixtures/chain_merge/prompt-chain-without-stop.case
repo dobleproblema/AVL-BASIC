@@ -1,0 +1,8 @@
+[commands]
+A=7
+CHAIN "child.bas",200
+[output]
+FRESH 7
+[input child.bas]
+200 PRINT "FRESH";A
+210 END

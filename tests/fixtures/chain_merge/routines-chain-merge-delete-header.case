@@ -1,0 +1,12 @@
+[commands]
+10 END
+100 DEF SUB WORK
+110 PRINT "OLD"
+120 SUBEND
+CHAIN MERGE "new.bas",110,DELETE 100-100
+NEW
+[output]
+OLD
+Line 120. Malformed subroutine.
+[input new.bas]
+200 END

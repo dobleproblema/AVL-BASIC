@@ -1,0 +1,11 @@
+[commands]
+10 IF 1 THEN GOSUB 100:PRINT "OLD TAIL"
+20 END
+100 CHAIN MERGE "child.bas",200
+110 RETURN
+RUN
+[output]
+FRESH 0
+[input child.bas]
+200 PRINT "FRESH";A
+210 END

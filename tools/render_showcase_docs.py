@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 CATALOG = SAMPLES / "catalog.tsv"
 MARKDOWN_OUTPUT = SAMPLES / "README.md"
-EXPECTED_SAMPLES = 115
+EXPECTED_SAMPLES = 119
 EXPECTED_FEATURED = 20
 
 
@@ -146,7 +146,7 @@ def render_markdown(samples: list[Sample]) -> str:
     lines = [
         "# AVL BASIC sample gallery",
         "",
-        "AVL BASIC ships with **115 runnable programs**. They are not filler or API",
+        f"AVL BASIC ships with **{len(samples)} runnable programs**. They are not filler or API",
         "snippets: the collection includes complete visual pieces, playable programs,",
         "numerical algorithms, interactive explorers, and focused teaching examples.",
         "",
@@ -204,6 +204,7 @@ def render_markdown(samples: list[Sample]) -> str:
             "- **Learn collisions, then build a game:** `g-balls.bas` + `g-sprite5.bas` →",
             "  `g-arkanoid.bas`.",
             "- **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.",
+            "- **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.",
             "",
             f"## Full catalog — {len(samples)} programs",
             "",
@@ -220,6 +221,18 @@ def render_markdown(samples: list[Sample]) -> str:
             [
                 f"### {category} ({len(category_samples)})",
                 "",
+            ]
+        )
+        if category == "Sequential data files":
+            lines.extend(
+                [
+                    "Each example creates or replaces its own named demonstration file beside the",
+                    "program, then reads it back.",
+                    "",
+                ]
+            )
+        lines.extend(
+            [
                 "| Sample | What it demonstrates | Techniques |",
                 "|---|---|---|",
             ]

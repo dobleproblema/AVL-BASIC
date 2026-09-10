@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn generated_error_catalog_is_contiguous_and_round_trips() {
-        assert_eq!(ErrorCode::ALL.len(), 56);
+        assert_eq!(ErrorCode::ALL.len(), 64);
         for (index, code) in ErrorCode::ALL.iter().copied().enumerate() {
             let number = i32::try_from(index + 1).unwrap();
             assert_eq!(code.number(), number);
@@ -88,7 +88,7 @@ mod tests {
             assert!(!code.message().is_empty());
         }
         assert_eq!(ErrorCode::from_number(0), None);
-        assert_eq!(ErrorCode::from_number(57), None);
+        assert_eq!(ErrorCode::from_number(65), None);
     }
 
     #[test]

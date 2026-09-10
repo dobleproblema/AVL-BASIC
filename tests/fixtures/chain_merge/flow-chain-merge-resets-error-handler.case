@@ -1,0 +1,12 @@
+[commands]
+10 ON ERROR GOTO 100
+20 CHAIN MERGE "new.bas",200
+30 END
+100 PRINT "OLD HANDLER"
+110 RESUME NEXT
+RUN
+[output]
+Line 200. Division by zero.
+[input new.bas]
+200 ERROR 6
+210 END

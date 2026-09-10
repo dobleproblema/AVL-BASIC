@@ -845,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn restart_clears_definitions_only_after_nested_bindings_have_unwound() {
+    fn restart_rebuilds_declarations_after_nested_bindings_have_unwound() {
         let mut interpreter = Interpreter::new();
         interpreter.program.load_text(
             "10 DEF FNA(X)=X+1\n20 DEF SUB WORK(A)\n30 LOCAL TEMP(2)\n40 TEMP(1)=7\n50 A(1)=5\n60 SUBEND\n70 DIM BUF(2):BUF(1)=9:X=8\n80 ON ERROR GOTO 200\n90 EVERY 100,1 GOSUB 210:READ D\n100 CALL WORK(BUF)\n110 END\n200 RESUME NEXT\n210 RETURN\n220 DATA 9"
@@ -877,11 +877,14 @@ mod tests {
                 ..
             }
         ));
-        assert!(interpreter.functions.is_empty());
-        assert!(interpreter.subs.is_empty());
+        assert!(interpreter.functions.contains_key("FNA"));
+        assert!(interpreter.subs.contains_key("WORK"));
         assert!(interpreter.single_line_function_cache.is_empty());
         assert!(interpreter.fn_line_owner.is_empty());
-        assert!(interpreter.sub_line_owner.is_empty());
+        assert_eq!(
+            interpreter.sub_line_owner.get(&50).map(String::as_str),
+            Some("WORK")
+        );
         assert!(interpreter.function_call_stack.is_empty());
         assert!(interpreter.sub_call_stack.is_empty());
         assert!(interpreter.active_functions.is_empty());
@@ -929,8 +932,10 @@ mod tests {
     #[test]
     fn only_the_outermost_run_boundary_can_consume_a_restart_request() {
         let mut interpreter = Interpreter::new();
-        interpreter.program.load_text("10 A=1").unwrap();
-        interpreter.process_immediate("DEF FNA(X)=X+1").unwrap();
+        interpreter
+            .program
+            .load_text("10 A=1\n20 DEF FNA(X)=X+1")
+            .unwrap();
         let mut debugger = Debugger::scripted([DebugAction::Restart]);
         debugger.replace_breakpoints([10]);
         interpreter.set_debugger(debugger);

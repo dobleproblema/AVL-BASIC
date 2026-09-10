@@ -1,0 +1,10 @@
+[commands]
+10 A=7:S$="kept":DIM V(2),W$(2):V(1)=8:W$(2)="array"
+20 CHAIN MERGE "child.bas",200
+30 END
+RUN
+[output]
+OK
+[input child.bas]
+200 IF A=7 AND S$="kept" AND V(1)=8 AND W$(2)="array" THEN PRINT "OK"
+210 END

@@ -1,0 +1,30 @@
+[commands]
+10 OPEN "output.txt" FOR OUTPUT AS #1
+20 OPEN "append.txt" FOR APPEND AS #2
+30 PRINT #1,"left-";
+40 PRINT #2,"left-";
+50 CHAIN "next"
+RUN
+PRINT EOF(1)
+PRINT EOF(2)
+OPEN "output.txt" FOR INPUT AS #1
+LINE INPUT #1,A$
+PRINT A$
+CLOSE #1
+[output]
+File is not open.
+File is not open.
+left-right
+[input output.txt]
+obsolete
+[input append.txt]
+seed
+[input next.bas]
+10 PRINT #1,"right"
+20 PRINT #2,"right"
+30 END
+[expect output.txt]
+left-right
+[expect append.txt]
+seed
+left-right

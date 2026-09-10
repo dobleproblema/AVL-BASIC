@@ -1,0 +1,20 @@
+[commands]
+10 OPEN "rows.csv" FOR INPUT AS #1
+20 INPUT #1,A$
+30 PRINT A$
+40 CHAIN "next"
+RUN
+PRINT EOF(1)
+[output]
+first
+second
+EOF
+File is not open.
+[input rows.csv]
+"first"
+"second"
+[input next.bas]
+10 INPUT #1,B$
+20 PRINT B$
+30 IF EOF(1) THEN PRINT "EOF"
+40 END

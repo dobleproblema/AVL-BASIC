@@ -1,0 +1,25 @@
+[commands]
+10 OPEN "rows.csv" FOR INPUT AS #1
+20 INPUT #1,A$
+30 PRINT A$
+40 MERGE "part"
+50 INPUT #1,B$
+60 PRINT B$
+70 GOTO 100
+RUN
+PRINT EOF(1)
+[output]
+first
+second
+third
+EOF
+File is not open.
+[input rows.csv]
+"first"
+"second"
+"third"
+[input part.bas]
+100 INPUT #1,C$
+110 PRINT C$
+120 IF EOF(1) THEN PRINT "EOF"
+130 END

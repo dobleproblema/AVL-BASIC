@@ -1,0 +1,12 @@
+[commands]
+CHAIN MERGE "child.bas",999
+LIST
+RUN
+[output]
+Target line does not exist.
+200 PRINT "LOADED"
+210 END
+LOADED
+[input child.bas]
+200 PRINT "LOADED"
+210 END

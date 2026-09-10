@@ -1,0 +1,11 @@
+[commands]
+10 CALL WORK
+20 END
+100 DEF SUB WORK
+110 CHAIN "child.bas"
+120 SUBEND
+RUN
+[output]
+Line 110. Instruction not allowed inside a subroutine.
+[input child.bas]
+200 PRINT "WRONG"

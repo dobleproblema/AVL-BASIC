@@ -1,0 +1,12 @@
+[commands]
+10 CHAIN "child.bas"
+20 END
+100 DEF FNOLD(X)=X+1
+RUN
+PRINT FNOLD(1)
+[output]
+NEW
+Undefined variable or function.
+[input child.bas]
+200 PRINT "NEW"
+210 END

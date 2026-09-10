@@ -33,7 +33,10 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def copy_tree(src: Path, dst: Path) -> None:
-    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
+    ignore = shutil.ignore_patterns(
+        "__pycache__", "*.pyc", ".pytest_cache",
+        "f-scores.csv", "f-records.csv", "f-text.txt",
+    )
     shutil.copytree(src, dst, ignore=ignore)
 
 
@@ -68,7 +71,7 @@ Included files
 --------------
 
 - avl-basic.exe: native Windows interpreter
-- samples/: optional collection of 115 BASIC programs, gallery, catalog, and assets
+- samples/: optional collection of BASIC programs, gallery, catalog, and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
 - COPYING: GPLv3-or-later license

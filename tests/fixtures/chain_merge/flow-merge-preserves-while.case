@@ -1,0 +1,13 @@
+[commands]
+10 N=0
+20 WHILE N<2
+30 IF N=0 THEN MERGE "new.bas"
+40 N=N+1
+50 WEND
+60 PRINT "DONE";N
+70 END
+RUN
+[output]
+DONE 2
+[input new.bas]
+35 REM inserted inside the active loop

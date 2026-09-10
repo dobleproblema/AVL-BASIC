@@ -105,7 +105,11 @@ g-mouse.bas	Input, events, and timing		Mouse Rectangle	Draws rectangles from mou
 g-mouse2.bas	Input, events, and timing		Mouse Freehand Drawing	Freehand drawing follows mouse drag events.	LEFTDRAG;MASK;DRAW
 inkey.bas	Input, events, and timing		Console Key Codes	Displays console key input and numeric codes.	INKEY$;ASC;console input
 interrupts.bas	Input, events, and timing		Scheduled Guessing Game	Scheduled callbacks race to guess a random letter.	EVERY;AFTER;callbacks
+f-scores.bas	Sequential data files		Saved Scores	Saves scores, appends one player, and reads every record.	OPEN;WRITE #;INPUT #;EOF;CLOSE
+f-text.bas	Sequential data files		Text Report	Writes a formatted report and appends to an unfinished line.	PRINT #;USING;APPEND;LINE INPUT #
+f-records.bas	Sequential data files		Recoverable CSV Records	Recovers quotes, commas, line breaks, empty strings, and numeric precision.	CSV quoting;CHR$;WRITE #;INPUT #
 g-subsample.bas	Console algorithms and language features		Local Scope Example	Demonstrates DEF SUB locals, shared names, and scope failure.	DEF SUB;LOCAL;scope
+routines.bas	Console algorithms and language features		Routines Below Main	Calls procedures and functions declared below the main program.	DEF SUB;DEF FN;FNEND;CALL
 loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
 matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
 nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output

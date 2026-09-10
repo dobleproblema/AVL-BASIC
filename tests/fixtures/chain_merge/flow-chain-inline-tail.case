@@ -1,0 +1,9 @@
+[commands]
+10 IF 1 THEN CHAIN "child.bas",200:PRINT "WRONG" ELSE PRINT "ALSO WRONG"
+20 PRINT "OLD"
+RUN
+[output]
+FRESH 0
+[input child.bas]
+200 PRINT "FRESH";A
+210 END

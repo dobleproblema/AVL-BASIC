@@ -1,0 +1,27 @@
+[commands]
+LOAD "source/main"
+CD "work"
+MERGE "patch"
+RUN
+OPEN "marker.txt" FOR INPUT AS #1
+LINE INPUT #1,A$
+PRINT A$
+CLOSE #1
+[output]
+SOURCE
+WORK
+[input source/main.bas]
+10 GOTO 100
+20 END
+[input work/patch.bas]
+100 OPEN "marker.txt" FOR INPUT AS #1
+110 LINE INPUT #1,A$
+120 PRINT A$
+130 END
+[input source/patch.bas]
+100 PRINT "WRONG-PATCH"
+110 END
+[input source/marker.txt]
+SOURCE
+[input work/marker.txt]
+WORK

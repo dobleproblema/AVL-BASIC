@@ -1,0 +1,14 @@
+[commands]
+10 STOP
+20 PRINT "OLD"
+RUN
+MERGE "new.bas"
+CONT
+RUN
+[output]
+Line 10. Program stopped.
+There is no stopped program to continue.
+NEW
+[input new.bas]
+10 PRINT "NEW"
+20 END

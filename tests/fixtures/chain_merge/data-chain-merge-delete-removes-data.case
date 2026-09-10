@@ -1,0 +1,17 @@
+[commands]
+10 CHAIN MERGE "part",100,DELETE 300-399
+20 END
+300 DATA "removed"
+400 DATA "kept"
+RUN
+[output]
+kept
+kept
+Line 140. The line has no DATA for RESTORE.
+[input part.bas]
+100 READ A$
+110 PRINT A$
+120 RESTORE 400
+130 READ B$:PRINT B$
+140 RESTORE 300
+150 END

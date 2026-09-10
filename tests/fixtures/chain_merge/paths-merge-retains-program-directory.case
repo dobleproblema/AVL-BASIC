@@ -1,0 +1,25 @@
+[commands]
+LOAD "source/main"
+RUN
+OPEN "marker.txt" FOR INPUT AS #1
+LINE INPUT #1,A$
+PRINT A$
+CLOSE #1
+[output]
+SOURCE
+ROOT
+[input source/main.bas]
+10 MERGE "../addon/part"
+20 GOTO 100
+30 END
+[input addon/part.bas]
+100 OPEN "marker.txt" FOR INPUT AS #1
+110 LINE INPUT #1,A$
+120 PRINT A$
+130 END
+[input source/marker.txt]
+SOURCE
+[input addon/marker.txt]
+ADDON
+[input marker.txt]
+ROOT

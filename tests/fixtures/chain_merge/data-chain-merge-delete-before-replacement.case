@@ -1,0 +1,19 @@
+[commands]
+10 READ A$
+20 PRINT A$
+30 CHAIN MERGE "part",100,DELETE 300-399
+300 DATA "removed"
+400 DATA "retained"
+RUN
+[output]
+removed
+replacement|retained
+replacement
+[input part.bas]
+100 READ B$,C$
+110 PRINT B$;"|";C$
+120 RESTORE 300
+130 READ D$
+140 PRINT D$
+150 END
+300 DATA "replacement"

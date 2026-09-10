@@ -1,0 +1,20 @@
+[commands]
+10 OPEN "rows.txt" FOR INPUT AS #1
+20 LINE INPUT #1,A$
+30 PRINT A$
+40 CHAIN MERGE "part",100
+RUN
+PRINT EOF(1)
+[output]
+first
+second
+EOF
+File is not open.
+[input rows.txt]
+first
+second
+[input part.bas]
+100 LINE INPUT #1,B$
+110 PRINT B$
+120 IF EOF(1) THEN PRINT "EOF"
+130 END

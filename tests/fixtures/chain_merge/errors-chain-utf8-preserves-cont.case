@@ -1,0 +1,14 @@
+[commands]
+10 A=7
+20 STOP
+30 PRINT "RESUMED";A
+40 END
+RUN
+CHAIN "bad.bas"
+CONT
+[output]
+Line 20. Program stopped.
+Invalid line format.
+RESUMED 7
+[input-hex bad.bas]
+32 30 30 20 50 52 49 4e 54 20 22 ff 22 0a

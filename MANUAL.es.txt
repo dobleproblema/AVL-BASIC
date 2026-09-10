@@ -17,6 +17,7 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 4.1 - Matrices y MAT
 5.  - Entrada / salida de texto en la consola
 5.1 - Entrada / salida de texto en la ventana gráfica
+5.2 - Ficheros de datos secuenciales
 6.  - Entorno gráfico
 6.1 - Ventana y coordenadas
 6.2 - Trazado básico
@@ -410,6 +411,135 @@ Ejemplo
 70 PAPER 0 : INK 1 : BIGFONT OPAQUE : LOCATE 17,25 : GPRINT "U.S.A."
 80 END
 
+5.2 Ficheros de datos secuenciales
+
+AVL BASIC usa una sintaxis inspirada en QuickBASIC para ficheros de texto UTF-8
+secuenciales. Estas operaciones se admiten en modo inmediato y en programas;
+cada fichero abierto tiene un canal numérico. No se admite acceso binario ni
+registros de acceso aleatorio.
+
++ OPEN nombre$ FOR INPUT AS #canal          Abre un fichero existente para leer
++ OPEN nombre$ FOR OUTPUT AS #canal         Crea o reemplaza un fichero
++ OPEN nombre$ FOR APPEND AS #canal         Abre al final y crea el fichero si no existe
++ PRINT #canal, [lista]                     Escribe texto con formato
++ PRINT #canal, USING formato$; lista       Escribe con una máscara PRINT USING
++ WRITE #canal[,expresión,...]              Escribe un registro CSV recuperable
++ INPUT #canal, destino1[,destino2...]      Lee un registro CSV
++ LINE INPUT #canal, destino$               Lee una línea física de texto
++ EOF(canal)                               Devuelve -1 al final del fichero y 0 en otro caso
++ CLOSE #canal[,#canal...]                  Cierra los ficheros indicados
++ CLOSE                                    Cierra todos los ficheros de datos
+
+Canales y rutas
+- La raíz virtual es el directorio de trabajo del proceso al arrancar el
+  intérprete; puede ser distinto del directorio que contiene el ejecutable
+  o el script.
+- El canal es una expresión cuyo valor debe ser un entero exacto entre 1 y 255.
+  Un canal fraccionario, no finito o fuera de rango produce el error 26. Se usa
+  `#` en las instrucciones, pero no en `EOF(1)`.
+- El nombre es una expresión de cadena, por ejemplo `OPEN F$ FOR INPUT AS #N`.
+  Se admite cualquier extensión y no se añade ninguna. Un nombre vacío, un
+  carácter NUL o una ruta fuera de la raíz virtual produce el error 26.
+- Las rutas siguen el sistema de archivos virtual existente: las relativas usan
+  el directorio virtual actual en modo inmediato y el directorio del programa
+  cargado durante su ejecución. Abrir un fichero no cambia de directorio. Se
+  conserva la resolución existente de mayúsculas/minúsculas en los nombres y
+  las rutas se normalizan en el árbol virtual lógico.
+- La raíz virtual es un límite lógico: los enlaces simbólicos y junctions bajo
+  ella se siguen igual que con LOAD/SAVE, aunque su destino físico esté fuera
+  de esa raíz. `..` recorre el árbol virtual, no el padre físico del destino del
+  enlace; subir por encima de la raíz virtual produce el error 26. Se rechazan
+  las rutas absolutas del sistema (como `C:\datos.txt`) y las rutas UNC.
+- Estas reglas ayudan a evitar errores accidentales de rutas; no son un sandbox
+  de seguridad ni garantizan confinamiento físico. El acceso real sigue sujeto
+  a los permisos del usuario en el sistema operativo.
+- Un canal ocupado produce el error 57 antes de poder truncar un fichero.
+  Varios canales INPUT pueden leer la misma ruta resuelta de forma independiente.
+  Abrir de nuevo esa ruta se rechaza si cualquiera de los canales escribe en ella.
+- CLOSE con canales explícitos exige que estén abiertos. Se valida toda la lista
+  antes de cerrar ninguno; los canales repetidos en la lista se cierran una vez.
+  CLOSE sin argumentos es inocuo si no hay ficheros abiertos. SCREEN CLOSE solo
+  cierra la ventana gráfica.
+
+Entrada y salida de texto
+- PRINT # tiene el mismo formato, SPC, TAB, USING, zonas de coma y comportamiento
+  de coma/punto y coma final que PRINT de consola. Cada canal tiene su propia
+  columna de impresión, inicialmente cero, incluso en APPEND. La salida se
+  dirige exclusivamente al fichero.
+- OUTPUT reemplaza el contenido anterior. APPEND no añade un separador o salto
+  de línea automáticamente: si el texto anterior no termina en un salto de
+  línea, el texto nuevo continúa a su lado.
+- OUTPUT y APPEND escriben UTF-8 sin BOM. Los saltos de línea generados por
+  PRINT # y WRITE # son LF en todas las plataformas. Los caracteres CR y LF que
+  ya contienen las cadenas se conservan. Cada instrucción de salida vacía su
+  búfer de escritura al fichero; CLOSE también lo hace.
+- INPUT acepta UTF-8 y omite un BOM inicial. UTF-8 incorrecto produce el error
+  62. LINE INPUT # admite finales LF, CRLF y CR, elimina solo ese terminador y
+  también lee una última línea sin terminador. El destino debe ser una variable
+  o elemento de array de cadena. Ctrl-Z es un carácter de datos ordinario.
+- EOF no consume datos. Solo funciona con canales INPUT y devuelve -1 para un
+  fichero vacío o cuando ya se han leído sus últimos datos. Leer después del
+  final produce el error 60; comprueba EOF antes de leer.
+
+Registros CSV: WRITE # e INPUT #
+- WRITE # escribe un registro separado por comas. Las cadenas siempre se
+  delimitan con comillas dobles y las comillas dobles internas se duplican.
+  Las cadenas vacías, comas y caracteres CR/LF internos se conservan al guardar
+  con WRITE # y recuperar con INPUT #.
+- Los campos numéricos son decimales finitos con hasta 17 cifras significativas,
+  suficientes para recuperar exactamente el valor almacenado en coma flotante.
+  El punto decimal y la notación científica opcional no dependen de la
+  configuración regional. El cero negativo se escribe como 0. Este formato
+  prioriza la recuperación del valor; usa PRINT # para números compactos o
+  con formato de presentación.
+- INPUT # consume exactamente un registro, que puede ocupar varias líneas
+  físicas dentro de campos entrecomillados. Debe haber exactamente un campo por
+  destino (error 30). Se admiten variables escalares y elementos de arrays. El
+  número de campos y sus tipos se comprueban antes de asignar valores.
+- Los campos entrecomillados conservan todo su contenido. En los demás se quitan
+  los espacios y tabuladores ASCII de los extremos. Tras una comilla de cierre
+  solo se admiten espacios, tabuladores, una coma o el final del registro. Un
+  registro físico vacío es un campo vacío; WRITE # sin expresiones lo escribe.
+- Los destinos de cadena reciben el texto del campo. Los numéricos exigen un
+  decimal finito, con signo y notación e/E opcionales; un campo numérico vacío
+  o incorrecto produce el error 62. La lectura nunca evalúa expresiones BASIC:
+  `1+2`, nombres de variables, literales hexadecimales, NaN e infinito no son
+  datos numéricos válidos.
+- Un registro CSV bien formado se consume entero antes de comunicar un error de
+  número de campos o de conversión numérica. Con CSV malformado o UTF-8 inválido,
+  la posición queda tras la línea física donde se detectó el error, o al final
+  del fichero. No se rebobina automáticamente; ON ERROR y RESUME NEXT permiten
+  continuar la lectura desde esa posición.
+
+Duración de los canales y errores
+- STOP, Ctrl+C reanudable, CONT, las pausas del depurador, ON ERROR atendido y
+  CHAIN (incluido CHAIN MERGE) conservan los canales y sus posiciones.
+- END, el final normal del programa, NEW, CLEAR, LOAD correcto, un RUN nuevo,
+  reiniciar el depurador, QUIT/EXIT/SYSTEM, un error de programa no atendido o
+  abandonar el depurador sin posibilidad de reanudar cierran todos los canales.
+  Editar el programa invalida la continuación como de costumbre, pero no cierra
+  los ficheros por sí solo. Los errores de órdenes inmediatas dejan abiertos los
+  demás canales. Cerrar no deshace los bytes ya escritos.
+- El error 40 indica que no se encuentra el fichero de entrada; 57, canal/ruta
+  ya abierto; 58, canal no abierto; 59, operación incompatible con el modo; 60,
+  lectura después del final; 61, fallo de E/S o permisos del sistema operativo;
+  62, UTF-8, CSV o datos numéricos incorrectos. Se integran con ON ERROR, ERR,
+  ERL y RESUME igual que los demás errores de ejecución.
+
+Ejemplo: guardar y recuperar puntuaciones
+10 OPEN "scores.csv" FOR OUTPUT AS #1
+20 WRITE #1,"PLAYER ONE",1250
+30 WRITE #1,"PLAYER TWO",980
+40 CLOSE #1
+50 OPEN "scores.csv" FOR INPUT AS #1
+60 WHILE NOT EOF(1)
+70 INPUT #1,N$,S : PRINT N$;": ";S
+80 WEND
+90 CLOSE #1
+
+Más ejemplos: samples/f-scores.bas, samples/f-text.bas y samples/f-records.bas.
+Cada uno crea o reemplaza su propio fichero de demostración junto al programa.
+
 6. Entorno gráfico
 
 6.1 Ventana y coordenadas
@@ -697,7 +827,8 @@ Notas rápidas
 - `SCREEN$` captura la pantalla en una cadena; `SCREEN var$` vuelca una variable a pantalla.
 - `BSAVE "img.png",gscr$` usa las dimensiones codificadas en la cadena gráfica; `BLOAD "img.png",gscr$` carga el PNG en la cadena conservando sus propias dimensiones. Estas formas no modifican la pantalla principal.
 - `BLOAD "img.png"` y `SCREEN gscr$` exigen que las dimensiones de la imagen/cadena coincidan con el `MODE` activo; en caso contrario dan `Invalid value` sin modificar la pantalla.
-- Reglas de fichero PNG: comillas obligatorias, extensión `.png` requerida y rutas siempre dentro de la raíz virtual del intérprete.
+- Los nombres de fichero PNG son expresiones de cadena, como `"img.png"`, `P$` o `P$+".png"`. Las comillas delimitan los literales de cadena; el nombre resultante debe tener la extensión `.png`.
+- BLOAD/BSAVE usan el mismo sistema virtual lógico que los ficheros de programa, incluidos los alias de directorio permitidos (ver 9.3). Se rechazan las rutas absolutas del sistema y las UNC; `..` se limita en la raíz virtual.
 - En modo inmediato, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio virtual actual.
 - Dentro de un programa cargado desde disco, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio del propio programa. Esto no cambia el `CD` actual del usuario.
 
@@ -1001,7 +1132,9 @@ Salida esperada
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
-- CTRL+C interrumpe la ejecución de forma equivalente a `STOP`; también se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
+- Durante un programa numerado, `CTRL+C` interrumpe la ejecución de forma equivalente a `STOP`; se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
+- Mientras se ejecutan instrucciones o bucles introducidos en el prompt, `CTRL+C` cancela esa ejecución inmediata y vuelve a `Ready`, conservando las variables actuales y los canales de datos abiertos. El propio comando inmediato no se puede reanudar con `CONT`; si ya había un programa detenido antes, `CONT` sigue reanudando ese programa.
+- En el prompt ocioso, `CTRL+C` sale del intérprete.
 
 8.2 Procesamiento de errores
 
@@ -1087,6 +1220,14 @@ Tabla completa de códigos de error
 54 Instrucción no permitida dentro de una subrutina.
 55 Subrutina mal formada.
 56 LOCAL debe aparecer en el bloque inicial de una función o subrutina.
+57 Archivo ya abierto.
+58 El archivo no está abierto.
+59 Modo de archivo incorrecto.
+60 Lectura después del final del archivo.
+61 Error de entrada/salida de archivo.
+62 Datos de archivo no válidos.
+63 Definición de rutina duplicada.
+64 Las definiciones de rutinas deben aparecer en el nivel superior.
 
 9. Comandos “solo inmediato”
 
@@ -1193,8 +1334,11 @@ Notas sobre el patrón de FILES / CAT
 - El patrón se aplica solo a los ficheros.
 
 Notas sobre CD
-- `CD ".."` sube un nivel sin salir nunca de la raíz virtual.
+- La raíz virtual es el directorio de trabajo del proceso al arrancar el intérprete, que puede ser distinto del directorio del ejecutable o script.
+- `CD ".."` sube un nivel en el árbol virtual; si ya está en la raíz, permanece en ella.
 - `CD "/"` vuelve a la raíz virtual.
+- Se siguen los alias de directorio explícitos (enlaces simbólicos o junctions) bajo la raíz virtual, incluidos los destinos físicamente externos. `..` recorre el árbol virtual, no el padre físico del destino de un enlace.
+- El árbol virtual ayuda a evitar errores accidentales de rutas. No es un sandbox de seguridad: el acceso a los ficheros sigue dependiendo de los permisos del usuario en el sistema operativo.
 - Las rutas con `/` al inicio se interpretan desde la raíz virtual; el resto, desde el directorio virtual actual.
 - `CD` solo cambia el directorio virtual actual visible para el usuario. `LOAD`, `RUN` y `CHAIN` no hacen ningún `CD` implícito.
 - En este repositorio, los ejemplos incluidos están en `samples/`, sus PNG de apoyo en `samples/assets/`.
@@ -1204,16 +1348,20 @@ Notas sobre CD
 + LOAD "prog.bas"            Solo en modo inmediato
 + SAVE "prog.bas"            Solo en modo inmediato
 + RUN "prog.bas"             Carga y ejecuta el fichero con arranque “limpio” (variables y pilas se reinician)
-+ CHAIN "prog.bas" [,línea]  Sustituye el programa actual con el indicado
++ CHAIN "prog.bas" [,línea]  Sustituye el programa actual y lo ejecuta
 + MERGE "prog.bas"           Combina el programa actual con el indicado
 + CHAIN MERGE "prog.bas" [,línea] [,DELETE línea-línea]
-                             Igual que MERGE pero borrando el rango de líneas y con salto a línea opcional
+                             Combina y ejecuta el código, con rango DELETE y línea inicial opcionales
 
 Notas
-- CHAIN, CHAIN MERGE y MERGE no borran las variables ni las funciones `DEF FN` ya cargadas.
+- `CHAIN` y `CHAIN MERGE` arrancan el programa resultante, también desde el modo inmediato y sin necesitar un `STOP` previo. Empiezan en la línea indicada o en la primera línea del programa. Conservan variables, arrays y canales de fichero abiertos con sus posiciones, pero reinician las pilas de control, los manejadores de errores, los temporizadores y los manejadores de ratón, e invalidan la continuación anterior con `CONT`.
+- `MERGE` combina el código sin arrancarlo. Si se ejecuta dentro del programa, continúa tras la instrucción y conserva el control activo, los manejadores y los canales abiertos. Una modificación correcta del código desde el modo inmediato invalida una continuación pendiente.
+- El puntero de `DATA` vuelve al comienzo de los datos del programa resultante. `CHAIN` sustituye los datos anteriores; `MERGE` y `CHAIN MERGE` usan los datos del código combinado. En `CHAIN MERGE`, `DELETE` se aplica antes de incorporar las líneas del fichero.
+- Las definiciones de rutinas pertenecen al programa almacenado actual: `CHAIN` las sustituye por las del nuevo programa, mientras que `MERGE` y `CHAIN MERGE` las reconstruyen a partir del código combinado. Se permite reemplazar una definición en la misma línea; dos definiciones de la misma rutina en líneas distintas producen el error 63.
+- Antes de modificar el texto almacenado, incluido un rango `DELETE`, se comprueba que el fichero existe, contiene UTF-8 válido y que sus líneas físicas no vacías tienen formato de línea de programa. Si falla esta lectura o validación, se conservan el programa y una continuación pendiente. Los errores semánticos del código resultante o una línea de entrada inexistente o protegida pueden dejar ese código cargado y editable; no implican restaurar automáticamente el programa anterior.
 - Nombres de fichero: comillas obligatorias; se admiten rutas relativas al directorio virtual actual y rutas absolutas virtuales con `/`.
 - Extensión: si falta en `SAVE/LOAD/CHAIN/MERGE`, se añade `.bas`; cualquier otra extensión da error.
-- Las rutas nunca pueden salir de la raíz virtual desde la que se lanzó el intérprete.
+- Las rutas de programa usan el árbol virtual lógico descrito en 9.3: `..` se limita en su raíz y se rechazan las rutas absolutas del sistema y las UNC. OPEN de ficheros de datos produce el error 26 si `..` intenta subir por encima de la raíz virtual (sección 5.2).
 - Cuando cargas un programa con `LOAD`, `RUN "fichero"` o `CHAIN`, AVL BASIC recuerda el directorio de ese fichero como “directorio del programa”.
 - Ese directorio del programa solo sirve para resolver rutas relativas usadas desde dentro del programa, por ejemplo en `BLOAD/BSAVE` y en `CHAIN/MERGE` ejecutados por el propio programa. No modifica el `CD` actual.
 - `MERGE` y `CHAIN MERGE` no cambian el directorio del programa ya asociado.
@@ -1239,6 +1387,10 @@ Cadenas
 + BIN$ | HEX$ | DEC$
 + UPPER$ | LOWER$ 
 + SPACE$ | STRING$ | TRIM$
+
+Ficheros de datos
++ EOF(channel)
+  EOF(canal) devuelve -1 al final de un canal INPUT abierto y 0 en otro caso; ver 5.2.
 
 Arrays
 + LBOUND(array[,dimensión]) | UBOUND(array[,dimensión])
@@ -1332,6 +1484,34 @@ Interrupciones
 
 11. Funciones y subrutinas definidas por usuario
 
+`DEF FN` (de una línea o multilinea) y `DEF SUB` son declaraciones del nivel
+superior del programa almacenado. Todas las rutinas se registran antes de ejecutar
+la primera instrucción, incluidas las definiciones situadas después de `END`, por
+lo que las llamadas pueden preceder a sus definiciones. Alcanzar una definición
+durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
+
+- Cada rutina solo puede definirse una vez en el programa. Una segunda definición
+  de la misma rutina produce el error 63 (`Definición de rutina duplicada`) en esa
+  segunda definición.
+  Funciones y subrutinas tienen nombres separados: `DEF FNFOO` y `DEF SUB FOO`
+  pueden coexistir.
+- Las definiciones dentro de `IF` (en línea o multilinea), `FOR` o `WHILE` producen
+  el error 64, aunque la rama o el bucle nunca fueran a ejecutarse. Las definiciones
+  anidadas dentro de otra función o subrutina conservan los errores 47 y 54,
+  respectivamente.
+- Esta comprobación se realiza antes de ejecutar el programa y valida la estructura
+  de las definiciones. Las expresiones de las funciones y los límites de arrays
+  `LOCAL` solo se evalúan al llamar a la rutina.
+- El programa principal puede aparecer primero y terminar con `END`, seguido de
+  sus rutinas. `samples/routines.bas` muestra las tres formas de definición.
+- Las definiciones se pueden editar o eliminar; el catálogo se reconstruye a partir
+  del código actual antes de ejecutar. `CONT` reutiliza el catálogo del programa
+  detenido; editar el programa almacenado invalida `CONT` como de costumbre.
+- `DEF FN` de una línea también está disponible en modo inmediato y debe ser única
+  en la sesión, incluidas las definiciones almacenadas. `CLEAR` y un `RUN` limpio
+  descartan las definiciones inmediatas; las declaraciones del programa almacenado
+  siguen disponibles.
+
 + DEF FNname(arg,…)=expr (una sola línea).
 + DEF FNname(arg,...) (bloque multilinea).
   - Todos los parámetros de `DEF FN` son locales y se pasan por valor; en las funciones multilinea los arrays se copian localmente, y en las funciones de una sola línea no se admiten arrays como argumentos.
@@ -1350,15 +1530,15 @@ Interrupciones
   - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
-  - Dentro del cuerpo no se permiten DEF FN anidados ni comandos de control inmediato (ON ERROR, RESUME, CHAIN, MERGE, AFTER, EVERY, DI, EI).
-  - Si la función ya ha sido definida, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la función desde fuera: el intérprete lo rechaza con `Invalid target line`.
-  - Si el salto intenta entrar en esas líneas antes de ejecutar la línea `DEF FN`, el intérprete todavía no sabe que pertenecen al cuerpo de una función. En ese caso no puede aplicar esa protección específica, y la primera línea alcanzada se interpreta como una sentencia normal. Por ejemplo, saltar a `FNF=X` antes de ejecutar `DEF FNF(X)` acaba dando `Syntax error`.
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
+  - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la función desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
 
 Ejemplo de definición y uso
-10 DEF FNCIRC(Radio)
-20 LET FNCIRC = 2 * PI * Radio
-30 FNEND
-40 PRINT FNCIRC(5) : REM -> 31.4159
+10 PRINT FNCIRC(5) : REM -> 31.4159
+20 END
+100 DEF FNCIRC(Radio)
+110 LET FNCIRC = 2 * PI * Radio
+120 FNEND
 
 Función que devuelve texto
 10 DEF FNBIENVENIDA$(Nombre$)
@@ -1411,7 +1591,7 @@ Subrutinas multilinea
   - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
   - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en si misma.
   - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
-  - Si la subrutina ya ha sido definida, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la subrutina desde fuera: el intérprete lo rechaza con `Invalid target line`.
+  - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la subrutina desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
   - `ON ERROR`, `RESUME NEXT` y `TRON` funcionan dentro de `CALL` igual que en las funciones multilinea, con las mismas restricciones de salto.
 
 Ejemplo de subrutina
@@ -1455,4 +1635,5 @@ Operadores lógicos (bit a bit)
 - `AND`, `OR`, `XOR` y `NOT` operan a nivel de bit sobre enteros.
 - Antes de aplicar los operadores lógicos, los operandos numéricos se redondean con `ROUND` de “medio hacia afuera” (away‑from‑zero). Ej.: `23.8 AND 1e3` → 8; `3.4 XOR 2.6` → 0.
 - Precedencia: las operaciones aritméticas y comparaciones se evalúan antes que los operadores lógicos; dentro de los lógicos: `NOT` > `AND` > `XOR` > `OR` (asociación por la izquierda). Ej.: `45 XOR 123 AND 145` → 60; `NOT 5=2` → `-1`.
-- Verdadero/Falso: las comparaciones y resultados lógicos se representan como `-1` (cierto) y `0` (falso). Ej.: `PRINT 7=7` → `-1`; `PRINT NOT 0` → `-1`; `PRINT NOT -1` → `0`.
+- Las comparaciones devuelven `-1` (cierto) o `0` (falso). IF y WHILE consideran falso el `0` y verdadero cualquier otro valor numérico.
+- AND, OR, XOR y NOT operan por bits y pueden producir otros enteros: `NOT 1` es `-2` (cierto), mientras que `NOT -1` es `0` (falso). Para invertir el valor de verdad de cualquier expresión numérica, usa `expresión=0` o `NOT(expresión<>0)`.

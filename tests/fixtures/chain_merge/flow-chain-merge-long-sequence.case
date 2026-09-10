@@ -1,0 +1,9 @@
+[commands]
+CHAIN MERGE "child.bas",200
+[output]
+DONE 400
+[input child.bas]
+200 A=A+1
+210 IF A<400 THEN CHAIN MERGE "child.bas",200
+220 PRINT "DONE";A
+230 END

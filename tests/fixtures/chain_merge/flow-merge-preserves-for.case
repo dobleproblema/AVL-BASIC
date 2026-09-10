@@ -1,0 +1,12 @@
+[commands]
+10 FOR I=1 TO 2
+20 IF I=1 THEN MERGE "new.bas"
+30 PRINT "I=";I
+40 NEXT I
+50 END
+RUN
+[output]
+I= 1
+I= 2
+[input new.bas]
+25 REM inserted within the loop

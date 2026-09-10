@@ -1,0 +1,15 @@
+[commands]
+10 A=7
+20 STOP
+30 PRINT "RESUMED";A
+40 END
+RUN
+CHAIN MERGE "bad.bas",200,DELETE 10-40
+CONT
+[output]
+Line 20. Program stopped.
+Invalid line format.
+RESUMED 7
+[input bad.bas]
+200 PRINT "WRONG"
+not a numbered line

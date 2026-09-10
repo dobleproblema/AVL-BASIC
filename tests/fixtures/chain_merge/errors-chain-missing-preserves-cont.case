@@ -1,0 +1,12 @@
+[commands]
+10 A=7
+20 STOP
+30 PRINT "RESUMED";A
+40 END
+RUN
+CHAIN "bad.bas"
+CONT
+[output]
+Line 20. Program stopped.
+File not found.
+RESUMED 7

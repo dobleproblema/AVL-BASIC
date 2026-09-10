@@ -1,0 +1,10 @@
+[commands]
+CHAIN MERGE "child.bas",310
+NEW
+[output]
+Line 310. Invalid target line.
+[input child.bas]
+200 END
+300 DEF SUB WORK
+310 PRINT "WRONG"
+320 SUBEND

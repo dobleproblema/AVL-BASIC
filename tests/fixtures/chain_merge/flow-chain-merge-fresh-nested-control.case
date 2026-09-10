@@ -1,0 +1,15 @@
+[commands]
+10 A=7
+20 FOR I=1 TO 2
+30 WHILE I<3
+40 IF 1 THEN
+50 CHAIN MERGE "child.bas",200
+60 ENDIF
+70 WEND
+80 NEXT I
+90 END
+RUN
+[output]
+FRESH 7
+[input child.bas]
+200 PRINT "FRESH";A

@@ -1,0 +1,20 @@
+[commands]
+10 READ A$
+20 PRINT A$
+30 MERGE "part"
+40 READ B$,C$
+50 PRINT B$;"|";C$
+60 RESTORE 300
+70 READ D$
+80 PRINT D$
+90 END
+100 DATA "source-one"
+300 DATA "retained"
+RUN
+[output]
+source-one
+merged-one|merged-two
+retained
+[input part.bas]
+100 DATA "merged-one"
+200 DATA "merged-two"

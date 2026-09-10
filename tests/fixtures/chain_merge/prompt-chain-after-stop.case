@@ -1,0 +1,16 @@
+[commands]
+10 A=7
+20 IF 1 THEN
+30 STOP
+40 ENDIF
+50 END
+RUN
+CHAIN "child.bas",200
+CONT
+[output]
+Line 30. Program stopped.
+FRESH 7
+There is no stopped program to continue.
+[input child.bas]
+200 PRINT "FRESH";A
+210 END

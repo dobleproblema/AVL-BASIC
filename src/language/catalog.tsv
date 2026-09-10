@@ -17,6 +17,11 @@ COL
 BASE
 USING
 INPUT
+OPEN
+OUTPUT
+APPEND
+AS
+WRITE
 GINPUT
 LINE
 RANDOMIZE
@@ -194,6 +199,15 @@ statement	both	SUBEND		SUBEND	-	Ends a multiline DEF SUB definition.	DEF SUB,EXI
 statement	both	EXIT SUB	SUBEXIT	EXIT SUB || SUBEXIT	-	Leaves the current DEF SUB subroutine early.	DEF SUB,SUBEND	-
 statement	both	LOCAL		LOCAL name[(bound1[,bound2...])][,name...]	name: Local scalar or array; bound1: Inclusive upper bound; bound2: Additional bounds	Declares local storage at the start of a multiline routine.	DEF FN,DEF SUB	-
 
+# Sequential data files
+statement	both	OPEN		OPEN filename$ FOR INPUT|OUTPUT|APPEND AS #channel	filename$: Data-file path; channel: Integer from 1 to 255	Opens a UTF-8 data file for reading, replacing, or appending. An occupied channel or conflicting open path is rejected.	CLOSE,PRINT #,WRITE,INPUT #,LINE INPUT #,EOF	-
+statement	both	CLOSE		CLOSE [#channel[,#channel...]]	channel: Open data-file channel	Closes the listed data files, or all data files when no channels are given.	OPEN	-
+statement	both	PRINT #		PRINT #channel, [item[;|,item...]] || PRINT #channel, USING format$; item[;|,item...]	channel: OUTPUT or APPEND channel; item: Expression or SPC or TAB item; format$: Numeric format mask	Writes formatted text using the channel's own print column. A trailing semicolon or comma suppresses the newline.	OPEN,PRINT,PRINT USING,WRITE	-
+statement	both	WRITE	WRITE #	WRITE #channel[,expression...]	channel: OUTPUT or APPEND channel; expression: String or finite number	Writes one CSV record with quoted strings, doubled embedded quotes, and round-trip decimal numbers.	OPEN,INPUT #,PRINT #	-
+statement	both	INPUT #		INPUT #channel, target1[,target2...]	channel: INPUT channel; target1: Variable or array element; target2: Additional targets	Reads one CSV record with exactly one field per target. Numeric fields are decimal data, not BASIC expressions.	OPEN,WRITE,LINE INPUT #,EOF	-
+statement	both	LINE INPUT #		LINE INPUT #channel, target$	channel: INPUT channel; target$: String variable or array element	Reads one physical text line without its LF, CRLF, or CR terminator.	OPEN,INPUT #,EOF	-
+function	expression	EOF		EOF(channel)	channel: Open INPUT channel, from 1 to 255	Returns -1 at physical end of file and 0 otherwise, without consuming input.	OPEN,INPUT #,LINE INPUT #	builtin
+
 # Console and graphics text
 statement	both	PRINT	?	PRINT [item[;|,item...]] || ? [item[;|,item...]]	item: Expression or print-only SPC or TAB item	Prints values to the console.	PRINT USING,ZONE,INPUT	-
 statement	both	PRINT USING		PRINT USING format$; item[;|,item...]	format$: Numeric format mask; item: Value to format or print	Prints values using a numeric format mask.	PRINT,MAT PRINT USING,GPRINT USING	-
@@ -271,7 +285,7 @@ statement	both	TRON		TRON	-	Enables program line tracing.	TROFF	-
 statement	both	TROFF		TROFF	-	Disables program line tracing.	TRON	-
 statement	both	DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD	-
 statement	both	RAD		RAD	-	Selects radians for trigonometry and drawing angles.	DEG	-
-statement	immediate	DEBUG		DEBUG	-	Opens the visual debugger and pauses before the first statement.	EDIT,RUN	-
+statement	immediate	DEBUG		DEBUG	-	Opens the full-screen debugger and pauses before the first statement.	EDIT,RUN	-
 statement	immediate	RUN		RUN || RUN line || RUN "filename"	line: Optional starting line; filename: Optional BASIC program path	Starts the loaded program or loads and runs a program file.	CONT,LOAD	-
 statement	immediate	LIST		LIST [range]	range: Optional line or line range	Displays stored program lines.	EDIT,DELETE	-
 statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	DEBUG,LIST,RENUM	-
@@ -466,3 +480,11 @@ MatIdnDimension	53	MAT IDN requires a two-dimensional square matrix.	MAT IDN req
 SubroutineForbidden	54	Instruction not allowed inside a subroutine.	Instrucción no permitida dentro de una subrutina.	SUBROUTINE_FORBIDDEN
 SubEndWithoutDef	55	Malformed subroutine.	Subrutina mal formada.	SUBEND_WITHOUT_DEF
 LocalNotAtStart	56	LOCAL must appear in the initial block of a function or subroutine.	LOCAL debe aparecer en el bloque inicial de una función o subrutina.	LOCAL_NOT_AT_START
+FileAlreadyOpen	57	File already open.	Archivo ya abierto.	FILE_ALREADY_OPEN
+FileNotOpen	58	File is not open.	El archivo no está abierto.	FILE_NOT_OPEN
+BadFileMode	59	Bad file mode.	Modo de archivo incorrecto.	BAD_FILE_MODE
+InputPastEnd	60	Input past end of file.	Lectura después del final del archivo.	INPUT_PAST_END
+FileIoError	61	File I/O error.	Error de entrada/salida de archivo.	FILE_IO_ERROR
+InvalidFileData	62	Invalid file data.	Datos de archivo no válidos.	INVALID_FILE_DATA
+DuplicateRoutineDefinition	63	Duplicate routine definition.	Definición de rutina duplicada.	DUPLICATE_ROUTINE_DEFINITION
+RoutineDefinitionNotAtTopLevel	64	Routine definitions must appear at the top level.	Las definiciones de rutinas deben aparecer en el nivel superior.	ROUTINE_DEFINITION_NOT_AT_TOP_LEVEL

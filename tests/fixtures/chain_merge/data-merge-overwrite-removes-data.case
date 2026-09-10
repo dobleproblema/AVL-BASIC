@@ -1,0 +1,14 @@
+[commands]
+10 MERGE "part"
+20 READ A$
+30 PRINT A$
+40 RESTORE 100
+50 END
+100 DATA "removed"
+200 DATA "kept"
+RUN
+[output]
+kept
+Line 40. The line has no DATA for RESTORE.
+[input part.bas]
+100 REM Former DATA line

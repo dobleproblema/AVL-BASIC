@@ -1,0 +1,16 @@
+[commands]
+10 END
+100 DEF FNF(X)=X+1
+OPEN "out" FOR OUTPUT AS #1
+MERGE "new.bas"
+DELETE 200-200
+WRITE #1,"kept"
+CLOSE #1
+PRINT "OK"
+[output]
+Line 200. Duplicate routine definition.
+OK
+[input new.bas]
+200 DEF FNF(X)=X+2
+[expect out]
+"kept"
