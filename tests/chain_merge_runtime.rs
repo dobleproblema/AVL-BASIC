@@ -327,3 +327,25 @@ fn immediate_chain_rejects_routine_body_entry_at_the_requested_line() {
         );
     }
 }
+
+#[test]
+fn cont_after_stop_at_end_of_deleted_merged_line_runs_its_inserted_successor() {
+    for debug in [false, true] {
+        let (_directory, mut interpreter) = setup(
+            "10 MERGE \"child\":STOP\n20 PRINT \"DONE\":END",
+            "10\n15 PRINT \"MID\"\n",
+        );
+        if debug {
+            interpreter.set_debugger(Debugger::scripted([]));
+        }
+
+        assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::Stop);
+        assert_eq!(
+            interpreter.take_output(),
+            "Line 10. Program stopped.\n",
+            "debugger={debug}"
+        );
+        interpreter.process_immediate("CONT").unwrap();
+        assert_eq!(interpreter.take_output(), "MID\nDONE\n", "debugger={debug}");
+    }
+}

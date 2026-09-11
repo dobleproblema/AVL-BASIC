@@ -115,6 +115,8 @@ Whenever you enter a line, the console automatically highlights the syntax with 
 
 It also automatically normalizes what you type both in program lines and in immediate mode: it uppercases keywords, inserts required spaces, closes missing quotes in string commands, and gives numbers a canonical format. Indentation in the code is preserved.
 
+Suggested quotes and the `.bas` extension become editable characters in the input buffer. You can move through them or delete them; redrawing the prompt or pressing Enter does not restore deleted characters. Explicit file extensions are preserved.
+
 Although uppercase/lowercase is not significant, variables keep the style used the first time that variable appeared throughout the whole program. If you want to change the style of a variable, you must edit, with `EDIT`, any program line that contains it and retype it using the new style.
 
 2. Essential syntax
@@ -1222,6 +1224,7 @@ Complete table of error codes
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
+- In immediate mode they can be combined with `:`, for example `CD "samples":CAT` or `LOAD "flower.bas":LIST:RUN`. They execute in order, and an error stops the rest of the sequence.
 
 9.1 Commands forbidden in immediate mode:
 

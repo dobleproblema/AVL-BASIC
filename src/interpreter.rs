@@ -2541,7 +2541,6 @@ impl Interpreter {
     }
 
     fn process_immediate_inner(&mut self, line: &str) -> BasicResult<()> {
-        let help_immediate = console::is_help_immediate_line(line);
         let normalized = console::normalize_code(line);
         let trimmed = normalized.trim();
         if trimmed.is_empty() {
@@ -2576,66 +2575,7 @@ impl Interpreter {
             return Ok(());
         }
         let upper = trimmed.to_ascii_uppercase();
-        if matches!(upper.as_str(), "EXIT" | "QUIT" | "SYSTEM") {
-            return self.data_files.close_all();
-        }
-        if upper == "NEW" {
-            self.program.clear();
-            self.program_dir = None;
-            self.clear_program_breakpoints();
-            self.clear_command_caches();
-            self.clear_runtime()?;
-            self.identifier_case.clear();
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "LIST") {
-            self.output.push_str(&self.render_program_list_range(arg)?);
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "FILES") {
-            self.execute_files(arg)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "CAT") {
-            self.execute_files(arg)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "CD") {
-            self.execute_cd(arg)?;
-            return Ok(());
-        }
-        if !is_assignment(trimmed) {
-            if help_immediate {
-                if let Some(arg) = immediate_arg(trimmed, &upper, "HELP") {
-                    self.execute_help(arg)?;
-                    return Ok(());
-                }
-            }
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "SAVE") {
-            let path = self.resolve_bas_literal_arg(arg)?;
-            self.save_file(&path)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "LOAD") {
-            let path = self.resolve_bas_literal_arg(arg)?;
-            self.load_file(&path)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "RUN") {
-            return self.execute_immediate_run(arg);
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "CONT") {
-            if !arg.trim().is_empty() {
-                return Err(self.err(ErrorCode::Syntax));
-            }
-            let cursor = self
-                .stopped_cursor
-                .clone()
-                .ok_or_else(|| BasicError::new(ErrorCode::NoStoppedProgram))?;
-            self.stopped_cursor = None;
-            let result = self.run_from(cursor);
-            self.finish_debug_continuation(result)?;
+        if split_commands(trimmed).len() == 1 && self.execute_immediate_special(trimmed)? {
             return Ok(());
         }
         let commands = split_commands(trimmed);
@@ -2645,22 +2585,6 @@ impl Interpreter {
                 self.execute_immediate_goto(arg)?;
                 return Ok(());
             }
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "RENUM") {
-            self.execute_renum(arg)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "DELETE") {
-            self.execute_delete_lines(arg)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "EDIT") {
-            self.execute_edit(arg)?;
-            return Ok(());
-        }
-        if let Some(arg) = immediate_arg(trimmed, &upper, "DEBUG") {
-            self.execute_debug(arg)?;
-            return Ok(());
         }
         self.record_identifier_case_from_code(trimmed, false);
         if upper != "CLEAR" {
@@ -2698,6 +2622,94 @@ impl Interpreter {
             self.pending_if_branch = saved_pending_if;
         }
         result
+    }
+
+    fn execute_immediate_special(&mut self, source: &str) -> BasicResult<bool> {
+        let help_immediate = console::is_help_immediate_line(source);
+        let normalized = console::normalize_code(source);
+        let trimmed = normalized.trim();
+        let upper = trimmed.to_ascii_uppercase();
+        if matches!(upper.as_str(), "EXIT" | "QUIT" | "SYSTEM") {
+            self.data_files.close_all()?;
+            return Ok(true);
+        }
+        if upper == "NEW" {
+            self.program.clear();
+            self.program_dir = None;
+            self.clear_program_breakpoints();
+            self.clear_command_caches();
+            self.clear_runtime()?;
+            self.identifier_case.clear();
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "LIST") {
+            self.output.push_str(&self.render_program_list_range(arg)?);
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "FILES") {
+            self.execute_files(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "CAT") {
+            self.execute_files(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "CD") {
+            self.execute_cd(arg)?;
+            return Ok(true);
+        }
+        if !is_assignment(trimmed) {
+            if help_immediate {
+                if let Some(arg) = immediate_arg(trimmed, &upper, "HELP") {
+                    self.execute_help(arg)?;
+                    return Ok(true);
+                }
+            }
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "SAVE") {
+            let path = self.resolve_bas_literal_arg(arg)?;
+            self.save_file(&path)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "LOAD") {
+            let path = self.resolve_bas_literal_arg(arg)?;
+            self.load_file(&path)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "RUN") {
+            self.execute_immediate_run(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "CONT") {
+            if !arg.trim().is_empty() {
+                return Err(self.err(ErrorCode::Syntax));
+            }
+            let cursor = self
+                .stopped_cursor
+                .clone()
+                .ok_or_else(|| BasicError::new(ErrorCode::NoStoppedProgram))?;
+            self.stopped_cursor = None;
+            let result = self.run_from(cursor);
+            self.finish_debug_continuation(result)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "RENUM") {
+            self.execute_renum(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "DELETE") {
+            self.execute_delete_lines(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "EDIT") {
+            self.execute_edit(arg)?;
+            return Ok(true);
+        }
+        if let Some(arg) = immediate_arg(trimmed, &upper, "DEBUG") {
+            self.execute_debug(arg)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn prepare_immediate_commands(&mut self, source: &str) -> BasicResult<Rc<[Rc<CachedCommand>]>> {
@@ -3478,8 +3490,19 @@ impl Interpreter {
     fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();
+        #[cfg(windows)]
+        let mut refresh_compiled_lines = false;
         let mut runtime_poll_skip = 0u8;
         'run_loop: loop {
+            #[cfg(windows)]
+            {
+                // A MERGE can replace the catalog while the current line still
+                // borrows its original commands. Refresh after that borrow ends.
+                if refresh_compiled_lines {
+                    compiled_lines = self.compiled_line_cache.clone();
+                    refresh_compiled_lines = false;
+                }
+            }
             let returning = self.return_line_plan.take();
             if cursor.line_idx >= lines.len() && returning.is_none() {
                 break;
@@ -3487,15 +3510,39 @@ impl Interpreter {
             let line_no = returning
                 .as_ref()
                 .map_or_else(|| lines[cursor.line_idx], |plan| plan.line);
+            #[cfg(windows)]
+            let line_commands = returning.as_ref().map_or_else(
+                || compiled_lines[cursor.line_idx].as_ref(),
+                |plan| plan.commands.as_ref(),
+            );
+            #[cfg(not(windows))]
             let line_commands = returning.as_ref().map_or_else(
                 || compiled_lines[cursor.line_idx].clone(),
                 |plan| plan.commands.clone(),
             );
             let commands_len = line_commands.len();
             let mut merged_line = returning.is_some();
-            self.active_line_plan = returning;
+            #[cfg(windows)]
+            {
+                self.active_line_plan = returning.clone();
+            }
+            #[cfg(not(windows))]
+            {
+                self.active_line_plan = returning;
+            }
             if cursor.cmd_idx >= commands_len {
-                cursor.line_idx = lines.partition_point(|number| *number <= line_no);
+                #[cfg(windows)]
+                {
+                    cursor.line_idx = if merged_line {
+                        lines.partition_point(|number| *number <= line_no)
+                    } else {
+                        cursor.line_idx + 1
+                    };
+                }
+                #[cfg(not(windows))]
+                {
+                    cursor.line_idx = lines.partition_point(|number| *number <= line_no);
+                }
                 cursor.cmd_idx = 0;
                 continue;
             }
@@ -3510,6 +3557,12 @@ impl Interpreter {
                     || console::interrupt_requested();
                 if poll_now {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
+                        #[cfg(windows)]
+                        {
+                            // Polling may run a mouse handler before dispatching
+                            // a timer, so its MERGE must reach the next line too.
+                            refresh_compiled_lines = true;
+                        }
                         continue 'run_loop;
                     }
                     runtime_poll_skip = RUNTIME_POLL_COMMAND_SKIP;
@@ -3532,7 +3585,14 @@ impl Interpreter {
                     cmd_idx: cursor.cmd_idx + 1,
                 };
                 let mut failure = if inline_if {
-                    self.execute_cached_inline_if_fast(&line_commands, &mut cursor)?
+                    #[cfg(windows)]
+                    {
+                        self.execute_cached_inline_if_fast(line_commands, &mut cursor)?
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        self.execute_cached_inline_if_fast(&line_commands, &mut cursor)?
+                    }
                 } else {
                     self.execute_cached_command(command, &mut cursor, &[])
                         .err()
@@ -3551,7 +3611,14 @@ impl Interpreter {
                         failure.next.line_idx = before.line_idx;
                     }
                     lines = self.line_numbers_cache.clone();
-                    compiled_lines = self.compiled_line_cache.clone();
+                    #[cfg(windows)]
+                    {
+                        refresh_compiled_lines = true;
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        compiled_lines = self.compiled_line_cache.clone();
+                    }
                 }
                 if let Some(failure) = failure {
                     let CachedExecutionFailure {
@@ -3596,7 +3663,14 @@ impl Interpreter {
                 if self.restart_run_loop {
                     self.restart_run_loop = false;
                     lines = self.line_numbers_cache.clone();
-                    compiled_lines = self.compiled_line_cache.clone();
+                    #[cfg(windows)]
+                    {
+                        refresh_compiled_lines = true;
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        compiled_lines = self.compiled_line_cache.clone();
+                    }
                     continue 'run_loop;
                 }
                 if self.return_line_plan.is_some() {
@@ -4704,6 +4778,9 @@ impl Interpreter {
         }
         if self.current_line.is_some() && is_immediate_only_command(first, &upper) {
             return Err(self.err(ErrorCode::ImmediateCommand));
+        }
+        if self.current_line.is_none() && self.execute_immediate_special(command)? {
+            return Ok(());
         }
         if starts_keyword(&upper, "PRINT") {
             return self.execute_print(command[5..].trim());

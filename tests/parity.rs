@@ -2962,3 +2962,80 @@ fn tab_normalization_preserves_literal_text() {
         "PRINT 1 ' Mixed\ttext"
     );
 }
+
+#[test]
+fn immediate_management_commands_compose_with_colons() {
+    let temp = tempfile::tempdir().unwrap();
+    let samples = temp.path().join("samples");
+    std::fs::create_dir(&samples).unwrap();
+    std::fs::write(samples.join("demo.bas"), "10 PRINT \"A:B\"\n").unwrap();
+    let mut interp = Interpreter::new();
+    interp.root_dir = temp.path().to_path_buf();
+    interp.current_dir = temp.path().to_path_buf();
+    interp.process_immediate("CD \"samples\" : CAT").unwrap();
+    assert_eq!(interp.current_dir, samples.canonicalize().unwrap());
+    assert_eq!(
+        interp.take_output().split_whitespace().collect::<Vec<_>>(),
+        vec!["demo.bas"]
+    );
+    interp
+        .process_immediate("LOAD \"demo\" : LIST : SAVE \"copy\"")
+        .unwrap();
+    assert_eq!(interp.take_output(), "10 PRINT \"A:B\"\n");
+    assert_eq!(
+        std::fs::read(samples.join("copy.bas")).unwrap(),
+        b"10 PRINT \"A:B\"\n"
+    );
+    interp
+        .process_immediate("PRINT \"BEFORE\" : NEW : LOAD \"copy\" : RUN")
+        .unwrap();
+    assert_eq!(interp.take_output(), "BEFORE\nA:B\n");
+    interp
+        .process_immediate("RENUM 100,10 : LIST : DELETE 100 : LIST")
+        .unwrap();
+    assert_eq!(interp.take_output(), "100 PRINT \"A:B\"\n");
+    interp
+        .process_immediate("IF 0 THEN CD \"missing\" : CAT")
+        .unwrap();
+    assert_eq!(interp.take_output(), "");
+    interp
+        .process_immediate("IF 1 THEN CD \"/\" : PRINT \"OK\"")
+        .unwrap();
+    assert_eq!(interp.current_dir, temp.path().canonicalize().unwrap());
+    assert_eq!(interp.take_output(), "OK\n");
+    let error = interp
+        .process_immediate("CD \"samples\" : LOAD")
+        .unwrap_err();
+    assert_eq!(interp.current_dir, samples.canonicalize().unwrap());
+    let mut single = Interpreter::new();
+    assert_eq!(
+        error.code,
+        single.process_immediate("LOAD").unwrap_err().code
+    );
+}
+
+#[test]
+fn immediate_management_commands_preserve_control_and_stop_on_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut interp = Interpreter::new();
+    interp.root_dir = temp.path().to_path_buf();
+    interp.current_dir = temp.path().to_path_buf();
+    interp.process_immediate("10 STOP").unwrap();
+    interp.process_immediate("20 PRINT 7").unwrap();
+    interp.process_immediate("RUN").unwrap();
+    interp.take_output();
+    interp.process_immediate("LIST 20 : CONT").unwrap();
+    assert_eq!(interp.take_output(), "20 PRINT 7\n 7\n");
+    interp
+        .process_immediate("FOR I=1 TO 2 : LIST 20 : NEXT I")
+        .unwrap();
+    assert_eq!(interp.take_output(), "20 PRINT 7\n20 PRINT 7\n");
+    assert!(interp
+        .process_immediate("CD \"missing\" : PRINT \"BAD\"")
+        .is_err());
+    assert_eq!(interp.take_output(), "");
+    interp
+        .process_immediate("PRINT \"A:B\" : LIST 20 ' : CD \"missing\"")
+        .unwrap();
+    assert_eq!(interp.take_output(), "A:B\n20 PRINT 7\n");
+}

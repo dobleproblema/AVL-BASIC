@@ -4,6 +4,7 @@ Informes en español:
 
 - [Primera ronda: 4 de septiembre de 2026](RESULTS-2026-09-04.md).
 - [Diagnóstico con perfiles y decisión: 5 de septiembre de 2026](PROFILING-2026-09-05.md).
+- [Regresión de MERGE y corrección: 11 de septiembre de 2026](REGRESSION-2026-09-11.md).
 
 Los candidatos de estas rondas fueron descartados y sus parches experimentales
 retirados. Se conservan las mediciones, conclusiones y herramientas de diagnóstico.

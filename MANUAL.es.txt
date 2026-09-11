@@ -115,6 +115,8 @@ Al introducir cualquier línea, la consola resalta automáticamente la sintaxis 
 
 También normaliza automáticamente lo tecleado tanto en líneas de programa como en el modo inmediato: pone las palabras clave en mayúsculas, inserta espacios necesarios, cierra comillas que falten en comandos de cadena y da a los números un formato canónico. Las indentaciones en el código se conservan.
 
+Las comillas y la extensión `.bas` sugeridas pasan a ser caracteres editables del texto de entrada. Puedes desplazarte por ellos o borrarlos; redibujar el prompt o pulsar Intro no recupera los caracteres borrados. Se respetan las extensiones de archivo escritas explícitamente.
+
 Pese a que las mayúsculas/minúsculas no son significativas, las variables conservan el estilo utilizado la primera vez que se usó la variable a lo largo de todo el programa. Si se quiere cambiar el estilo de una variable, hay que editar, con `EDIT`, cualquier línea del programa que la contenga y reescribirla con el nuevo estilo.
 
 2. Sintaxis esencial
@@ -1236,6 +1238,7 @@ Tabla completa de códigos de error
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
+- En modo inmediato pueden combinarse con `:`, por ejemplo `CD "samples":CAT` o `LOAD "flor.bas":LIST:RUN`. Se ejecutan en orden y un error interrumpe el resto de la secuencia.
 
 9.1 Comandos prohibidos en inmediato:
 

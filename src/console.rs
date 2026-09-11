@@ -350,6 +350,7 @@ fn syntax_highlight_with_theme_for_test(line: &str, theme: SyntaxTheme) -> Strin
     highlight_normalized_code(normalize_code(line), true, None, syntax_palette_for(theme))
 }
 
+#[cfg(test)]
 fn syntax_highlight_editing_with_cases(
     line: &str,
     cursor: usize,
@@ -401,6 +402,7 @@ fn highlight_normalized_code(
     out
 }
 
+#[cfg(test)]
 fn normalize_code_for_editing(code: &str, cursor: usize) -> String {
     normalize_code_for_editing_marked(&mark_cursor(code, cursor))
         .chars()
@@ -408,11 +410,18 @@ fn normalize_code_for_editing(code: &str, cursor: usize) -> String {
         .collect()
 }
 
+#[cfg(test)]
 fn normalize_code_for_editing_marked(code: &str) -> String {
+    normalize_editing_assistance(code, true)
+}
+
+fn normalize_editing_assistance(code: &str, complete_extension: bool) -> String {
     let contextual_immediate = contextual_immediate_command_marked(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code_for_editing_marked(main.trim_end());
-    result = add_bas_extension_to_leading_file_command(&result);
+    if complete_extension {
+        result = complete_bas_extension(&result, true);
+    }
     result = format_colon_separators(&result);
     if let Some((spaces, comment)) = comment {
         let spaces = if result.trim().is_empty() {
@@ -502,6 +511,7 @@ where
     let mut cursor = buffer.len();
     let use_history = prefill.is_empty();
     let mut history = HistoryNavigation::default();
+    materialize_prompt_assistance(&mut buffer, &mut cursor);
     enable_raw_mode()?;
     redraw_input_line(prompt, &buffer, cursor, ansi, cases)?;
     loop {
@@ -513,7 +523,7 @@ where
             Event::Key(event) => match event.code {
                 _ if event.kind == KeyEventKind::Release => {}
                 KeyCode::Enter => {
-                    let result = finish_editing_buffer(&mut buffer, &mut cursor);
+                    let result: String = buffer.iter().collect();
                     disable_raw_mode()?;
                     println!();
                     if use_history {
@@ -542,7 +552,7 @@ where
                 }
                 KeyCode::Char(ch) if should_insert_key_char(ch, event.modifiers) => {
                     insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
-                    format_editing_separators_with_cursor(&mut buffer, &mut cursor);
+                    materialize_prompt_assistance(&mut buffer, &mut cursor);
                     history.reset();
                 }
                 KeyCode::Backspace => {
@@ -559,14 +569,7 @@ where
                     }
                 }
                 KeyCode::Left => cursor = cursor.saturating_sub(1),
-                KeyCode::Right => {
-                    if accept_editing_buffer_virtual_quote(&mut buffer, &mut cursor) {
-                        format_editing_separators_with_cursor(&mut buffer, &mut cursor);
-                        history.reset();
-                    } else {
-                        cursor = (cursor + 1).min(buffer.len());
-                    }
-                }
+                KeyCode::Right => cursor = (cursor + 1).min(buffer.len()),
                 KeyCode::Home => cursor = 0,
                 KeyCode::End => cursor = buffer.len(),
                 KeyCode::Up if use_history => {
@@ -4301,9 +4304,9 @@ fn redraw_input_line(
     cases: Option<&HashMap<String, String>>,
 ) -> io::Result<()> {
     let text: String = buffer.iter().collect();
-    let rendered = syntax_highlight_editing_with_cases(&text, cursor, ansi, cases);
+    let rendered = syntax_highlight_raw_with_cases(&text, ansi, cases);
     let prompt_width = visible_width(prompt);
-    let cursor_col = prompt_width + normalized_cursor_position(&text, cursor);
+    let cursor_col = prompt_width + visible_width(&buffer[..cursor].iter().collect::<String>());
     let mut stdout = io::stdout();
     execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
     print!("{prompt}{rendered}");
@@ -4314,6 +4317,7 @@ fn redraw_input_line(
     stdout.flush()
 }
 
+#[cfg(test)]
 fn normalized_cursor_position(text: &str, cursor: usize) -> usize {
     if cursor_after_unfinished_colon_separator(text, cursor) {
         return normalize_code(text).chars().count();
@@ -4342,6 +4346,7 @@ fn mark_cursor(text: &str, cursor: usize) -> String {
     marked
 }
 
+#[cfg(test)]
 fn cursor_after_unfinished_colon_separator(text: &str, cursor: usize) -> bool {
     if cursor == 0 {
         return false;
@@ -4377,7 +4382,33 @@ fn should_insert_key_char(ch: char, modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::ALT) && !ch.is_ascii_alphanumeric()
 }
 
+// Materialize assistance only on insertion, allowing generated characters to be deleted.
+fn materialize_prompt_assistance(buffer: &mut Vec<char>, cursor: &mut usize) {
+    let text: String = buffer.iter().collect();
+    let marked = normalize_editing_assistance(&mark_cursor(&text, *cursor), true);
+    if let Some(position) = marked.chars().position(|ch| ch == CURSOR_MARKER) {
+        *buffer = marked.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
+        *cursor = position.min(buffer.len());
+    }
+}
+
 fn insert_editing_buffer_char(buffer: &mut Vec<char>, cursor: &mut usize, ch: char) {
+    let text: String = buffer.iter().collect();
+    let file_command = ["LOAD ", "SAVE ", "RUN ", "MERGE ", "CHAIN "]
+        .iter()
+        .any(|command| text.trim_start().starts_with(command));
+    if file_command {
+        let tail: String = buffer[*cursor..].iter().collect();
+        // Accept the real suffix as well as the closing quote without duplicating it.
+        if tail.starts_with(".bas\"") && quote_at_cursor_is_closing(buffer, *cursor + 4) {
+            if ch == '.' {
+                buffer.drain(*cursor..*cursor + 4);
+            } else if ch == '"' {
+                *cursor += 5;
+                return;
+            }
+        }
+    }
     if ch == '"' && quote_at_cursor_is_closing(buffer, *cursor) {
         *cursor += 1;
         return;
@@ -4386,6 +4417,7 @@ fn insert_editing_buffer_char(buffer: &mut Vec<char>, cursor: &mut usize, ch: ch
     *cursor += 1;
 }
 
+#[cfg(test)]
 fn accept_editing_buffer_virtual_quote(buffer: &mut Vec<char>, cursor: &mut usize) -> bool {
     if !cursor_on_virtual_closing_quote(buffer, *cursor) {
         return false;
@@ -4395,11 +4427,13 @@ fn accept_editing_buffer_virtual_quote(buffer: &mut Vec<char>, cursor: &mut usiz
     true
 }
 
+#[cfg(test)]
 fn finish_editing_buffer(buffer: &mut Vec<char>, cursor: &mut usize) -> String {
     accept_editing_buffer_virtual_quote(buffer, cursor);
     buffer.iter().collect()
 }
 
+#[cfg(test)]
 fn cursor_on_virtual_closing_quote(line: &[char], cursor: usize) -> bool {
     cursor == line.len() && line.iter().filter(|ch| **ch == '"').count() % 2 == 1
 }
@@ -5291,6 +5325,10 @@ fn highlight_main(
 }
 
 fn add_bas_extension_to_leading_file_command(code: &str) -> String {
+    complete_bas_extension(code, false)
+}
+
+fn complete_bas_extension(code: &str, editing: bool) -> String {
     let trimmed_start = code.trim_start();
     let leading_ws = code.len() - trimmed_start.len();
     let commands = ["CHAIN MERGE", "CHAIN", "MERGE", "LOAD", "SAVE", "RUN"];
@@ -5323,7 +5361,15 @@ fn add_bas_extension_to_leading_file_command(code: &str) -> String {
         let path_end = path_start + relative_end;
         let path = &code[path_start..path_end];
         let path_for_extension = path.replace(CURSOR_MARKER, "");
-        if Path::new(&path_for_extension).extension().is_some() {
+        if (editing
+            && path_for_extension
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or("")
+                .contains('.'))
+            || path_for_extension.to_ascii_lowercase().ends_with(".bas")
+            || Path::new(&path_for_extension).extension().is_some()
+        {
             return code.to_string();
         }
         let mut out = String::new();
@@ -5483,6 +5529,113 @@ fn is_signed_number_start(chars: &[char], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_assistance_respects_edited_quotes_and_extensions() {
+        // Reproduce backspacing the name, with and without its opening quote.
+        for remove_opening in [false, true] {
+            let mut buffer: Vec<char> = "LOAD \"pimachin.bas\"".chars().collect();
+            let mut cursor = 14;
+            let stop = if remove_opening { 5 } else { 6 };
+            while cursor > stop {
+                cursor -= 1;
+                buffer.remove(cursor);
+            }
+            if remove_opening {
+                assert_eq!(buffer.iter().collect::<String>(), "LOAD .bas\"");
+                insert_editing_buffer_char(&mut buffer, &mut cursor, '"');
+                materialize_prompt_assistance(&mut buffer, &mut cursor);
+                assert_eq!(cursor, 6);
+                assert_eq!(buffer.iter().collect::<String>(), "LOAD \".bas\"");
+            } else {
+                cursor += 1;
+                insert_editing_buffer_char(&mut buffer, &mut cursor, 'e');
+                materialize_prompt_assistance(&mut buffer, &mut cursor);
+                assert_eq!(cursor, 8);
+                assert_eq!(buffer.iter().collect::<String>(), "LOAD \".ebas\"");
+            }
+        }
+        for input in ["LOAD \"a.b.c\"", "SAVE \"demo.XXX\"", "LOAD \"demo.BAS\""] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            for ch in input.chars() {
+                insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
+                materialize_prompt_assistance(&mut buffer, &mut cursor);
+            }
+            assert_eq!(buffer.iter().collect::<String>(), input);
+            assert_eq!(cursor, buffer.len());
+        }
+    }
+
+    #[test]
+    fn prompt_assistance_file_names_remain_typeable() {
+        for (input, expected) in [
+            ("LOAD \"demo.bas\"", "LOAD \"demo.bas\""),
+            ("SAVE \"demo\"", "SAVE \"demo.bas\""),
+            ("LOAD \"pimachin.XXX\"", "LOAD \"pimachin.XXX\""),
+            ("SAVE \"samples/demo\"", "SAVE \"samples/demo.bas\""),
+            ("MERGE \"demo\"", "MERGE \"demo.bas\""),
+            ("CHAIN MERGE \"demo\"", "CHAIN MERGE \"demo.bas\""),
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            for ch in input.chars() {
+                insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
+                materialize_prompt_assistance(&mut buffer, &mut cursor);
+            }
+            assert_eq!(buffer.iter().collect::<String>(), expected, "{input}");
+            assert_eq!(cursor, buffer.len(), "{input}");
+        }
+    }
+
+    #[test]
+    fn prompt_assistance_is_real_and_keeps_caret_inside_quotes() {
+        let mut buffer = Vec::new();
+        let mut cursor = 0;
+        for ch in "CD\"samples".chars() {
+            insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
+            materialize_prompt_assistance(&mut buffer, &mut cursor);
+        }
+        assert_eq!(buffer.iter().collect::<String>(), "CD \"samples\"");
+        assert_eq!(cursor, buffer.len() - 1);
+        insert_editing_buffer_char(&mut buffer, &mut cursor, '"');
+        materialize_prompt_assistance(&mut buffer, &mut cursor);
+        assert_eq!(cursor, buffer.len());
+        for ch in " : CAT".chars() {
+            insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
+            materialize_prompt_assistance(&mut buffer, &mut cursor);
+        }
+        assert_eq!(buffer.iter().collect::<String>(), "CD \"samples\" : CAT");
+        buffer.remove(3);
+        assert_eq!(
+            syntax_highlight_raw_with_cases(&buffer.iter().collect::<String>(), false, None),
+            "CD samples\" : CAT"
+        );
+    }
+
+    #[test]
+    fn prompt_assistance_preserves_partial_numbers_and_literal_colons() {
+        for input in [
+            "PRINT 1.25E-3",
+            "PRINT .5",
+            "PRINT \"a:b",
+            "REM a\"b",
+            "PRINT 1 ' a\"b",
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            for ch in input.chars() {
+                insert_editing_buffer_char(&mut buffer, &mut cursor, ch);
+                materialize_prompt_assistance(&mut buffer, &mut cursor);
+            }
+            let expected = if input == "PRINT \"a:b" {
+                "PRINT \"a:b\""
+            } else {
+                input
+            };
+            assert_eq!(buffer.iter().collect::<String>(), expected, "{input}");
+        }
+    }
 
     #[test]
     fn cursor_tracks_inserted_command_space_without_jumping_to_bas_suffix() {
