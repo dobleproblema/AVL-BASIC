@@ -4705,18 +4705,18 @@ impl Interpreter {
         if self.current_line.is_some() && is_immediate_only_command(first, &upper) {
             return Err(self.err(ErrorCode::ImmediateCommand));
         }
-        if upper.starts_with("PRINT") {
+        if starts_keyword(&upper, "PRINT") {
             return self.execute_print(command[5..].trim());
         }
         if let Some(rest) = command.strip_prefix('?') {
             return self.execute_print(rest.trim());
         }
-        if upper.starts_with("LINE INPUT") {
+        if starts_keyword(&upper, "LINE INPUT") {
             return self.execute_line_input(command[10..].trim(), cursor);
         }
         if self.inside_multiline_routine()
-            && (upper.starts_with("ON ERROR")
-                || upper.starts_with("CHAIN MERGE")
+            && (starts_keyword(&upper, "ON ERROR")
+                || starts_keyword(&upper, "CHAIN MERGE")
                 || first == "RESUME"
                 || first == "DEF"
                 || matches!(first, "AFTER" | "EVERY" | "DI" | "EI" | "CHAIN" | "MERGE"))
@@ -4741,15 +4741,15 @@ impl Interpreter {
             "GINPUT" => {
                 self.execute_input_to(command[6..].trim(), cursor, InputDestination::Graphics)
             }
-            "LINE" if upper.starts_with("LINE INPUT") => {
+            "LINE" if starts_keyword(&upper, "LINE INPUT") => {
                 self.execute_line_input(command[10..].trim(), cursor)
             }
             "LET" => self.execute_assignment(command[3..].trim()),
             "IF" => self.execute_if(command, cursor, line_commands),
             "ELSEIF" => self.execute_elseif(command, cursor, line_commands),
             "ELSE" => self.execute_else(cursor),
-            "ON" if upper.starts_with("ON ERROR") => self.execute_on_error(command),
-            "ON" if upper.starts_with("ON MOUSE") => self.execute_on_mouse(command),
+            "ON" if starts_keyword(&upper, "ON ERROR") => self.execute_on_error(command),
+            "ON" if starts_keyword(&upper, "ON MOUSE") => self.execute_on_mouse(command),
             "ON" => self.execute_on(command, cursor),
             "ERROR" => self.execute_error(command[5..].trim()),
             "RESUME" => self.execute_resume(command[6..].trim(), cursor),
@@ -4771,7 +4771,7 @@ impl Interpreter {
             "MAT" => self.execute_mat(command[3..].trim(), cursor),
             "LOCAL" => self.execute_local(),
             "MERGE" => self.execute_merge(command[5..].trim(), cursor),
-            "CHAIN" if upper.starts_with("CHAIN MERGE") => {
+            "CHAIN" if starts_keyword(&upper, "CHAIN MERGE") => {
                 self.execute_chain_merge(command[11..].trim(), cursor)
             }
             "CHAIN" => self.execute_chain(command[5..].trim(), cursor),
@@ -8077,7 +8077,7 @@ impl Interpreter {
             self.error_resume_next = true;
             return Ok(());
         }
-        if upper.starts_with("GOTO") {
+        if starts_keyword(&upper, "GOTO") {
             let target = tail[4..].trim();
             let line = parse_line_number_literal(target)
                 .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
@@ -8547,7 +8547,7 @@ impl Interpreter {
     fn execute_mat(&mut self, args: &str, cursor: &Cursor) -> BasicResult<()> {
         let trimmed = args.trim();
         let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with("BASE") {
+        if starts_keyword(&upper, "BASE") {
             let value = self.eval_number(trimmed[4..].trim())? as i32;
             if value != 0 && value != 1 {
                 return Err(self.err(ErrorCode::InvalidArgument));
@@ -8555,13 +8555,13 @@ impl Interpreter {
             self.mat_base = value;
             return Ok(());
         }
-        if upper.starts_with("PRINT") {
+        if starts_keyword(&upper, "PRINT") {
             return self.execute_mat_print(trimmed[5..].trim());
         }
-        if upper.starts_with("READ") {
+        if starts_keyword(&upper, "READ") {
             return self.execute_mat_read(trimmed[4..].trim());
         }
-        if upper.starts_with("INPUT") {
+        if starts_keyword(&upper, "INPUT") {
             return self.execute_mat_input(trimmed[5..].trim(), cursor);
         }
         if find_assignment_equal(trimmed).is_some() {
@@ -8796,7 +8796,7 @@ impl Interpreter {
     fn execute_mat_print(&mut self, args: &str) -> BasicResult<()> {
         let mut body = args.trim();
         let mut using_format: Option<String> = None;
-        if body.to_ascii_uppercase().starts_with("USING") {
+        if starts_keyword(&body.to_ascii_uppercase(), "USING") {
             let Some((fmt_expr, tail)) = split_first_top_level(body[5..].trim(), ';') else {
                 return Err(self.err(ErrorCode::Syntax));
             };
@@ -11470,12 +11470,12 @@ impl Interpreter {
     fn execute_sprite(&mut self, args: &str) -> BasicResult<()> {
         self.ensure_graphics_window()?;
         let upper = args.to_ascii_uppercase();
-        if upper.starts_with("DEL") {
+        if starts_keyword(&upper, "DEL") {
             let id = self.eval_number(args[3..].trim())? as i32;
             self.graphics.sprite_delete(id);
             return Ok(());
         }
-        if upper.starts_with("MOVE") {
+        if starts_keyword(&upper, "MOVE") {
             let nums = split_arguments(args[4..].trim());
             if nums.len() < 3 {
                 return Err(self.err(ErrorCode::ArgumentMismatch));
@@ -11487,7 +11487,7 @@ impl Interpreter {
             self.graphics.sprite_move(id, x, y, transparent)?;
             return self.refresh_graphics_window();
         }
-        let hittest = upper.starts_with("HITTEST");
+        let hittest = starts_keyword(&upper, "HITTEST");
         let body = if hittest { args[7..].trim() } else { args };
         let parts = split_arguments(body);
         if parts.len() < 3 {
@@ -11707,7 +11707,7 @@ impl Interpreter {
         let text = read_validated_program_text(&path)?;
         for part in parts.iter().skip(2) {
             let trimmed = part.trim();
-            if trimmed.to_ascii_uppercase().starts_with("DELETE") {
+            if starts_keyword(&trimmed.to_ascii_uppercase(), "DELETE") {
                 let range = trimmed[6..].trim();
                 let (start, end) = parse_delete_range(range)?;
                 self.program.delete_range(start, end);
@@ -12026,11 +12026,7 @@ impl Interpreter {
         for line in self.program.line_numbers() {
             if let Some(code) = self.program.get(line) {
                 for command in split_commands(code) {
-                    if command
-                        .trim_start()
-                        .to_ascii_uppercase()
-                        .starts_with("DATA")
-                    {
+                    if starts_keyword(&command.trim_start().to_ascii_uppercase(), "DATA") {
                         self.data_line_starts.entry(line).or_insert(self.data.len());
                         self.data
                             .extend(parse_data_items(command.trim_start()[4..].trim()));
@@ -12429,7 +12425,7 @@ impl Interpreter {
             "FOR" => compile_for_statement(trimmed[3..].trim())
                 .map(|compiled| CachedCommand::For(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
-            "ON" if !upper.starts_with("ON ERROR") => self
+            "ON" if !starts_keyword(&upper, "ON ERROR") => self
                 .compile_cached_on(trimmed)
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "GOTO" => parse_line_number_literal(trimmed[4..].trim())
@@ -17637,6 +17633,14 @@ fn starts_with_line_number(line: &str) -> bool {
 
 fn is_assignment(command: &str) -> bool {
     find_assignment_equal(command).is_some()
+}
+
+fn starts_keyword(text: &str, word: &str) -> bool {
+    text.strip_prefix(word).is_some_and(|rest| {
+        rest.chars()
+            .next()
+            .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_' && ch != '$')
+    })
 }
 
 fn first_word_is(command: &str, word: &str) -> bool {

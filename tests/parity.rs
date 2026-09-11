@@ -2839,3 +2839,126 @@ fn if_then_colon_else_executes_only_selected_branch() {
     );
     assert_eq!(output, " 2  1\n 3  0\n");
 }
+
+#[test]
+fn keyword_prefix_identifiers() {
+    let words: Vec<_> = include_str!("../src/language/catalog.tsv")
+        .split_once("[keywords]")
+        .unwrap()
+        .1
+        .lines()
+        .take_while(|line| !line.starts_with('['))
+        .map(str::trim)
+        .filter(|word| {
+            !word.is_empty()
+                && word.chars().all(|c| c.is_ascii_alphabetic())
+                && !word.starts_with("FN")
+        })
+        .collect();
+    for stored in [false, true] {
+        for upper in [false, true] {
+            for placement in ["prefix", "suffix", "middle", "digit"] {
+                for spaced in [false, true] {
+                    let mut interp = Interpreter::new();
+                    for (i, word) in words.iter().enumerate() {
+                        let name = match placement {
+                            "prefix" => format!("{word}value"),
+                            "suffix" => format!("value{word}"),
+                            "middle" => format!("value{word}x"),
+                            _ => format!("{word}1"),
+                        };
+                        let name = if upper {
+                            name.to_ascii_uppercase()
+                        } else {
+                            name.to_ascii_lowercase()
+                        };
+                        let equals = if spaced { " = " } else { "=" };
+                        for (offset, command) in
+                            [format!("{name}{equals}123"), format!("PRINT {name}")]
+                                .iter()
+                                .enumerate()
+                        {
+                            let command = if stored {
+                                format!("{} {command}", (i * 2 + offset + 1) * 10)
+                            } else {
+                                command.clone()
+                            };
+                            interp
+                                .process_immediate(&command)
+                                .unwrap_or_else(|e| panic!("{command}: {e:?}"));
+                        }
+                    }
+                    if stored {
+                        interp.process_immediate("RUN").unwrap();
+                    }
+                    assert_eq!(
+                        interp.take_output(),
+                        " 123\n".repeat(words.len()),
+                        "stored={stored}, upper={upper}, placement={placement}, spaced={spaced}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn data_prefix_assignment_does_not_add_data() {
+    assert_eq!(
+        run_rust("10 dataCount=10\n20 DATA 42\n30 READ a\n40 PRINT a"),
+        " 42\n"
+    );
+}
+
+#[test]
+fn keyword_boundaries_shared_cases() {
+    let fixture = include_str!("fixtures/keyword_boundaries.txt").replace("\r\n", "\n");
+    for case in fixture.split("\n===\n") {
+        let (name, body) = case.split_once('\n').unwrap();
+        let (program, expected) = body.split_once("\n---\n").unwrap();
+        assert_eq!(run_rust(program), expected, "{name}");
+    }
+}
+
+#[test]
+fn sprite_subcommand_prefix_string_variables() {
+    let output = run_rust(
+        r#"10 SCREEN:CLG
+20 DELimage$="1x1:ff0000":MOVEimage$=DELimage$:HITTESTimage$=DELimage$
+30 SPRITE DELimage$,1,2
+40 SPRITE MOVEimage$,2,2
+50 SPRITE HITTESTimage$,3,2
+60 PRINT TEST(1,2);TEST(2,2);TEST(3,2)"#,
+    );
+    assert_eq!(output, " 16711680  16711680  16711680\n");
+}
+
+#[test]
+fn immediate_tab_separated_statements() {
+    let mut interp = Interpreter::new();
+    for command in [
+        "printa\t=\t8",
+        "IF\tprinta=8\tTHEN\tPRINT\tprinta",
+        "FOR\ti=1\tTO\t2 : PRINT\ti : NEXT\ti",
+    ] {
+        interp.process_immediate(command).unwrap();
+    }
+    assert_eq!(interp.take_output(), " 8\n 1\n 2\n");
+}
+
+#[test]
+fn tab_normalization_preserves_literal_text() {
+    assert_eq!(console::normalize_code("print\t\"A\tB\""), "PRINT \"A\tB\"");
+    assert_eq!(
+        console::normalize_code("data\t\"A\tB\",mixed\ttext"),
+        "DATA \"A\tB\",mixed\ttext"
+    );
+    assert_eq!(
+        console::normalize_code("rem\tMixed\ttext"),
+        "REM\tMixed\ttext"
+    );
+    assert_eq!(
+        console::normalize_code("print\t1 ' Mixed\ttext"),
+        "PRINT 1 ' Mixed\ttext"
+    );
+}

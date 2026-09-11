@@ -1,0 +1,29 @@
+[commands]
+LOAD "names"
+MERGE "part"
+RENUM 100,10
+SAVE "saved"
+RUN
+NEW
+LOAD "saved"
+LIST
+RUN
+[output]
+5  8  42  84
+100 dataCount=5
+110 valueREM = 8
+120 DATA 42
+130 READ a,b
+140 PRINT dataCount;valueREM;a;b
+150 DATA 84
+160 dataMore=9
+ 5  8  42  84
+[input names.bas]
+10 dataCount=5
+20 valueREM = 8
+30 DATA 42
+40 READ a,b
+50 PRINT dataCount;valueREM;a;b
+[input part.bas]
+60 DATA 84
+70 dataMore=9

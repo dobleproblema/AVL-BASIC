@@ -104,6 +104,7 @@ RUN "g-demo.bas"
 That is: enter `samples`, list the available examples, and run one.
 
 Quick notes
+- Keywords must not split identifiers: `printa=8` assigns to `printa`, and `PRINT printa` prints it. Separate keywords from variable names with a space or tab; `PRINT"hello"` remains valid.
 - Use `RUN` to execute, `STOP` or CTRL+C to pause, and `CONT` to resume.
 - Program lines must start with a line number; working commands (`LIST`, `NEW`, ...) are used in immediate mode, without a line number (see 9).
 - This BASIC is case-insensitive for keywords and names.

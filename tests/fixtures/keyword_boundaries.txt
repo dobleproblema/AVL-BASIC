@@ -1,0 +1,147 @@
+skipped_branches
+10 IF 0 THEN ELSEvalue=1 : PRINT "BAD"
+20 FOR i=2 TO 1
+30 NEXTvalue=3
+40 FORvalue=4
+50 NEXT i
+60 WHILE 0
+70 WENDvalue=5
+80 WHILEvalue=6
+90 WEND
+100 PRINT ELSEvalue;NEXTvalue;FORvalue;WENDvalue;WHILEvalue
+---
+ 0  0  0  0  0
+
+===
+compact_print_and_identifiers
+10 a=7 : printa=8
+20 printa$="OK"
+30 DIM printarr(2)
+40 printarr(1)=9
+50 PRINT"OK"
+60 PRINT printa;a=8;printa$;printarr(1)
+---
+OK
+ 8  0 OK 9
+
+===
+mat_prefix_assignments
+10 DIM printarr(2),readarr(2),inputarr(2),basearr(2)
+20 MAT printarr=CON
+30 MAT readarr=CON
+40 MAT inputarr=CON
+50 MAT basearr=CON
+60 PRINT printarr(1);readarr(1);inputarr(1);basearr(1)
+---
+ 1  1  1  1
+
+===
+conditional_identifier_suffix
+10 XTHEN=1 : XGOTO=1
+20 IF XTHEN THEN PRINT "THEN OK"
+30 IF XGOTO THEN PRINT "GOTO OK"
+---
+THEN OK
+GOTO OK
+
+===
+exit_loop_identifier_prefix
+10 FOR i=1 TO 2
+20 EXIT FOR
+30 NEXTvalue=123
+40 PRINT "BAD"
+50 NEXT i
+60 WHILE 1
+70 EXIT WHILE
+80 WENDvalue=123
+90 PRINT "BAD"
+100 WEND
+110 PRINT NEXTvalue;WENDvalue
+---
+ 0  0
+
+===
+mat_print_using_identifier
+10 DIM USINGvalues(1)
+20 MAT USINGvalues=CON
+30 MAT PRINT USINGvalues
+---
+ 1
+ 1
+
+===
+rem_suffix_preserves_source
+10 valueREM = 123 : PRINT valueREM
+20 valueREM$ = "TEXT" : PRINT valueREM$
+30 DIM arrayREM(1) : arrayREM(1) = 7 : PRINT arrayREM(1)
+40 PRINT valueREM;arrayREM(1)
+---
+ 123
+TEXT
+ 7
+ 123  7
+
+===
+keywords_in_literals_and_comments
+10 PRINT "PRINTa=8 : REM ELSE THEN GOTO"
+20 REM PRINT "BAD" : NEXT : WEND
+30 DATA "IF THEN","REM",42
+40 READ a$,b$,c
+50 PRINT a$;":";b$;":";c ' ELSE PRINT "BAD"
+---
+PRINTa=8 : REM ELSE THEN GOTO
+IF THEN:REM: 42
+
+===
+keyword_identifiers_in_routines
+10 DEF FNdouble(printa)
+20 LOCAL nextValue,remCount
+30 nextValue=printa : remCount=nextValue*2
+40 FNdouble=remCount
+50 FNEND
+60 DEF SUB PRINTresult(elseValue)
+70 LOCAL dataCount
+80 dataCount=elseValue : PRINT dataCount
+90 SUBEND
+100 CALL PRINTresult(FNdouble(7))
+---
+ 14
+
+===
+keyword_identifiers_across_gosub
+10 GOSUBvalue=1 : GOTOvalue=2 : GOSUB 100 : PRINT GOSUBvalue;GOTOvalue
+20 ON 1 GOSUB 100 : PRINT "RETURNED"
+30 END
+100 GOSUBvalue=GOSUBvalue+1 : GOTOvalue=GOTOvalue+2
+110 RETURN
+---
+ 2  4
+RETURNED
+
+===
+keyword_identifiers_in_error_handler
+10 ON ERROR GOTO 100
+20 PRINT 1/0 : PRINT "RESUMED"
+30 PRINT resumeValue;returnValue
+40 END
+100 resumeValue=7 : returnValue=8
+110 RESUME NEXT
+---
+RESUMED
+ 7  8
+
+===
+tab_separated_statements
+10 printa	=	8
+20 IF	printa=8	THEN	PRINT	printa
+30 FOR	i=1	TO	2 : PRINT	i : NEXT	i
+40 DATA	42
+50 READ	a : PRINT	a
+60 REM	PRINT "BAD"
+70 PRINT"OK"
+---
+ 8
+ 1
+ 2
+ 42
+OK

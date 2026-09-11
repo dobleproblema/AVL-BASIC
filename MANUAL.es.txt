@@ -104,6 +104,7 @@ RUN "g-demo.bas"
 Es decir: entra en `samples`, lista los ejemplos disponibles y ejecuta uno.
 
 Notas rápidas
+- Las palabras clave no dividen identificadores: `printa=8` asigna a `printa`, y `PRINT printa` muestra su valor. Separa las instrucciones de los nombres de variable con un espacio o un tabulador; `PRINT"hola"` sigue siendo válido.
 - Usa `RUN` para ejecutar, `STOP` o CTRL+C para pausar y `CONT` para reanudar.
 - Las líneas de programa deben comenzar con un número de línea; los comandos de trabajo (LIST, NEW, …) se usan en modo inmediato, sin número de línea (ver 9).
 - Este BASIC no distingue mayúsculas/minúsculas en palabras clave ni nombres.

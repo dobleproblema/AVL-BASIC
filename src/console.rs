@@ -4762,6 +4762,10 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                 // DATA fields are literal text, including unquoted words. New
                 // keywords must never change stored data (e.g. "días" -> "díAS").
                 out.push_str("DATA");
+                if chars.get(i) == Some(&'\t') {
+                    out.push(' ');
+                    i += 1;
+                }
                 let mut quoted = false;
                 while i < chars.len() {
                     let ch = chars[i];
@@ -4807,7 +4811,8 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
             }
             continue;
         }
-        out.push(ch);
+        // Grammar whitespace is normalized without touching strings, DATA or REM text.
+        out.push(if ch == '\t' { ' ' } else { ch });
         i += 1;
     }
     out
