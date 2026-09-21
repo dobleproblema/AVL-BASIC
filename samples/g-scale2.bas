@@ -1,6 +1,6 @@
 10 SCREEN : CLG : SMALLFONT
 15 SCALE -3,1,-2,2,20
-20 XAXIS 0.5,-3,1,-1
+20 XAXIS 0.5,-3,1,-1 'A negative side draws ticks without labels
 25 YAXIS 0.5,-2,2,-1
 30 RAD
 35 MOVE 0,0 : PENWIDTH 2 : INK 2

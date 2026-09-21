@@ -37,6 +37,7 @@ pub struct Graphics {
     graph_x_axis_range: Option<(f64, f64)>,
     graph_y_axis_range: Option<(f64, f64)>,
     x_axis_label_bboxes: Vec<(i32, i32, i32, i32)>,
+    y_axis_label_bboxes: Vec<(i32, i32, i32, i32)>,
     collision_mode: i32,
     collision_color: Option<u32>,
     hit: bool,
@@ -150,6 +151,7 @@ impl Graphics {
             graph_x_axis_range: None,
             graph_y_axis_range: None,
             x_axis_label_bboxes: Vec::new(),
+            y_axis_label_bboxes: Vec::new(),
             collision_mode: 0,
             collision_color: None,
             hit: false,
@@ -193,6 +195,7 @@ impl Graphics {
         self.cross_at_y = None;
         self.reset_graph_ranges();
         self.x_axis_label_bboxes.clear();
+        self.y_axis_label_bboxes.clear();
         self.collision_mode = 0;
         self.collision_color = None;
         self.hit = false;
@@ -239,6 +242,8 @@ impl Graphics {
     }
 
     pub fn clg(&mut self) {
+        self.x_axis_label_bboxes.clear();
+        self.y_axis_label_bboxes.clear();
         let left = self.w_left.max(0) as usize;
         let right = self.w_right.min(self.width as i32 - 1) as usize;
         let top = self.w_top.max(0) as usize;
@@ -446,6 +451,50 @@ impl Graphics {
         (x1 - x0).unsigned_abs().max(1) as usize
     }
 
+    pub fn x_axis_auto_spacing(&self, xmin: f64, xmax: f64, orientation: i32) -> f64 {
+        if !xmin.is_finite() || !xmax.is_finite() || xmin == xmax {
+            return 1.0;
+        }
+        let (minimum, maximum) = (xmin.min(xmax), xmin.max(xmax));
+        let y = self.cross_at_y.unwrap_or(0.0);
+        let crossing = self.cross_at_x.unwrap_or(0.0);
+        let center = if (minimum..=maximum).contains(&crossing) {
+            crossing
+        } else {
+            minimum
+        };
+        let (start, end) = self.x_axis_canvas_span(y, minimum, maximum, self.scale_border());
+        automatic_axis_spacing(
+            minimum,
+            maximum,
+            center,
+            (i64::from(end) - i64::from(start) + 1).max(1) as f64,
+            orientation != 0,
+        )
+    }
+
+    pub fn y_axis_auto_spacing(&self, ymin: f64, ymax: f64) -> f64 {
+        if !ymin.is_finite() || !ymax.is_finite() || ymin == ymax {
+            return 1.0;
+        }
+        let (minimum, maximum) = (ymin.min(ymax), ymin.max(ymax));
+        let x = self.cross_at_x.unwrap_or(0.0);
+        let crossing = self.cross_at_y.unwrap_or(0.0);
+        let center = if (minimum..=maximum).contains(&crossing) {
+            crossing
+        } else {
+            minimum
+        };
+        let (start, end) = self.y_axis_canvas_span(x, minimum, maximum, self.scale_border());
+        automatic_axis_spacing(
+            minimum,
+            maximum,
+            center,
+            (i64::from(end) - i64::from(start) + 1).max(1) as f64,
+            true,
+        )
+    }
+
     pub fn draw_x_axis(
         &mut self,
         tic: f64,
@@ -467,7 +516,7 @@ impl Graphics {
             || xmin == xmax
             || border < 0
             || border * 2 >= viewport_width
-            || !matches!(orientation, 0 | 1)
+            || !matches!(orientation, 0 | 1 | 2)
             || subdivisions < 1
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
@@ -480,9 +529,13 @@ impl Graphics {
         let mut mask_phase = 0;
         if axis_start <= axis_end {
             for x in axis_start..=axis_end {
+                if self.over_y_axis_label(x, y_pixel) {
+                    continue;
+                }
                 self.draw_masked_axis_pixel(x, y_pixel, &mut mask_phase);
             }
         }
+        self.x_axis_label_bboxes.clear();
         if tic != 0.0 {
             let show_labels = label_side >= 0;
             let labels_below = label_side == 0;
@@ -495,7 +548,7 @@ impl Graphics {
                 axis_end,
                 labels_below,
                 show_labels,
-                orientation == 1,
+                orientation,
                 force_scientific_labels,
                 subdivisions,
                 &mut mask_phase,
@@ -545,6 +598,7 @@ impl Graphics {
                 self.draw_masked_axis_pixel(x_pixel, y, &mut mask_phase);
             }
         }
+        self.y_axis_label_bboxes.clear();
         if tic != 0.0 {
             let show_labels = label_side >= 0;
             let labels_left = label_side == 0;
@@ -1503,100 +1557,169 @@ impl Graphics {
         axis_end: i32,
         labels_below: bool,
         show_labels: bool,
-        labels_vertical: bool,
+        orientation: i32,
         force_scientific_labels: bool,
         subdivisions: i32,
         mask_phase: &mut u8,
     ) {
         const TIC_LENGTH: i32 = 8;
         const SUB_TIC_LENGTH: i32 = 3;
-        let draw_tics_upward = if show_labels { labels_below } else { true };
-        let direction = if draw_tics_upward { -1 } else { 1 };
+        let labels_below = labels_below || !show_labels;
+        let direction = if labels_below { -1 } else { 1 };
         let axis_span = (axis_end - axis_start + 1).max(1) as f64;
-        if axis_ticks_too_dense(
-            xmin,
-            xmax,
-            tic,
-            axis_span,
-            if show_labels { 18.0 } else { 9.0 },
-        ) {
+        let crossing = self.cross_at_x.unwrap_or(0.0);
+        let (center_tick, intersection_pixel) = if crossing >= xmin && crossing <= xmax {
+            (
+                crossing,
+                Some(self.axis_x_tick_pixel(crossing, y, xmin, xmax)),
+            )
+        } else {
+            (xmin, None)
+        };
+        let Some((_, label_tic, label_center)) =
+            axis_label_tick_grid(xmin, xmax, center_tick, tic, axis_span)
+        else {
+            return;
+        };
+        let ticks = build_axis_ticks(xmin, xmax, label_center, label_tic, axis_span);
+        if ticks.is_empty() {
             return;
         }
-        let axis_intersection_x = self.cross_at_x.unwrap_or(0.0);
-        let (center_tick, x_intersection_pixel) =
-            if axis_intersection_x >= xmin && axis_intersection_x <= xmax {
-                (
-                    axis_intersection_x,
-                    Some(self.axis_x_tick_pixel(axis_intersection_x, y, xmin, xmax)),
-                )
+        let labels = format_axis_tick_labels(&ticks, tic, force_scientific_labels);
+        let mut seen = HashSet::new();
+        let mut horizontal = Vec::new();
+        let mut vertical = Vec::new();
+        for (index, (&x, label)) in ticks.iter().zip(labels).enumerate() {
+            let cx = self.axis_x_tick_pixel(x, y, xmin, xmax);
+            let is_intersection = intersection_pixel.is_some_and(|pixel| (cx - pixel).abs() < 2);
+            if !seen.insert(cx) && !is_intersection {
+                continue;
+            }
+            let (_, cy) = self.user_to_canvas(x, y);
+            let width = label.chars().count() as i32 * 8;
+            let label_x = if is_intersection {
+                intersection_pixel.unwrap_or(cx) + 4
             } else {
-                (xmin, None)
+                cx - width / 2
             };
-        if subdivisions > 1 {
-            let sub_tic = tic / subdivisions as f64;
-            if !axis_ticks_too_dense(xmin, xmax, sub_tic, axis_span, 6.0) {
-                let sub_ticks = build_axis_ticks(xmin, xmax, center_tick, sub_tic, axis_span);
-                let main_eps = tic.abs().mul_add(1e-9, 0.0).max(1e-12);
-                let mut seen_sub_tick_pixels = HashSet::new();
-                for x in sub_ticks {
-                    let main_index = ((x - center_tick) / tic).round();
-                    if ((x - center_tick) - main_index * tic).abs() > main_eps {
-                        let cx = self.axis_x_tick_pixel(x, y, xmin, xmax);
-                        if !seen_sub_tick_pixels.insert(cx) {
-                            continue;
-                        }
-                        let (_, cy) = self.user_to_canvas(x, y);
-                        for step in 1..=SUB_TIC_LENGTH {
-                            self.draw_masked_axis_pixel(cx, cy + direction * step, mask_phase);
-                        }
-                    }
+            let label_y = if labels_below { cy + 5 } else { cy - 18 };
+            horizontal.push(AxisLabelCandidate {
+                index,
+                text: label.clone(),
+                bbox: (label_x, label_y, label_x + width - 1, label_y + 15),
+                x: label_x,
+                y: label_y,
+                angle: 0,
+                intersection: is_intersection,
+            });
+            let center_x = if is_intersection {
+                intersection_pixel.unwrap_or(cx) + 10
+            } else {
+                cx
+            };
+            let (pivot_x, pivot_y, angle) = if labels_below {
+                (center_x + 6, cy + 5, -90)
+            } else {
+                (center_x - 6, cy - 5, 90)
+            };
+            let bbox = if labels_below {
+                (pivot_x - 15, pivot_y, pivot_x, pivot_y + width - 1)
+            } else {
+                (pivot_x, pivot_y - width + 1, pivot_x + 15, pivot_y)
+            };
+            vertical.push(AxisLabelCandidate {
+                index,
+                text: label,
+                bbox,
+                x: pivot_x,
+                y: pivot_y,
+                angle,
+                intersection: is_intersection,
+            });
+        }
+        let Some((left, right, top, bottom)) = self.drawable_bounds() else {
+            return;
+        };
+        let bounds = (left, top, right, bottom);
+        let anchor = axis_label_anchor(&ticks, label_center);
+        let (mut horizontal_plan, horizontal_stride) = select_axis_labels(
+            &horizontal,
+            ticks.len(),
+            anchor,
+            bounds,
+            &self.y_axis_label_bboxes,
+        );
+        let (mut vertical_plan, vertical_stride) = select_axis_labels(
+            &vertical,
+            ticks.len(),
+            anchor,
+            bounds,
+            &self.y_axis_label_bboxes,
+        );
+        // A nearby label can cross the perpendicular axis without its tick
+        // being the intersection. Omit only the text, keeping the chosen stride.
+        let perpendicular_x = self.user_to_canvas(crossing, y).0;
+        horizontal_plan
+            .retain(|label| !(label.bbox.0 <= perpendicular_x && perpendicular_x <= label.bbox.2));
+        vertical_plan
+            .retain(|label| !(label.bbox.0 <= perpendicular_x && perpendicular_x <= label.bbox.2));
+        let use_vertical = orientation == 1
+            || (orientation == 2
+                && vertical_plan.len() > horizontal_plan.len()
+                && vertical_plan.len() >= (horizontal_plan.len() * 2).saturating_sub(2));
+        let (plan, stride) = if use_vertical {
+            (vertical_plan, vertical_stride)
+        } else {
+            (horizontal_plan, horizontal_stride)
+        };
+        let effective_tic = label_tic * stride as f64;
+        let effective_center = ticks[anchor];
+        let mut seen_subticks = HashSet::new();
+        for x in axis_sub_ticks(
+            xmin,
+            xmax,
+            effective_center,
+            effective_tic,
+            subdivisions,
+            axis_span,
+        ) {
+            let cx = self.axis_x_tick_pixel(x, y, xmin, xmax);
+            if !seen_subticks.insert(cx) {
+                continue;
+            }
+            let (_, cy) = self.user_to_canvas(x, y);
+            for step in 1..=SUB_TIC_LENGTH {
+                if !self.over_y_axis_label(cx, cy + direction * step) {
+                    self.draw_masked_axis_pixel(cx, cy + direction * step, mask_phase);
                 }
             }
         }
-        self.x_axis_label_bboxes.clear();
-        let ticks = build_axis_ticks(xmin, xmax, center_tick, tic, axis_span);
-        let mut seen_tick_pixels = HashSet::new();
-        for x in ticks {
+        let mut seen_marks = HashSet::new();
+        for (index, &x) in ticks.iter().enumerate() {
+            if index.abs_diff(anchor) % stride != 0 {
+                continue;
+            }
             let cx = self.axis_x_tick_pixel(x, y, xmin, xmax);
-            let is_intersection = x_intersection_pixel.is_some_and(|pixel| (cx - pixel).abs() < 2);
-            if !seen_tick_pixels.insert(cx) && !is_intersection {
+            if !seen_marks.insert(cx) {
                 continue;
             }
             let (_, cy) = self.user_to_canvas(x, y);
             for step in 1..=TIC_LENGTH {
-                self.draw_masked_axis_pixel(cx, cy + direction * step, mask_phase);
-            }
-            if show_labels {
-                let label = format_axis_tick_label(x, force_scientific_labels);
-                if labels_vertical {
-                    let x_center = if is_intersection {
-                        x_intersection_pixel.unwrap_or(cx) + 10
-                    } else {
-                        cx
-                    };
-                    let (pivot_x, pivot_y, ldir) = if labels_below {
-                        (x_center + 6, cy + 5, -90)
-                    } else {
-                        (x_center - 6, cy - 5, 90)
-                    };
-                    self.draw_axis_label_at_angle(pivot_x, pivot_y, &label, ldir);
-                    let rot_w = 16;
-                    let rot_h = label.chars().count() as i32 * 8;
-                    let bbox_x = x_center - rot_w / 2;
-                    let bbox_y = if labels_below { cy + 5 } else { cy - 5 - rot_h };
-                    self.remember_x_axis_label_bbox(bbox_x, bbox_y, rot_w, rot_h);
-                } else {
-                    let label_width = label.chars().count() as i32 * 8;
-                    let label_x = if is_intersection {
-                        x_intersection_pixel.unwrap_or(cx) + 4
-                    } else {
-                        cx - label_width / 2
-                    };
-                    let label_y = if labels_below { cy + 5 } else { cy - 18 };
-                    self.draw_axis_label(label_x, label_y, &label);
-                    self.remember_x_axis_label_bbox(label_x, label_y, label_width, 16);
+                if !self.over_y_axis_label(cx, cy + direction * step) {
+                    self.draw_masked_axis_pixel(cx, cy + direction * step, mask_phase);
                 }
             }
+        }
+        if !show_labels {
+            return;
+        }
+        for label in plan {
+            if label.angle == 0 {
+                self.draw_axis_label(label.x, label.y, &label.text);
+            } else {
+                self.draw_axis_label_at_angle(label.x, label.y, &label.text, label.angle);
+            }
+            self.x_axis_label_bboxes.push(label.bbox);
         }
     }
 
@@ -1616,80 +1739,114 @@ impl Graphics {
     ) {
         const TIC_LENGTH: i32 = 8;
         const SUB_TIC_LENGTH: i32 = 3;
-        let draw_tics_left = if show_labels { !labels_left } else { false };
-        let direction = if draw_tics_left { -1 } else { 1 };
+        let labels_left = labels_left || !show_labels;
+        let direction = if labels_left { 1 } else { -1 };
         let axis_span = (axis_end - axis_start + 1).max(1) as f64;
-        if axis_ticks_too_dense(
-            ymin,
-            ymax,
-            tic,
-            axis_span,
-            if show_labels { 18.0 } else { 9.0 },
-        ) {
+        let crossing = self.cross_at_y.unwrap_or(0.0);
+        let (center_tick, intersection_pixel) = if crossing >= ymin && crossing <= ymax {
+            (
+                crossing,
+                Some(self.axis_y_tick_pixel(crossing, x, ymin, ymax)),
+            )
+        } else {
+            (ymin, None)
+        };
+        let Some((_, label_tic, label_center)) =
+            axis_label_tick_grid(ymin, ymax, center_tick, tic, axis_span)
+        else {
+            return;
+        };
+        let ticks = build_axis_ticks(ymin, ymax, label_center, label_tic, axis_span);
+        if ticks.is_empty() {
             return;
         }
-        let axis_intersection_y = self.cross_at_y.unwrap_or(0.0);
-        let (center_tick, y_intersection_pixel) =
-            if axis_intersection_y >= ymin && axis_intersection_y <= ymax {
-                (
-                    axis_intersection_y,
-                    Some(self.axis_y_tick_pixel(axis_intersection_y, x, ymin, ymax)),
-                )
-            } else {
-                (ymin, None)
-            };
-        if subdivisions > 1 {
-            let sub_tic = tic / subdivisions as f64;
-            if !axis_ticks_too_dense(ymin, ymax, sub_tic, axis_span, 6.0) {
-                let sub_ticks = build_axis_ticks(ymin, ymax, center_tick, sub_tic, axis_span);
-                let main_eps = tic.abs().mul_add(1e-9, 0.0).max(1e-12);
-                let mut seen_sub_tick_pixels = HashSet::new();
-                for y in sub_ticks {
-                    let main_index = ((y - center_tick) / tic).round();
-                    if ((y - center_tick) - main_index * tic).abs() > main_eps {
-                        let cy = self.axis_y_tick_pixel(y, x, ymin, ymax);
-                        if !seen_sub_tick_pixels.insert(cy) {
-                            continue;
-                        }
-                        let (cx, _) = self.user_to_canvas(x, y);
-                        if self.over_x_axis_label(cx, cy) {
-                            continue;
-                        }
-                        for step in 0..SUB_TIC_LENGTH {
-                            self.draw_masked_axis_pixel(cx + direction * step, cy, mask_phase);
-                        }
-                    }
-                }
-            }
-        }
-        let ticks = build_axis_ticks(ymin, ymax, center_tick, tic, axis_span);
-        let mut seen_tick_pixels = HashSet::new();
-        for y in ticks {
+        let labels = format_axis_tick_labels(&ticks, tic, force_scientific_labels);
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        for (index, (&y, label)) in ticks.iter().zip(labels).enumerate() {
             let cy = self.axis_y_tick_pixel(y, x, ymin, ymax);
-            let is_intersection = y_intersection_pixel.is_some_and(|pixel| (cy - pixel).abs() < 2);
-            if !seen_tick_pixels.insert(cy) && !is_intersection {
+            let is_intersection = intersection_pixel.is_some_and(|pixel| (cy - pixel).abs() < 2);
+            if !seen.insert(cy) && !is_intersection {
                 continue;
             }
             let (cx, _) = self.user_to_canvas(x, y);
-            if self.over_x_axis_label(cx, cy) {
-                continue;
-            }
-            for step in 0..TIC_LENGTH {
-                self.draw_masked_axis_pixel(cx + direction * step, cy, mask_phase);
-            }
             if is_intersection {
                 continue;
             }
-            if show_labels {
-                let label = format_axis_tick_label(y, force_scientific_labels);
-                let label_width = label.chars().count() as i32 * 8;
-                let label_x = if labels_left {
-                    cx - TIC_LENGTH - 4 - label_width + 5
-                } else {
-                    cx + TIC_LENGTH
-                };
-                self.draw_axis_label(label_x, cy - 6, &label);
+            let width = label.chars().count() as i32 * 8;
+            let label_x = if labels_left {
+                cx - TIC_LENGTH - 4 - width + 5
+            } else {
+                cx + TIC_LENGTH
+            };
+            candidates.push(AxisLabelCandidate {
+                index,
+                text: label,
+                bbox: (label_x, cy - 6, label_x + width - 1, cy + 9),
+                x: label_x,
+                y: cy - 6,
+                angle: 0,
+                intersection: false,
+            });
+        }
+        let Some((left, right, top, bottom)) = self.drawable_bounds() else {
+            return;
+        };
+        let bounds = (left, top, right, bottom);
+        let anchor = axis_label_anchor(&ticks, label_center);
+        let (mut plan, stride) = select_axis_labels(
+            &candidates,
+            ticks.len(),
+            anchor,
+            bounds,
+            &self.x_axis_label_bboxes,
+        );
+        let perpendicular_y = self.user_to_canvas(x, crossing).1;
+        plan.retain(|label| !(label.bbox.1 <= perpendicular_y && perpendicular_y <= label.bbox.3));
+        let effective_tic = label_tic * stride as f64;
+        let effective_center = ticks[anchor];
+        let mut seen_subticks = HashSet::new();
+        for y in axis_sub_ticks(
+            ymin,
+            ymax,
+            effective_center,
+            effective_tic,
+            subdivisions,
+            axis_span,
+        ) {
+            let cy = self.axis_y_tick_pixel(y, x, ymin, ymax);
+            if !seen_subticks.insert(cy) {
+                continue;
             }
+            let (cx, _) = self.user_to_canvas(x, y);
+            for step in 0..SUB_TIC_LENGTH {
+                if !self.over_x_axis_label(cx + direction * step, cy) {
+                    self.draw_masked_axis_pixel(cx + direction * step, cy, mask_phase);
+                }
+            }
+        }
+        let mut seen_marks = HashSet::new();
+        for (index, &y) in ticks.iter().enumerate() {
+            if index.abs_diff(anchor) % stride != 0 {
+                continue;
+            }
+            let cy = self.axis_y_tick_pixel(y, x, ymin, ymax);
+            if !seen_marks.insert(cy) {
+                continue;
+            }
+            let (cx, _) = self.user_to_canvas(x, y);
+            for step in 0..TIC_LENGTH {
+                if !self.over_x_axis_label(cx + direction * step, cy) {
+                    self.draw_masked_axis_pixel(cx + direction * step, cy, mask_phase);
+                }
+            }
+        }
+        if !show_labels {
+            return;
+        }
+        for label in plan {
+            self.draw_axis_label(label.x, label.y, &label.text);
+            self.y_axis_label_bboxes.push(label.bbox);
         }
     }
 
@@ -1758,25 +1915,14 @@ impl Graphics {
         *mask_phase = mask_phase.wrapping_add(1);
     }
 
-    fn remember_x_axis_label_bbox(&mut self, x: i32, y: i32, width: i32, height: i32) {
-        let mut x0 = x;
-        let mut y0 = y;
-        let mut x1 = x + width - 1;
-        let mut y1 = y + height - 1;
-        if x1 < 0 || y1 < 0 || x0 >= self.width as i32 || y0 >= self.height as i32 {
-            return;
-        }
-        x0 = x0.max(0);
-        y0 = y0.max(0);
-        x1 = x1.min(self.width as i32 - 1);
-        y1 = y1.min(self.height as i32 - 1);
-        if x0 <= x1 && y0 <= y1 {
-            self.x_axis_label_bboxes.push((x0, y0, x1, y1));
-        }
-    }
-
     fn over_x_axis_label(&self, x: i32, y: i32) -> bool {
         self.x_axis_label_bboxes
+            .iter()
+            .any(|&(x0, y0, x1, y1)| x0 <= x && x <= x1 && y0 <= y && y <= y1)
+    }
+
+    fn over_y_axis_label(&self, x: i32, y: i32) -> bool {
+        self.y_axis_label_bboxes
             .iter()
             .any(|&(x0, y0, x1, y1)| x0 <= x && x <= x1 && y0 <= y && y <= y1)
     }
@@ -2374,6 +2520,75 @@ pub fn resolve_color_number(color: i32) -> u32 {
     }
 }
 
+fn nice_axis_spacing(raw: f64) -> f64 {
+    if !raw.is_finite() || raw <= 0.0 {
+        return raw;
+    }
+    let unit = 10.0_f64.powf(raw.log10().floor());
+    if !unit.is_finite() || unit <= 0.0 {
+        return raw;
+    }
+    for factor in [1.0, 2.0, 5.0, 10.0] {
+        let spacing = unit * factor;
+        if raw / unit <= factor * (1.0 + 1e-12) && spacing.is_finite() {
+            return spacing;
+        }
+    }
+    raw
+}
+
+fn automatic_axis_spacing(
+    minimum: f64,
+    maximum: f64,
+    center: f64,
+    pixel_span: f64,
+    vertical: bool,
+) -> f64 {
+    let span = maximum - minimum;
+    if !minimum.is_finite()
+        || !maximum.is_finite()
+        || !center.is_finite()
+        || !span.is_finite()
+        || span <= 0.0
+        || !pixel_span.is_finite()
+        || pixel_span <= 0.0
+    {
+        return 1.0;
+    }
+    let target = span * (32.0 / pixel_span);
+    let mut spacing = nice_axis_spacing(if target.is_finite() && target > 0.0 {
+        target
+    } else {
+        span
+    });
+    if vertical {
+        return spacing;
+    }
+    for _ in 0..16 {
+        let ticks = build_axis_ticks(minimum, maximum, center, spacing, pixel_span);
+        if ticks.is_empty() {
+            break;
+        }
+        let labels = format_axis_tick_labels(&ticks, spacing, false);
+        let required_pixels =
+            (labels.iter().map(String::len).max().unwrap_or(0) * 8 + 10).max(32) as f64;
+        if pixel_span * (spacing / span) + 1e-12 >= required_pixels {
+            break;
+        }
+        let target = span * (required_pixels / pixel_span);
+        let next = nice_axis_spacing(if target.is_finite() && target > 0.0 {
+            target
+        } else {
+            span
+        });
+        if next <= spacing {
+            break;
+        }
+        spacing = next;
+    }
+    spacing
+}
+
 fn axis_ticks_too_dense(
     min_value: f64,
     max_value: f64,
@@ -2390,6 +2605,71 @@ fn axis_ticks_too_dense(
     }
     let pixels_per_tick = pixel_span.max(1.0) * (tick_spacing / logical_span);
     pixels_per_tick < min_pixels_between_ticks
+}
+
+// Classify lattice indexes before adding the center: subtracting a large
+// coordinate afterwards can turn a principal tick into a duplicate minor tick.
+fn axis_sub_ticks(
+    minimum: f64,
+    maximum: f64,
+    center: f64,
+    spacing: f64,
+    subdivisions: i32,
+    pixel_span: f64,
+) -> Vec<f64> {
+    if subdivisions <= 1
+        || !minimum.is_finite()
+        || !maximum.is_finite()
+        || maximum <= minimum
+        || !center.is_finite()
+        || !spacing.is_finite()
+        || spacing <= 0.0
+        || !pixel_span.is_finite()
+        || pixel_span <= 0.0
+    {
+        return Vec::new();
+    }
+    let sub_spacing = spacing / subdivisions as f64;
+    if !sub_spacing.is_finite()
+        || sub_spacing <= 0.0
+        || axis_ticks_too_dense(minimum, maximum, sub_spacing, pixel_span, 6.0)
+    {
+        return Vec::new();
+    }
+    let start = ((minimum - center) / sub_spacing - 1e-12).ceil();
+    let end = ((maximum - center) / sub_spacing + 1e-12).floor();
+    if !start.is_finite()
+        || !end.is_finite()
+        || start > end
+        || start < i64::MIN as f64
+        || end >= i64::MAX as f64
+    {
+        return Vec::new();
+    }
+    (start as i64..=end as i64)
+        .filter(|index| index % i64::from(subdivisions) != 0)
+        .map(|index| center + index as f64 * sub_spacing)
+        .collect()
+}
+
+// Bound the marks and label candidates independently of the requested density.
+// The reduced grid remains an integer multiple of the requested tick spacing.
+fn axis_label_tick_grid(
+    min_value: f64,
+    max_value: f64,
+    center_tick: f64,
+    tic: f64,
+    pixel_span: f64,
+) -> Option<(bool, f64, f64)> {
+    let dense = axis_ticks_too_dense(min_value, max_value, tic, pixel_span, 9.0);
+    if !dense {
+        return Some((false, tic, center_tick));
+    }
+    let label_tic = tic * (((max_value - min_value) * (9.0 / pixel_span)) / tic).ceil();
+    if !label_tic.is_finite() || label_tic <= 0.0 {
+        return None;
+    }
+    Some((true, label_tic, center_tick))
 }
 
 fn build_axis_ticks(
@@ -2458,31 +2738,158 @@ fn normalize_user_coord(value: f64) -> f64 {
     }
 }
 
-fn format_axis_tick_label(value: f64, force_scientific: bool) -> String {
-    if force_scientific {
-        if !value.is_finite() || value.abs() < 5e-15 {
-            return "0".to_string();
-        }
-        let text = format!("{value:.14E}");
-        let Some((mantissa, exponent)) = text.split_once('E') else {
-            return text;
-        };
-        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
-        let exponent = exponent.parse::<i32>().unwrap_or(0);
-        return format!("{mantissa}E{exponent:+}");
-    }
+type AxisLabelBox = (i32, i32, i32, i32);
 
-    let mut text = format!("{value:.2}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
+#[derive(Clone, Debug)]
+struct AxisLabelCandidate {
+    index: usize,
+    text: String,
+    bbox: AxisLabelBox,
+    x: i32,
+    y: i32,
+    angle: i32,
+    intersection: bool,
+}
+
+fn axis_label_boxes_conflict(a: AxisLabelBox, b: AxisLabelBox) -> bool {
+    const GAP: i32 = 10;
+    !(a.2 + GAP < b.0 || b.2 + GAP < a.0 || a.3 + GAP < b.1 || b.3 + GAP < a.1)
+}
+
+fn axis_label_anchor(values: &[f64], crossing: f64) -> usize {
+    values
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (**a - crossing).abs().total_cmp(&(**b - crossing).abs()))
+        .map_or(0, |(index, _)| index)
+}
+
+fn select_axis_labels(
+    candidates: &[AxisLabelCandidate],
+    tick_count: usize,
+    anchor: usize,
+    bounds: AxisLabelBox,
+    other_boxes: &[AxisLabelBox],
+) -> (Vec<AxisLabelCandidate>, usize) {
+    let visible: Vec<_> = candidates
+        .iter()
+        .filter(|label| {
+            let b = label.bbox;
+            b.0 >= bounds.0
+                && b.1 >= bounds.1
+                && b.2 <= bounds.2
+                && b.3 <= bounds.3
+                && !other_boxes
+                    .iter()
+                    .any(|&other| axis_label_boxes_conflict(b, other))
+        })
+        .collect();
+    for stride in 1..=tick_count.max(1) {
+        let mut selected: Vec<_> = visible
+            .iter()
+            .copied()
+            .filter(|label| !label.intersection && label.index.abs_diff(anchor) % stride == 0)
+            .collect();
+        let collision = selected.iter().enumerate().any(|(index, label)| {
+            selected[..index]
+                .iter()
+                .any(|other| axis_label_boxes_conflict(label.bbox, other.bbox))
+        });
+        if collision {
+            continue;
+        }
+        for label in visible
+            .iter()
+            .copied()
+            .filter(|label| label.intersection && label.index.abs_diff(anchor) % stride == 0)
+        {
+            if !selected
+                .iter()
+                .any(|other| axis_label_boxes_conflict(label.bbox, other.bbox))
+            {
+                selected.push(label);
+            }
+        }
+        selected.sort_by_key(|label| label.index);
+        return (selected.into_iter().cloned().collect(), stride);
     }
-    if text.ends_with('.') {
-        text.pop();
+    (Vec::new(), tick_count.max(1))
+}
+
+fn format_axis_tick_labels(values: &[f64], tic: f64, force_scientific: bool) -> Vec<String> {
+    let values: Vec<_> = values
+        .iter()
+        .map(|&value| {
+            if value.abs() <= tic.abs() * 1e-9 {
+                0.0
+            } else {
+                value
+            }
+        })
+        .collect();
+    let tolerance = tic.abs() * 0.001;
+    let format_values = |scientific: bool, precision: usize| -> Vec<String> {
+        values
+            .iter()
+            .map(|&value| {
+                if value == 0.0 {
+                    return "0".to_string();
+                }
+                let raw = if scientific {
+                    format!("{value:.precision$E}")
+                } else {
+                    format!("{value:.precision$}")
+                };
+                let (mantissa, exponent) = raw
+                    .split_once('E')
+                    .map_or((raw.as_str(), None), |(m, e)| (m, Some(e)));
+                let mantissa = if mantissa.contains('.') {
+                    mantissa.trim_end_matches('0').trim_end_matches('.')
+                } else {
+                    mantissa
+                };
+                let mantissa = if mantissa == "-0" { "0" } else { mantissa };
+                match exponent {
+                    Some(exponent) => {
+                        format!("{mantissa}E{:+}", exponent.parse::<i32>().unwrap_or(0))
+                    }
+                    None => mantissa.to_string(),
+                }
+            })
+            .collect()
+    };
+    let find_precision = |scientific: bool| -> (Vec<String>, bool) {
+        let max_precision = if scientific { 16 } else { 15 };
+        let mut labels = Vec::new();
+        for precision in 0..=max_precision {
+            labels = format_values(scientific, precision);
+            let accurate = labels.iter().zip(&values).all(|(label, value)| {
+                label.parse::<f64>().is_ok_and(|parsed| {
+                    parsed.is_finite()
+                        && (parsed - value).abs() <= tolerance.max(value.abs() * f64::EPSILON)
+                })
+            });
+            let distinct = labels
+                .windows(2)
+                .zip(values.windows(2))
+                .all(|(labels, values)| values[0] == values[1] || labels[0] != labels[1]);
+            if accurate && distinct {
+                return (labels, true);
+            }
+        }
+        (labels, false)
+    };
+    let (scientific, _) = find_precision(true);
+    if force_scientific {
+        return scientific;
     }
-    if text == "-0" {
-        "0".to_string()
+    let (fixed, valid) = find_precision(false);
+    let fixed_width = fixed.iter().map(String::len).max().unwrap_or(0);
+    let scientific_width = scientific.iter().map(String::len).max().unwrap_or(0);
+    if !valid || (fixed_width > 12 && scientific_width + 2 < fixed_width) {
+        scientific
     } else {
-        text
+        fixed
     }
 }
 
@@ -2517,7 +2924,10 @@ fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_color_number, Graphics, Texture};
+    use super::{
+        automatic_axis_spacing, axis_label_boxes_conflict, format_axis_tick_labels,
+        nice_axis_spacing, resolve_color_number, Graphics, Texture,
+    };
     use crate::ErrorCode;
 
     fn assert_operation_marks_buffer_dirty(
@@ -2538,6 +2948,750 @@ mod tests {
             graphics.buffer_dirty(),
             "{label}: changed pixels without marking the buffer dirty"
         );
+    }
+
+    #[test]
+    fn axis_label_format_preserves_small_steps_and_shared_precision() {
+        assert_eq!(
+            format_axis_tick_labels(
+                &[-0.003, -0.002, -0.001, 0.0, 0.001, 0.002, 0.003],
+                0.001,
+                false
+            ),
+            vec!["-0.003", "-0.002", "-0.001", "0", "0.001", "0.002", "0.003"],
+            "milliths"
+        );
+        assert_eq!(
+            format_axis_tick_labels(
+                &[-0.0025, -0.0015, -0.0005, 0.0005, 0.0015, 0.0025],
+                0.001,
+                false
+            ),
+            vec!["-0.0025", "-0.0015", "-0.0005", "0.0005", "0.0015", "0.0025"],
+            "offset_half_a_step"
+        );
+        assert_eq!(
+            format_axis_tick_labels(
+                &[
+                    -0.3,
+                    -0.2,
+                    -0.1,
+                    -2.7755575615628914e-17,
+                    0.1,
+                    0.2,
+                    0.30000000000000004
+                ],
+                0.1,
+                false
+            ),
+            vec!["-0.3", "-0.2", "-0.1", "0", "0.1", "0.2", "0.3"],
+            "negative_zero_and_binary_residue"
+        );
+        assert_eq!(
+            format_axis_tick_labels(
+                &[-3e-20, -2e-20, -1e-20, 0.0, 1e-20, 2e-20, 3e-20],
+                1e-20,
+                true
+            ),
+            vec!["-3E-20", "-2E-20", "-1E-20", "0", "1E-20", "2E-20", "3E-20"],
+            "tiny_explicit_scientific"
+        );
+        assert_eq!(
+            format_axis_tick_labels(&[-2e-20, -1e-20, 0.0, 1e-20, 2e-20], 1e-20, false),
+            vec!["-2E-20", "-1E-20", "0", "1E-20", "2E-20"],
+            "tiny_automatic_scientific"
+        );
+        assert_eq!(
+            format_axis_tick_labels(&[-0.0015, -0.0005, 0.0005, 0.0015], 0.001, true),
+            vec!["-1.5E-3", "-5E-4", "5E-4", "1.5E-3"],
+            "scientific_offset_half_a_step"
+        );
+        assert_eq!(
+            format_axis_tick_labels(&[1000.0, 1000.001, 1000.002, 1000.003], 0.001, false),
+            vec!["1000", "1000.001", "1000.002", "1000.003"],
+            "large_nearby_values_keep_distinct_digits"
+        );
+        assert_eq!(
+            format_axis_tick_labels(&[-0.0], 0.1, true),
+            vec!["0"],
+            "scientific_signed_zero"
+        );
+    }
+
+    #[test]
+    fn automatic_axis_spacing_matches_shared_numeric_contract() {
+        // Same independent expectations as Python tests/axis_spacing_cases.json.
+        for (minimum, maximum, center, pixels, vertical, expected) in [
+            (-1.0, 1.0, 0.0, 600.0, false, 0.2),
+            (-1.0, 1.0, 0.0, 400.0, false, 0.5),
+            (0.0, 0.01, 0.0, 600.0, false, 0.001),
+            (0.0, 1000000.0, 0.0, 600.0, false, 200000.0),
+            (0.0, 1000000.0, 0.0, 600.0, true, 100000.0),
+            (-0.003, 0.003, 0.0005, 600.0, false, 0.001),
+            (-0.003, 0.003, 0.0005, 600.0, true, 0.0005),
+            (12345.6789, 12345.6809, 12345.6799, 600.0, false, 0.0005),
+            (1000.0, 1000.02, 1001.0, 600.0, false, 0.005),
+        ] {
+            let step = automatic_axis_spacing(minimum, maximum, center, pixels, vertical);
+            assert!((step / expected - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn automatic_axis_spacing_uses_nice_steps_and_accounts_for_label_width() {
+        assert_eq!(nice_axis_spacing(0.11), 0.2);
+        assert_eq!(nice_axis_spacing(2.0 + 1e-13), 2.0);
+        assert_eq!(nice_axis_spacing(2.1), 5.0);
+        assert_eq!(automatic_axis_spacing(-1.0, 1.0, 0.0, 600.0, false), 0.2);
+        assert_eq!(automatic_axis_spacing(0.0, 639.0, 0.0, 640.0, false), 50.0);
+        assert_eq!(
+            automatic_axis_spacing(1000.0, 1000.02, 1000.0, 600.0, false),
+            0.005
+        );
+        assert_eq!(
+            automatic_axis_spacing(1000.0, 1000.02, 1000.0, 600.0, true),
+            0.002
+        );
+        for (minimum, maximum, center, pixels) in [
+            (0.0, 0.0, 0.0, 640.0),
+            (1.0, -1.0, 0.0, 640.0),
+            (f64::NAN, 1.0, 0.0, 640.0),
+            (0.0, f64::INFINITY, 0.0, 640.0),
+            (0.0, 1.0, f64::NAN, 640.0),
+            (0.0, 1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0, f64::INFINITY),
+        ] {
+            assert_eq!(
+                automatic_axis_spacing(minimum, maximum, center, pixels, false),
+                1.0
+            );
+        }
+        for maximum in [f64::from_bits(1), 1e-300, 1e300, f64::MAX] {
+            for vertical in [false, true] {
+                let spacing = automatic_axis_spacing(0.0, maximum, 0.0, 640.0, vertical);
+                assert!(
+                    spacing.is_finite() && spacing > 0.0,
+                    "maximum={maximum}, spacing={spacing}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn axis_extremely_dense_ticks_keep_bounded_marks_independently_of_labels() {
+        let (dense, spacing, center) =
+            super::axis_label_tick_grid(0.0, 1e308, 0.0, 1e300, 600.0).unwrap();
+        assert!(dense);
+        assert!((spacing / 1.5e306 - 1.0).abs() < 1e-12);
+        assert_eq!(center, 0.0);
+        for tic in [0.01, 1e-50] {
+            let mut horizontal = Graphics::new(640);
+            horizontal
+                .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+                .unwrap();
+            let mut hidden_horizontal = horizontal.clone();
+            horizontal
+                .draw_x_axis(tic, -1.0, 1.0, false, 0, 0, false, 2)
+                .unwrap();
+            hidden_horizontal
+                .draw_x_axis(tic, -1.0, 1.0, false, -1, 0, false, 2)
+                .unwrap();
+            assert!((2..=80).contains(&horizontal.x_axis_label_bboxes.len()));
+            assert!(hidden_horizontal.x_axis_label_bboxes.is_empty());
+            for (index, &bbox) in horizontal.x_axis_label_bboxes.iter().enumerate() {
+                for &other in &horizontal.x_axis_label_bboxes[..index] {
+                    assert!(!axis_label_boxes_conflict(bbox, other));
+                }
+            }
+            let (_, cy) = horizontal.user_to_canvas(0.0, 0.0);
+            let mut mark_count = 0;
+            for x in 0..640 {
+                let mark = horizontal.get_canvas_pixel(x, cy - 8);
+                mark_count += usize::from(mark != Some(0));
+                assert_eq!(
+                    hidden_horizontal.get_canvas_pixel(x, cy - 1),
+                    horizontal.get_canvas_pixel(x, cy - 1)
+                );
+                assert_eq!(hidden_horizontal.get_canvas_pixel(x, cy - 8), mark);
+            }
+            assert!((horizontal.x_axis_label_bboxes.len()..=80).contains(&mark_count));
+            let mut vertical = Graphics::new(640);
+            vertical
+                .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+                .unwrap();
+            let mut hidden_vertical = vertical.clone();
+            vertical
+                .draw_y_axis(tic, -1.0, 1.0, false, 0, false, 2)
+                .unwrap();
+            hidden_vertical
+                .draw_y_axis(tic, -1.0, 1.0, false, -1, false, 2)
+                .unwrap();
+            assert!((2..=60).contains(&vertical.y_axis_label_bboxes.len()));
+            assert!(hidden_vertical.y_axis_label_bboxes.is_empty());
+            let (cx, _) = vertical.user_to_canvas(0.0, 0.0);
+            let mut mark_count = 0;
+            for y in 0..480 {
+                let mark = vertical.get_canvas_pixel(cx + 7, y);
+                mark_count += usize::from(mark != Some(0));
+                assert_eq!(
+                    hidden_vertical.get_canvas_pixel(cx + 1, y),
+                    vertical.get_canvas_pixel(cx + 1, y)
+                );
+                assert_eq!(hidden_vertical.get_canvas_pixel(cx + 7, y), mark);
+            }
+            assert!((vertical.y_axis_label_bboxes.len()..=60).contains(&mark_count));
+        }
+    }
+
+    #[test]
+    fn dense_axis_labels_set_major_cadence_and_subdivide_final_intervals() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+            .unwrap();
+        graphics.set_cross_at(Some((-0.1, 0.3))).unwrap();
+        graphics.move_to(0.23, -0.17);
+        let cursor = (graphics.xpos(), graphics.ypos());
+        graphics
+            .draw_x_axis(0.1, -1.0, 1.0, false, 0, 0, false, 2)
+            .unwrap();
+        assert_eq!(graphics.x_axis_label_bboxes.len(), 10);
+        for (index, &bbox) in graphics.x_axis_label_bboxes.iter().enumerate() {
+            for &other in &graphics.x_axis_label_bboxes[..index] {
+                assert!(!axis_label_boxes_conflict(bbox, other));
+            }
+        }
+        // The 0.2 cadence stays centered at CROSSAT; midway ticks are short.
+        for x in [-0.3, -0.1, 0.1] {
+            let (cx, cy) = graphics.user_to_canvas(x, 0.3);
+            assert_eq!(graphics.get_canvas_pixel(cx, cy - 8), Some(0xffffff));
+        }
+        for x in [-0.2, 0.0] {
+            let (cx, cy) = graphics.user_to_canvas(x, 0.3);
+            assert_eq!(graphics.get_canvas_pixel(cx, cy - 3), Some(0xffffff));
+            assert_eq!(graphics.get_canvas_pixel(cx, cy - 8), Some(0));
+        }
+        graphics
+            .draw_y_axis(0.1, -0.75, 0.75, false, 0, false, 2)
+            .unwrap();
+        for &x in &graphics.x_axis_label_bboxes {
+            for &y in &graphics.y_axis_label_bboxes {
+                assert!(!axis_label_boxes_conflict(x, y));
+            }
+        }
+        assert_eq!((graphics.xpos(), graphics.ypos()), cursor);
+    }
+
+    #[test]
+    fn axis_major_cadence_survives_hidden_labels_and_boundary_omissions() {
+        for orientation in [0, 1, 2] {
+            let mut visible = Graphics::new(640);
+            visible
+                .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+                .unwrap();
+            visible.set_cross_at(Some((-0.1, 0.3))).unwrap();
+            let mut hidden = visible.clone();
+            visible
+                .draw_x_axis(0.1, -1.0, 1.0, false, 0, orientation, false, 1)
+                .unwrap();
+            hidden
+                .draw_x_axis(0.1, -1.0, 1.0, false, -1, orientation, false, 1)
+                .unwrap();
+            let (_, cy) = visible.user_to_canvas(0.0, 0.3);
+            for x in 0..640 {
+                for dy in 1..=8 {
+                    assert_eq!(
+                        visible.get_canvas_pixel(x, cy - dy),
+                        hidden.get_canvas_pixel(x, cy - dy)
+                    );
+                }
+            }
+            assert!(hidden.x_axis_label_bboxes.is_empty());
+        }
+        let mut graphics = Graphics::new(640);
+        let pi = std::f64::consts::PI;
+        graphics.set_scale(Some((-pi, pi, -1.0, 1.0, 20))).unwrap();
+        graphics
+            .draw_x_axis(pi / 2.0, -pi, pi, false, 0, 0, false, 1)
+            .unwrap();
+        assert_eq!(graphics.x_axis_label_bboxes.len(), 4);
+        let (cx, cy) = graphics.user_to_canvas(-pi, 0.0);
+        assert_eq!(graphics.get_canvas_pixel(cx, cy - 8), Some(0xffffff));
+    }
+
+    #[test]
+    fn axis_dense_subdivisions_are_optional_short_and_between_final_majors() {
+        let mut plain = Graphics::new(640);
+        plain.set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20))).unwrap();
+        let mut subdivided = plain.clone();
+        plain
+            .draw_x_axis(0.01, -1.0, 1.0, false, 0, 0, false, 1)
+            .unwrap();
+        subdivided
+            .draw_x_axis(0.01, -1.0, 1.0, false, 0, 0, false, 2)
+            .unwrap();
+        assert_eq!(plain.x_axis_label_bboxes, subdivided.x_axis_label_bboxes);
+        let (_, cy) = plain.user_to_canvas(0.0, 0.0);
+        let mut major_count = 0;
+        let mut minor_count = 0;
+        for x in 0..640 {
+            let major = plain.get_canvas_pixel(x, cy - 8);
+            assert_eq!(major, subdivided.get_canvas_pixel(x, cy - 8));
+            assert_eq!(plain.get_canvas_pixel(x, cy - 3), major);
+            major_count += usize::from(major != Some(0));
+            if subdivided.get_canvas_pixel(x, cy - 3) != Some(0) && major == Some(0) {
+                minor_count += 1;
+            }
+        }
+        assert!(major_count > 2 && minor_count > 2);
+        let (cx, cy) = plain.user_to_canvas(0.09, 0.0);
+        assert_eq!(plain.get_canvas_pixel(cx, cy - 3), Some(0));
+        assert_eq!(subdivided.get_canvas_pixel(cx, cy - 3), Some(0xffffff));
+        assert_eq!(subdivided.get_canvas_pixel(cx, cy - 8), Some(0));
+        assert!(axis_label_boxes_conflict((0, 0, 31, 15), (41, 0, 72, 15)));
+        assert!(!axis_label_boxes_conflict((0, 0, 31, 15), (42, 0, 73, 15)));
+    }
+
+    #[test]
+    fn axis_subticks_exclude_principals_before_adding_large_offsets() {
+        for (minimum, maximum, center, spacing, count) in [
+            (1e10, 1e10 + 1.0, 1e10 + 0.5, 0.1, 10),
+            (12345.6789, 12345.6809, 12345.6799, 0.0002, 10),
+            (12345.6789, 12345.6809, 12345.6799, 0.0005, 4),
+        ] {
+            let minors = super::axis_sub_ticks(minimum, maximum, center, spacing, 2, 600.0);
+            assert_eq!(minors.len(), count, "center={center}, spacing={spacing}");
+            let majors = super::build_axis_ticks(minimum, maximum, center, spacing, 600.0);
+            assert!(minors.iter().all(|value| !majors.contains(value)));
+            assert!(minors.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(
+                super::axis_sub_ticks(minimum, maximum, center, spacing, 1000, 600.0).is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn axis_labels_avoid_perpendicular_lines_for_both_sides_and_drawing_orders() {
+        for crossing in [None, Some((-0.1, 0.25))] {
+            for side in [0, 1] {
+                for orientation in [0, 1, 2] {
+                    for x_first in [false, true] {
+                        let mut graphics = Graphics::new(640);
+                        graphics
+                            .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+                            .unwrap();
+                        graphics.set_cross_at(crossing).unwrap();
+                        let (cross_x, cross_y) = crossing.unwrap_or((0.0, 0.0));
+                        let (px, py) = graphics.user_to_canvas(cross_x, cross_y);
+                        for horizontal in [x_first, !x_first] {
+                            if horizontal {
+                                graphics
+                                    .draw_x_axis(
+                                        0.01,
+                                        -1.0,
+                                        1.0,
+                                        false,
+                                        side,
+                                        orientation,
+                                        false,
+                                        1,
+                                    )
+                                    .unwrap();
+                                assert!(!graphics.x_axis_label_bboxes.is_empty());
+                                assert!(graphics
+                                    .x_axis_label_bboxes
+                                    .iter()
+                                    .all(|b| px < b.0 || px > b.2));
+                            } else {
+                                graphics
+                                    .draw_y_axis(0.01, -0.75, 0.75, false, side, false, 1)
+                                    .unwrap();
+                                assert!(!graphics.y_axis_label_bboxes.is_empty());
+                                assert!(graphics
+                                    .y_axis_label_bboxes
+                                    .iter()
+                                    .all(|b| py < b.1 || py > b.3));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn axis_crossing_anchor_keeps_dense_major_cadence() {
+        for orientation in [1, 2] {
+            let mut graphics = Graphics::new(640);
+            graphics
+                .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+                .unwrap();
+            graphics.set_cross_at(Some((-0.1, 0.3))).unwrap();
+            graphics
+                .draw_x_axis(0.01, -1.0, 1.0, false, 0, orientation, false, 1)
+                .unwrap();
+            let (cross_x, cy) = graphics.user_to_canvas(-0.1, 0.3);
+            assert_eq!(graphics.x_axis_label_bboxes.len(), 22);
+            assert!(graphics
+                .x_axis_label_bboxes
+                .iter()
+                .all(|b| cross_x < b.0 || cross_x > b.2));
+            let marks = (0..640)
+                .filter(|&x| graphics.get_canvas_pixel(x, cy - 8) == Some(0xffffff))
+                .count();
+            assert_eq!(marks, 23);
+            let (tick_x, _) = graphics.user_to_canvas(-0.1, 0.3);
+            assert_eq!(graphics.get_canvas_pixel(tick_x, cy - 8), Some(0xffffff));
+        }
+    }
+
+    #[test]
+    fn axis_label_protection_uses_real_lines_with_physical_scale_and_explicit_ranges() {
+        let setup = || {
+            let mut graphics = Graphics::new(640);
+            graphics
+                .set_origin(13, 17, Some((100, 500, 400, 80)))
+                .unwrap();
+            graphics
+                .set_scale(Some((0.0, 639.0, 0.0, 479.0, 0)))
+                .unwrap();
+            graphics.set_cross_at(Some((130.0, 200.0))).unwrap();
+            graphics
+        };
+        let mut horizontal = setup();
+        let (real_x, real_y) = horizontal.user_to_canvas(130.0, 200.0);
+        assert_ne!(
+            real_x,
+            horizontal.axis_x_tick_pixel(130.0, 200.0, 100.0, 200.0)
+        );
+        horizontal
+            .draw_x_axis(10.0, 100.0, 200.0, true, 0, 0, false, 1)
+            .unwrap();
+        assert!(!horizontal.x_axis_label_bboxes.is_empty());
+        assert!(horizontal
+            .x_axis_label_bboxes
+            .iter()
+            .all(|b| real_x < b.0 || real_x > b.2));
+        let tick_x = horizontal.axis_x_tick_pixel(120.0, 200.0, 100.0, 200.0);
+        assert_eq!(
+            horizontal.get_canvas_pixel(tick_x, real_y - 8),
+            Some(0xffffff)
+        );
+
+        let mut vertical = setup();
+        assert_ne!(
+            real_y,
+            vertical.axis_y_tick_pixel(200.0, 130.0, 100.0, 200.0)
+        );
+        vertical
+            .draw_y_axis(10.0, 100.0, 200.0, true, 0, false, 1)
+            .unwrap();
+        assert!(!vertical.y_axis_label_bboxes.is_empty());
+        assert!(vertical
+            .y_axis_label_bboxes
+            .iter()
+            .all(|b| real_y < b.1 || real_y > b.3));
+        let tick_y = vertical.axis_y_tick_pixel(140.0, 130.0, 100.0, 200.0);
+        assert_eq!(
+            vertical.get_canvas_pixel(real_x + 7, tick_y),
+            Some(0xffffff)
+        );
+    }
+
+    #[test]
+    fn axis_reduction_prefers_crossing_over_zero_at_both_density_stages() {
+        for tic in [0.1, 0.01] {
+            let (_, spacing, center) =
+                super::axis_label_tick_grid(-1.0, 1.0, -0.1, tic, 600.0).unwrap();
+            assert_eq!(center, -0.1);
+            let ticks = super::build_axis_ticks(-1.0, 1.0, center, spacing, 600.0);
+            let anchor = super::axis_label_anchor(&ticks, center);
+            assert!((ticks[anchor] - center).abs() < 1e-12);
+        }
+        assert_eq!(super::axis_label_anchor(&[-0.2, -0.1, 0.0, 0.1], -0.1), 1);
+        assert_eq!(super::axis_label_anchor(&[], -0.1), 0);
+    }
+
+    #[test]
+    fn axis_major_marks_remain_symmetric_about_crossing_with_hidden_labels() {
+        let collect_marks = |horizontal: bool, tic, side, orientation| {
+            let mut graphics = Graphics::new(640);
+            graphics
+                .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+                .unwrap();
+            graphics.set_cross_at(Some((-0.1, 0.3))).unwrap();
+            let (cx, cy) = graphics.user_to_canvas(-0.1, 0.3);
+            let (marks, cross_pixel) = if horizontal {
+                graphics
+                    .draw_x_axis(tic, -1.0, 1.0, false, side, orientation, false, 1)
+                    .unwrap();
+                let row = cy + if side == 1 { 8 } else { -8 };
+                let marks = (0..640)
+                    .filter(|&x| graphics.get_canvas_pixel(x, row) == Some(0xffffff))
+                    .collect::<Vec<_>>();
+                (marks, cx)
+            } else {
+                graphics
+                    .draw_y_axis(tic, -0.75, 0.75, false, side, false, 1)
+                    .unwrap();
+                let column = cx + if side == 1 { -7 } else { 7 };
+                let marks = (0..480)
+                    .filter(|&y| graphics.get_canvas_pixel(column, y) == Some(0xffffff))
+                    .collect::<Vec<_>>();
+                (marks, cy)
+            };
+            if side < 0 {
+                assert!(graphics.x_axis_label_bboxes.is_empty());
+                assert!(graphics.y_axis_label_bboxes.is_empty());
+            }
+            let anchor = marks
+                .iter()
+                .position(|&pixel| pixel == cross_pixel)
+                .expect("the crossing keeps a full main mark");
+            assert!(anchor > 0 && anchor + 1 < marks.len());
+            let before = cross_pixel - marks[anchor - 1];
+            let after = marks[anchor + 1] - cross_pixel;
+            assert!(
+                (before - after).abs() <= 1,
+                "asymmetric crossing neighbors: {before} vs {after}"
+            );
+            let intervals: Vec<_> = marks.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            assert!(intervals.iter().max().unwrap() - intervals.iter().min().unwrap() <= 1);
+            marks
+        };
+        for orientation in [0, 1, 2] {
+            for tic in [0.1, 0.01] {
+                let visible = collect_marks(true, tic, 0, orientation);
+                assert_eq!(visible, collect_marks(true, tic, -1, orientation));
+                collect_marks(true, tic, 1, orientation);
+            }
+        }
+        for tic in [0.05, 0.01] {
+            let visible = collect_marks(false, tic, 0, 0);
+            assert_eq!(visible, collect_marks(false, tic, -1, 0));
+            collect_marks(false, tic, 1, 0);
+        }
+    }
+
+    #[test]
+    fn axis_outside_crossing_keeps_lower_endpoint_anchor_for_both_axes() {
+        let mut horizontal = Graphics::new(640);
+        horizontal
+            .set_scale(Some((1000.0, 1000.02, -1.0, 1.0, 20)))
+            .unwrap();
+        horizontal.set_cross_at(Some((1001.0, 0.0))).unwrap();
+        horizontal
+            .draw_x_axis(0.001, 1000.0, 1000.02, false, 0, 0, false, 1)
+            .unwrap();
+        let (x, y) = horizontal.user_to_canvas(1000.0, 0.0);
+        assert_eq!(horizontal.get_canvas_pixel(x, y - 8), Some(0xffffff));
+        assert_eq!(horizontal.x_axis_label_bboxes.first().unwrap().0, 4);
+
+        let mut vertical = Graphics::new(640);
+        vertical
+            .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+            .unwrap();
+        vertical.set_cross_at(Some((0.0, 2.0))).unwrap();
+        vertical
+            .draw_y_axis(0.05, -0.75, 0.75, false, 0, false, 1)
+            .unwrap();
+        let (x, y) = vertical.user_to_canvas(0.0, -0.75);
+        assert_eq!(vertical.get_canvas_pixel(x + 7, y), Some(0xffffff));
+    }
+
+    #[test]
+    fn automatic_axis_orientation_uses_approximately_twice_the_labels() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((1000.0, 1000.02, -1.0, 1.0, 20)))
+            .unwrap();
+        graphics
+            .draw_x_axis(0.001, 1000.0, 1000.02, false, 0, 0, false, 1)
+            .unwrap();
+        let horizontal_count = graphics.x_axis_label_bboxes.len();
+        assert!(horizontal_count > 0);
+        let mut automatic = Graphics::new(640);
+        automatic
+            .set_scale(Some((1000.0, 1000.02, -1.0, 1.0, 20)))
+            .unwrap();
+        automatic
+            .draw_x_axis(0.001, 1000.0, 1000.02, false, 0, 2, false, 1)
+            .unwrap();
+        assert!(automatic.x_axis_label_bboxes.len() >= horizontal_count * 2);
+        assert!(automatic
+            .x_axis_label_bboxes
+            .iter()
+            .all(|&(x0, _, x1, _)| x1 - x0 + 1 == 16));
+        let mut short = Graphics::new(640);
+        short.set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20))).unwrap();
+        short
+            .draw_x_axis(0.5, -1.0, 1.0, false, 0, 2, false, 1)
+            .unwrap();
+        assert!(!short.x_axis_label_bboxes.is_empty());
+        assert!(short
+            .x_axis_label_bboxes
+            .iter()
+            .all(|&(_, y0, _, y1)| y1 - y0 + 1 == 16));
+    }
+
+    #[test]
+    fn automatic_axis_orientation_allows_two_boundary_omissions_and_keeps_ties_horizontal() {
+        let render = |orientation, tic, cross_x| {
+            let mut graphics = Graphics::new(640);
+            graphics
+                .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+                .unwrap();
+            graphics.set_cross_at(Some((cross_x, 0.3))).unwrap();
+            graphics
+                .draw_x_axis(tic, -1.0, 1.0, false, 0, orientation, false, 2)
+                .unwrap();
+            graphics
+        };
+        for (cross_x, horizontal_count) in [(-0.1, 10), (0.0, 11)] {
+            let horizontal = render(0, 0.1, cross_x);
+            let vertical = render(1, 0.1, cross_x);
+            let automatic = render(2, 0.1, cross_x);
+            assert_eq!(horizontal.x_axis_label_bboxes.len(), horizontal_count);
+            assert_eq!(vertical.x_axis_label_bboxes.len(), 20);
+            assert_eq!(automatic.x_axis_label_bboxes, vertical.x_axis_label_bboxes);
+            assert_eq!(automatic.buffer, vertical.buffer);
+        }
+
+        let horizontal = render(0, 0.5, 0.0);
+        let vertical = render(1, 0.5, 0.0);
+        let automatic = render(2, 0.5, 0.0);
+        assert!(!horizontal.x_axis_label_bboxes.is_empty());
+        assert_eq!(
+            horizontal.x_axis_label_bboxes.len(),
+            vertical.x_axis_label_bboxes.len()
+        );
+        assert_eq!(
+            automatic.x_axis_label_bboxes,
+            horizontal.x_axis_label_bboxes
+        );
+        assert_eq!(automatic.buffer, horizontal.buffer);
+    }
+
+    #[test]
+    fn tiny_axis_steps_keep_subticks_and_nonzero_labels() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-3e-20, 3e-20, -1.0, 1.0, 30)))
+            .unwrap();
+        graphics
+            .draw_x_axis(1e-20, -3e-20, 3e-20, false, 0, 0, true, 2)
+            .unwrap();
+        let (cx, cy) = graphics.user_to_canvas(0.5e-20, 0.0);
+        assert_eq!(graphics.get_canvas_pixel(cx, cy - 3), Some(0xffffff));
+        assert!(graphics.x_axis_label_bboxes.len() >= 5);
+    }
+
+    #[test]
+    fn clg_discards_axis_label_boxes_before_drawing_a_new_scene() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-1.0, 1.0, -0.75, 0.75, 20)))
+            .unwrap();
+        graphics.set_cross_at(Some((-0.1, 0.3))).unwrap();
+        graphics
+            .draw_x_axis(0.1, -1.0, 1.0, false, 0, 0, false, 2)
+            .unwrap();
+        graphics
+            .draw_y_axis(0.1, -0.75, 0.75, false, 0, false, 2)
+            .unwrap();
+        assert!(!graphics.x_axis_label_bboxes.is_empty());
+        assert!(!graphics.y_axis_label_bboxes.is_empty());
+        graphics.clg();
+        assert!(graphics.x_axis_label_bboxes.is_empty());
+        assert!(graphics.y_axis_label_bboxes.is_empty());
+
+        let mut fresh = Graphics::new(640);
+        for target in [&mut graphics, &mut fresh] {
+            target
+                .set_scale(Some((-0.003, 0.003, -0.003, 0.003, 40)))
+                .unwrap();
+            target.set_cross_at(Some((0.0, 0.0))).unwrap();
+            target
+                .draw_x_axis(0.001, -0.003, 0.003, false, 0, 0, false, 2)
+                .unwrap();
+            target
+                .draw_y_axis(0.001, -0.003, 0.003, false, 0, false, 2)
+                .unwrap();
+        }
+        assert_eq!(graphics.buffer, fresh.buffer);
+        assert_eq!(graphics.x_axis_label_bboxes, fresh.x_axis_label_bboxes);
+        assert_eq!(graphics.y_axis_label_bboxes, fresh.y_axis_label_bboxes);
+    }
+
+    #[test]
+    fn axis_without_ticks_clears_previous_label_boxes() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+            .unwrap();
+        graphics
+            .draw_x_axis(0.5, -1.0, 1.0, false, 0, 0, false, 1)
+            .unwrap();
+        graphics
+            .draw_y_axis(0.5, -1.0, 1.0, false, 0, false, 1)
+            .unwrap();
+        assert!(!graphics.x_axis_label_bboxes.is_empty());
+        assert!(!graphics.y_axis_label_bboxes.is_empty());
+        graphics
+            .draw_x_axis(0.0, -1.0, 1.0, false, 0, 0, false, 1)
+            .unwrap();
+        assert!(graphics.x_axis_label_bboxes.is_empty());
+        graphics
+            .draw_y_axis(0.0, -1.0, 1.0, false, 0, false, 1)
+            .unwrap();
+        assert!(graphics.y_axis_label_bboxes.is_empty());
+    }
+
+    #[test]
+    fn y_axis_keeps_exposed_tick_pixels_and_mask_phase() {
+        for (tic, subdivisions, expected_phase) in [(0.1, 1, 23), (0.2, 2, 18)] {
+            let mut graphics = Graphics::new(640);
+            graphics
+                .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+                .unwrap();
+            graphics.set_mask(Some(170)).unwrap();
+            let (cx, cy) = graphics.user_to_canvas(0.0, 0.1);
+            // A label covers the first pixel of this main/minor tick only.
+            graphics.x_axis_label_bboxes.push((cx, cy, cx, cy));
+            let (start, end) = graphics.y_axis_canvas_span(0.0, 0.0, 0.2, 20);
+            let mut phase = 0;
+            graphics.draw_y_axis_ticks(
+                0.0,
+                tic,
+                0.0,
+                0.2,
+                start,
+                end,
+                true,
+                false,
+                false,
+                subdivisions,
+                &mut phase,
+            );
+            assert_eq!(graphics.get_canvas_pixel(cx, cy), Some(0));
+            assert_eq!(graphics.get_canvas_pixel(cx + 2, cy), Some(0xffffff));
+            assert_eq!(phase, expected_phase);
+        }
+    }
+
+    #[test]
+    fn crossing_outside_range_anchors_label_cadence_at_first_tick() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_scale(Some((1000.0, 1000.02, -1.0, 1.0, 20)))
+            .unwrap();
+        graphics.set_cross_at(Some((1001.0, 0.0))).unwrap();
+        graphics
+            .draw_x_axis(0.001, 1000.0, 1000.02, false, 0, 0, false, 1)
+            .unwrap();
+        // "1000" is 32 pixels wide, centred on the first tick at x=20.
+        assert_eq!(graphics.x_axis_label_bboxes.first().unwrap().0, 4);
+        assert!(graphics.x_axis_label_bboxes.len() > 1);
     }
 
     #[test]

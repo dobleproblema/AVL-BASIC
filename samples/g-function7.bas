@@ -8,5 +8,5 @@
 170 INK 1
 180 CROSSAT 256,0 : XAXIS 32 'CROSSAT outside the drawing area so all the labels remain centered
 190 CROSSAT -128,0 : YAXIS 1.8E+27 'If ticks use exponential notation, labels do too
-200 CROSSAT 128,0 : YAXIS 1E+5 'If ticks are too dense, they are ignored
+200 CROSSAT 128,0 : YAXIS 0 'Use 0 for an axis without ticks or labels
 210 END

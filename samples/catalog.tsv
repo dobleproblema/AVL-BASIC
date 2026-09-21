@@ -16,7 +16,7 @@ g-tunnel-tquad.bas	Showcase animations and retro effects	19	Textured Tunnel	A se
 g-tunnel.bas	Showcase animations and retro effects		BASIC Texture Tunnel	BASIC texture lookup creates a block-rendered tunnel.	BLOAD;TEST;texture mapping
 g-zoomer-tquad.bas	Showcase animations and retro effects		Textured Zoomer	One textured quad produces rotating zoom feedback.	TQUAD;rotation;zoom
 g-zoomer.bas	Showcase animations and retro effects	5	BASIC Zoomer	Block-sampled texture mapping powers a retro zoomer.	BLOAD;TEST;block rendering
-g-arkanoid.bas	Games, applications, and algorithmic scenes	3	AVL Arkanoid	A genuinely playable brick-breaker—and a collision-engine masterclass.	sprite collisions;color collisions;mouse input
+g-arkanoid.bas	Games, applications, and algorithmic scenes	3	AVL Arkanoid	A playable brick-breaker with stereo sound effects and sprite/color collisions.	sprite collisions;color collisions;mouse input;AUDIO;WAV
 g-chess960.bas	Games, applications, and algorithmic scenes	11	Chess960 Generator	Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls.	DEF SUB;constrained randomization;sprites
 g-loan.bas	Games, applications, and algorithmic scenes	18	Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
 g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
@@ -46,6 +46,7 @@ g-ftree4.bas	Fractals, curves, and procedural geometry	15	Animated Tree	Animated
 g-parametric.bas	Fractals, curves, and procedural geometry		Parametric Curve	Rainbow multi-frequency curve uses custom color functions.	DEF FN;parametric plotting;RGB
 g-parametric2.bas	Fractals, curves, and procedural geometry		Lissajous 3:4	Rainbow Lissajous curve traces a three-by-four ratio.	DEF FN;Lissajous curve;RGB
 g-parametric3.bas	Fractals, curves, and procedural geometry		Lissajous 12:11	Dense rainbow Lissajous curve uses adjacent frequencies.	DEF FN;Lissajous curve;RGB
+g-axis-labels.bas	Plotting, charts, and mathematical visualization		Adaptive Axis Labels	Demonstrates automatic tick spacing, dense explicit steps, fractional crossings, and label orientation.	XAXIS and YAXIS;CROSSAT;adaptive labels
 g-axis.bas	Plotting, charts, and mathematical visualization		Shifted Axes	Minimal shifted-axis example using SCALE and CROSSAT.	SCALE;CROSSAT;XAXIS and YAXIS
 g-bifurcation.bas	Plotting, charts, and mathematical visualization	17	Bifurcation Explorer	Explore chaos by clicking into a rainbow logistic-map bifurcation diagram.	logistic map;Lyapunov exponent;mouse zoom
 g-function.bas	Plotting, charts, and mathematical visualization		Sine Plot	Plots sine from a string expression with axes.	GRAPH;string expression;axes
@@ -105,11 +106,14 @@ g-mouse.bas	Input, events, and timing		Mouse Rectangle	Draws rectangles from mou
 g-mouse2.bas	Input, events, and timing		Mouse Freehand Drawing	Freehand drawing follows mouse drag events.	LEFTDRAG;MASK;DRAW
 inkey.bas	Input, events, and timing		Console Key Codes	Displays console key input and numeric codes.	INKEY$;ASC;console input
 interrupts.bas	Input, events, and timing		Scheduled Guessing Game	Scheduled callbacks race to guess a random letter.	EVERY;AFTER;callbacks
+s-melody.bas	Sound and music		Classic Chord and Melody	Releases a held three-voice chord, then plays a melody with volume and tone envelopes.	SOUND;ENV;ENT;RELEASE;SQ
+s-queue.bas	Sound and music		Music in the Background	Rearms a one-shot queue event to supply notes while the main loop keeps running.	ON SQ;SOUND;asynchronous playback
+s-cpc-duet.bas	Sound and music		CPC Manual Duet	Plays a two-part score with queue callbacks, channel rendezvous, and fractional tone periods.	ON SQ;SOUND;ENV;ENT;rendezvous
+s-audio.bas	Sound and music		Sample Playback Controls	Loops an included WAV with pan and rate transitions, pause, resume, and a volume fade.	AUDIO;AUDIOSTATE;AUDIOPOS;WAV
 f-scores.bas	Sequential data files		Saved Scores	Saves scores, appends one player, and reads every record.	OPEN;WRITE #;INPUT #;EOF;CLOSE
 f-text.bas	Sequential data files		Text Report	Writes a formatted report and appends to an unfinished line.	PRINT #;USING;APPEND;LINE INPUT #
 f-records.bas	Sequential data files		Recoverable CSV Records	Recovers quotes, commas, line breaks, empty strings, and numeric precision.	CSV quoting;CHR$;WRITE #;INPUT #
 g-subsample.bas	Console algorithms and language features		Local Scope Example	Demonstrates DEF SUB locals, shared names, and scope failure.	DEF SUB;LOCAL;scope
-routines.bas	Console algorithms and language features		Routines Below Main	Calls procedures and functions declared below the main program.	DEF SUB;DEF FN;FNEND;CALL
 loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
 matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
 nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output

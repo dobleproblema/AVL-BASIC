@@ -1,3 +1,6 @@
+mod audio_commands;
+
+use crate::audio::{cpc::Note as SoundNote, AudioSystem};
 use crate::console;
 use crate::data_files::{self, DataFiles, FileMode};
 use crate::debugger::{
@@ -1987,6 +1990,15 @@ fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
 
 #[inline(always)]
 fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastNumberExpr) -> BasicResult<i32> {
+    // Windows release measurements favor direct index leaves. Keep the general
+    // evaluator elsewhere: the same specialization regressed a Linux workload.
+    #[cfg(windows)]
+    let value = match expr {
+        FastNumberExpr::Number(value) => *value,
+        FastNumberExpr::Var { name, slot } => interpreter.get_fast_number_variable(name, slot)?,
+        _ => expr.eval(interpreter)?,
+    };
+    #[cfg(not(windows))]
     let value = expr.eval(interpreter)?;
     if value.fract() != 0.0 {
         return Err(BasicError::new(ErrorCode::InvalidIndex));
@@ -1998,6 +2010,11 @@ fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastNumberExpr) -> Basi
 pub struct Interpreter {
     pub program: Program,
     data_files: DataFiles,
+    audio: AudioSystem,
+    sound_handlers: [Option<i32>; 3],
+    has_sound_handlers: bool,
+    sound_isr_markers: Vec<(usize, bool)>,
+    pending_sounds: Vec<(Cursor, SoundNote)>,
     command_cache: HashMap<i32, Vec<Rc<str>>>,
     compiled_command_cache: HashMap<i32, Vec<Rc<CachedCommand>>>,
     execution_source_cache: HashMap<i32, Vec<ExecutionMetadata>>,
@@ -2110,6 +2127,11 @@ impl Interpreter {
         Self {
             program: Program::default(),
             data_files: DataFiles::default(),
+            audio: AudioSystem::new(),
+            sound_handlers: [None; 3],
+            has_sound_handlers: false,
+            sound_isr_markers: Vec::new(),
+            pending_sounds: Vec::new(),
             command_cache: HashMap::new(),
             compiled_command_cache: HashMap::new(),
             execution_source_cache: HashMap::new(),
@@ -2348,7 +2370,12 @@ impl Interpreter {
     }
 
     pub fn print_banner(&mut self) {
-        self.write_line("AVL BASIC v1.5");
+        self.write_line(concat!(
+            "AVL BASIC v",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            ".",
+            env!("CARGO_PKG_VERSION_MINOR")
+        ));
         self.write_line("BASIC interpreter written in Rust");
         self.write_line("Copyright 2024-2026 Jos\u{00e9} Antonio \u{00c1}vila");
         self.write_line("License: GPLv3 or later (see COPYING)");
@@ -2533,6 +2560,10 @@ impl Interpreter {
     pub fn process_immediate(&mut self, line: &str) -> BasicResult<()> {
         self.graphics_window_used_by_immediate = false;
         let result = self.process_immediate_inner(line);
+        if result.is_err() {
+            self.audio.stop_all();
+            self.pending_sounds.clear();
+        }
         if self.current_line.is_none() && self.graphics_window_used_by_immediate {
             focus_console_window(self.graphics_window.as_mut());
         }
@@ -3352,6 +3383,7 @@ impl Interpreter {
 
     fn prepare_run(&mut self) -> BasicResult<()> {
         self.data_files.close_all()?;
+        self.reset_audio();
         self.numeric_variables.clear();
         self.string_variables.clear();
         self.texture_cache.clear();
@@ -3457,6 +3489,8 @@ impl Interpreter {
             self.active_line_plan = caller_plan;
         }
         if self.run_depth == 0 {
+            self.audio.stop_all();
+            self.pending_sounds.clear();
             let resumable_interrupt = result.as_ref().err().is_some_and(|error| {
                 error.code == ErrorCode::KeyboardInterrupt
                     && self.stopped_cursor.is_some()
@@ -3554,6 +3588,7 @@ impl Interpreter {
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
                     || !self.timers.is_empty()
+                    || self.has_sound_handlers
                     || console::interrupt_requested();
                 if poll_now {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
@@ -3774,6 +3809,7 @@ impl Interpreter {
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
                     || !self.timers.is_empty()
+                    || self.has_sound_handlers
                     || console::interrupt_requested();
                 if poll_now && !relocating {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
@@ -4700,11 +4736,10 @@ impl Interpreter {
     #[inline(never)]
     fn poll_interrupts_and_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         self.check_user_interrupt(cursor)?;
-        if self.timers.is_empty() {
-            return Ok(false);
-        }
         let dispatched = self.process_timers(cursor)?;
-        self.check_user_interrupt(cursor)?;
+        if dispatched || !self.timers.is_empty() || self.has_sound_handlers {
+            self.check_user_interrupt(cursor)?;
+        }
         Ok(dispatched)
     }
 
@@ -4791,6 +4826,18 @@ impl Interpreter {
         if starts_keyword(&upper, "LINE INPUT") {
             return self.execute_line_input(command[10..].trim(), cursor);
         }
+        if starts_keyword(&upper, "ON SQ") {
+            // A global sound handler may interrupt a named routine and rearm
+            // itself. Only an ON SQ in the routine's own body is forbidden.
+            if let Some(line) = self.current_line {
+                if self.fn_line_owner.contains_key(&line) {
+                    return Err(self.err(ErrorCode::FunctionForbidden));
+                }
+                if self.sub_line_owner.contains_key(&line) {
+                    return Err(self.err(ErrorCode::SubroutineForbidden));
+                }
+            }
+        }
         if self.inside_multiline_routine()
             && (starts_keyword(&upper, "ON ERROR")
                 || starts_keyword(&upper, "CHAIN MERGE")
@@ -4827,6 +4874,7 @@ impl Interpreter {
             "ELSE" => self.execute_else(cursor),
             "ON" if starts_keyword(&upper, "ON ERROR") => self.execute_on_error(command),
             "ON" if starts_keyword(&upper, "ON MOUSE") => self.execute_on_mouse(command),
+            "ON" if starts_keyword(&upper, "ON SQ") => self.execute_on_sq(command),
             "ON" => self.execute_on(command, cursor),
             "ERROR" => self.execute_error(command[5..].trim()),
             "RESUME" => self.execute_resume(command[6..].trim(), cursor),
@@ -4869,6 +4917,11 @@ impl Interpreter {
             "AFTER" => self.execute_timer(command[5..].trim(), false),
             "EVERY" => self.execute_timer(command[5..].trim(), true),
             "CANCEL" => self.execute_cancel(command[6..].trim()),
+            "SOUND" => self.execute_sound(command[5..].trim(), cursor),
+            "ENV" => self.execute_sound_envelope(command[3..].trim(), false),
+            "ENT" => self.execute_sound_envelope(command[3..].trim(), true),
+            "RELEASE" => self.execute_sound_release(command[7..].trim()),
+            "AUDIO" => self.execute_audio(command[5..].trim()),
             "DI" => {
                 self.interrupts_enabled = false;
                 Ok(())
@@ -4885,6 +4938,7 @@ impl Interpreter {
             }
             "CLEAR" => {
                 self.data_files.close_all()?;
+                self.reset_audio();
                 for name in self.immediate_functions.keys() {
                     self.functions.remove(name);
                     self.single_line_function_cache.remove(name.as_str());
@@ -4923,6 +4977,7 @@ impl Interpreter {
             "ENDIF" => self.execute_end_if(cursor),
             "END" => {
                 self.data_files.close_all()?;
+                self.audio.stop_all();
                 self.finish_output_line();
                 if self.current_line.is_none() {
                     self.stopped_cursor = None;
@@ -4931,6 +4986,7 @@ impl Interpreter {
                 Ok(())
             }
             "STOP" => {
+                self.audio.stop_all();
                 self.finish_output_line();
                 let text = match self
                     .current_line
@@ -4957,11 +5013,14 @@ impl Interpreter {
             }
             "PAUSE" => self.execute_pause(command[5..].trim(), cursor),
             "BEEP" => {
-                self.write("\x07");
-                Ok(())
+                if !command[4..].trim().is_empty() {
+                    return Err(self.err(ErrorCode::ArgumentMismatch));
+                }
+                self.execute_sound("1,142,10,10", cursor)
             }
             "CLS" => {
                 self.write("\x1b[2J\x1b[H");
+                self.flush_stream_output();
                 self.output_col = 0;
                 self.line_open = false;
                 Ok(())
@@ -5353,12 +5412,29 @@ impl Interpreter {
         // RETURN closes only the callee's IF blocks. The caller can itself be
         // suspended in a different source region, including recursive calls.
         self.if_stack.truncate(frame.if_depth);
+        // A handler can return to the very RETURN that it interrupted. Retain
+        // that line so both run loops recognize the control transfer instead
+        // of advancing past it merely because the cursor is unchanged.
+        let return_plan = frame.return_plan.or_else(|| {
+            (frame.return_cursor == *cursor && cursor.line_idx != usize::MAX)
+                .then(|| self.retain_current_line())
+                .flatten()
+        });
         *cursor = frame.return_cursor;
-        if let Some(plan) = frame.return_plan {
+        if let Some(plan) = return_plan {
             cursor.line_idx = self.merge_line_index(plan.line);
             self.return_line_plan = Some(plan);
         }
         self.restore_timer_interrupt_if_returned();
+        if self
+            .sound_isr_markers
+            .last()
+            .is_some_and(|(depth, _)| *depth == self.gosub_stack.len())
+        {
+            if let Some((_, enabled)) = self.sound_isr_markers.pop() {
+                self.interrupts_enabled = enabled;
+            }
+        }
         Ok(())
     }
 
@@ -9767,13 +9843,17 @@ impl Interpreter {
     }
 
     fn process_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
-        if self.run_depth == 0 || self.timers.is_empty() {
+        self.audio.tick();
+        if self.run_depth == 0 {
             return Ok(false);
         }
-        let now = Instant::now();
         if !self.interrupts_enabled {
             return Ok(false);
         }
+        if self.timers.is_empty() {
+            return self.process_sound_events(cursor);
+        }
+        let now = Instant::now();
         let Some(index) = self
             .timers
             .iter()
@@ -9786,7 +9866,7 @@ impl Interpreter {
             .max_by_key(|(_, timer)| timer.number)
             .map(|(index, _)| index)
         else {
-            return Ok(false);
+            return self.process_sound_events(cursor);
         };
         let priority = self.timers[index].number;
         let target = self.timers[index].target;
@@ -11141,7 +11221,11 @@ impl Interpreter {
         if parts.len() > 6 {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
-        let tic = self.eval_optional_number_or_default(&parts, 0, 1.0)?;
+        let explicit_tic = parts
+            .first()
+            .filter(|part| !part.trim().is_empty())
+            .map(|part| self.eval_number(part))
+            .transpose()?;
         let force_scientific_labels = parts
             .first()
             .is_some_and(|part| axis_tics_token_is_scientific(part));
@@ -11149,8 +11233,10 @@ impl Interpreter {
         let (xmin, xmax, explicit_range) =
             self.axis_range_from_optional_pair(&parts, 1, 2, scale_xmin, scale_xmax)?;
         let side = self.eval_axis_side_code(&parts, 3)?;
-        let orientation = self.eval_axis_binary_flag(&parts, 4)?;
+        let orientation = self.eval_axis_orientation(&parts, 4)?;
         let subdivisions = self.eval_axis_subdivisions(&parts, 5)?;
+        let tic = explicit_tic
+            .unwrap_or_else(|| self.graphics.x_axis_auto_spacing(xmin, xmax, orientation));
         self.graphics.draw_x_axis(
             tic,
             xmin,
@@ -11170,7 +11256,11 @@ impl Interpreter {
         if parts.len() > 5 {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
-        let tic = self.eval_optional_number_or_default(&parts, 0, 1.0)?;
+        let explicit_tic = parts
+            .first()
+            .filter(|part| !part.trim().is_empty())
+            .map(|part| self.eval_number(part))
+            .transpose()?;
         let force_scientific_labels = parts
             .first()
             .is_some_and(|part| axis_tics_token_is_scientific(part));
@@ -11179,6 +11269,7 @@ impl Interpreter {
             self.axis_range_from_optional_pair(&parts, 1, 2, scale_ymin, scale_ymax)?;
         let side = self.eval_axis_side_code(&parts, 3)?;
         let subdivisions = self.eval_axis_subdivisions(&parts, 4)?;
+        let tic = explicit_tic.unwrap_or_else(|| self.graphics.y_axis_auto_spacing(ymin, ymax));
         self.graphics.draw_y_axis(
             tic,
             ymin,
@@ -11205,9 +11296,9 @@ impl Interpreter {
         Err(self.err(ErrorCode::InvalidArgument))
     }
 
-    fn eval_axis_binary_flag(&mut self, parts: &[String], index: usize) -> BasicResult<i32> {
+    fn eval_axis_orientation(&mut self, parts: &[String], index: usize) -> BasicResult<i32> {
         let value = self.eval_optional_number_or_default(parts, index, 0.0)?;
-        if value == 0.0 || value == 1.0 {
+        if value == 0.0 || value == 1.0 || value == 2.0 {
             Ok(value as i32)
         } else {
             Err(self.err(ErrorCode::InvalidArgument))
@@ -11726,6 +11817,13 @@ impl Interpreter {
         if let Some((cursor, _)) = &mut self.pause_deadline {
             relocate(cursor);
         }
+        for (cursor, _) in &mut self.pending_sounds {
+            // A suspended SOUND resumes its retained caller even if MERGE
+            // deletes that stored line. Preserve its command within that plan.
+            let command = cursor.cmd_idx;
+            relocate(cursor);
+            cursor.cmd_idx = command;
+        }
         if let Some(state) = self.debugger_state.as_mut() {
             for (cursor, _) in &mut state.resume_guards {
                 relocate(cursor);
@@ -11840,6 +11938,7 @@ impl Interpreter {
     }
 
     fn reset_control_for_chain(&mut self) {
+        self.reset_audio();
         self.program_transfer_generation = self.program_transfer_generation.wrapping_add(1);
         self.for_stack.clear();
         self.while_stack.clear();
@@ -12502,7 +12601,7 @@ impl Interpreter {
             "FOR" => compile_for_statement(trimmed[3..].trim())
                 .map(|compiled| CachedCommand::For(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
-            "ON" if !starts_keyword(&upper, "ON ERROR") => self
+            "ON" if !starts_keyword(&upper, "ON ERROR") && !starts_keyword(&upper, "ON SQ") => self
                 .compile_cached_on(trimmed)
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "GOTO" => parse_line_number_literal(trimmed[4..].trim())
@@ -13313,6 +13412,9 @@ impl EvalContext for Interpreter {
             "REMAIN" if args.len() == 1 => Ok(Value::number(
                 self.remain_value(args[0].as_number()? as i32)?,
             )),
+            "SQ" | "AUDIOAVAILABLE" | "AUDIOERROR$" | "AUDIOSTATE" | "AUDIOPOS" => {
+                self.audio_function(name, &args)
+            }
             "ERR" if args.is_empty() => Ok(Value::number(
                 self.last_error
                     .as_ref()
@@ -14176,6 +14278,33 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn axis_omitted_and_empty_spacing_is_automatic_while_zero_and_negative_stay_explicit() {
+        let draw = |args: &str, vertical: bool| {
+            let mut interp = Interpreter::new();
+            interp.graphics_window_enabled = false;
+            interp.graphics = Graphics::new(640);
+            interp
+                .graphics
+                .set_scale(Some((-1.0, 1.0, -1.0, 1.0, 20)))
+                .unwrap();
+            if vertical {
+                interp.execute_yaxis(args).unwrap();
+            } else {
+                interp.execute_xaxis(args).unwrap();
+            }
+            interp.graphics.buffer().to_vec()
+        };
+        for vertical in [false, true] {
+            let automatic = draw("", vertical);
+            assert_eq!(automatic, draw(",-1,1", vertical));
+            assert_eq!(automatic, draw("0.2", vertical));
+            assert_eq!(draw("-0.2", vertical), draw("0.2", vertical));
+            assert_ne!(automatic, draw("0", vertical));
+            assert_ne!(automatic, draw("1", vertical));
+        }
+    }
 
     fn assert_number_results_match(
         source: &str,
@@ -15563,6 +15692,163 @@ mod interpreter_tests {
         interp.mark_graphics_window_user_closed();
 
         assert!(!interp.should_present_dirty_graphics_at_run_boundary());
+    }
+
+    #[test]
+    fn fast_index_leaves_preserve_conversion_and_array_read_errors() {
+        let variable = compile_fast_number_expr(&compile_expression("I").unwrap(), false).unwrap();
+        assert!(matches!(&variable, FastNumberExpr::Var { .. }));
+        let mut interp = Interpreter::new();
+        assert_eq!(eval_fast_index(&mut interp, &variable).unwrap(), 0);
+        for (value, expected) in [
+            (0.0, Ok(0)),
+            (-0.0, Ok(0)),
+            (2.0, Ok(2)),
+            (-1.0, Ok(-1)),
+            (i32::MAX as f64, Ok(i32::MAX)),
+            (i32::MIN as f64, Ok(i32::MIN)),
+            (i32::MAX as f64 + 1.0, Ok(i32::MAX)),
+            (i32::MIN as f64 - 1.0, Ok(i32::MIN)),
+            (1.0e100, Ok(i32::MAX)),
+            (-1.0e100, Ok(i32::MIN)),
+            (0.5, Err(ErrorCode::InvalidIndex)),
+            (-0.5, Err(ErrorCode::InvalidIndex)),
+            (f64::MIN_POSITIVE, Err(ErrorCode::InvalidIndex)),
+            (f64::INFINITY, Err(ErrorCode::InvalidIndex)),
+            (f64::NEG_INFINITY, Err(ErrorCode::InvalidIndex)),
+            (f64::NAN, Err(ErrorCode::InvalidIndex)),
+        ] {
+            interp.numeric_variables.insert("I".to_string(), value);
+            assert_eq!(
+                eval_fast_index(&mut interp, &FastNumberExpr::Number(value)).map_err(|e| e.code),
+                expected,
+                "literal index {value:?}"
+            );
+            assert_eq!(
+                eval_fast_index(&mut interp, &variable).map_err(|e| e.code),
+                expected,
+                "cached variable index {value:?}"
+            );
+        }
+
+        let expression = compile_expression("A(I)").unwrap();
+        let fast = compile_fast_number_expr(&expression, true).unwrap();
+        let mut generic = Interpreter::new();
+        for ctx in [&mut interp, &mut generic] {
+            let mut array = ArrayValue::new("A", vec![2]);
+            array.set_number_direct_1d(0, 11.0).unwrap();
+            array.set_number_direct_1d(2, 23.0).unwrap();
+            ctx.arrays.insert("A".to_string(), array);
+        }
+        for (index, expected) in [
+            (-0.0, Ok(11.0)),
+            (2.0, Ok(23.0)),
+            (2.5, Err(ErrorCode::InvalidIndex)),
+            (-1.0, Err(ErrorCode::IndexOutOfRange)),
+            (3.0, Err(ErrorCode::IndexOutOfRange)),
+            (1.0e100, Err(ErrorCode::IndexOutOfRange)),
+            (f64::INFINITY, Err(ErrorCode::InvalidIndex)),
+        ] {
+            interp.numeric_variables.insert("I".to_string(), index);
+            generic.numeric_variables.insert("I".to_string(), index);
+            let actual = fast.eval(&mut interp);
+            assert_eq!(actual.as_ref().map(|v| *v).map_err(|e| e.code), expected);
+            assert_number_results_match(
+                "A(I)",
+                actual,
+                eval_compiled_number(&mut generic, &expression),
+            );
+        }
+    }
+
+    #[test]
+    fn fast_index_leaves_preserve_function_scope_and_composite_index_order() {
+        let expression = compile_expression("A(I)").unwrap();
+        let fast = compile_fast_number_expr(&expression, true).unwrap();
+        let mut scoped = Interpreter::new();
+        let mut array = ArrayValue::new("A", vec![1]);
+        array.set_number_direct_1d(0, 11.0).unwrap();
+        array.set_number_direct_1d(1, 17.0).unwrap();
+        scoped.arrays.insert("A".to_string(), array);
+        scoped.set_array_alias_binding("I", "A".to_string());
+        assert_eq!(fast.eval(&mut scoped).unwrap(), 11.0);
+        // A function's array-valued name must not use the absent-scalar zero.
+        scoped.function_call_stack.push(Rc::from("FNREAD"));
+        assert_eq!(
+            fast.eval(&mut scoped).unwrap_err().code,
+            ErrorCode::TypeMismatch
+        );
+        scoped.numeric_variables.insert("I".to_string(), 1.0);
+        assert_eq!(fast.eval(&mut scoped).unwrap(), 17.0);
+        scoped.function_call_stack.pop();
+
+        let mut local = Interpreter::new();
+        local
+            .program
+            .load_text(
+                "10 DIM A(2):A(0)=11:A(1)=17:A(2)=23:I=2\n\
+    20 FIRST=FNREAD(0):SECOND=FNREAD(1):OUTER=A(I)\n\
+    30 END\n\
+    100 DEF FNREAD(I)\n\
+    110 LOCAL K\n\
+    120 K=I\n\
+    130 FNREAD=A(K)\n\
+    140 FNEND",
+            )
+            .unwrap();
+        local.run_loaded().unwrap();
+        assert_eq!(local.numeric_variables.get("FIRST"), Some(&11.0));
+        assert_eq!(local.numeric_variables.get("SECOND"), Some(&17.0));
+        assert_eq!(local.numeric_variables.get("OUTER"), Some(&23.0));
+        assert_eq!(local.numeric_variables.get("I"), Some(&2.0));
+        assert!(!local.numeric_variables.contains_key("K"));
+
+        for (source, index, expected, draws) in [
+            ("M(I,RND+1/0)", 0.5, Err(ErrorCode::InvalidIndex), 0),
+            ("M(I,RND+1/0)", 1.0, Err(ErrorCode::DivisionByZero), 1),
+            ("M(RND*0+I,RND*0+1)", 0.5, Err(ErrorCode::InvalidIndex), 1),
+            ("M(RND*0+I,RND*0+1)", 1.0, Ok(37.0), 2),
+            ("M(I,RND*0+1)", -1.0, Err(ErrorCode::IndexOutOfRange), 1),
+            ("M(RND+1/0,RND)", 1.0, Err(ErrorCode::DivisionByZero), 1),
+        ] {
+            let expression = compile_expression(source).unwrap();
+            let fast = compile_fast_number_expr(&expression, true).unwrap();
+            let mut candidate = Interpreter::new();
+            let mut generic = Interpreter::new();
+            for ctx in [&mut candidate, &mut generic] {
+                ctx.rng = SimpleRng::new(1234);
+                ctx.numeric_variables.insert("I".to_string(), index);
+                let mut matrix = ArrayValue::new("M", vec![1, 1]);
+                matrix.set_number_direct_2d(1, 1, 37.0).unwrap();
+                ctx.arrays.insert("M".to_string(), matrix);
+            }
+            let actual = fast.eval(&mut candidate);
+            assert_eq!(
+                actual.as_ref().map(|v| *v).map_err(|e| e.code),
+                expected,
+                "{source}"
+            );
+            assert_number_results_match(
+                source,
+                actual,
+                eval_compiled_number(&mut generic, &expression),
+            );
+            let mut expected_rng = SimpleRng::new(1234);
+            for _ in 0..draws {
+                expected_rng.next_f64();
+            }
+            let expected_next = expected_rng.next_f64().to_bits();
+            assert_eq!(
+                candidate.rng.next_f64().to_bits(),
+                expected_next,
+                "{source}: fast RNG order"
+            );
+            assert_eq!(
+                generic.rng.next_f64().to_bits(),
+                expected_next,
+                "{source}: generic RNG order"
+            );
+        }
     }
 
     #[test]

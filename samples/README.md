@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **119 runnable programs**. They are not filler or API
+AVL BASIC ships with **123 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-119-program catalog. On GitHub, select any image or program name
+123-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -35,8 +35,8 @@ to inspect its BASIC source.
   <a id="highlight-g-arkanoid"></a>
   <a href="g-arkanoid.bas"><img src="showcase/g-arkanoid.png" alt="AVL Arkanoid running in AVL BASIC" width="100%"></a><br>
   <strong>3. AVL Arkanoid</strong><br>
-  A genuinely playable brick-breaker—and a collision-engine masterclass.<br>
-  <sub><strong>Shows:</strong> sprite collisions · color collisions · mouse input</sub><br>
+  A playable brick-breaker with stereo sound effects and sprite/color collisions.<br>
+  <sub><strong>Shows:</strong> sprite collisions · color collisions · mouse input · AUDIO · WAV</sub><br>
   <code>RUN "/samples/g-arkanoid.bas"</code>
 </td>
 </tr>
@@ -219,7 +219,7 @@ python tools/generate_showcase.py
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 119 programs
+## Full catalog — 123 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -251,7 +251,7 @@ demo.
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
-| <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A genuinely playable brick-breaker—and a collision-engine masterclass. | sprite collisions, color collisions, mouse input |
+| <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
 | <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) [★](#highlight-g-loan) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
@@ -292,10 +292,11 @@ demo.
 | <a id="sample-g-parametric2"></a>[`g-parametric2.bas`](g-parametric2.bas) | Rainbow Lissajous curve traces a three-by-four ratio. | DEF FN, Lissajous curve, RGB |
 | <a id="sample-g-parametric3"></a>[`g-parametric3.bas`](g-parametric3.bas) | Dense rainbow Lissajous curve uses adjacent frequencies. | DEF FN, Lissajous curve, RGB |
 
-### Plotting, charts, and mathematical visualization (20)
+### Plotting, charts, and mathematical visualization (21)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
+| <a id="sample-g-axis-labels"></a>[`g-axis-labels.bas`](g-axis-labels.bas) | Demonstrates automatic tick spacing, dense explicit steps, fractional crossings, and label orientation. | XAXIS and YAXIS, CROSSAT, adaptive labels |
 | <a id="sample-g-axis"></a>[`g-axis.bas`](g-axis.bas) | Minimal shifted-axis example using SCALE and CROSSAT. | SCALE, CROSSAT, XAXIS and YAXIS |
 | <a id="sample-g-bifurcation"></a>[`g-bifurcation.bas`](g-bifurcation.bas) [★](#highlight-g-bifurcation) | Explore chaos by clicking into a rainbow logistic-map bifurcation diagram. | logistic map, Lyapunov exponent, mouse zoom |
 | <a id="sample-g-function"></a>[`g-function.bas`](g-function.bas) | Plots sine from a string expression with axes. | GRAPH, string expression, axes |
@@ -376,6 +377,15 @@ demo.
 | <a id="sample-inkey"></a>[`inkey.bas`](inkey.bas) | Displays console key input and numeric codes. | INKEY$, ASC, console input |
 | <a id="sample-interrupts"></a>[`interrupts.bas`](interrupts.bas) | Scheduled callbacks race to guess a random letter. | EVERY, AFTER, callbacks |
 
+### Sound and music (4)
+
+| Sample | What it demonstrates | Techniques |
+|---|---|---|
+| <a id="sample-s-melody"></a>[`s-melody.bas`](s-melody.bas) | Releases a held three-voice chord, then plays a melody with volume and tone envelopes. | SOUND, ENV, ENT, RELEASE, SQ |
+| <a id="sample-s-queue"></a>[`s-queue.bas`](s-queue.bas) | Rearms a one-shot queue event to supply notes while the main loop keeps running. | ON SQ, SOUND, asynchronous playback |
+| <a id="sample-s-cpc-duet"></a>[`s-cpc-duet.bas`](s-cpc-duet.bas) | Plays a two-part score with queue callbacks, channel rendezvous, and fractional tone periods. | ON SQ, SOUND, ENV, ENT, rendezvous |
+| <a id="sample-s-audio"></a>[`s-audio.bas`](s-audio.bas) | Loops an included WAV with pan and rate transitions, pause, resume, and a volume fade. | AUDIO, AUDIOSTATE, AUDIOPOS, WAV |
+
 ### Sequential data files (3)
 
 Each example creates or replaces its own named demonstration file beside the
@@ -387,12 +397,11 @@ program, then reads it back.
 | <a id="sample-f-text"></a>[`f-text.bas`](f-text.bas) | Writes a formatted report and appends to an unfinished line. | PRINT #, USING, APPEND, LINE INPUT # |
 | <a id="sample-f-records"></a>[`f-records.bas`](f-records.bas) | Recovers quotes, commas, line breaks, empty strings, and numeric precision. | CSV quoting, CHR$, WRITE #, INPUT # |
 
-### Console algorithms and language features (10)
+### Console algorithms and language features (9)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-subsample"></a>[`g-subsample.bas`](g-subsample.bas) | Demonstrates DEF SUB locals, shared names, and scope failure. | DEF SUB, LOCAL, scope |
-| <a id="sample-routines"></a>[`routines.bas`](routines.bas) | Calls procedures and functions declared below the main program. | DEF SUB, DEF FN, FNEND, CALL |
 | <a id="sample-loan"></a>[`loan.bas`](loan.bas) | Console loan calculator with first-year amortization table. | INPUT, DEF FN, formatted output |
 | <a id="sample-matrix"></a>[`matrix.bas`](matrix.bas) | Inverts, transposes, multiplies, and prints a matrix. | MAT INV, MAT TRN, DET |
 | <a id="sample-nqueens"></a>[`nqueens.bas`](nqueens.bas) | Backtracking solves and prints a sixteen-queen board. | backtracking, arrays, formatted output |

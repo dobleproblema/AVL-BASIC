@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 CATALOG = SAMPLES / "catalog.tsv"
 MARKDOWN_OUTPUT = SAMPLES / "README.md"
-EXPECTED_SAMPLES = 119
+EXPECTED_SAMPLES = 123
 EXPECTED_FEATURED = 20
 
 

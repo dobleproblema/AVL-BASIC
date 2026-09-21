@@ -38,7 +38,7 @@ TEST_PRINT_ZONE_ENV = {**os.environ, "AVL_BASIC_PRINT_ZONE_DEFAULT": str(PRINT_Z
 
 SESSION_NOISE_RE = re.compile(
     r"^(?:"
-    r"AVL BASIC v1\.5|"
+    r"AVL BASIC v\d+\.\d+(?:\.\d+)?|"
     r"BASIC interpreter written in (?:Python|Rust)|"
     r"Copyright 2024-2026 .+|"
     r"License: GPLv3 or later \(see COPYING\)|"

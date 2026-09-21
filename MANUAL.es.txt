@@ -28,6 +28,8 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 6.7 - Sprites
 6.8 - Ratón en la ventana gráfica
 7.  - Interrupciones
+7.1 - Sonido clásico y colas de sonido
+7.2 - Archivos de audio y controles de reproducción
 8.  - Sistema, tiempo y depuración
 8.1 - Ejecución y reanudación (RUN · STOP · CONT · END · CTRL+C)
 8.2 - Procesamiento de errores
@@ -44,15 +46,19 @@ Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
 
 Requisitos
 - Paquete precompilado para Windows: Windows x64. No necesita toolchain Rust ni runtime externo.
+- Paquete precompilado Linux 1.6.0: x86-64, glibc 2.39 o posterior y `libasound.so.2`; los gráficos necesitan X11 o XWayland. Consulta los requisitos del ejecutable en `README-FIRST.txt` dentro del paquete.
 - Compilación desde el código fuente: toolchain Rust estable y un entorno gráfico nativo para la ventana gráfica.
+- El sonido utiliza la salida de audio del sistema operativo. Los decodificadores de archivos están incluidos en el ejecutable; no hace falta un reproductor externo ni un paquete de códecs. Linux utiliza las bibliotecas de audio del sistema (habituales en un escritorio, incluida `libasound.so.2`). Para compilar en Linux también hacen falta los paquetes de desarrollo correspondientes. Si no hay dispositivo de salida, los programas pueden continuar con la temporización de audio en silencio; ver apartados 7.1 y 7.2.
 
 Instalación por sistema
 - Windows: descarga el último `avl-basic-*-windows-x64.zip` de GitHub Releases, extráelo y ejecuta `avl-basic.exe`.
-- Linux/macOS: compila desde el código fuente con `cargo build --release` hasta que se publiquen paquetes precompilados para esas plataformas.
+- Linux: descarga `avl-basic-*-linux-x64.tar.gz` de GitHub Releases, extráelo y ejecuta `./avl-basic` desde un terminal en esa carpeta. En distribuciones más antiguas, compila desde el código fuente con `cargo build --release`.
+- macOS: compila desde el código fuente con `cargo build --release`.
 - Integración con el escritorio Linux: después de compilar, ejecuta `sh packaging/install_linux_desktop.sh`. Esto instala el ejecutable, el icono de la aplicación y un lanzador de AVL BASIC para el usuario actual, sin necesitar permisos de administrador. La ventana gráfica también recibe el mismo icono embebido bajo X11.
 
 Verificación rápida
 - Paquete Windows: ejecuta `avl-basic.exe`.
+- Paquete Linux: ejecuta `./avl-basic`.
 - Compilación desde fuente: ejecuta `target/release/avl-basic` o `target\release\avl-basic.exe` en Windows.
 
 Tema claro en terminales con fondo blanco
@@ -116,6 +122,8 @@ Al introducir cualquier línea, la consola resalta automáticamente la sintaxis 
 También normaliza automáticamente lo tecleado tanto en líneas de programa como en el modo inmediato: pone las palabras clave en mayúsculas, inserta espacios necesarios, cierra comillas que falten en comandos de cadena y da a los números un formato canónico. Las indentaciones en el código se conservan.
 
 Las comillas y la extensión `.bas` sugeridas pasan a ser caracteres editables del texto de entrada. Puedes desplazarte por ellos o borrarlos; redibujar el prompt o pulsar Intro no recupera los caracteres borrados. Se respetan las extensiones de archivo escritas explícitamente.
+
+Durante la edición inmediata y `EDIT número`, las mayúsculas del resaltado son solo visuales: se conserva la escritura original hasta aceptar la línea. Así, al continuar `val` con `or`, queda `valor`, no `VALor`; lo mismo ocurre al borrar o unir palabras. Al pulsar Intro se normalizan las palabras clave completas.
 
 Pese a que las mayúsculas/minúsculas no son significativas, las variables conservan el estilo utilizado la primera vez que se usó la variable a lo largo de todo el programa. Si se quiere cambiar el estilo de una variable, hay que editar, con `EDIT`, cualquier línea del programa que la contenga y reescribirla con el nuevo estilo.
 
@@ -777,12 +785,12 @@ Ejemplo (muestra en pantalla todos los colores de la paleta predefinida)
 + YAXIS [tics][,ymin,ymax][,lado][,subdiv]
 
 Parámetro                Significado
-- tics                   Distancia entre marcas (unidades de usuario). Si se omite: `1`.
+- tics                   Distancia entre marcas (unidades de usuario). Omitido o vacío: automático. Con `0`, solo se dibuja la línea del eje, sin marcas, sub-tics ni etiquetas.
 - xmin,xmax / ymin,ymax  Valores de etiquetas en los extremos; con `SCALE` activo también delimitan el tramo del eje que se dibuja.
 - lado                   Posición de los rótulos respecto al eje. 0 = debajo/izq · 1 = encima/der · <0 = sin rótulos (solo marcas).
-- orient (XAXIS solo)    0 = texto horizontal · 1 = vertical.
-- subdiv                 Número de partes `N` entre dos tics principales (`N>=1`). Si `N=1`, no hay sub-tics.
-                         Con `N>1` se dibujan `N-1` sub-tics (sin etiqueta y más cortos).
+- orient (XAXIS solo)    0 = texto horizontal (por defecto) · 1 = vertical · 2 = automático.
+- subdiv                 Número de partes `N` entre los tics principales finalmente seleccionados (`N>=1`). Si `N=1`, no hay sub-tics.
+                         Con `N>1` se dibujan hasta `N-1` sub-tics (sin etiqueta y más cortos), si hay espacio.
 - `XAXIS/YAXIS` requieren `SCALE` activo (definido explícitamente con `SCALE ...`).
 - Con escala física por defecto (sin `SCALE` explícito), `XAXIS/YAXIS` dan error.
 - Si quieres ejes en escala física, define una escala explícita equivalente:
@@ -795,20 +803,36 @@ Parámetro                Significado
 
 Notas rápidas (ejes)
 - Intersección y tics se expresan en unidades de usuario (afectadas por `SCALE`).
-- Si hay `CROSSAT`, la fase de los tics usa ese cruce (independiente del orden de dibujo).
-- Si no hay `CROSSAT`, la fase de los tics usa `(0,0)`.
+- Con el paso omitido o vacío, el eje elige un espaciado de la familia `1, 2, 5` multiplicada por una potencia de diez, según el rango, los píxeles disponibles y el tamaño de las etiquetas. Ejemplos: `XAXIS`, `YAXIS` o `XAXIS ,,,1` para paso automático con etiquetas encima del eje.
+- Si hay `CROSSAT`, la retícula original de los tics toma ese cruce como referencia (independiente del orden de dibujo).
+- Si no hay `CROSSAT`, la retícula original de los tics toma `(0,0)` como referencia.
+- Si la coordenada del cruce queda fuera del tramo del eje, la retícula de marcas parte del extremo de menor valor (`xmin` o `ymin`), como en versiones anteriores.
 - Las etiquetas de `XAXIS/YAXIS` se dibujan siempre con `SMALLFONT`, independientemente de la fuente activa (`BIGFONT/SMALLFONT`).
 - `XAXIS/YAXIS` respetan `INK` y `MASK` (los rótulos de texto no se enmascaran).
-- Si la separación entre tics resultante es demasiado densa, no se dibujan marcas ni etiquetas:
-- Umbral con etiquetas: menos de 18 píxeles por tic.
-- Umbral sin etiquetas (`lado<0`): menos de 9 píxeles por tic.
-- Si los sub-tics quedan demasiado densos, se omiten automáticamente:
-- Umbral de sub-tics: menos de 6 píxeles entre sub-tics.
-- `YAXIS` evita pisar los rótulos ya dibujados por `XAXIS` en cruces, para mantener legibles las etiquetas.
+- La precisión de las etiquetas se adapta al paso y a los valores de los tics, incluidos los desplazamientos fraccionarios de `CROSSAT`, para distinguir los tics próximos. Se eliminan los ceros finales innecesarios.
+- Las marcas principales y las etiquetas siguen la misma cadencia regular. Si las etiquetas son demasiado anchas o altas, se reducen ambas a la vez (una de cada dos, tres, etc. marcas), dejando al menos 10 píxeles entre las cajas de las etiquetas. La reducción se ancla en el valor del cruce: si está dentro del tramo, conserva la marca de ese valor y mantiene las vecinas equidistantes. El cero puede quedar fuera de esta selección.
+- Un paso explícito denso se reduce a una selección regular de su retícula original, usando un múltiplo entero del paso solicitado. Solo se dibujan las marcas principales seleccionadas para la cadencia final de las etiquetas; las principales descartadas no permanecen como marcas largas.
+- Las subdivisiones solicitadas dividen el intervalo entre las marcas principales finalmente seleccionadas, incluso al reducir un paso explícito denso. Los sub-tics son más cortos que las marcas principales y solo se dibujan si su separación es de al menos 6 píxeles.
+- Con `orient=2`, `XAXIS` prefiere etiquetas horizontales y pasa todas las del eje a verticales solo cuando caben en pantalla y permiten mostrar aproximadamente el doble de etiquetas: V > H y V >= 2*H - 2, siendo H y V las cantidades que caben en horizontal y vertical. La tolerancia de dos etiquetas contempla las omisiones en los extremos o en el cruce. Ejemplo: `XAXIS 0.0001,,,,2`.
+- En el cruce exacto, `XAXIS` desplaza su etiqueta a la derecha; `YAXIS` omite la suya. También se omiten las etiquetas del cruce o próximas a él cuya caja completa intersectaría el eje perpendicular definido por `CROSSAT` (por defecto `(0,0)`), con cualquier orientación o lado. Estas omisiones puntuales, y las debidas a falta de espacio o a un borde, no alteran la cadencia regular y conservan las marcas seleccionadas por ella.
+- Ambos ejes protegen las etiquetas ya dibujadas por el otro, en cualquiera de los dos órdenes de dibujo. Por ello, la selección regular puede tener omisiones puntuales cerca del cruce para evitar colisiones.
 - Truco útil: para que la etiqueta de `XAXIS` en el punto de cruce quede centrada en su tic (y no desplazada a la derecha), dibuja `XAXIS` antes de definir `CROSSAT`:
   `XAXIS 10 : CROSSAT 1960,0 : YAXIS 30`
 - Si el parámetro `tics` se escribe como literal en notación exponencial (por ejemplo `1E+5`), las etiquetas del eje también se muestran en notación exponencial.
+- Los valores muy pequeños o grandes también usan notación exponencial automáticamente cuando acorta considerablemente las etiquetas sin perder la precisión necesaria para el paso entre tics.
+- El ejemplo `samples/g-axis-labels.bas` muestra paso automático con escalas pequeñas y grandes, pasos explícitos densos, cruces fraccionarios, orientación automática y marcas sin etiquetas.
 - Úsalos tras establecer escalas para superponer datos y ejes sin recalcular posiciones.
+
+Simplificar los decimales con ROUND
+- Redondear el paso es una técnica práctica para simplificar o limitar los decimales en casos habituales. Con el cruce por defecto `(0,0)` y una escala de `-PI` a `PI`, `XAXIS ROUND(PI/2,2)` produce las etiquetas `-3.14`, `-1.57`, `0`, `1.57`, `3.14`. Véase `samples/g-function2.bas`.
+- Esto desplaza ligeramente las marcas; cuando el redondeo es pequeño respecto al paso, el cambio suele ser despreciable a la resolución del gráfico. La precisión sigue siendo adaptativa: un cruce decimal definido con `CROSSAT` que no esté alineado con el paso puede necesitar más decimales. Los ceros finales se eliminan.
+
+Marcas sin etiquetas (`lado<0`)
+- `XAXIS 0.5,,,-1` y `YAXIS 0.5,,,-1` dibujan marcas sin etiquetas, como en `samples/g-scale2.bas`. El lado negativo selecciona las mismas marcas que `lado=0` y después oculta el texto. También se aplica al paso automático, por ejemplo `XAXIS ,,,-1`. En cambio, `XAXIS 0` y `YAXIS 0` dibujan solo la línea del eje, sin marcas ni etiquetas.
+
+Compatibilidad con programas anteriores
+- Las etiquetas normales ya no se limitan a dos decimales: con `XAXIS PI/2`, `-PI` se muestra como `-3.142` en lugar de `-3.14`. Pueden necesitar más espacio; aumenta el borde de `SCALE` si las etiquetas de los extremos ya no caben (por ejemplo, a `25` en `samples/g-function2b.bas`). El borde no aumenta automáticamente.
+- Ahora el paso omitido se elige automáticamente. Para conservar el antiguo paso por defecto, escribe `XAXIS 1` o `YAXIS 1` explícitamente. Los pasos explícitos densos conservan una selección regular con marcas y etiquetas. Para obtener solo la línea del eje, usa `XAXIS 0` o `YAXIS 0`.
 
 Ejemplo
 10 CLG : B=80
@@ -1062,8 +1086,8 @@ Ejemplos (botón derecho finaliza)
 
 + AFTER <retardo del temporizador >[, <número de temporizador>] GOSUB [número de línea]
 + EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <número de línea>
-+ EI              Habilita interrupciones de temporizador/ratón inhibidas previamente con `DI`.
-+ DI              Inhibe las interrupciones de temporizador/ratón; no inhibe `CTRL+C`.
++ EI              Habilita las interrupciones de temporizador, ratón y cola de sonido inhibidas previamente con `DI`.
++ DI              Inhibe las interrupciones de temporizador, ratón y cola de sonido; no inhibe `CTRL+C` ni detiene la reproducción.
 + CANCEL n        Desactiva permanentemente el temporizador n actual
 + REMAIN (<n>)    Función. Da la cuenta restante en el temporizador especificado (0 a 3)
 
@@ -1081,7 +1105,7 @@ Ejemplo
 30 PRINT "¿'Adivinaré' la letra que yo mismo he escogido en 5 segundos? ;)"
 35 IF a$<>s$ THEN 35
 40 PRINT : PRINT "'";UPPER$(a$);"' es correcto. ¡Yo gano!"
-45 BEEP : END
+45 BEEP : PAUSE 120 : END
 50 PRINT : PRINT "Demasiado tarde. ¡También gano yo! :DDD"
 55 END
 60 a$=FNSOL$
@@ -1091,14 +1115,101 @@ Ejemplo
 Notas
 - Los temporizadores `AFTER` y `EVERY` tienen una prioridad igual a su número. Al entrar en una rutina de interrupción, AVL BASIC guarda el estado de `DI`/`EI` y eleva la prioridad actual a la de esa interrupción.
 - Mientras se atiende una interrupción, no se despachan otras de prioridad igual o inferior. Un temporizador solo puede interrumpir la rutina de otro temporizador de prioridad menor.
-- `DI` inhibe todas las interrupciones de temporizador/ratón hasta `EI`. Si `DI` se ejecuta dentro de una rutina de interrupción que termina con `RETURN`, ese `RETURN` restaura el estado guardado al entrar; no equivale siempre a un `EI` incondicional. Si la rutina se abandona con `GOTO` o `END`, no hay restauración automática.
+- `DI` inhibe todas las interrupciones de temporizador, ratón y cola de sonido hasta `EI`. Si `DI` se ejecuta dentro de una rutina de interrupción que termina con `RETURN`, ese `RETURN` restaura el estado guardado al entrar; no equivale siempre a un `EI` incondicional. Si la rutina se abandona con `GOTO` o `END`, no hay restauración automática.
 - Los eventos de ratón (`ON MOUSE`) tienen una prioridad mayor que los temporizadores y, por lo tanto, pueden interrumpirlos.
+
+7.1 Sonido clásico y colas de sonido
+
++ SOUND estado,periodo[,duracion[,volumen[,env[,ent[,ruido]]]]]
++ RELEASE mascara
++ ENV id[,pasos,incremento,tiempo[,pasos,incremento,tiempo...]]
++ ENT id[,pasos,incremento,tiempo[,pasos,incremento,tiempo...]]
++ SQ(canal)
++ ON SQ(canal) GOSUB linea
+
+`SOUND` ofrece tres canales de tono/ruido al estilo CPC, independientes de los 32 canales para muestras del apartado 7.2. Las notas se reproducen de forma asíncrona y BASIC puede seguir dibujando o calculando. Es un modelo musical inspirado en el CPC, no una emulación del chip AY con precisión de ciclos.
+
+Notas y colas
+- Los parámetros de `SOUND`, `ENV`, `ENT`, `RELEASE`, `SQ` y el canal de `ON SQ` aceptan expresiones reales: se redondean al entero más cercano, con las mitades alejándose de cero, y después se comprueba el rango. Por ejemplo, `SOUND 1,&H647/8` usa el periodo 201; no hace falta añadir `ROUND`. Este redondeo del resultado no cambia las reglas de las expresiones: los índices de arrays siguen requiriendo enteros exactos. Al portar un listado CPC, usa un índice como `escala(ROUND(nd1))` si puede tener decimales.
+- `estado` selecciona canales mediante los bits 1 (A), 2 (B) y 4 (C). Combina los bits para enviar la misma nota a varios canales. Añade 64 para retener una nota hasta `RELEASE`; añade 128 para vaciar los canales seleccionados antes de encolarla.
+- Los bits 8, 16 y 32 solicitan una sincronización con los canales A, B y C respectivamente: la nota espera hasta que los canales indicados tengan notas compatibles listas. Por ejemplo, `SOUND 17,478,30` y `SOUND 10,379,30` sincronizan los canales A y B.
+- `periodo` es un entero de 0 a 4095; cuanto mayor sea, más grave será el tono. La frecuencia es aproximadamente `62500/periodo` Hz. El periodo 0 desactiva la componente tonal.
+- `duracion` vale 20 por defecto y es un entero de -32768 a 32767. Los valores positivos son centésimas de segundo; 0 utiliza una envolvente de volumen completa y un valor negativo la repite `ABS(duracion)` veces. La envolvente 0 o una no definida proporciona una envolvente constante de dos segundos a estos efectos.
+- `volumen` va de 0 a 15 (por defecto 12). `env` y `ent` seleccionan envolventes de volumen y tono de 0 a 15 (por defecto 0, sin envolvente definida). `ruido` va de 0 a 31 (por defecto 0, sin ruido); el generador de ruido es compartido por los tres canales clásicos.
+- Los niveles de volumen usan una curva de amplitud cuadrática, `(nivel/15)^2`, siguiendo la aproximación musical de CPCBasic. El canal A suena a la izquierda, C a la derecha y B en el centro, repartiendo su potencia entre ambos lados. Así se equilibra la presencia de las voces, sin afirmar una reproducción exacta de la salida analógica del chip AY.
+- Cada canal tiene una nota activa y espacio para cuatro notas pendientes. Si una cola seleccionada está llena, `SOUND` espera a que haya espacio, atendiendo eventos y permitiendo `CTRL+C`. Una nota retenida ocupa una posición pendiente.
+- `RELEASE mascara` acepta 1..7 con los mismos bits de canal. Libera la nota retenida situada a la cabeza de cada canal seleccionado que esté inactivo; las notas retenidas posteriores siguen necesitando su propia liberación.
+
+Envolventes
+- `ENV` define una envolvente de volumen numerada de 1 a 15, con un máximo de cinco secciones. Cada sección tiene un número entero de pasos 0..127, un incremento -128..127 y un tiempo por paso de 0..255 centésimas de segundo; el tiempo 0 equivale a 256 centésimas.
+- El primer paso se aplica inmediatamente. Los siguientes suman el incremento al volumen, con vuelta módulo 16. Una sección con `pasos=0` establece el volumen al incremento módulo 16 y lo mantiene durante un tiempo de paso. Al acabar la envolvente, el último volumen se conserva durante el resto de la nota.
+- `ENT` define una envolvente de tono numerada de 1 a 15, también con un máximo de cinco secciones. Usa un número de envolvente negativo para repetir sus secciones hasta que termine la nota; `SOUND` sigue utilizando el número positivo. Los pasos van de 0 a 239, los incrementos de -128 a 127 y los tiempos siguen las reglas de `ENV`. Los cambios de periodo se acumulan y se limitan a 0..4095.
+- Una sección de `ENT` también puede escribirse `=periodo,tiempo`, por ejemplo `ENT 2,=200,10,=100,10`. Establece un periodo absoluto 0..4095 durante ese tiempo. Como extensión de AVL BASIC, una sección de tres valores con `pasos=0` espera un tiempo de paso sin cambiar el periodo; su incremento se ignora, pero debe estar dentro del rango.
+- `ENV id` o `ENT id` sin secciones elimina esa definición. El número 0 está reservado. Cada nota copia las definiciones de sus envolventes al empezar; redefinirlas no modifica una nota que ya se está reproduciendo.
+- Las secciones de envolvente hardware de la sintaxis original de `ENV` del CPC no están implementadas y producen el error 38 (`Unsupported`).
+
+Consultas y eventos de cola
+- `SQ(canal)` acepta exactamente 1, 2 o 4. Los bits 0..2 indican el número de posiciones pendientes libres (0..4); los bits 3..5 describen una sincronización pendiente; el bit 6 indica una nota retenida a la cabeza; el bit 7 indica una nota en reproducción. Los estados de reproducción, retención y sincronización son excluyentes. Un canal vacío e inactivo devuelve 4.
+- `(SQ(1) AND 7)>0` comprueba si queda espacio en la cola del canal A. `SQ(1)=4` indica que todas sus notas han terminado.
+- `ON SQ(canal) GOSUB linea` activa un evento de un solo disparo cuando hay espacio en la cola, incluso si ya lo hay. Hay que volver a registrarlo para recibir otro evento; `ON SQ(canal) GOSUB 0` lo desactiva. El manejador debe terminar con `RETURN` y no puede interrumpirse a sí mismo: registrarlo de nuevo desde el propio manejador surte efecto tras el retorno.
+- `ON SQ` solo se admite en programas y no puede registrarse dentro de `DEF FN` ni `DEF SUB`. Respeta `DI`/`EI`; inhibir los manejadores no pausa el audio ni el avance de las colas.
+
+Ejemplo
+10 ENV 1,12,-1,2
+20 SOUND 65,478,30,12,1
+30 SOUND 66,379,30,12,1
+40 SOUND 68,319,30,12,1
+50 RELEASE 7
+60 WHILE SQ(1)<>4 OR SQ(2)<>4 OR SQ(4)<>4
+70 PAUSE 10
+80 WEND
+90 END
+
+Ver `samples/s-melody.bas` para envolventes y un acorde retenido, y `samples/s-queue.bas` para música alimentada por un manejador `ON SQ` que se registra de nuevo.
+`samples/s-cpc-duet.bas` adapta la partitura a dos voces del manual inglés CPC6128 User Instructions (AMSOFT), capítulo 9, pp. 46-47, con sincronización entre canales y periodos de tono fraccionarios. Conserva los comentarios originales en inglés y la partitura. Las adaptaciones para AVL-BASIC omiten los sufijos de variables enteras (`%`), cambian `scale`/`scale$` por `notes`/`notes$` porque `SCALE` está reservado, usan prefijos hexadecimales `&H` y esperan a que terminen ambas colas de sonido antes de `END`.
+
+7.2 Archivos de audio y controles de reproducción
+
++ AUDIO ON | AUDIO OFF
++ AUDIO LOAD id,"ruta"
++ AUDIO UNLOAD [id]
++ AUDIO PLAY canal,id[,bucle[,volumen[,pan[,velocidad]]]]
++ AUDIO STOP [canal]
++ AUDIO PAUSE [canal]
++ AUDIO RESUME [canal]
++ AUDIO VOLUME canal,valor[,fade_ms]
++ AUDIO PAN canal,valor[,fade_ms]
++ AUDIO RATE canal,valor[,fade_ms]
++ AUDIOAVAILABLE | AUDIOERROR$ | AUDIOSTATE(canal) | AUDIOPOS(canal)
+
+- `AUDIO LOAD` decodifica un archivo mono o estéreo WAV (PCM), MP3, Ogg Vorbis o FLAC en una posición de muestra 1..64. Las rutas relativas utilizan el directorio del programa durante la ejecución, o el directorio actual en modo inmediato, igual que en `BLOAD`. Incluye los archivos necesarios al compartir un programa. Las muestras se cargan en memoria, sin streaming: cada archivo codificado tiene un límite de 128 MiB y las posiciones de muestras admiten un total de 128 MiB de datos decodificados. Sustituir una muestra conserva las voces que ya utilizaban la anterior; si la carga falla, se conserva la muestra previa.
+- `AUDIO PLAY` inicia o sustituye una voz en el canal 1..32. Estos canales pueden sonar a la vez y son independientes de los de `SOUND`. `bucle` vale 0 por defecto (una reproducción); 1 o -1 repite la muestra. El volumen va de 0 a 1 (por defecto 1), el balance estéreo de -1 a 1 (por defecto 0, centro) y la velocidad de 0.125 a 8 (por defecto 1). Cambiar la velocidad también cambia el tono.
+- `AUDIO STOP`, `AUDIO PAUSE` y `AUDIO RESUME` afectan a un canal o, si se omite, a todos los canales de muestras. Pausar conserva la posición actual y reanudar continúa desde ella. `AUDIO UNLOAD` detiene las voces que usan una muestra y libera esa posición; si se omite el número, detiene todas las voces de muestras y libera todas las muestras cargadas.
+- `AUDIO VOLUME`, `AUDIO PAN` y `AUDIO RATE` modifican un canal en reproducción. El parámetro opcional `fade_ms` es un número entero de milisegundos (0..600000) durante los que se alcanza gradualmente el nuevo valor; omitirlo o usar 0 lo aplica inmediatamente.
+- `AUDIOSTATE(canal)` devuelve 0 si está detenido, 1 si se reproduce o 2 si está pausado. `AUDIOPOS(canal)` devuelve su posición de reproducción en segundos. Ambas utilizan canales 1..32.
+- `AUDIOAVAILABLE` devuelve -1 si hay salida de audio real disponible y 0 en caso contrario. Inicializa la salida de forma diferida al consultarla por primera vez. `AUDIOERROR$` proporciona un diagnóstico cuando no se puede abrir el audio. Ninguna lleva argumentos ni paréntesis.
+- `AUDIO OFF` detiene los sonidos actuales y desactiva la salida, conservando las muestras cargadas. Los siguientes `SOUND` y `AUDIO PLAY` siguen avanzando en silencio, incluidos los eventos de cola, las posiciones y el final de reproducción. `AUDIO ON` habilita la salida para nuevas reproducciones y permite otro intento de abrir un dispositivo. Las voces de muestras que ya empezaron en silencio siguen en silencio; usa un nuevo `AUDIO PLAY` para escucharlas. Si no se puede abrir un dispositivo, se utiliza la misma temporización silenciosa y el programa BASIC puede continuar sin sonido. Los argumentos incorrectos y los archivos ilegibles siguen produciendo los errores normales.
+- Establece la variable de entorno `AVL_BASIC_AUDIO=off` antes de iniciar el intérprete para forzar el funcionamiento en silencio, por ejemplo en pruebas automáticas. La síntesis y la decodificación son internas; no se ejecuta ningún reproductor externo.
+- `RUN`, `NEW`, `CLEAR` y `CHAIN` reinician las colas, las envolventes, las muestras cargadas y los manejadores de eventos de sonido. `END`, un error de ejecución no capturado, `STOP` y `CTRL+C` detienen las voces y descartan las notas pendientes. `CONT` reanuda el programa sin recuperar esos sonidos. Como la reproducción es asíncrona, espera a que termine antes de `END` si quieres que la última nota o muestra se escuche completa.
+- Al detener o finalizar un programa se libera también la salida de audio. El siguiente `RUN` vuelve a intentar abrirla cuando la necesita, aunque un intento anterior haya fallado. Si la salida deja de responder durante la reproducción, las colas clásicas continúan en silencio, las voces de muestras se detienen y `AUDIOERROR$` conserva el diagnóstico. `AUDIO ON` permite reintentar sin salir del intérprete. En WSLg se utiliza directamente su servidor PulseAudio.
+- Los números de canal y muestra, el indicador de bucle y `fade_ms` de la familia `AUDIO` deben ser enteros exactos. El sonido clásico utiliza el redondeo descrito en 7.1. Los argumentos fuera de rango producen el error 26. Las operaciones con archivos utilizan los errores existentes (40, 61 o 62).
+
+Ejemplo
+10 AUDIO LOAD 1,"assets/audio/chime.wav"
+20 IF AUDIOAVAILABLE=0 THEN PRINT AUDIOERROR$
+30 AUDIO PLAY 1,1,0,0.4
+40 WHILE AUDIOSTATE(1)<>0
+50 PAUSE 10
+60 WEND
+70 END
+
+Ejecuta `samples/s-audio.bas` para probar bucles, cambios de balance y velocidad, transiciones graduales, pausa y reanudación con el WAV generado incluido.
 
 8. Sistema, tiempo y depuración
 
 + RANDOMIZE [semilla]
 + PAUSE [ms]            Espera el número de milisegundos especificado o hasta que se pulsa una tecla
-+ BEEP                  Tono ASCII
++ BEEP                  Tono asíncrono corto, equivalente a `SOUND 1,142,10,10`
 + TRON | TROFF          Traza paso a paso
 + DEG | RAD             Trigonometría en grados/radianes
 + EXIT | QUIT | SYSTEM  Abandonar intérprete
@@ -1135,6 +1246,7 @@ Salida esperada
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
+- Detener o finalizar la ejecución también detiene el audio y vacía las notas pendientes. `CONT` reanuda BASIC, pero no recupera esos sonidos; ver apartados 7.1 y 7.2.
 - Durante un programa numerado, `CTRL+C` interrumpe la ejecución de forma equivalente a `STOP`; se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
 - Mientras se ejecutan instrucciones o bucles introducidos en el prompt, `CTRL+C` cancela esa ejecución inmediata y vuelve a `Ready`, conservando las variables actuales y los canales de datos abiertos. El propio comando inmediato no se puede reanudar con `CONT`; si ya había un programa detenido antes, `CONT` sigue reanudando ese programa.
 - En el prompt ocioso, `CTRL+C` sale del intérprete.
@@ -1242,7 +1354,7 @@ Notas
 
 9.1 Comandos prohibidos en inmediato:
 
-+ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | RESUME | RETURN | STOP
++ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
 
 Formato de rangos
 1 `n`        Solo la línea n
@@ -1283,7 +1395,7 @@ Notas sobre DEBUG
 - La edición numérica admite literales decimales finitos, con signo o notación exponencial opcionales, pero no expresiones. Las cadenas no necesitan comillas delimitadoras; las comillas son caracteres ordinarios. Se usan `\\`, `\n`, `\r`, `\t`, `\0`, `\xNN` o `\u{...}` para barras inversas y caracteres de control. Los caracteres Unicode de ancho variable también se muestran mediante escapes reversibles durante la edición para mantener el cursor alineado. Una entrada inválida permanece editable sin cambiar la variable ni invocar `ON ERROR`. Los temporizadores permanecen detenidos durante toda la edición.
 - Las variables fijadas, las categorías plegadas, el foco, la selección y el desplazamiento se conservan entre pausas de la sesión `DEBUG` actual. No se guardan en el archivo `.bas` y se reinician en el siguiente `DEBUG`. El inspector se maneja exclusivamente con el teclado.
 - Desde el panel de código, F4 muestra la pantalla de salida existente mientras el programa sigue detenido, sin añadir ningún aviso. Pulsa F4 de nuevo o Esc para volver a la misma pausa con el foco en el código, conservando la línea mostrada y el estado del inspector sin ejecutar ninguna instrucción. Durante la consulta, Ctrl+C sigue abortando; las demás teclas se ignoran. Vuelve al panel de código antes de usar F5/F6/F7/F8.
-- Con F6/F7/F8, la pantalla del depurador se conserva durante los pasos que no necesitan la consola. La pantalla normal de salida se recupera justo antes de producir salida de consola (por ejemplo, `PRINT`, `CLS` o `BEEP`) o de solicitar entrada con `INPUT`, `LINE INPUT` o `MAT INPUT`. `INKEY$`, `KEYDOWN` y `PAUSE` también recuperan esa pantalla antes de consultar o esperar entrada. La siguiente pausa vuelve a mostrar el depurador. F5 sigue abandonando inmediatamente la pantalla del depurador.
+- Con F6/F7/F8, la pantalla del depurador se conserva durante los pasos que no necesitan la consola. La pantalla normal de salida se recupera justo antes de producir salida de consola (por ejemplo, `PRINT` o `CLS`) o de solicitar entrada con `INPUT`, `LINE INPUT` o `MAT INPUT`. `INKEY$`, `KEYDOWN` y `PAUSE` también recuperan esa pantalla antes de consultar o esperar entrada. La siguiente pausa vuelve a mostrar el depurador. F5 sigue abandonando inmediatamente la pantalla del depurador.
 - La preparación de la ventana gráfica, el dibujo, la presentación y las lecturas del búfer gráfico (por ejemplo, `TEST`, `TESTCHR$`, `SCREEN$` o `SPRITE$`) no cambian la pantalla de la consola. `GINPUT` usa sólo la ventana gráfica y tampoco muestra la consola de salida. La E/S de archivos por sí sola no cambia de pantalla.
 - Cuando el programa está usando la ventana gráfica, el contenido actual del búfer gráfico se presenta automáticamente al entrar en cada pausa del depurador. Por tanto, tras F6, la siguiente pausa muestra los cambios gráficos realizados por el paso anterior sin necesidad de añadir `FRAME`. Con F7/F8, el resultado acumulado se presenta en el siguiente alto del depurador. Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS; las llamadas explícitas a `FRAME` y `FRAME fps` conservan su comportamiento normal.
 - El foco de ventana es independiente de la pantalla mostrada en la consola. Con F6/F7/F8, configurar, dibujar o presentar una ventana gráfica existente no la activa; el reenfoque queda reservado a la entrada. Tampoco la activa el refresco automático en cada parada. `GINPUT` solicita el foco explícitamente; `INKEY$`, `KEYDOWN` y `PAUSE` recuperan el foco gráfico cuando usan la entrada gráfica. F5 restablece la política normal de foco; fuera de `DEBUG` no hay cambios. Al crear o recrear una ventana, el sistema operativo puede activarla momentáneamente.
@@ -1535,7 +1647,7 @@ durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
   - En una función multilinea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una funcion no puede reentrar en si misma.
-  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
   - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la función desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
 
 Ejemplo de definición y uso
@@ -1595,7 +1707,7 @@ Subrutinas multilinea
   - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
   - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en si misma.
-  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni comandos de control inmediato (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
   - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la subrutina desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
   - `ON ERROR`, `RESUME NEXT` y `TRON` funcionan dentro de `CALL` igual que en las funciones multilinea, con las mismas restricciones de salto.
 

@@ -1,0 +1,15 @@
+10 REM Loop, pan, change pitch, pause and fade an included WAV
+20 AUDIO LOAD 1,"assets/audio/chime.wav"
+30 IF AUDIOAVAILABLE=0 THEN PRINT "Silent timing: ";AUDIOERROR$
+40 PRINT "Looping chime: left to right, then twice as fast."
+50 AUDIO PLAY 1,1,1,0.4,-1
+60 AUDIO PAN 1,1,600:PAUSE 600
+70 AUDIO RATE 1,2,200:PAUSE 400
+80 AUDIO PAUSE 1
+90 PRINT "Paused: state=";AUDIOSTATE(1);", seconds=";AUDIOPOS(1)
+100 PAUSE 300
+110 AUDIO RESUME 1
+120 AUDIO PAN 1,0,200:PAUSE 400
+130 AUDIO VOLUME 1,0,400:PAUSE 400
+140 AUDIO STOP 1:AUDIO UNLOAD 1
+150 PRINT "Stopped: state=";AUDIOSTATE(1):END

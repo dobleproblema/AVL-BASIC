@@ -2,11 +2,11 @@
 use crate::keyboard::TerminalInputDecoder;
 use crate::language;
 use crate::lexer::split_command_ranges;
-use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
+use crossterm::cursor::{Hide, MoveDown, MoveTo, MoveToColumn, MoveUp, Show};
 use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
-    LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, Clear, ClearType,
+    EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
 use std::cell::Cell;
@@ -416,7 +416,6 @@ fn normalize_code_for_editing_marked(code: &str) -> String {
 }
 
 fn normalize_editing_assistance(code: &str, complete_extension: bool) -> String {
-    let contextual_immediate = contextual_immediate_command_marked(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code_for_editing_marked(main.trim_end());
     if complete_extension {
@@ -432,10 +431,6 @@ fn normalize_editing_assistance(code: &str, complete_extension: bool) -> String 
         result.push_str(&" ".repeat(spaces));
         result.push('\'');
         result.push_str(comment);
-    }
-    match contextual_immediate {
-        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
-        None => {}
     }
     result
 }
@@ -512,20 +507,25 @@ where
     let use_history = prefill.is_empty();
     let mut history = HistoryNavigation::default();
     materialize_prompt_assistance(&mut buffer, &mut cursor);
-    enable_raw_mode()?;
-    redraw_input_line(prompt, &buffer, cursor, ansi, cases)?;
+    let mut terminal = InputLineGuard::enter()?;
+    let mut display = InputLineDisplay::default();
+    redraw_input_line(&mut display, prompt, &buffer, cursor, ansi, cases)?;
     loop {
         if !poll(Duration::from_millis(30))? {
             idle()?;
             continue;
         }
-        match read()? {
+        let previous_buffer = buffer.clone();
+        let previous_cursor = cursor;
+        let event = read()?;
+        let resized = matches!(event, Event::Resize(_, _));
+        match event {
             Event::Key(event) => match event.code {
-                _ if event.kind == KeyEventKind::Release => {}
+                _ if event.kind == KeyEventKind::Release => continue,
                 KeyCode::Enter => {
                     let result: String = buffer.iter().collect();
-                    disable_raw_mode()?;
-                    println!();
+                    display.finish()?;
+                    terminal.restore()?;
                     if use_history {
                         remember_history(&result);
                     }
@@ -539,15 +539,15 @@ where
                     } else {
                         buffer = prefill.chars().collect();
                         cursor = buffer.len();
-                        redraw_input_line(prompt, &buffer, cursor, ansi, cases)?;
-                        disable_raw_mode()?;
-                        println!();
+                        redraw_input_line(&mut display, prompt, &buffer, cursor, ansi, cases)?;
+                        display.finish()?;
+                        terminal.restore()?;
                         return Ok(prefill.to_string());
                     }
                 }
                 KeyCode::Char(ch) if is_ctrl_c_key(ch, event.modifiers) => {
-                    disable_raw_mode()?;
-                    println!();
+                    display.finish()?;
+                    terminal.restore()?;
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "Ctrl-C"));
                 }
                 KeyCode::Char(ch) if should_insert_key_char(ch, event.modifiers) => {
@@ -590,7 +590,9 @@ where
             Event::Resize(_, _) => {}
             _ => {}
         }
-        redraw_input_line(prompt, &buffer, cursor, ansi, cases)?;
+        if resized || cursor != previous_cursor || buffer != previous_buffer {
+            redraw_input_line(&mut display, prompt, &buffer, cursor, ansi, cases)?;
+        }
     }
 }
 
@@ -4296,7 +4298,213 @@ fn remember_history(line: &str) {
     history.push(line.to_string());
 }
 
+// This guard owns only the prompt's terminal state, never an alternate screen.
+struct InputLineGuard {
+    owns_raw_mode: bool,
+    active: bool,
+}
+
+impl InputLineGuard {
+    fn enter() -> io::Result<Self> {
+        let owns_raw_mode = !is_raw_mode_enabled()?;
+        if owns_raw_mode {
+            enable_raw_mode()?;
+        }
+        Ok(Self {
+            owns_raw_mode,
+            active: true,
+        })
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        // Attempt both restorations even if writing the cursor command fails.
+        let cursor_result = execute!(io::stdout(), Show);
+        let raw_result = if self.owns_raw_mode {
+            disable_raw_mode()
+        } else {
+            Ok(())
+        };
+        if cursor_result.is_ok() && raw_result.is_ok() {
+            self.active = false;
+        }
+        cursor_result.and(raw_result)
+    }
+}
+
+impl Drop for InputLineGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[derive(Default)]
+struct InputLineDisplay {
+    cursor_row: usize,
+    cursor_col: usize,
+    rows: Vec<String>,
+    first_row: usize,
+    columns: usize,
+    screen_rows: usize,
+    end_row: usize,
+}
+
+impl InputLineDisplay {
+    fn write_frame<W: Write>(
+        &mut self,
+        output: &mut W,
+        rendered: &str,
+        cursor: usize,
+        columns: usize,
+        screen_rows: usize,
+    ) -> io::Result<()> {
+        let columns = columns.max(1);
+        let screen_rows = screen_rows.max(1);
+        let all_rows = input_line_rows(rendered, columns);
+        let first_row = input_line_first_row(
+            self.first_row,
+            cursor / columns,
+            all_rows.len(),
+            screen_rows,
+        );
+        let rows = &all_rows[first_row..all_rows.len().min(first_row + screen_rows)];
+        let cursor_row = cursor / columns - first_row;
+        let cursor_col = cursor % columns;
+
+        // A resize can reflow old terminal rows in host-specific ways. If the
+        // old footprint no longer fits, start below the existing output rather
+        // than guessing its new origin and potentially erasing earlier output.
+        if !self.rows.is_empty()
+            && (screen_rows < self.rows.len()
+                || (columns < self.columns
+                    && self.rows.iter().any(|row| visible_width(row) > columns)))
+        {
+            queue!(output, Hide, MoveTo(0, (screen_rows - 1) as u16))?;
+            write!(output, "\r\n")?;
+            self.rows.clear();
+            self.cursor_row = 0;
+        }
+
+        let repaint = self.rows != rows || self.columns != columns;
+        if repaint {
+            queue!(output, Hide, MoveToColumn(0))?;
+            if self.cursor_row > 0 {
+                queue!(output, MoveUp(self.cursor_row as u16))?;
+            }
+            let painted_rows = rows.len().max(self.rows.len()).min(screen_rows);
+            for row in 0..painted_rows {
+                if row > 0 {
+                    // Explicit CRLF cancels pending autowrap at the right edge.
+                    write!(output, "\r\n")?;
+                }
+                let text = rows.get(row).map(String::as_str).unwrap_or("");
+                write!(output, "{text}")?;
+                if visible_width(text) < columns {
+                    queue!(output, Clear(ClearType::UntilNewLine))?;
+                }
+            }
+            queue!(output, MoveToColumn(cursor_col as u16))?;
+            if painted_rows - 1 > cursor_row {
+                queue!(output, MoveUp((painted_rows - 1 - cursor_row) as u16))?;
+            }
+            queue!(output, Show)?;
+        } else if self.cursor_row != cursor_row || self.cursor_col != cursor_col {
+            // Navigation alone does not need to recolour or rewrite the line.
+            queue!(output, MoveToColumn(cursor_col as u16))?;
+            if cursor_row < self.cursor_row {
+                queue!(output, MoveUp((self.cursor_row - cursor_row) as u16))?;
+            } else if cursor_row > self.cursor_row {
+                queue!(output, MoveDown((cursor_row - self.cursor_row) as u16))?;
+            }
+        }
+        self.rows = rows.to_vec();
+        self.first_row = first_row;
+        self.cursor_row = cursor_row;
+        self.cursor_col = cursor_col;
+        self.columns = columns;
+        self.screen_rows = screen_rows;
+        self.end_row = (visible_width(rendered).saturating_sub(1) / columns)
+            .saturating_sub(first_row)
+            .min(rows.len() - 1);
+        Ok(())
+    }
+
+    fn finish(&self) -> io::Result<()> {
+        let stdout = io::stdout();
+        let mut output = io::BufWriter::new(stdout.lock());
+        queue!(output, Hide, MoveToColumn(0))?;
+        if self.end_row > self.cursor_row {
+            queue!(output, MoveDown((self.end_row - self.cursor_row) as u16))?;
+        } else if self.end_row < self.cursor_row {
+            queue!(output, MoveUp((self.cursor_row - self.end_row) as u16))?;
+        }
+        // Do this while still in raw mode, with a defined CRLF on every host.
+        write!(output, "\r\n")?;
+        queue!(output, Show)?;
+        output.flush()
+    }
+}
+
+fn input_line_first_row(previous: usize, cursor_row: usize, rows: usize, height: usize) -> usize {
+    let first = previous.min(rows.saturating_sub(height));
+    if cursor_row < first {
+        cursor_row
+    } else if cursor_row >= first + height {
+        cursor_row + 1 - height
+    } else {
+        first
+    }
+}
+
+// Split the already-highlighted line, carrying its SGR style across row and
+// viewport boundaries. As in the existing editor, each source char is one cell.
+fn input_line_rows(rendered: &str, columns: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    let mut style = String::new();
+    let mut width = 0;
+    let mut chars = rendered.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            let mut escape = String::from(ch);
+            escape.push(chars.next().unwrap());
+            for next in chars.by_ref() {
+                escape.push(next);
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            if escape == RESET {
+                style.clear();
+            } else {
+                style.push_str(&escape);
+            }
+            row.push_str(&escape);
+        } else {
+            row.push(ch);
+            width += 1;
+            if width == columns {
+                if !style.is_empty() {
+                    row.push_str(RESET);
+                }
+                rows.push(row);
+                row = style.clone();
+                width = 0;
+            }
+        }
+    }
+    if !style.is_empty() {
+        row.push_str(RESET);
+    }
+    // Keep an empty last row at an exact width for the insertion caret.
+    rows.push(row);
+    rows
+}
+
 fn redraw_input_line(
+    display: &mut InputLineDisplay,
     prompt: &str,
     buffer: &[char],
     cursor: usize,
@@ -4304,17 +4512,31 @@ fn redraw_input_line(
     cases: Option<&HashMap<String, String>>,
 ) -> io::Result<()> {
     let text: String = buffer.iter().collect();
-    let rendered = syntax_highlight_raw_with_cases(&text, ansi, cases);
-    let prompt_width = visible_width(prompt);
-    let cursor_col = prompt_width + visible_width(&buffer[..cursor].iter().collect::<String>());
-    let mut stdout = io::stdout();
-    execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
-    print!("{prompt}{rendered}");
-    execute!(
-        stdout,
-        MoveToColumn(cursor_col.min(u16::MAX as usize) as u16)
+    let rendered = format!(
+        "{prompt}{}",
+        syntax_highlight_raw_with_cases(&text, ansi, cases)
+    );
+    let cursor_col =
+        visible_width(prompt) + visible_width(&buffer[..cursor].iter().collect::<String>());
+    let (columns, rows) = size().unwrap_or((80, 24));
+    let stdout = io::stdout();
+    // Buffer the entire update, including control sequences, before publishing
+    // it. Queue on this writer (not Vec<u8>) also preserves crossterm's WinAPI
+    // fallback ordering on consoles that do not support VT sequences.
+    let capacity = rendered
+        .len()
+        .saturating_mul(2)
+        .saturating_add(rows as usize * 128)
+        .saturating_add(256);
+    let mut output = io::BufWriter::with_capacity(capacity, stdout.lock());
+    display.write_frame(
+        &mut output,
+        &rendered,
+        cursor_col,
+        columns as usize,
+        rows as usize,
     )?;
-    stdout.flush()
+    output.flush()
 }
 
 #[cfg(test)]
@@ -4396,7 +4618,11 @@ fn insert_editing_buffer_char(buffer: &mut Vec<char>, cursor: &mut usize, ch: ch
     let text: String = buffer.iter().collect();
     let file_command = ["LOAD ", "SAVE ", "RUN ", "MERGE ", "CHAIN "]
         .iter()
-        .any(|command| text.trim_start().starts_with(command));
+        .any(|command| {
+            text.trim_start()
+                .get(..command.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(command))
+        });
     if file_command {
         let tail: String = buffer[*cursor..].iter().collect();
         // Accept the real suffix as well as the closing quote without duplicating it.
@@ -4694,11 +4920,6 @@ fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand
     }
 }
 
-fn contextual_immediate_command_marked(line: &str) -> Option<ContextualImmediateCommand> {
-    let unmarked: String = line.chars().filter(|ch| *ch != CURSOR_MARKER).collect();
-    contextual_immediate_command(&unmarked)
-}
-
 pub(crate) fn is_help_immediate_line(line: &str) -> bool {
     let command = line.trim();
     let Some(prefix) = command.get(..4) else {
@@ -4744,7 +4965,7 @@ fn uppercase_leading_help(line: &mut String) {
         .collect();
 }
 
-fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String {
+fn normalize_main_code_inner(code: &str, editing: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
     let mut i = 0usize;
@@ -4768,12 +4989,12 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
             }
             continue;
         }
-        if is_number_start_at(&chars, i, preserve_marked_number) {
+        if is_number_start_at(&chars, i, editing) {
             let start = i;
-            let (end, contains_marker) = scan_number_token(&chars, i, preserve_marked_number);
+            let (end, contains_marker) = scan_number_token(&chars, i, editing);
             i = end;
             let raw = chars[start..i].iter().collect::<String>();
-            if preserve_marked_number && contains_marker {
+            if editing && contains_marker {
                 out.push_str(&raw);
             } else {
                 out.push_str(&canonicalize_number(&raw));
@@ -4783,19 +5004,29 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
         if is_ident_start(ch) {
             let start = i;
             i += 1;
-            while i < chars.len() && is_ident_char(chars[i]) {
+            while i < chars.len()
+                && (is_ident_char(chars[i]) || (editing && chars[i] == CURSOR_MARKER))
+            {
                 i += 1;
             }
             let word: String = chars[start..i].iter().collect();
-            let upper = word.to_ascii_uppercase();
+            // The caret is not a token boundary. Keep the typed case in the
+            // editable buffer: live highlighting may show a keyword in capitals,
+            // but extending or joining it must recover the original spelling.
+            let upper: String = word
+                .chars()
+                .filter(|ch| *ch != CURSOR_MARKER)
+                .map(|ch| ch.to_ascii_uppercase())
+                .collect();
+            let displayed_word = if editing { &word } else { &upper };
             if upper == "REM" && token_boundary(&chars, start, i) {
-                out.push_str("REM");
+                out.push_str(displayed_word);
                 out.extend(chars[i..].iter());
                 return out;
             } else if upper == "DATA" && token_boundary(&chars, start, i) {
                 // DATA fields are literal text, including unquoted words. New
                 // keywords must never change stored data (e.g. "días" -> "díAS").
-                out.push_str("DATA");
+                out.push_str(displayed_word);
                 if chars.get(i) == Some(&'\t') {
                     out.push(' ');
                     i += 1;
@@ -4813,7 +5044,7 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                     i += 1;
                 }
             } else if is_known_word(&upper) && token_boundary(&chars, start, i) {
-                out.push_str(&upper);
+                out.push_str(displayed_word);
                 if matches!(
                     upper.as_str(),
                     "LOAD"
@@ -4837,7 +5068,7 @@ fn normalize_main_code_inner(code: &str, preserve_marked_number: bool) -> String
                         out.push(' ');
                     }
                 }
-            } else if upper.starts_with("FN") && word.len() > 2 {
+            } else if !editing && upper.starts_with("FN") && word.len() > 2 {
                 out.push_str("FN");
                 out.push_str(&word[2..].to_ascii_uppercase());
             } else {
@@ -5245,6 +5476,41 @@ fn highlight_main(
                     &chars[i..].iter().collect::<String>(),
                 );
                 return out;
+            } else if upper == "DATA" && token_boundary(&chars, start, i) {
+                push_styled(&mut out, palette.keyword, "DATA");
+                while i < chars.len() && chars[i] != ':' {
+                    let start = i;
+                    let mut quoted = false;
+                    while i < chars.len() {
+                        if !quoted && matches!(chars[i], ',' | ':') {
+                            break;
+                        }
+                        if chars[i] == '"' {
+                            quoted = !quoted;
+                        }
+                        i += 1;
+                    }
+                    let field: String = chars[start..i].iter().collect();
+                    let trimmed = field.trim();
+                    let lower = trimmed.to_ascii_lowercase();
+                    let numeric = trimmed.parse::<f64>().is_ok()
+                        || lower.strip_prefix("&h").is_some_and(|digits| {
+                            !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_hexdigit())
+                        })
+                        || lower.strip_prefix("&x").is_some_and(|digits| {
+                            !digits.is_empty() && digits.chars().all(|ch| matches!(ch, '0' | '1'))
+                        });
+                    if numeric {
+                        out.push_str(&highlight_main(&field, palette, None));
+                    } else {
+                        push_styled(&mut out, palette.string, &field);
+                    }
+                    if chars.get(i) == Some(&',') {
+                        push_styled(&mut out, palette.other, ",");
+                        i += 1;
+                    }
+                }
+                after_def = false;
             } else if language::is_keyword(&upper) {
                 push_styled(&mut out, palette.keyword, &upper);
                 if upper == "DEF" {
@@ -5333,7 +5599,10 @@ fn complete_bas_extension(code: &str, editing: bool) -> String {
     let leading_ws = code.len() - trimmed_start.len();
     let commands = ["CHAIN MERGE", "CHAIN", "MERGE", "LOAD", "SAVE", "RUN"];
     for command in commands {
-        if !trimmed_start.starts_with(command) {
+        if !trimmed_start
+            .get(..command.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(command))
+        {
             continue;
         }
         let mut rest_start = leading_ws + command.len();
@@ -5374,7 +5643,7 @@ fn complete_bas_extension(code: &str, editing: bool) -> String {
         }
         let mut out = String::new();
         out.push_str(&code[..leading_ws]);
-        out.push_str(command);
+        out.push_str(&trimmed_start[..command.len()]);
         out.push(' ');
         out.push_str(&cursor_markers);
         out.push('"');
@@ -5458,6 +5727,7 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
     let chars: Vec<char> = source.chars().collect();
     let mut i = 0usize;
     let mut in_string = false;
+    let mut in_data = false;
     while i < chars.len() {
         let ch = chars[i];
         if ch == '"' {
@@ -5470,7 +5740,10 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
             out.extend(chars[i..].iter());
             break;
         }
-        if !in_string && is_ident_start(ch) {
+        if !in_string && ch == ':' {
+            in_data = false;
+        }
+        if !in_string && !in_data && is_ident_start(ch) {
             let start = i;
             i += 1;
             while i < chars.len() && is_ident_char(chars[i]) {
@@ -5481,6 +5754,9 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
                 out.push_str(&word);
                 out.extend(chars[i..].iter());
                 break;
+            } else if word.eq_ignore_ascii_case("DATA") && token_boundary(&chars, start, i) {
+                out.push_str(&word);
+                in_data = true;
             } else if let Some(display) = cases.get(&word.to_ascii_uppercase()) {
                 out.push_str(display);
             } else {
@@ -5529,6 +5805,48 @@ fn is_signed_number_start(chars: &[char], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_line_layout_keeps_edge_caret_and_wrapped_tail() {
+        assert_eq!(input_line_rows("", 4), [""]);
+        assert_eq!(input_line_rows("abcd", 4), ["abcd", ""]);
+        assert_eq!(input_line_rows("abcdefghi", 4), ["abcd", "efgh", "i"]);
+        assert_eq!(input_line_rows("áñΩxy", 4), ["áñΩx", "y"]);
+        assert_eq!(input_line_first_row(0, 5, 6, 3), 3);
+        assert_eq!(input_line_first_row(3, 0, 6, 3), 0);
+        assert_eq!(input_line_first_row(3, 1, 2, 3), 0);
+    }
+
+    #[test]
+    fn input_line_wrapping_preserves_string_colour_across_rows() {
+        let rendered = format!("{ORCHID}abcdefgh{RESET}X");
+        assert_eq!(
+            input_line_rows(&rendered, 4),
+            [
+                format!("{ORCHID}abcd{RESET}"),
+                format!("{ORCHID}efgh{RESET}"),
+                format!("{ORCHID}{RESET}X"),
+            ]
+        );
+        let source = "10 PRINT \"abcdefghijk\": REM next line";
+        let rendered = syntax_highlight_raw_with_cases(source, true, None);
+        let rows = input_line_rows(&rendered, 8);
+        let mut plain = String::new();
+        let mut in_escape = false;
+        for ch in rows.iter().flat_map(|row| row.chars()) {
+            if ch == '\x1b' {
+                in_escape = true;
+            } else if in_escape {
+                if ch == 'm' {
+                    in_escape = false;
+                }
+            } else {
+                plain.push(ch);
+            }
+        }
+        assert_eq!(plain, source);
+        assert!(rows.iter().all(|row| visible_width(row) <= 8));
+    }
 
     #[test]
     fn prompt_assistance_respects_edited_quotes_and_extensions() {
@@ -5637,6 +5955,138 @@ mod tests {
         }
     }
 
+    fn type_prompt_text(buffer: &mut Vec<char>, cursor: &mut usize, text: &str) {
+        for ch in text.chars() {
+            insert_editing_buffer_char(buffer, cursor, ch);
+            materialize_prompt_assistance(buffer, cursor);
+        }
+    }
+
+    #[test]
+    fn prompt_keyword_prefixes_preserve_the_spelling_that_was_typed() {
+        for source in [
+            "valor=7",
+            "printer=9",
+            "orange=2",
+            "format=3",
+            "remember=4",
+            "dataset=5",
+            "helpful=6",
+            "inkwell=8",
+            "screenName=1",
+            "vALor=7",
+            "pruebaOR=7",
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            let text: String = buffer.iter().collect();
+            assert_eq!(text, source);
+            assert_eq!(cursor, buffer.len());
+            assert_eq!(normalize_code(&text), source);
+            let name = source.split('=').next().unwrap();
+            assert!(
+                syntax_highlight_raw_with_cases(&text, true, None)
+                    .contains(&format!("{VARIABLE_STYLE}{name}{RESET}")),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_live_capitals_are_reversible_when_a_keyword_becomes_a_variable() {
+        let mut buffer = Vec::new();
+        let mut cursor = 0;
+        type_prompt_text(&mut buffer, &mut cursor, "val");
+        let text: String = buffer.iter().collect();
+        assert_eq!(text, "val");
+        assert!(syntax_highlight_raw_with_cases(&text, true, None)
+            .contains(&format!("{OTHER_STYLE}VAL{RESET}")));
+        type_prompt_text(&mut buffer, &mut cursor, "or=7");
+        assert_eq!(buffer.iter().collect::<String>(), "valor=7");
+    }
+
+    #[test]
+    fn prompt_deleting_and_joining_words_does_not_freeze_keyword_case() {
+        for source in ["valor=7", "VALor=7"] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            cursor = 0;
+            for _ in 0..3 {
+                buffer.remove(cursor);
+            }
+            assert_eq!(buffer.iter().collect::<String>(), "or=7");
+            assert!(syntax_highlight_raw_with_cases("or=7", true, None)
+                .contains(&format!("{OTHER_STYLE}OR{RESET}")));
+            type_prompt_text(&mut buffer, &mut cursor, "prueba");
+            assert_eq!(buffer.iter().collect::<String>(), "pruebaor=7");
+        }
+        let mut buffer = Vec::new();
+        let mut cursor = 0;
+        type_prompt_text(&mut buffer, &mut cursor, "print er=9");
+        cursor = 6;
+        cursor -= 1;
+        buffer.remove(cursor);
+        assert_eq!(buffer.iter().collect::<String>(), "printer=9");
+        type_prompt_text(&mut buffer, &mut cursor, "x");
+        assert_eq!(buffer.iter().collect::<String>(), "printxer=9");
+    }
+
+    #[test]
+    fn prompt_cursor_inside_identifier_is_not_a_word_boundary() {
+        for word in [
+            "valor", "printer", "pruebaor", "remember", "dataset", "helpful",
+        ] {
+            let source = format!("{word}=7");
+            for cursor in 0..=word.len() {
+                assert_eq!(
+                    normalize_code_for_editing(&source, cursor),
+                    source,
+                    "{source}, cursor={cursor}"
+                );
+                assert_eq!(normalized_cursor_position(&source, cursor), cursor);
+            }
+        }
+    }
+
+    #[test]
+    fn prompt_preserves_literal_case_and_normalizes_keywords_on_acceptance() {
+        for (source, normalized) in [
+            ("print valor+val(\"7\")", "PRINT valor+VAL(\"7\")"),
+            (
+                "data val,print,or : print dataset",
+                "DATA val,print,or : PRINT dataset",
+            ),
+            ("rem val Print or", "REM val Print or"),
+            ("print 1 ' val Print or", "PRINT 1 ' val Print or"),
+            ("help val", "HELP VAL"),
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            let text: String = buffer.iter().collect();
+            assert_eq!(text, source);
+            assert_eq!(normalize_code(&text), normalized);
+        }
+    }
+
+    #[test]
+    fn prompt_lowercase_file_commands_keep_editable_completion() {
+        for (source, expected) in [
+            ("load\"demo\"", "load \"demo.bas\""),
+            ("save \"demo.txt\"", "save \"demo.txt\""),
+            ("chain merge \"demo\"", "chain merge \"demo.bas\""),
+            ("LoAd \"demo.BAS\"", "LoAd \"demo.BAS\""),
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            assert_eq!(buffer.iter().collect::<String>(), expected);
+            assert_eq!(cursor, buffer.len());
+        }
+    }
+
     #[test]
     fn cursor_tracks_inserted_command_space_without_jumping_to_bas_suffix() {
         let load = "load\"a";
@@ -5668,7 +6118,7 @@ mod tests {
         let cursor = "load".chars().count();
         assert_eq!(
             normalize_code_for_editing(load, cursor),
-            "LOAD \"demo.bas\""
+            "load \"demo.bas\""
         );
         assert_eq!(
             normalized_cursor_position(load, cursor),
@@ -5679,7 +6129,7 @@ mod tests {
         let cursor = "load".chars().count();
         assert_eq!(
             normalize_code_for_editing(open_load, cursor),
-            "LOAD \"demo.bas\""
+            "load \"demo.bas\""
         );
         assert_eq!(
             normalized_cursor_position(open_load, cursor),
@@ -5812,7 +6262,7 @@ mod tests {
         assert_eq!(normalize_code("10 print\""), "10 PRINT \"\"");
         assert_eq!(
             normalize_code_for_editing("10 print\"", "10 print\"".chars().count()),
-            "10 PRINT \"\""
+            "10 print \"\""
         );
     }
 
@@ -5923,6 +6373,45 @@ mod tests {
                 "highlighted entry {word} has no HELP topic"
             );
         }
+    }
+
+    #[test]
+    fn data_highlighting_preserves_literal_words_and_resumes_after_colon() {
+        let source = "140 DATA olive, lime, navy, teal, tan, maroon, ivory";
+        let cases = HashMap::from([("OLIVE".to_string(), "Olive".to_string())]);
+        for ansi in [false, true] {
+            for rendered in [
+                syntax_highlight_with_cases(source, ansi, Some(&cases)),
+                syntax_highlight_raw_with_cases(source, ansi, Some(&cases)),
+            ] {
+                assert!(rendered.contains("olive"));
+                assert!(rendered.contains("tan"));
+                assert!(!rendered.contains("TAN"));
+                assert!(!rendered.contains("Olive"));
+            }
+        }
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let rendered = highlight_main(
+                "DATA tan, REM, print, \"a:b,c\", 12, -2.5, &hff:PRINT TAN(0)",
+                palette,
+                None,
+            );
+            for literal in [" tan", " REM", " print", " \"a:b,c\""] {
+                assert!(rendered.contains(&format!("{}{literal}{RESET}", palette.string)));
+            }
+            assert!(rendered.contains(&format!("{}12{RESET}", palette.number)));
+            assert!(rendered.contains(&format!("{}PRINT{RESET}", palette.keyword)));
+            assert!(rendered.contains(&format!("{}TAN{RESET}", palette.other)));
+        }
+        assert_eq!(
+            syntax_highlight_raw_with_cases(
+                "DATA olive, \"a:b\", olive:PRINT OLIVE",
+                false,
+                Some(&cases)
+            ),
+            "DATA olive, \"a:b\", olive:PRINT Olive"
+        );
     }
 
     #[test]

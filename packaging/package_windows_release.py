@@ -75,6 +75,7 @@ Included files
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
 - COPYING: GPLv3-or-later license
+- licenses/: third-party notices
 """,
         encoding="utf-8",
         newline="\r\n",
@@ -89,7 +90,7 @@ def build_package(skip_build: bool) -> Path:
     exe = ROOT / "target" / "release" / "avl-basic.exe"
 
     if not skip_build:
-        run(["cargo", "build", "--release"], ROOT)
+        run(["cargo", "build", "--release", "--locked"], ROOT)
     if not exe.exists():
         raise SystemExit(f"Missing release executable: {exe}")
 
@@ -113,6 +114,7 @@ def build_package(skip_build: bool) -> Path:
         shutil.copy2(ROOT / name, stage / name)
 
     copy_tree(ROOT / "samples", stage / "samples")
+    copy_tree(ROOT / "licenses", stage / "licenses")
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", RELEASE_DIR, package_name)
     return zip_path
 

@@ -5,9 +5,13 @@ Informes en español:
 - [Primera ronda: 4 de septiembre de 2026](RESULTS-2026-09-04.md).
 - [Diagnóstico con perfiles y decisión: 5 de septiembre de 2026](PROFILING-2026-09-05.md).
 - [Regresión de MERGE y corrección: 11 de septiembre de 2026](REGRESSION-2026-09-11.md).
+- [Regresión tras los cambios de ejes y consola: 18 de septiembre de 2026](REGRESSION-2026-09-18.md).
+- [Optimización de índices numéricos en Windows: 18 de septiembre de 2026](INDEX-LEAVES-2026-09-18.md).
+- [Comprobación tras los ejes automáticos: 19 de septiembre de 2026](AXIS-AUTO-2026-09-19.md).
+- [Comprobación tras unificar marcas y etiquetas: 19 de septiembre de 2026](AXIS-CADENCE-2026-09-19.md).
 
-Los candidatos de estas rondas fueron descartados y sus parches experimentales
-retirados. Se conservan las mediciones, conclusiones y herramientas de diagnóstico.
+Los informes distinguen las correcciones incorporadas de los candidatos
+descartados. Se conservan las mediciones, conclusiones y herramientas de diagnóstico.
 
 Las herramientas Python requieren Python 3.10 o posterior.
 
@@ -101,3 +105,9 @@ otras integradas por el compilador. No llamar despacho puro a `run_from_inner`,
 no sumar porcentajes inclusivos de niveles anidados y no convertir muestras de
 CPU en ahorro potencial. Medir cualquier candidato después con ejecutables
 release normales y sin perfilador; añadir símbolos puede cambiar el código.
+
+## Comprobación de la versión 1.6.0
+
+El [seguimiento de 1.6.0](RELEASE-1.6.0.md) compara los ejecutables finales con
+1.5.96 en Pi y Jelly, con y sin ventana. Conserva los datos y hashes e identifica
+la regresión residual; no se considera resuelta.

@@ -7,7 +7,8 @@
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
 line-numbered programs, immediate mode, an integrated full-screen editor and
 debugger, structured control flow, matrix operations, sequential data files,
-sprites, mouse and keyboard input, and a complete built-in graphics environment.
+sprites, mouse and keyboard input, a complete built-in graphics environment,
+CPC-style sound synthesis, and modern audio playback.
 
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
@@ -99,7 +100,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 119-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 123-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -113,8 +114,23 @@ For Windows users, the easiest option is the prebuilt native package:
 The Windows package includes the native interpreter, manuals, examples, assets,
 and license. You do not need Rust or Cargo to use it.
 
-Linux and macOS users can build from source until prebuilt packages are
-published for those platforms.
+Linux x86-64 users can download `avl-basic-*-linux-x64.tar.gz` from the same
+release page, extract it, and run `./avl-basic` from a terminal. The 1.6.0
+binary requires glibc 2.39 or later and `libasound.so.2`; graphics use X11 or
+XWayland. See `README-FIRST.txt` in the package for details. Older Linux
+distributions and macOS users can build from source.
+
+## Sound and Music
+
+Use `SOUND`, `ENV`, `ENT`, `RELEASE`, `SQ` and `ON SQ` for three-channel
+Amstrad CPC-style music, or `AUDIO` to load and play WAV, MP3, Ogg Vorbis and
+FLAC with independent playback channels, volume, stereo pan, playback rate
+and fades. `BEEP` now plays a short synthesized tone.
+
+Try the [CPC manual duet](samples/s-cpc-duet.bas), the
+[playback controls example](samples/s-audio.bas), or
+[Arkanoid with sound effects](samples/g-arkanoid.bas). The required sample
+audio files are included in both desktop packages.
 
 ## Quick Start
 
@@ -135,7 +151,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-119 sample programs and their visual gallery are optional companion material.
+123 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -149,6 +165,22 @@ Build the release interpreter:
 ```bash
 cargo build --release
 ```
+
+Audio uses Kira and CPAL, with built-in decoding for WAV PCM, MP3, Ogg Vorbis,
+and FLAC. On Linux, building also requires `pkg-config` and the ALSA development
+package (`libasound2-dev` on Debian/Ubuntu); the executable requires
+`libasound.so.2` at startup. No external player or codec pack is needed.
+If an output device cannot be opened, audio commands retain their timing in
+silence. `AVL_BASIC_AUDIO=off` starts with output disabled.
+WSLg uses a small Rust adapter for its PulseAudio server, with bounded buffers
+and a connection that can be interrupted. It uses the existing `pulseaudio`
+protocol crate and needs no additional native library. Its upstream MIT notice
+is included in `licenses/pulseaudio-MIT.txt`. Finishing or stopping a program
+releases the audio output; a later `RUN` retries it if necessary. An unresponsive
+output is detected so CPC sound queues can continue silently.
+
+The sound examples are `samples/s-melody.bas` (CPC-style envelopes),
+`samples/s-queue.bas` (`ON SQ`), and `samples/s-audio.bas` (sample playback).
 
 Run interactive mode:
 
@@ -195,6 +227,7 @@ adding a practical modern feature set:
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
 - `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
+- CPC-style sound queues and envelopes, plus modern audio playback controls,
 - embedded bitmap fonts for reproducible graphics text,
 - deterministic examples and regression tests for the native runtime,
 - a visual gallery and categorized sample catalog on GitHub for discovering
@@ -226,17 +259,24 @@ to verify every error name, number, and English message against the Python oracl
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
 - [`tools/`](tools/): maintainer validation and benchmark tools
-- [`samples/`](samples/): 119 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 123 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
-- [`samples/assets/`](samples/assets/): image assets used by examples
+- [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source
 - [`src/language/catalog.tsv`](src/language/catalog.tsv): declarative language and error catalog
 - [`packaging/`](packaging/): release packaging scripts
 
 ## Release Packaging
 
-The generated `release/` directory is local build output. Published binaries
-belong in GitHub Releases, not in the Git repository.
+After validation, run `python packaging/package_windows_release.py --skip-build`
+for Windows, or `python3 packaging/package_linux_release.py --skip-build` on
+Linux/WSL. Both packages include the manuals, complete sample tree and license
+notices. The Linux archive preserves executable permissions and records the
+binary's minimum glibc version.
+
+Unpacked staging directories and raw executables are local build output.
+Versioned Windows ZIPs are retained in Git as in earlier releases; downloadable
+Windows and Linux packages are published in GitHub Releases.
 
 ## License
 

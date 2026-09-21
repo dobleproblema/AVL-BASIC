@@ -1,0 +1,15 @@
+10 REM A one-shot queue event feeds music while the main loop works
+20 PRINT "The dots continue while ON SQ supplies the melody."
+30 IF AUDIOAVAILABLE=0 THEN PRINT "Silent timing: ";AUDIOERROR$
+40 ENV 1,10,-1,2
+50 N=0:ON SQ(1) GOSUB 200
+60 WHILE N<16 OR SQ(1)<>4
+70 PRINT ".";:PAUSE 100
+80 WEND
+90 PRINT:PRINT "All 16 notes have finished.":END
+200 READ P:SOUND 1,P,22,10,1
+210 N=N+1
+220 IF N<16 THEN ON SQ(1) GOSUB 200
+230 RETURN
+300 DATA 478,379,319,379,426,358,284,358
+310 DATA 379,319,253,319,358,284,239,478

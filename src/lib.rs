@@ -1,3 +1,4 @@
+mod audio;
 pub mod console;
 mod data_files;
 pub mod debugger;

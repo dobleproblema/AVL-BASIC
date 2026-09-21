@@ -28,6 +28,8 @@ Contents
 6.7 - Sprites
 6.8 - Mouse in the graphics window
 7.  - Interrupts
+7.1 - Classic sound and sound queues
+7.2 - Audio files and playback controls
 8.  - System, time and debugging
 8.1 - Execution and resumption (RUN - STOP - CONT - END - CTRL+C)
 8.2 - Error handling
@@ -44,15 +46,19 @@ Contents
 
 Requirements
 - Prebuilt Windows package: Windows x64. No Rust toolchain or external runtime is required.
+- Prebuilt Linux 1.6.0 package: x86-64, glibc 2.39 or later and `libasound.so.2`; graphics require X11 or XWayland. See the package's `README-FIRST.txt` for runtime requirements.
 - Building from source: Rust stable toolchain and a native desktop environment for the graphics window.
+- Sound uses the operating system's audio output. The file decoders are included in the executable; no external player or codec pack is needed. Linux uses the system audio stack (normally already present on a desktop, including `libasound.so.2`). Building on Linux also requires the corresponding development packages. If no output device is available, programs can continue with silent audio timing; see sections 7.1 and 7.2.
 
 Installation by system
 - Windows: download the latest `avl-basic-*-windows-x64.zip` from GitHub Releases, extract it, and run `avl-basic.exe`.
-- Linux/macOS: build from source with `cargo build --release` until prebuilt packages are published for those platforms.
+- Linux: download `avl-basic-*-linux-x64.tar.gz` from GitHub Releases, extract it, and run `./avl-basic` from a terminal in that folder. On older distributions, build from source with `cargo build --release`.
+- macOS: build from source with `cargo build --release`.
 - Linux desktop integration: after building, run `sh packaging/install_linux_desktop.sh`. This installs the executable, the application icon and an AVL BASIC launcher for the current user, without requiring root permissions. The graphics window also obtains the same embedded icon under X11.
 
 Quick check
 - Windows package: run `avl-basic.exe`.
+- Linux package: run `./avl-basic`.
 - Source build: run `target/release/avl-basic` or `target\release\avl-basic.exe` on Windows.
 
 Light theme in white-background terminals
@@ -116,6 +122,8 @@ Whenever you enter a line, the console automatically highlights the syntax with 
 It also automatically normalizes what you type both in program lines and in immediate mode: it uppercases keywords, inserts required spaces, closes missing quotes in string commands, and gives numbers a canonical format. Indentation in the code is preserved.
 
 Suggested quotes and the `.bas` extension become editable characters in the input buffer. You can move through them or delete them; redrawing the prompt or pressing Enter does not restore deleted characters. Explicit file extensions are preserved.
+
+During immediate input and `EDIT number`, capitals introduced by highlighting are visual only: the original spelling is retained until the line is accepted. Extending `val` with `or` therefore produces `valor`, not `VALor`; deleting or joining words works the same way. Pressing Enter normalizes complete keywords.
 
 Although uppercase/lowercase is not significant, variables keep the style used the first time that variable appeared throughout the whole program. If you want to change the style of a variable, you must edit, with `EDIT`, any program line that contains it and retype it using the new style.
 
@@ -764,12 +772,12 @@ Example (show all colors from the predefined palette on screen)
 + YAXIS [ticks][,ymin,ymax][,side][,subdiv]
 
 Parameter                Meaning
-- ticks                  Distance between tick marks (user units). If omitted: `1`.
+- ticks                  Distance between tick marks (user units). Omitted or empty: automatic. With `0`, only the axis line is drawn, without tick marks, sub-ticks or labels.
 - xmin,xmax / ymin,ymax  Label values at the ends; with `SCALE` active they also delimit the segment of the axis that is drawn.
 - side                   Position of labels relative to the axis. 0 = below/left . 1 = above/right . <0 = no labels (tick marks only).
-- orient (`XAXIS` only)  0 = horizontal text . 1 = vertical.
-- subdiv                 Number of parts `N` between two main ticks (`N>=1`). If `N=1`, there are no sub-ticks.
-                         With `N>1`, `N-1` sub-ticks are drawn (shorter and without labels).
+- orient (`XAXIS` only)  0 = horizontal text (default) . 1 = vertical . 2 = automatic.
+- subdiv                 Number of parts `N` between the final selected main ticks (`N>=1`). If `N=1`, there are no sub-ticks.
+                         With `N>1`, up to `N-1` sub-ticks are drawn (shorter and without labels) when space permits.
 - `XAXIS/YAXIS` require `SCALE` to be active (explicitly defined with `SCALE ...`).
 - With the default physical scale (without explicit `SCALE`), `XAXIS/YAXIS` raise an error.
 - If you want axes in physical scale, define an equivalent explicit scale:
@@ -782,20 +790,36 @@ Parameter                Meaning
 
 Quick notes (axes)
 - The intersection and tick spacing are expressed in user units (affected by `SCALE`).
-- If `CROSSAT` is present, tick phase uses that crossing point (independently of drawing order).
-- If there is no `CROSSAT`, tick phase uses `(0,0)`.
+- With an omitted or empty step, the axis chooses a spacing from `1, 2, 5` multiplied by a power of ten, considering the range, available pixels and label size. Examples: `XAXIS`, `YAXIS`, or `XAXIS ,,,1` for automatic spacing with labels above the axis.
+- If `CROSSAT` is present, the original tick grid is anchored at that crossing point (independently of drawing order).
+- If there is no `CROSSAT`, the original tick grid is anchored at `(0,0)`.
+- If the crossing coordinate lies outside the axis segment, the tick grid starts at its lower-value endpoint (`xmin` or `ymin`), as in earlier versions.
 - `XAXIS/YAXIS` labels are always drawn with `SMALLFONT`, regardless of the active font (`BIGFONT/SMALLFONT`).
 - `XAXIS/YAXIS` respect `INK` and `MASK` (text labels are not masked).
-- If the resulting tick spacing is too dense, neither marks nor labels are drawn:
-- Threshold with labels: less than 18 pixels per tick.
-- Threshold without labels (`side<0`): less than 9 pixels per tick.
-- If sub-ticks become too dense, they are automatically omitted:
-- Sub-tick threshold: less than 6 pixels between sub-ticks.
-- `YAXIS` avoids overwriting labels already drawn by `XAXIS` at crossings, to keep them readable.
+- Label precision adapts to the tick spacing and values, including fractional `CROSSAT` offsets, so nearby ticks have distinct labels. Unnecessary trailing zeroes are removed.
+- Main ticks and labels use the same regular spacing. If labels are too wide or tall, both are reduced together (every second, third, etc. tick), leaving at least 10 pixels between label boxes. The reduction is anchored at the crossing value: when it lies within the segment, the mark for that value is retained with evenly spaced neighbors. Zero may fall outside this selection.
+- A dense explicit step is reduced to a regular subset of its original tick grid, using an integer multiple of the requested spacing. Only the main marks selected for the final label spacing are drawn; discarded main marks do not remain as long ticks.
+- Requested subdivisions split the interval between the final selected main ticks, including when an explicit dense step has been reduced. Sub-ticks are shorter than main ticks and are drawn only when their spacing is at least 6 pixels.
+- With `orient=2`, `XAXIS` prefers horizontal labels and switches the whole axis to vertical labels only when they fit on screen and allow approximately twice as many labels: V > H and V >= 2*H - 2, where H and V are the counts of labels that fit horizontally and vertically. The two-label tolerance accounts for omissions at the ends or crossing. Example: `XAXIS 0.0001,,,,2`.
+- At the exact crossing, `XAXIS` shifts its label to the right; `YAXIS` omits its label. Labels at or near the crossing are also omitted whenever their full box would intersect the perpendicular axis defined by `CROSSAT` (default `(0,0)`), in any orientation or label side. Local omissions for this reason, lack of space or an edge leave the regular spacing unchanged and retain any tick selected by that spacing.
+- Both axes protect labels already drawn by the other axis, in either drawing order. Regular label reduction may therefore have local omissions near the crossing to prevent collisions.
 - Useful trick: to keep the `XAXIS` label at the crossing point centered on its tick (instead of shifted to the right), draw `XAXIS` before defining `CROSSAT`:
   `XAXIS 10 : CROSSAT 1960,0 : YAXIS 30`
 - If the `ticks` parameter is written as a literal in exponential notation (for example, `1E+5`), the axis labels are also shown in exponential notation.
+- Very small or large values also use exponential notation automatically when it makes the labels substantially shorter without losing the precision needed for the tick spacing.
+- Sample `samples/g-axis-labels.bas` shows automatic spacing on small and large scales, dense explicit steps, fractional crossings, automatic orientation and ticks without labels.
 - Use them after setting scales to overlay data and axes without recalculating positions.
+
+Simplifying decimal labels with ROUND
+- Rounding the tick spacing is a practical way to simplify or limit decimals in common cases. With the default crossing `(0,0)` and a scale from `-PI` to `PI`, `XAXIS ROUND(PI/2,2)` produces the labels `-3.14`, `-1.57`, `0`, `1.57`, `3.14`. See `samples/g-function2.bas`.
+- This slightly shifts the marks; when rounding is small relative to the step, the change is usually negligible at the graph's resolution. Precision remains adaptive: a decimal `CROSSAT` crossing that is not aligned with the step may need more decimal places. Trailing zeroes are removed.
+
+Tick marks without labels (`side<0`)
+- `XAXIS 0.5,,,-1` and `YAXIS 0.5,,,-1` draw tick marks without labels, as in `samples/g-scale2.bas`. A negative side plans the same marks as `side=0`, then hides the text. This also applies to automatic spacing, for example `XAXIS ,,,-1`. By comparison, `XAXIS 0` and `YAXIS 0` draw only the axis line, without marks or labels.
+
+Compatibility with earlier programs
+- Normal labels are no longer limited to two decimal places: with `XAXIS PI/2`, `-PI` is shown as `-3.142` instead of `-3.14`. Wider labels may need a larger `SCALE` border to fit at the ends (for example, `25` in `samples/g-function2b.bas`). The border is not enlarged automatically.
+- Omitting the tick spacing now selects it automatically. To retain the earlier default step, write `XAXIS 1` or `YAXIS 1` explicitly. Dense explicit steps retain a regular subset with marks and labels. Use `XAXIS 0` or `YAXIS 0` for the axis line alone.
 
 Example
 10 CLG : B=80
@@ -1048,8 +1072,8 @@ Examples (right button exits)
 
 + AFTER <timer delay>[, <timer number>] GOSUB [line number]
 + EVERY <time period>[, <timer number>] GOSUB <line number>
-+ EI              Enables timer/mouse interrupts previously inhibited with `DI`.
-+ DI              Inhibits timer/mouse interrupts; it does not inhibit `CTRL+C`.
++ EI              Enables timer, mouse and sound-queue interrupts previously inhibited with `DI`.
++ DI              Inhibits timer, mouse and sound-queue interrupts; it does not inhibit `CTRL+C` or stop sound playback.
 + CANCEL n        Permanently disables current timer `n`
 + REMAIN(n)       Function. Returns the remaining count of the specified timer (0 to 3)
 
@@ -1067,7 +1091,7 @@ Example
 30 PRINT "Will I 'guess' the letter I myself picked in 5 seconds? ;)"
 35 IF a$<>s$ THEN 35
 40 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!"
-45 BEEP : END
+45 BEEP : PAUSE 120 : END
 50 PRINT : PRINT "Too late. I win too! :DDD"
 55 END
 60 a$=FNSOL$
@@ -1077,14 +1101,101 @@ Example
 Notes
 - `AFTER` and `EVERY` timers have a priority equal to their number. When an interrupt routine is entered, AVL BASIC saves the current `DI`/`EI` state and raises the current priority to that interrupt's priority.
 - While an interrupt is being handled, interrupts with equal or lower priority are not dispatched. A timer can interrupt only another timer routine with lower priority.
-- `DI` inhibits all timer/mouse interrupts until `EI`. If `DI` is executed inside an interrupt routine that ends with `RETURN`, that `RETURN` restores the state saved on entry; it is not always the same as an unconditional `EI`. If the routine is left with `GOTO` or `END`, there is no automatic restoration.
+- `DI` inhibits all timer, mouse and sound-queue interrupts until `EI`. If `DI` is executed inside an interrupt routine that ends with `RETURN`, that `RETURN` restores the state saved on entry; it is not always the same as an unconditional `EI`. If the routine is left with `GOTO` or `END`, there is no automatic restoration.
 - Mouse events (`ON MOUSE`) have higher priority than timers and can therefore interrupt them.
+
+7.1 Classic sound and sound queues
+
++ SOUND state,period[,duration[,volume[,env[,ent[,noise]]]]]
++ RELEASE mask
++ ENV id[,steps,delta,ticks[,steps,delta,ticks...]]
++ ENT id[,steps,delta,ticks[,steps,delta,ticks...]]
++ SQ(channel)
++ ON SQ(channel) GOSUB line
+
+`SOUND` provides three CPC-style tone/noise channels, independent of the 32 sample-playback channels in section 7.2. Notes play asynchronously, so BASIC can keep drawing or computing. This is a CPC-inspired musical model, not a cycle-accurate emulation of an AY chip.
+
+Notes and queues
+- Parameters of `SOUND`, `ENV`, `ENT`, `RELEASE`, `SQ`, and the channel of `ON SQ` accept real expressions: round to the nearest integer, with exact halves away from zero, then check the range. For example, `SOUND 1,&H647/8` uses period 201; an explicit `ROUND` is unnecessary. Rounding the result does not change expression rules: array indexes still require exact integers. When porting a CPC listing, use an index such as `escala(ROUND(nd1))` if it may be fractional.
+- `state` selects channels with bits 1 (A), 2 (B), and 4 (C). Combine bits to send the same note to several channels. Add 64 to hold a note until `RELEASE`; add 128 to flush the selected channels before queuing it.
+- Bits 8, 16, and 32 request a rendezvous with channels A, B, and C respectively: the note waits until the requested channels have compatible notes ready. For example, `SOUND 17,478,30` and `SOUND 10,379,30` rendezvous channels A and B.
+- `period` is an integer from 0 to 4095; a larger period gives a lower pitch. The tone frequency is approximately `62500/period` Hz. Period 0 disables the tone component.
+- `duration` defaults to 20 and is an integer from -32768 to 32767. Positive values are centiseconds (1/100 s); 0 uses one complete volume envelope, and a negative value repeats that envelope `ABS(duration)` times. Envelope 0 or an undefined envelope supplies a constant two-second envelope for this purpose.
+- `volume` is 0..15 (default 12). `env` and `ent` select volume and tone envelopes 0..15 (default 0, no defined envelope). `noise` is 0..31 (default 0, no noise); the noise generator is shared by the three classic channels.
+- Volume levels use a quadratic amplitude curve, `(level/15)^2`, following CPCBasic's musical approximation. Channel A plays on the left, C on the right, and B in the center with equal-power stereo distribution. This keeps the voices balanced without claiming an exact reproduction of the AY chip's analog output.
+- Each channel has one active note and room for four pending notes. If a selected queue is full, `SOUND` waits for room while servicing events and allowing `CTRL+C`. A held note occupies a pending slot.
+- `RELEASE mask` accepts 1..7, using the same channel bits. It releases the held note at the head of each selected inactive channel; later held notes still need their own release.
+
+Envelopes
+- `ENV` defines a volume envelope numbered 1..15, with at most five sections. Each section has an integer step count 0..127, a delta -128..127, and a step time 0..255 centiseconds; time 0 means 256 centiseconds.
+- The first step is applied immediately. Subsequent steps change the volume by `delta`, wrapping modulo 16. A section with `steps=0` sets the volume to `delta` modulo 16 and holds it for one step time. At the end, the last volume is retained for the rest of the note.
+- `ENT` defines a tone envelope numbered 1..15, also with at most five sections. Use a negative envelope number to repeat its sections until the note ends; `SOUND` still refers to its positive number. Its step counts are 0..239, deltas -128..127, and times follow `ENV`. Period changes accumulate and are limited to 0..4095.
+- An `ENT` section may instead be written `=period,ticks`, for example `ENT 2,=200,10,=100,10`. This sets an absolute period 0..4095 for that time. As an AVL BASIC extension, a three-value `ENT` section with `steps=0` waits one step time without changing the period; its delta is ignored but must remain in range.
+- `ENV id` or `ENT id` without sections deletes that definition. Number 0 is reserved. A note takes a copy of its envelope definitions when it starts, so redefining one does not alter a note already playing.
+- Hardware-envelope sections of the original CPC `ENV` syntax are not implemented and report error 38 (`Unsupported`).
+
+Queue queries and events
+- `SQ(channel)` accepts exactly 1, 2, or 4. Bits 0..2 give the number of free pending slots (0..4); bits 3..5 describe a pending rendezvous; bit 6 indicates a held head note; bit 7 indicates a playing note. The playing, held and rendezvous states are exclusive. An empty idle channel returns 4.
+- `(SQ(1) AND 7)>0` tests whether channel A has queue room. `SQ(1)=4` means all of its notes have finished.
+- `ON SQ(channel) GOSUB line` arms a one-shot event for queue room, including a queue that already has room. Rearm it to receive another event; `ON SQ(channel) GOSUB 0` disables it. The handler must finish with `RETURN` and cannot interrupt itself: rearming inside it takes effect after return.
+- `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress.
+
+Example
+10 ENV 1,12,-1,2
+20 SOUND 65,478,30,12,1
+30 SOUND 66,379,30,12,1
+40 SOUND 68,319,30,12,1
+50 RELEASE 7
+60 WHILE SQ(1)<>4 OR SQ(2)<>4 OR SQ(4)<>4
+70 PAUSE 10
+80 WEND
+90 END
+
+See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.bas` for music supplied by a rearmed `ON SQ` handler.
+`samples/s-cpc-duet.bas` adapts the two-part score from the English CPC6128 User Instructions (AMSOFT), chapter 9, pp. 46-47, with channel rendezvous and fractional tone periods. It preserves the original English comments and score. AVL-BASIC adaptations omit integer-variable suffixes (`%`), rename `scale`/`scale$` to `notes`/`notes$` because `SCALE` is reserved, use `&H` hexadecimal prefixes and wait for both sound queues before `END`.
+
+7.2 Audio files and playback controls
+
++ AUDIO ON | AUDIO OFF
++ AUDIO LOAD id,"path"
++ AUDIO UNLOAD [id]
++ AUDIO PLAY channel,id[,loop[,volume[,pan[,rate]]]]
++ AUDIO STOP [channel]
++ AUDIO PAUSE [channel]
++ AUDIO RESUME [channel]
++ AUDIO VOLUME channel,value[,fade_ms]
++ AUDIO PAN channel,value[,fade_ms]
++ AUDIO RATE channel,value[,fade_ms]
++ AUDIOAVAILABLE | AUDIOERROR$ | AUDIOSTATE(channel) | AUDIOPOS(channel)
+
+- `AUDIO LOAD` decodes a mono or stereo WAV (PCM), MP3, Ogg Vorbis, or FLAC file into a sample slot 1..64. Relative paths use the program's directory during execution, or the current directory in immediate mode, as with `BLOAD`. Include the required files when sharing a program. Samples are loaded into memory, without streaming: each encoded file and the total decoded sample cache are limited to 128 MiB. Replacing a slot preserves voices already using its previous sample; a failed load preserves the previous slot.
+- `AUDIO PLAY` starts or replaces a voice on channel 1..32. These channels can overlap and are separate from `SOUND` channels. `loop` defaults to 0 (play once); 1 or -1 repeats the sample. Volume is 0..1 (default 1), stereo pan is -1..1 (default 0, center), and playback rate is 0.125..8 (default 1). Changing rate also changes pitch.
+- `AUDIO STOP`, `AUDIO PAUSE`, and `AUDIO RESUME` affect one channel, or all sample channels when omitted. Pause keeps the current position; resume continues it. `AUDIO UNLOAD` stops voices using one sample slot and frees that slot, or stops all sample voices and frees all loaded samples when omitted.
+- `AUDIO VOLUME`, `AUDIO PAN`, and `AUDIO RATE` change a playing channel. Optional `fade_ms` is an integer number of milliseconds (0..600000) over which the new value is reached smoothly; omission or 0 applies it immediately.
+- `AUDIOSTATE(channel)` returns 0 for stopped, 1 for playing, or 2 for paused. `AUDIOPOS(channel)` returns its playback position in seconds. Both use channels 1..32.
+- `AUDIOAVAILABLE` returns -1 when real audio output is available, otherwise 0. It initializes output lazily on first use. `AUDIOERROR$` gives a diagnostic when audio cannot be opened. Neither function takes arguments or parentheses.
+- `AUDIO OFF` stops current sounds and disables output while retaining loaded samples. Later `SOUND` and `AUDIO PLAY` still advance silently, including queue events, positions and completion. `AUDIO ON` enables output for future playback and permits another attempt to open a device. Sample voices that already started silently remain silent; use a new `AUDIO PLAY` to hear them. The same silent timing is used when no output device can be opened, so a BASIC program can continue without sound. Invalid arguments or unreadable audio files still produce normal errors.
+- Set the environment variable `AVL_BASIC_AUDIO=off` before launching the interpreter to force silent operation, for example in automated tests. Audio synthesis and decoding are internal; no external player is launched.
+- `RUN`, `NEW`, `CLEAR`, and `CHAIN` reset sound queues, envelopes, loaded samples, and sound-event handlers. `END`, an unhandled execution error, `STOP`, and `CTRL+C` stop voices and discard queued notes. `CONT` resumes the program, without restoring those sounds. Because playback is asynchronous, wait for completion before `END` if you want the final note or sample to finish.
+- Stopping or finishing a program also releases the audio output. The next `RUN` attempts to open it again when needed, even if an earlier attempt failed. If output stops responding during playback, classic queues continue silently, sample voices stop, and `AUDIOERROR$` retains the diagnostic. `AUDIO ON` permits another attempt without leaving the interpreter. WSLg uses its PulseAudio server directly.
+- Sample channel/slot numbers, the loop flag, and `fade_ms` in the `AUDIO` family must be exact integers. Classic sound uses the rounding described in 7.1. Out-of-range arguments report error 26. File operations use the existing file errors (40, 61, or 62).
+
+Example
+10 AUDIO LOAD 1,"assets/audio/chime.wav"
+20 IF AUDIOAVAILABLE=0 THEN PRINT AUDIOERROR$
+30 AUDIO PLAY 1,1,0,0.4
+40 WHILE AUDIOSTATE(1)<>0
+50 PAUSE 10
+60 WEND
+70 END
+
+Run `samples/s-audio.bas` for looping, pan/rate changes, fades, pause and resume using the included generated WAV.
 
 8. System, time and debugging
 
 + RANDOMIZE [seed]
 + PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed
-+ BEEP                  ASCII tone
++ BEEP                  Short asynchronous tone, equivalent to `SOUND 1,142,10,10`
 + TRON | TROFF          Step-by-step trace
 + DEG | RAD             Trigonometry in degrees/radians
 + EXIT | QUIT | SYSTEM  Leave the interpreter
@@ -1121,6 +1232,7 @@ Expected output
 
 Notes
 - `RUN` starts execution with a clean start (state reset). Use `CONT` or `GOTO n` only when you have stopped with `STOP`/`CTRL+C` and want to continue without restarting.
+- Stopping or ending execution also stops audio and clears pending notes. `CONT` resumes BASIC execution but does not restart those sounds; see sections 7.1 and 7.2.
 - During a numbered program, `CTRL+C` interrupts execution in the same way as `STOP`; it can be resumed with `CONT` without losing state, except when that interruption was triggered by closing a graphics window.
 - While statements or loops entered at the prompt are running, `CTRL+C` cancels that immediate execution and returns to `Ready`, preserving current variables and open data-file channels. The immediate command itself cannot be resumed with `CONT`; if a program was already stopped beforehand, `CONT` still resumes that program.
 - At an idle prompt, `CTRL+C` exits the interpreter.
@@ -1228,7 +1340,7 @@ Notes
 
 9.1 Commands forbidden in immediate mode:
 
-+ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | RESUME | RETURN | STOP
++ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
 
 Range formats
 1 `n`        Only line `n`
@@ -1269,7 +1381,7 @@ Notes on `DEBUG`
 - Numeric edits accept finite decimal literals, optionally signed or in exponent notation, not expressions. String edits need no enclosing quotes; quotes are ordinary characters. Use `\\`, `\n`, `\r`, `\t`, `\0`, `\xNN` or `\u{...}` for backslashes and control characters. Unicode characters with variable terminal width are also displayed as reversible escapes while editing, keeping the cursor aligned. Invalid input remains editable without changing the variable or invoking `ON ERROR`. Timers remain paused throughout editing.
 - Pinned variables, collapsed categories, focus, selection and scroll position are retained across pauses in the current `DEBUG` session. They are not stored in the `.bas` file and reset on the next `DEBUG`. Inspector navigation uses only the keyboard.
 - From the code panel, F4 shows the existing output screen while the program remains paused, without adding a prompt. Press F4 again or Esc to return to the same debugger pause with the code focused, preserving the viewed line and inspector state without executing a statement. While viewing output, Ctrl+C still aborts; other keys are ignored. Return to the code panel before using F5/F6/F7/F8.
-- With F6/F7/F8, the debugger screen is retained during steps that do not need the console. The normal output screen is restored immediately before console output (for example, `PRINT`, `CLS`, or `BEEP`) or console input through `INPUT`, `LINE INPUT`, or `MAT INPUT`. `INKEY$`, `KEYDOWN`, and `PAUSE` also restore that screen before polling or waiting for input. The next pause shows the debugger again. F5 still leaves the debugger screen immediately.
+- With F6/F7/F8, the debugger screen is retained during steps that do not need the console. The normal output screen is restored immediately before console output (for example, `PRINT` or `CLS`) or console input through `INPUT`, `LINE INPUT`, or `MAT INPUT`. `INKEY$`, `KEYDOWN`, and `PAUSE` also restore that screen before polling or waiting for input. The next pause shows the debugger again. F5 still leaves the debugger screen immediately.
 - Preparing the graphics window, drawing, presenting, and reading the graphics buffer (for example, `TEST`, `TESTCHR$`, `SCREEN$`, or `SPRITE$`) do not switch the console screen. `GINPUT` uses only the graphics window and does not show the output console either. File I/O alone does not switch screens.
 - When the current program is using the graphics window, the current graphics buffer is presented automatically on entering each debugger pause. After F6, the next pause therefore shows the graphics changes made by the previous step without needing to add `FRAME`. With F7/F8, the accumulated result is presented at the next debugger stop. This inspection update does not execute `FRAME` or apply its FPS limiter; explicit `FRAME` and `FRAME fps` calls retain their normal behavior.
 - Window focus is independent of the screen shown in the console. During F6/F7/F8 stepping, configuring, drawing, or presenting an existing graphics window does not activate it; refocusing is reserved for input. The automatic refresh at each stop does not activate it either. `GINPUT` explicitly requests focus; `INKEY$`, `KEYDOWN`, and `PAUSE` restore graphics focus when using graphical input. F5 restores the normal focus policy; behavior outside `DEBUG` is unchanged. The operating system may briefly activate a newly created or recreated window.
@@ -1517,7 +1629,7 @@ executing its body.
   - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`).
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
   - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the function body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
 
 Definition and usage example
@@ -1577,7 +1689,7 @@ Multiline subroutines
   - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - Inside the block, the subroutine name may be used as a local variable. Its previous value is restored on exit.
   - Indirect calls between subroutines are allowed, but a subroutine may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
   - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the subroutine body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
   - `ON ERROR`, `RESUME NEXT`, and `TRON` work inside `CALL` exactly as they do in multiline functions, with the same jump restrictions.
 

@@ -1,6 +1,6 @@
 100 DEF FNX(X)=TAN(X) 'The one-variable function we want to plot
 101 MODE 1024
-105 B=20 'Border discarded at each end so, for example, the labels fit
+105 B=25 'Border wide enough for the adaptive axis labels
 110 D=-PI : H=PI 'Start and end of the plot; the function may extend beyond the screen
 115 P=0.01 'Precision: the larger the number, the lower the precision and the higher the speed
 120 SCREEN : CLG

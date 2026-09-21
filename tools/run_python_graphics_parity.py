@@ -361,6 +361,308 @@ GRAPHICS_SMOKE_CASES = [
 """,
     ),
     GraphicsCase(
+        name="axes_omitted_and_empty_automatic_spacing",
+        description="omitted and empty steps select the same readable marks on small and large scales",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 0,0.01,0,1000000,80
+30 XAXIS : YAXIS
+40 PRINT "__AVL_GRAPHICS_SCREEN__=omitted="+SCREEN$
+50 CLG : SCALE 0,0.01,0,1000000,80
+60 XAXIS , : YAXIS ,
+70 PRINT "__AVL_GRAPHICS_SCREEN__=empty="+SCREEN$
+80 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_fractional_crossing_subdivisions",
+        description="automatic ticks keep a fractional CROSSAT phase and requested subdivisions",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -0.003,0.003,-0.003,0.003,80 : CROSSAT 0.0005,0.0005
+30 XAXIS ,,,,,2 : YAXIS ,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_small_scientific_range",
+        description="automatic steps and labels remain distinct on extremely small ranges",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -3E-20,3E-20,-3E-20,3E-20,80
+30 XAXIS : YAXIS
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_spacing_vertical_and_hidden",
+        description="empty steps support automatic orientation and hidden text without changing tick selection",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 12345.6789,12345.6809,-1,1,80 : CROSSAT 12345.6799,0
+30 XAXIS ,,,,2,2 : YAXIS ,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=visible="+SCREEN$
+50 CLG : SCALE 12345.6789,12345.6809,-1,1,80 : CROSSAT 12345.6799,0
+60 XAXIS ,,,-1,2,2 : YAXIS ,,,-1,2
+70 PRINT "__AVL_GRAPHICS_SCREEN__=hidden="+SCREEN$
+80 CLG : SCALE 12345.6789,12345.6809,12345.6789,12345.6809,80
+90 CROSSAT 12345.6799,12345.6799 : MASK 170
+100 XAXIS 0.0002,,,,1,2 : YAXIS 0.0002,,,,2
+110 PRINT "__AVL_GRAPHICS_SCREEN__=masked_offset="+SCREEN$
+120 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_explicit_zero_and_one",
+        description="explicit step one preserves its lattice and zero draws only axis lines",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-1,1,40
+30 XAXIS 1 : YAXIS 1
+40 PRINT "__AVL_GRAPHICS_SCREEN__=one="+SCREEN$
+50 CLG : SCALE -1,1,-1,1,40
+60 XAXIS 0 : YAXIS 0
+70 PRINT "__AVL_GRAPHICS_SCREEN__=zero="+SCREEN$
+80 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_spacing_clipped_range",
+        description="automatic spacing uses the visible ORIGIN viewport when explicit axis ranges extend beyond SCALE",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 ORIGIN 0,0,80,560,400,80 : SCALE -1,1,-1,1,20
+30 XAXIS ,-4,4 : YAXIS ,-4,4
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_dense_labels_640",
+        description="dense labels and major ticks share a regular cadence, with requested short subdivisions",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.1,,,,,2 : YAXIS 0.1,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_auto_nearly_double_labels",
+        description="automatic orientation accepts twenty vertical labels versus ten horizontal labels",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.1,,,,2,2 : YAXIS 0.1,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_crossing_label_omitted_800",
+        description="crowded shifted crossing label is omitted without suppressing its neighbors",
+        program=r"""
+10 SCREEN : MODE 800 : PAPER 0 : CLG
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.1,,,,,2 : YAXIS 0.1,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_fractional_crossing_precision",
+        description="thousandth ticks retain the extra precision of a fractional crossing",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -0.005,0.005,-1,1,40 : CROSSAT 0.0005,-0.3
+30 XAXIS 0.001 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_tiny_scientific_subdivisions",
+        description="extremely small scientific ticks remain distinct with subdivisions",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1E-19,1E-19,-1,1,30 : CROSSAT 0,0.25
+30 XAXIS 1E-20,,,,,2 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_vertical_labels",
+        description="automatic orientation uses vertical labels for long nearby values",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 12345.6789,12345.6809,-1,1,40 : CROSSAT 12345.6799,0.4
+30 XAXIS 0.0001,,,,2 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_orientation_near_edge",
+        description="automatic orientation keeps horizontal labels when vertical text cannot fit",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 12345.6789,12345.6809,-1,1,20 : CROSSAT 12345.6799,-0.9
+30 XAXIS 0.0001,,,,2 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_vertical_labels_above",
+        description="explicit vertical X labels above the axis preserve precision and spacing",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 12345.6789,12345.6809,-1,1,40 : CROSSAT 12345.6799,-0.5
+30 XAXIS 0.0001,,,1,1 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_y_first_masked",
+        description="XAXIS protects existing YAXIS labels when masked axes are drawn in reverse order",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG : MASK 170
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 YAXIS 0.1,,,,2 : XAXIS 0.1,,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_origin_viewport_labels",
+        description="adaptive axis labels respect an ORIGIN viewport and its SCALE border",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 ORIGIN 0,0,80,559,419,60 : SCALE -1,1,-3/4,3/4,16
+30 CROSSAT -0.1,0.3 : XAXIS 0.1,,,,2,2 : YAXIS 0.1,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_automatic_scientific_labels",
+        description="small decimal tick literals use compact scientific labels automatically",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -0.00000001,0.00000001,-1,1,40 : CROSSAT 0,0.25
+30 XAXIS 0.000000001 : YAXIS 0.25
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_clg_resets_label_collision_state",
+        description="CLG clears previous axis label protection before a new scale and crossing",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.1,,,,,2 : YAXIS 0.1,,,,2
+40 PRINT "__AVL_GRAPHICS_SCREEN__=before="+SCREEN$
+50 CLG : SCALE -0.005,0.005,-1,1,40 : CROSSAT 0.00025,-0.3
+60 XAXIS 0.001 : YAXIS 0.25
+70 PRINT "__AVL_GRAPHICS_SCREEN__=after="+SCREEN$
+80 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_crossing_outside_scale_phase",
+        description="tick phase remains precise when CROSSAT lies outside a narrow large-value scale",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE 1000,1000.02,-1,1,20 : CROSSAT 1001,0
+30 XAXIS 0.001
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_masked_partial_ticks_protect_labels",
+        description="masked Y subdivisions preserve existing scientific X labels at a fractional crossing",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -0.0000008,0.0000008,-1,1,20 : CROSSAT -0.0000002,0
+30 XAXIS 0.0000001 : MASK 170 : YAXIS 0.05,,,,3
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_crossing_anchor_visible_hidden_and_outside",
+        description="reduced grids stay anchored to CROSSAT with hidden text and fall back to the range minimum outside it",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-1,1,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.1 : YAXIS 0.1
+40 PRINT "__AVL_GRAPHICS_SCREEN__=visible="+SCREEN$
+50 CLG : SCALE -1,1,-1,1,20 : CROSSAT -0.1,0.3
+60 XAXIS 0.1,,,-1 : YAXIS 0.1,,,-1
+70 PRINT "__AVL_GRAPHICS_SCREEN__=hidden="+SCREEN$
+80 CLG : SCALE 10,12,10,12,20 : CROSSAT 13,11
+90 XAXIS 0.01
+100 PRINT "__AVL_GRAPHICS_SCREEN__=outside_x="+SCREEN$
+110 CLG : SCALE 10,12,10,12,20 : CROSSAT 11,13
+120 YAXIS 0.01
+130 PRINT "__AVL_GRAPHICS_SCREEN__=outside_y="+SCREEN$
+140 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_labels_clear_perpendicular_lines",
+        description="nearby labels avoid perpendicular lines for both drawing orders, orientations and text sides",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.01,,,,0 : YAXIS 0.01
+40 PRINT "__AVL_GRAPHICS_SCREEN__=horizontal_xy="+SCREEN$
+50 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+60 YAXIS 0.01 : XAXIS 0.01,,,,0
+70 PRINT "__AVL_GRAPHICS_SCREEN__=horizontal_yx="+SCREEN$
+80 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+90 XAXIS 0.01,,,1,1 : YAXIS 0.01,,,1
+100 PRINT "__AVL_GRAPHICS_SCREEN__=vertical_above_xy="+SCREEN$
+110 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+120 YAXIS 0.01,,,1 : XAXIS 0.01,,,1,1
+130 PRINT "__AVL_GRAPHICS_SCREEN__=vertical_above_yx="+SCREEN$
+140 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+150 XAXIS 0.01,,,,2 : YAXIS 0.01
+160 PRINT "__AVL_GRAPHICS_SCREEN__=auto_xy="+SCREEN$
+170 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+180 YAXIS 0.01 : XAXIS 0.01,,,,2
+190 PRINT "__AVL_GRAPHICS_SCREEN__=auto_yx="+SCREEN$
+200 CLG : SCALE -1,1,-1,1,20 : CROSSAT 0.3,0.16
+210 YAXIS 0.01 : XAXIS 0.2
+220 PRINT "__AVL_GRAPHICS_SCREEN__=y_near_x_left="+SCREEN$
+230 CLG : SCALE -1,1,-1,1,20 : CROSSAT 0.3,0.16
+240 XAXIS 0.2,,,1 : YAXIS 0.01,,,1
+250 PRINT "__AVL_GRAPHICS_SCREEN__=y_near_x_right="+SCREEN$
+260 END
+""",
+    ),
+    GraphicsCase(
+        name="axes_extremely_dense_ticks_keep_labels",
+        description="dense automatic orientation yields matching major ticks and labels; requested minors divide that final cadence",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+30 XAXIS 0.01,,,,2 : YAXIS 0.01,,,-1
+40 PRINT "__AVL_GRAPHICS_SCREEN__=axes="+SCREEN$
+50 CLG : SCALE -1,1,-3/4,3/4,20 : CROSSAT -0.1,0.3
+60 XAXIS 0.01,,,,2,2 : YAXIS 0.01,,,-1,2
+70 PRINT "__AVL_GRAPHICS_SCREEN__=subdivisions="+SCREEN$
+80 END
+""",
+    ),
+    GraphicsCase(
         name="filled_circle_sprite_shape",
         description="FCIRCLE scanline fill matches sprite-collision silhouettes",
         program=r"""
