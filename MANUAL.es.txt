@@ -1127,16 +1127,16 @@ Notas
 + SQ(canal)
 + ON SQ(canal) GOSUB linea
 
-`SOUND` ofrece tres canales de tono/ruido al estilo CPC, independientes de los 32 canales para muestras del apartado 7.2. Las notas se reproducen de forma asíncrona y BASIC puede seguir dibujando o calculando. Es un modelo musical inspirado en el CPC, no una emulación del chip AY con precisión de ciclos.
+`SOUND` ofrece tres canales de tono/ruido al estilo CPC, independientes de los 32 canales para muestras del apartado 7.2. Las notas se reproducen de forma asíncrona y BASIC puede seguir dibujando o calculando. Es un modelo musical inspirado en el CPC, no una emulación al ciclo del chip AY-3-8912.
 
 Notas y colas
-- Los parámetros de `SOUND`, `ENV`, `ENT`, `RELEASE`, `SQ` y el canal de `ON SQ` aceptan expresiones reales: se redondean al entero más cercano, con las mitades alejándose de cero, y después se comprueba el rango. Por ejemplo, `SOUND 1,&H647/8` usa el periodo 201; no hace falta añadir `ROUND`. Este redondeo del resultado no cambia las reglas de las expresiones: los índices de arrays siguen requiriendo enteros exactos. Al portar un listado CPC, usa un índice como `escala(ROUND(nd1))` si puede tener decimales.
+- Los parámetros de `SOUND`, `ENV`, `ENT`, `RELEASE`, `SQ` y el canal de `ON SQ` aceptan expresiones reales: se redondean al entero más cercano, con las mitades alejándose de cero, y después se comprueba el rango. Por ejemplo, `SOUND 1,&H647/8` usa el periodo 201.
 - `estado` selecciona canales mediante los bits 1 (A), 2 (B) y 4 (C). Combina los bits para enviar la misma nota a varios canales. Añade 64 para retener una nota hasta `RELEASE`; añade 128 para vaciar los canales seleccionados antes de encolarla.
 - Los bits 8, 16 y 32 solicitan una sincronización con los canales A, B y C respectivamente: la nota espera hasta que los canales indicados tengan notas compatibles listas. Por ejemplo, `SOUND 17,478,30` y `SOUND 10,379,30` sincronizan los canales A y B.
 - `periodo` es un entero de 0 a 4095; cuanto mayor sea, más grave será el tono. La frecuencia es aproximadamente `62500/periodo` Hz. El periodo 0 desactiva la componente tonal.
 - `duracion` vale 20 por defecto y es un entero de -32768 a 32767. Los valores positivos son centésimas de segundo; 0 utiliza una envolvente de volumen completa y un valor negativo la repite `ABS(duracion)` veces. La envolvente 0 o una no definida proporciona una envolvente constante de dos segundos a estos efectos.
 - `volumen` va de 0 a 15 (por defecto 12). `env` y `ent` seleccionan envolventes de volumen y tono de 0 a 15 (por defecto 0, sin envolvente definida). `ruido` va de 0 a 31 (por defecto 0, sin ruido); el generador de ruido es compartido por los tres canales clásicos.
-- Los niveles de volumen usan una curva de amplitud cuadrática, `(nivel/15)^2`, siguiendo la aproximación musical de CPCBasic. El canal A suena a la izquierda, C a la derecha y B en el centro, repartiendo su potencia entre ambos lados. Así se equilibra la presencia de las voces, sin afirmar una reproducción exacta de la salida analógica del chip AY.
+- El canal A suena a la izquierda, C a la derecha y B en el centro.
 - Cada canal tiene una nota activa y espacio para cuatro notas pendientes. Si una cola seleccionada está llena, `SOUND` espera a que haya espacio, atendiendo eventos y permitiendo `CTRL+C`. Una nota retenida ocupa una posición pendiente.
 - `RELEASE mascara` acepta 1..7 con los mismos bits de canal. Libera la nota retenida situada a la cabeza de cada canal seleccionado que esté inactivo; las notas retenidas posteriores siguen necesitando su propia liberación.
 
@@ -1146,7 +1146,6 @@ Envolventes
 - `ENT` define una envolvente de tono numerada de 1 a 15, también con un máximo de cinco secciones. Usa un número de envolvente negativo para repetir sus secciones hasta que termine la nota; `SOUND` sigue utilizando el número positivo. Los pasos van de 0 a 239, los incrementos de -128 a 127 y los tiempos siguen las reglas de `ENV`. Los cambios de periodo se acumulan y se limitan a 0..4095.
 - Una sección de `ENT` también puede escribirse `=periodo,tiempo`, por ejemplo `ENT 2,=200,10,=100,10`. Establece un periodo absoluto 0..4095 durante ese tiempo. Como extensión de AVL BASIC, una sección de tres valores con `pasos=0` espera un tiempo de paso sin cambiar el periodo; su incremento se ignora, pero debe estar dentro del rango.
 - `ENV id` o `ENT id` sin secciones elimina esa definición. El número 0 está reservado. Cada nota copia las definiciones de sus envolventes al empezar; redefinirlas no modifica una nota que ya se está reproduciendo.
-- Las secciones de envolvente hardware de la sintaxis original de `ENV` del CPC no están implementadas y producen el error 38 (`Unsupported`).
 
 Consultas y eventos de cola
 - `SQ(canal)` acepta exactamente 1, 2 o 4. Los bits 0..2 indican el número de posiciones pendientes libres (0..4); los bits 3..5 describen una sincronización pendiente; el bit 6 indica una nota retenida a la cabeza; el bit 7 indica una nota en reproducción. Los estados de reproducción, retención y sincronización son excluyentes. Un canal vacío e inactivo devuelve 4.
@@ -1166,7 +1165,7 @@ Ejemplo
 90 END
 
 Ver `samples/s-melody.bas` para envolventes y un acorde retenido, y `samples/s-queue.bas` para música alimentada por un manejador `ON SQ` que se registra de nuevo.
-`samples/s-cpc-duet.bas` adapta la partitura a dos voces del manual inglés CPC6128 User Instructions (AMSOFT), capítulo 9, pp. 46-47, con sincronización entre canales y periodos de tono fraccionarios. Conserva los comentarios originales en inglés y la partitura. Las adaptaciones para AVL-BASIC omiten los sufijos de variables enteras (`%`), cambian `scale`/`scale$` por `notes`/`notes$` porque `SCALE` está reservado, usan prefijos hexadecimales `&H` y esperan a que terminen ambas colas de sonido antes de `END`.
+`samples/s-cpc-duet.bas` adapta la partitura a dos voces del manual inglés `CPC6128 User Instructions` (AMSOFT), capítulo 9, pp. 46-47, con sincronización entre canales y periodos de tono fraccionarios. Conserva los comentarios originales en inglés y la partitura. Las adaptaciones para AVL-BASIC omiten los sufijos de variables enteras (`%`), cambian `scale`/`scale$` por `notes`/`notes$` porque `SCALE` está reservado, usan prefijos hexadecimales `&H` y esperan a que terminen ambas colas de sonido antes de `END`.
 
 7.2 Archivos de audio y controles de reproducción
 

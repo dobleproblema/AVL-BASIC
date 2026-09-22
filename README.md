@@ -115,7 +115,7 @@ The Windows package includes the native interpreter, manuals, examples, assets,
 and license. You do not need Rust or Cargo to use it.
 
 Linux x86-64 users can download `avl-basic-*-linux-x64.tar.gz` from the same
-release page, extract it, and run `./avl-basic` from a terminal. The 1.6.0
+release page, extract it, and run `./avl-basic` from a terminal. The 1.6.1
 binary requires glibc 2.39 or later and `libasound.so.2`; graphics use X11 or
 XWayland. See `README-FIRST.txt` in the package for details. Older Linux
 distributions and macOS users can build from source.

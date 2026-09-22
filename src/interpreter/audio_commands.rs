@@ -121,12 +121,8 @@ impl Interpreter {
             if sections.len() == 5 {
                 return Err(self.err(ErrorCode::InvalidArgument));
             }
-            if let Some(absolute) = args[index].trim().strip_prefix('=') {
-                if !tone {
-                    return Err(self.err(ErrorCode::Unsupported).with_detail(
-                        "AY hardware envelope sections are not supported; use ENV steps.",
-                    ));
-                }
+            if tone && args[index].trim().starts_with('=') {
+                let absolute = &args[index].trim()[1..];
                 if index + 1 >= args.len() {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
@@ -507,10 +503,15 @@ mod tests {
         i.process_immediate("ENT -2,=142,1,3,1,1").unwrap();
         i.process_immediate("ENV 1").unwrap();
         i.process_immediate("ENT -2").unwrap();
-        assert_eq!(
-            i.process_immediate("ENV 1,=9,500").unwrap_err().code,
-            ErrorCode::Unsupported
-        );
+        for (command, expected) in [
+            ("ENV 1,12,-1", ErrorCode::ArgumentMismatch),
+            ("ENV 1,=9,500", ErrorCode::ArgumentMismatch),
+            ("ENV 1,=9,500,1", ErrorCode::Syntax),
+        ] {
+            let error = i.process_immediate(command).unwrap_err();
+            assert_eq!(error.code, expected, "{command}: {error}");
+            assert!(error.detail.is_none(), "{command}: {error}");
+        }
     }
 
     #[test]
