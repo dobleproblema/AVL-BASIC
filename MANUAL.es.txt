@@ -46,7 +46,7 @@ Licencia: MIT. Ver `COPYING`.
 
 Requisitos
 - Paquete precompilado para Windows: Windows x64. No necesita toolchain Rust ni runtime externo.
-- Paquete precompilado Linux 1.6.0: x86-64, glibc 2.39 o posterior y `libasound.so.2`; los gráficos necesitan X11 o XWayland. Consulta los requisitos del ejecutable en `README-FIRST.txt` dentro del paquete.
+- Paquete precompilado Linux: x86-64, glibc 2.39 o posterior y `libasound.so.2`; los gráficos necesitan X11 o XWayland. Consulta los requisitos del ejecutable en `README-FIRST.txt` dentro del paquete.
 - Compilación desde el código fuente: toolchain Rust estable y un entorno gráfico nativo para la ventana gráfica.
 - El sonido utiliza la salida de audio del sistema operativo. Los decodificadores de archivos están incluidos en el ejecutable; no hace falta un reproductor externo ni un paquete de códecs. Linux utiliza las bibliotecas de audio del sistema (habituales en un escritorio, incluida `libasound.so.2`). Para compilar en Linux también hacen falta los paquetes de desarrollo correspondientes. Si no hay dispositivo de salida, los programas pueden continuar con la temporización de audio en silencio; ver apartados 7.1 y 7.2.
 
