@@ -1,10 +1,10 @@
-100 REM Old-school demo: 3D starfield, copper bars and pixel-column sine scroller
+100 REM Old-school demo: starfield, copper bars, sine scroller and original looped music
 110 SCREEN : MODE 640 : DEG : PAPER 0 : CLG : BIGFONT
 120 GS=4 : CW=16*GS+10 : GH=16*GS+8
 130 OX=16 : OY=94 : BAS=HEIGHT\2-GH\2 : AMP=70
 140 SCROLL=0 : SCROLLSPEED=4 : WPH=0 : WAVESPEED=8 : WAVE=0.45
 150 RES=4 'Horizontal scroller resolution: 1=pixel perfect, 2/3/... faster
-160 MSG$="      AVL-BASIC PRESENTS THE OLD-SCHOOL DEMO - A TRUE PIXEL-RESOLUTION SINE SCROLLER OVER A 3D STARFIELD - JUST CODE AND A LOT OF NOSTALGIA..."
+160 MSG$="      AVL-BASIC PRESENTS THE OLD-SCHOOL DEMO - A TRUE PIXEL-RESOLUTION SINE SCROLLER OVER A 3D STARFIELD - ORIGINAL MUSIC AND A LOT OF NOSTALGIA..."
 170 CHARS$=" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.,$"
 180 N=LEN(MSG$) : TW=N*CW
 190 STARS=600 : SNEAR=70 : SFAR=950 : VPDIST=4200 : DIRPH=35
@@ -12,7 +12,9 @@
 210 REM Build the bitmap font and fill the star volume
 220 GOSUB 600 : PAPER RGB$(1,2,9) : CLG : SMALLFONT TRANSPARENT
 230 RANDOMIZE TIME : GOSUB 1000
+235 AUDIO LOAD 1,"assets/audio/old-school/copper-drive.wav"
 240 FCOUNT=0 : TLAST=TIME : FPS=0
+245 AUDIO PLAY 1,1,1,0.45
 300 REM Main loop: stars, copper bars and one text column every RES pixels
 310 CLG OFFSCREEN
 315 GOSUB 1100

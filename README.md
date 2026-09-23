@@ -115,7 +115,7 @@ The Windows package includes the native interpreter, manuals, examples, assets,
 and license. You do not need Rust or Cargo to use it.
 
 Linux x86-64 users can download `avl-basic-*-linux-x64.tar.gz` from the same
-release page, extract it, and run `./avl-basic` from a terminal. The 1.6.1
+release page, extract it, and run `./avl-basic` from a terminal. The 1.6.2
 binary requires glibc 2.39 or later and `libasound.so.2`; graphics use X11 or
 XWayland. See `README-FIRST.txt` in the package for details. Older Linux
 distributions and macOS users can build from source.
@@ -127,10 +127,11 @@ Amstrad CPC-style music, or `AUDIO` to load and play WAV, MP3, Ogg Vorbis and
 FLAC with independent playback channels, volume, stereo pan, playback rate
 and fades. `BEEP` now plays a short synthesized tone.
 
-Try the [CPC manual duet](samples/s-cpc-duet.bas), the
+Try the [Old-School Demo with original looping music](samples/g-old-school.bas),
+the [CPC manual duet](samples/s-cpc-duet.bas), the
 [playback controls example](samples/s-audio.bas), or
-[Arkanoid with sound effects](samples/g-arkanoid.bas). The required sample
-audio files are included in both desktop packages.
+[Arkanoid with sound effects](samples/g-arkanoid.bas). The required audio
+files are included in both desktop packages.
 
 ## Quick Start
 

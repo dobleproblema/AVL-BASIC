@@ -16,8 +16,8 @@ to inspect its BASIC source.
 </p>
 <p align="center">
   <strong>1. Old-School Demo</strong><br>
-  A complete demoscene postcard: 3D starfield, copper bars and a hand-built sine scroller.<br>
-  <sub><strong>Shows:</strong> 3D starfield · SPRITE$ · sine scroller</sub><br>
+  A demoscene postcard with a starfield, copper bars, sine scroller and original looping music.<br>
+  <sub><strong>Shows:</strong> 3D starfield · SPRITE$ · sine scroller · AUDIO · WAV</sub><br>
   <code>RUN "/samples/g-old-school.bas"</code>
 </p>
 
@@ -236,7 +236,7 @@ demo.
 | <a id="sample-g-cooperative"></a>[`g-cooperative.bas`](g-cooperative.bas) | Two animations redraw sequentially on each timer pulse. | EVERY, ORIGIN, sequential redraw |
 | <a id="sample-g-dot-tunnel"></a>[`g-dot-tunnel.bas`](g-dot-tunnel.bas) [★](#highlight-g-dot-tunnel) | Twisting 3D dot tunnel with star backdrop. | 3D projection, procedural animation, FRAME |
 | <a id="sample-g-jelly"></a>[`g-jelly.bas`](g-jelly.bas) [★](#highlight-g-jelly) | Ten thousand points fold into a living neon form. | parametric plotting, offscreen rendering, FRAME |
-| <a id="sample-g-old-school"></a>[`g-old-school.bas`](g-old-school.bas) [★](#highlight-g-old-school) | A complete demoscene postcard: 3D starfield, copper bars and a hand-built sine scroller. | 3D starfield, SPRITE$, sine scroller |
+| <a id="sample-g-old-school"></a>[`g-old-school.bas`](g-old-school.bas) [★](#highlight-g-old-school) | A demoscene postcard with a starfield, copper bars, sine scroller and original looping music. | 3D starfield, SPRITE$, sine scroller, AUDIO, WAV |
 | <a id="sample-g-roulette"></a>[`g-roulette.bas`](g-roulette.bas) | Rotating colored circle sectors create a pinwheel. | FCIRCLE, animation, DEG |
 | <a id="sample-g-scroll"></a>[`g-scroll.bas`](g-scroll.bas) | Diagonal rotating-text scroll with offscreen redraw. | LDIR, LABEL, offscreen rendering |
 | <a id="sample-g-sine-scroll"></a>[`g-sine-scroll.bas`](g-sine-scroll.bas) | Hand-built bitmap font bends through a sine wave. | SPRITE$, TEST, bitmap font |

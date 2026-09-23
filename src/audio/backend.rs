@@ -16,6 +16,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const PULSE_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn open_output() -> Result<AudioManager<OutputBackend>, String> {
     fn create() -> Result<AudioManager<OutputBackend>, String> {
@@ -82,6 +84,7 @@ where
 }
 
 struct CallbackWatchdog {
+    timeout: Duration,
     frames: u64,
     progressed_at: Instant,
     window_frames: u64,
@@ -90,7 +93,12 @@ struct CallbackWatchdog {
 
 impl CallbackWatchdog {
     fn new(frames: u64, now: Instant) -> Self {
+        Self::with_timeout(frames, now, CALLBACK_TIMEOUT)
+    }
+
+    fn with_timeout(frames: u64, now: Instant, timeout: Duration) -> Self {
         Self {
+            timeout,
             frames,
             progressed_at: now,
             window_frames: frames,
@@ -103,15 +111,15 @@ impl CallbackWatchdog {
             self.frames = frames;
             self.progressed_at = now;
         }
-        if now.saturating_duration_since(self.progressed_at) >= CALLBACK_TIMEOUT {
+        if now.saturating_duration_since(self.progressed_at) >= self.timeout {
             return true;
         }
         let elapsed = now.saturating_duration_since(self.window_started);
-        if elapsed >= CALLBACK_TIMEOUT {
+        if elapsed >= self.timeout {
             // Occasional callbacks are not sufficient: a degraded output can
             // trickle samples for minutes while BASIC waits for a short note.
             // Allow generous scheduling jitter, but reject sustained playback
-            // below half the requested sample rate over a two-second window.
+            // below half the requested sample rate over the configured window.
             let played = frames.wrapping_sub(self.window_frames) as f64 / sample_rate as f64;
             self.window_frames = frames;
             self.window_started = now;
@@ -412,7 +420,11 @@ impl Backend for OutputBackend {
                         format: cpal::SampleFormat::I16,
                         stream: None,
                         failure: Arc::new(Failure::default()),
-                        watchdog: CallbackWatchdog::new(0, Instant::now()),
+                        watchdog: CallbackWatchdog::with_timeout(
+                            0,
+                            Instant::now(),
+                            PULSE_CALLBACK_TIMEOUT,
+                        ),
                         pulse_cleanup: None,
                         pulse: Some(output),
                     },
@@ -462,8 +474,11 @@ impl Backend for OutputBackend {
         #[cfg(target_os = "linux")]
         if let Some(output) = &mut self.pulse {
             output.start(renderer, self.failure.clone())?;
-            self.watchdog =
-                CallbackWatchdog::new(self.failure.frames.load(Ordering::Relaxed), Instant::now());
+            self.watchdog = CallbackWatchdog::with_timeout(
+                self.failure.frames.load(Ordering::Relaxed),
+                Instant::now(),
+                PULSE_CALLBACK_TIMEOUT,
+            );
             return Ok(());
         }
         let renderer = Arc::new(Mutex::new(renderer));
@@ -510,6 +525,18 @@ mod tests {
         let mut watchdog = CallbackWatchdog::new(0, start);
         assert!(!watchdog.stalled(0, start + Duration::from_millis(1999), 48000));
         assert!(watchdog.stalled(0, start + CALLBACK_TIMEOUT, 48000));
+    }
+
+    #[test]
+    fn pulse_watchdog_tolerates_two_second_sink_requests_and_detects_a_stall() {
+        let start = Instant::now();
+        let mut watchdog = CallbackWatchdog::with_timeout(0, start, Duration::from_secs(5));
+        assert!(!watchdog.stalled(4800, start + Duration::from_millis(100), 48000));
+        assert!(!watchdog.stalled(4800, start + Duration::from_secs(2), 48000));
+        assert!(!watchdog.stalled(96000, start + Duration::from_millis(2100), 48000));
+        assert!(!watchdog.stalled(96000, start + Duration::from_secs(4), 48000));
+        assert!(!watchdog.stalled(192000, start + Duration::from_millis(4100), 48000));
+        assert!(watchdog.stalled(192000, start + Duration::from_millis(9100), 48000));
     }
 
     #[test]

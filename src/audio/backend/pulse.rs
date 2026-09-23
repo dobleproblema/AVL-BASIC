@@ -25,6 +25,8 @@ const MAX_BUFFER_BYTES: u32 = SAMPLE_RATE * FRAME_BYTES;
 const MAX_PACKET_BYTES: usize = 64 * 1024;
 const CHUNK_FRAMES: usize = 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+// Some Pulse sinks request PCM in two-second bursts; keep a bounded margin.
+const PLAYBACK_READ_TIMEOUT: Duration = Duration::from_secs(4);
 
 fn buffer_attributes() -> protocol::stream::BufferAttr {
     protocol::stream::BufferAttr {
@@ -390,6 +392,11 @@ impl PulseOutput {
             .and_then(|path| std::fs::read(path).ok())
             .unwrap_or_default();
         connection.initialize(cookie)?;
+        connection
+            .socket
+            .get_ref()
+            .set_read_timeout(Some(PLAYBACK_READ_TIMEOUT))
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             connection: Some(connection),
             shutdown_socket,

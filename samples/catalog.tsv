@@ -6,7 +6,7 @@ g-bobs.bas	Showcase animations and retro effects		Orbiting Bobs	Six depth-sorted
 g-cooperative.bas	Showcase animations and retro effects		Cooperative Simulation	Two animations redraw sequentially on each timer pulse.	EVERY;ORIGIN;sequential redraw
 g-dot-tunnel.bas	Showcase animations and retro effects	9	Twisting Dot Tunnel	Twisting 3D dot tunnel with star backdrop.	3D projection;procedural animation;FRAME
 g-jelly.bas	Showcase animations and retro effects	13	Jelly	Ten thousand points fold into a living neon form.	parametric plotting;offscreen rendering;FRAME
-g-old-school.bas	Showcase animations and retro effects	1	Old-School Demo	A complete demoscene postcard: 3D starfield, copper bars and a hand-built sine scroller.	3D starfield;SPRITE$;sine scroller
+g-old-school.bas	Showcase animations and retro effects	1	Old-School Demo	A demoscene postcard with a starfield, copper bars, sine scroller and original looping music.	3D starfield;SPRITE$;sine scroller;AUDIO;WAV
 g-roulette.bas	Showcase animations and retro effects		Color Roulette	Rotating colored circle sectors create a pinwheel.	FCIRCLE;animation;DEG
 g-scroll.bas	Showcase animations and retro effects		Diagonal Text Scroll	Diagonal rotating-text scroll with offscreen redraw.	LDIR;LABEL;offscreen rendering
 g-sine-scroll.bas	Showcase animations and retro effects		Sine Scroller	Hand-built bitmap font bends through a sine wave.	SPRITE$;TEST;bitmap font
