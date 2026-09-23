@@ -74,8 +74,8 @@ Included files
 - samples/: optional collection of BASIC programs, gallery, catalog, and assets
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
-- COPYING: GPLv3-or-later license
-- licenses/: third-party notices
+- COPYING: MIT project license
+- LICENSES.txt: third-party licenses and copyright notices
 """,
         encoding="utf-8",
         newline="\r\n",
@@ -110,11 +110,11 @@ def build_package(skip_build: bool) -> Path:
         "MANUAL.txt",
         "MANUAL.es.txt",
         "COPYING",
+        "LICENSES.txt",
     ]:
         shutil.copy2(ROOT / name, stage / name)
 
     copy_tree(ROOT / "samples", stage / "samples")
-    copy_tree(ROOT / "licenses", stage / "licenses")
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", RELEASE_DIR, package_name)
     return zip_path
 

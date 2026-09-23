@@ -1,6 +1,6 @@
 # AVL BASIC — Manual Completo  
 *(Manual de usuario completo, edición 2025)*  
-Licencia: GNU GPL versión 3 o posterior. Ver `COPYING`.
+Licencia: MIT. Ver `COPYING`.
 
 ---
 

@@ -20,4 +20,4 @@ plays the start/life/ending cues. Playback never waits in the game loop.
 Keep this directory beside the other samples/assets files when copying the
 game. If audio output is unavailable or disabled, the game continues silently.
 
-License: GNU GPL version 3 or later, like the accompanying AVL BASIC samples.
+License: MIT. See COPYING in the project root.

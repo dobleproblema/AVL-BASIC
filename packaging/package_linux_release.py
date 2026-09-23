@@ -55,9 +55,9 @@ def build_package(skip_build: bool) -> Path:
     shutil.copy2(binary, stage / "avl-basic")
     (stage / "avl-basic").chmod(0o755)
     for name in ["README.md", "README.png", "README-console.png",
-                 "MANUAL.txt", "MANUAL.es.txt", "COPYING"]:
+                 "MANUAL.txt", "MANUAL.es.txt", "COPYING", "LICENSES.txt"]:
         shutil.copy2(ROOT / name, stage / name)
-    for name in ["samples", "licenses", "assets/linux"]:
+    for name in ["samples", "assets/linux"]:
         copy_tree(ROOT / name, stage / name)
     (stage / "packaging" / "linux").mkdir(parents=True)
     for name in ["install_linux_desktop.sh", "linux/avl-basic.desktop.in"]:
@@ -106,7 +106,8 @@ Included files
 - avl-basic: native Linux interpreter
 - samples/: BASIC programs, gallery, catalog, images and audio assets
 - MANUAL.txt and MANUAL.es.txt: English and Spanish manuals
-- COPYING and licenses/: project license and third-party notices
+- COPYING: MIT project license
+- LICENSES.txt: third-party licenses and copyright notices
 - packaging/ and assets/linux/: optional desktop launcher and icons
 """, encoding="utf-8", newline="\n",
     )

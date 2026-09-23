@@ -2378,9 +2378,8 @@ impl Interpreter {
         ));
         self.write_line("BASIC interpreter written in Rust");
         self.write_line("Copyright 2024-2026 Jos\u{00e9} Antonio \u{00c1}vila");
-        self.write_line("License: GPLv3 or later (see COPYING)");
         self.write_line(
-            "This is free software under GPLv3 or later. You may redistribute it under its terms.",
+            "This is free software under the MIT License. You may redistribute it under its terms.",
         );
         self.write_line("This program comes with ABSOLUTELY NO WARRANTY. See COPYING.");
         self.write_line("Type HELP <topic> for syntax and parameters.");

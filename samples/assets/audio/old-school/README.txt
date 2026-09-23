@@ -7,4 +7,4 @@ sounds are original; no third-party recordings, samples or melodies are used.
 
 Keep copper-drive.wav in samples/assets/audio/old-school when copying the demo.
 
-License: GNU GPL version 3 or later, like the accompanying AVL BASIC samples.
+License: MIT. See COPYING in the project root.
