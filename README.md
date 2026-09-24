@@ -226,7 +226,7 @@ adding a practical modern feature set:
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
-- `ON ERROR`, `ON TIMER`, `ON MOUSE`, procedures, functions, and matrices,
+- `ON ERROR`, `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - CPC-style sound queues and envelopes, plus modern audio playback controls,
 - embedded bitmap fonts for reproducible graphics text,
@@ -250,8 +250,35 @@ to verify every error name, number, and English message against the Python oracl
 
 ## Documentation
 
-- Full manual in English: [`MANUAL.txt`](MANUAL.txt)
-- Manual completo en español: [`MANUAL.es.txt`](MANUAL.es.txt)
+Release packages include offline HTML manuals in English and Spanish. Open
+`MANUAL.html` for English or `MANUAL.es.html` for Spanish, beside the executable.
+The examples use AVL BASIC's syntax highlighting
+on a black background and can be copied into the interpreter.
+
+To try a complete program, start the interpreter in the extracted package
+folder, enter `NEW` and `CD "/"`, paste the example, and enter `RUN`. Image and
+audio examples use the included `samples/assets` directory. If you save a copied
+example, save it in that same package folder so its relative asset paths still
+resolve.
+
+To generate the HTML manuals from a source checkout, use Python 3.10 or later
+and Cargo, and run from the repository root:
+
+```text
+python tools/render_manuals.py
+```
+
+Then open `dist/MANUAL.html` for English or `dist/MANUAL.es.html`
+for Spanish. To choose another output directory, use
+`python tools/render_manuals.py --output path/to/output`. The generated manuals
+work without a web server or an internet connection.
+
+The TXT sources remain in the repository; end-user packages include only the
+two HTML manuals. For separate developer audit files, add `--audit-dir PATH`
+with a directory outside the HTML output.
+
+- English manual source: [`MANUAL.txt`](https://github.com/dobleproblema/AVL-BASIC/blob/main/MANUAL.txt)
+- Fuente del manual en español: [`MANUAL.es.txt`](https://github.com/dobleproblema/AVL-BASIC/blob/main/MANUAL.es.txt)
 - Visual gallery and complete sample catalog: [`samples/README.md`](samples/README.md)
 - License: MIT. See [`COPYING`](COPYING).
 
@@ -271,8 +298,9 @@ to verify every error name, number, and English message against the Python oracl
 
 After validation, run `python packaging/package_windows_release.py --skip-build`
 for Windows, or `python3 packaging/package_linux_release.py --skip-build` on
-Linux/WSL. Both packages include the manuals, complete sample tree and license
-notices. The Linux archive preserves executable permissions and records the
+Linux/WSL. Both packages include the HTML manuals, the complete sample tree
+and license notices. The Linux archive
+preserves executable permissions and records the
 binary's minimum glibc version.
 
 Unpacked staging directories and raw executables are local build output.

@@ -1,5 +1,5 @@
 # AVL BASIC - Complete Manual
-*(Full user manual, 2025 edition)*
+*(Rust interpreter user manual, 2026 edition)*
 License: MIT. See `COPYING`.
 
 ---
@@ -30,7 +30,7 @@ Contents
 7.  - Interrupts
 7.1 - Classic sound and sound queues
 7.2 - Audio files and playback controls
-8.  - System, time and debugging
+8.  - System, time and tracing
 8.1 - Execution and resumption (RUN - STOP - CONT - END - CTRL+C)
 8.2 - Error handling
 9.  - "Immediate mode only" commands
@@ -39,7 +39,7 @@ Contents
 9.3 - Other immediate utilities
 9.4 - Saving and loading programs
 10. - Built-in functions
-11. - User-defined functions
+11. - User-defined functions and subroutines
 12. - Hexadecimal/Binary and bitwise logic
 
 0. Requirements and installation
@@ -90,24 +90,47 @@ The interpreter includes its own bitmap fonts to ensure a uniform appearance acr
 
 1. Quick start
 
-10 AFTER 500 GOSUB 80
+Using the examples
+- Start the interpreter in the extracted package or repository folder containing `samples/assets`.
+- Before each independent numbered example, enter the following commands at the interpreter prompt. `NEW` removes the previous program, including any old line numbers that the next example would not overwrite.
+
+```console
+NEW
+CD "/"
+```
+
+- Copy the complete numbered program, paste it at the interpreter prompt, and then type `RUN`. If the terminal asks whether to allow a multiline paste, accept the paste. Do not copy the explanatory text or the expected output.
+- To keep an example, use `SAVE "manual-example.bas"` in that same package folder. The examples using `samples/assets/...` assume that location; when a program is loaded from a file, its relative resource paths start from the program's own folder.
+- Complete examples are shown as BASIC programs. Command sequences are entered directly at the prompt; syntax fragments and expected output are identified separately. The examples use the same code in both language editions.
+- A looping example states how to stop it. `Ctrl+C` while a program is running returns to the prompt; use `NEW` before trying the next example.
+
+First program
+The animation below draws 300 frames at up to 60 frames per second and leaves the final image visible. `CLG OFFSCREEN` clears the next frame without showing an empty screen between images.
+
+```basic
+10 SCREEN : MODE 640 : RAD
 20 PENWIDTH 4 : ORIGIN WIDTH\2,HEIGHT\2
-30 FOR I=1 TO 100
-40   T=TIME : A=I*2*PI/100 : X=90+60*SIN(5*A+T)
-50   PLOT X*COS(A+T),X*SIN(A+T),I MOD 7
-60 NEXT I
-70 FRAME : CLG : GOTO 30
-80 CLG : END
+30 FOR F=1 TO 300
+40   CLG OFFSCREEN : T=TIME
+50   FOR I=1 TO 100
+60     A=I*2*PI/100 : X=90+60*SIN(5*A+T)
+70     PLOT X*COS(A+T),X*SIN(A+T),1+I MOD 7
+80   NEXT I
+90   FRAME 60
+100 NEXT F
+```
 
 Save the file with `SAVE "name"`. If you omit the `.bas` extension or the closing quote, the interpreter adds them automatically; for example, it will turn `save"flower` into `SAVE "flower.bas"`. Type `RUN` in the interpreter console to execute the program.
 
 If the first thing you want to do is try the examples included in the repository, a typical sequence is this:
 
+```console
 CD "samples"
 FILES "*.bas"
 RUN "g-demo.bas"
+```
 
-That is: enter `samples`, list the available examples, and run one.
+That is: enter `samples`, list the available examples, and run one. Before returning to a manual example, use `NEW` and `CD "/"` as described above.
 
 Quick notes
 - Keywords must not split identifiers: `printa=8` assigns to `printa`, and `PRINT printa` prints it. Separate keywords from variable names with a space or tab; `PRINT"hello"` remains valid.
@@ -133,8 +156,8 @@ Rules                Detail
 + Line number        Integer > 0, mandatory. It controls flow (`GOTO`, `GOSUB`, etc.).
 + Separator          : Several statements on the same line or after `THEN/ELSE`.
 + Comments           REM ... | ' ... (the latter does not need `:` before it).
-+ Variables          Alphanumeric, 1-32 chars; strings end in $. Global by default; `DEF FN`/`DEF SUB` parameters and `LOCAL` variables are local.
-+ Types              64-bit float, 14 significant digits | String | Multidimensional array (`DIM`, indices 0..N).
++ Variables          Names start with an ASCII letter or `_`, followed by letters, digits or `_`; strings end in `$`. Global by default; `DEF FN`/`DEF SUB` parameters and `LOCAL` variables are local.
++ Types              IEEE-754 64-bit floating point | String | Multidimensional array (`DIM`, indices 0..N). `PRINT` normally displays up to 14 significant digits; this display limit does not reduce stored precision.
 + Operators          Arithmetic: + - * / \ ^ MOD | Comparisons: = <> > < >= <= | Logical: AND OR XOR NOT.
 
 Quick notes
@@ -145,6 +168,9 @@ Quick notes
 
 3. Flow control
 
++ GOTO line                                                  Jumps to a program line
++ GOSUB line                                                 Calls a line-numbered subroutine
++ RETURN                                                     Returns from the most recent `GOSUB` or interrupt
 + IF expression GOTO line [ELSE else-clause]                  `ELSE` always extends to the end of the line.
 + IF expression THEN then-clause [ELSE else-clause]          Clauses may contain several statements separated by `:`
 + IF expression THEN                                         Block form; details below.
@@ -175,22 +201,27 @@ Detailed notes (block IF)
 - It works in stored programs; in immediate mode you must use the single-line syntax.
 
 Example
-100 IF V > 50 THEN
-110   PRINT "OK" : GOSUB 900
-120 ELSEIF V = 0 THEN
-130   PRINT "no data"
-140 ELSE
-150   PRINT "value"; V
-160 END IF
+Change `V=75` to `V=0` or `V=25` to try the other two branches.
+
+```basic
+10 V=75
+20 IF V > 50 THEN
+30   PRINT "OK"
+40 ELSEIF V = 0 THEN
+50   PRINT "no data"
+60 ELSE
+70   PRINT "value"; V
+80 END IF
+```
 
 4. Data and memory
 
-+ DIM var(dim1[,dim2,...])       Indices 0..10 and 0..5 (arbitrary number of dimensions)
++ DIM var(dim1[,dim2,...])       Inclusive upper bounds; for example `DIM A(10,5)` has indices 0..10 and 0..5
 + REDIM var(dim1[,dim2,...])     Changes bounds without losing the existing data that still fits in the new range
 + LET var1[=var2...]=value       LET is optional
 + READ variable-list
 + DATA constant-list
-+ RESTORE                        Resets the `DATA` pointer
++ RESTORE [line]                 Resets the `DATA` pointer to the beginning or to the specified DATA line
 + SWAP v1,v2                     Swaps values
 + CLEAR                          Clears all variables
 + NEW                            Clears all variables and the current program. Returns the interpreter to its initial state.
@@ -205,12 +236,14 @@ Notes on `NEW`
 - It also resets the graphics window and its settings (equivalent to resetting `SCREEN` to its default state, including `SMALLFONT OPAQUE`).
 - Valid only in immediate mode; inside a program it raises "Instruction not allowed in a program."
 
-Assignment to strings
+Assignment to strings (syntax fragment)
 
+```text
 MID$(str$,pos[,len]) = value$   'pos is 1-based
+```
 
 Quick notes
-- `DATA` and `READ` advance sequentially; `RESTORE` resets the read pointer.
+- `READ` consumes the constants stored by `DATA` sequentially. Bare `RESTORE` returns to the first value; `RESTORE line` moves to the first value on that exact line, which must contain `DATA` (otherwise error 25).
 - `CLEAR` clears variables, arrays and functions, resets the `DATA` pointer, and sets angular mode to radians (it does not clear the loaded program).
   * `CLEAR INPUT` empties the keyboard/input buffer without changing variables or the loaded program.
 
@@ -263,7 +296,7 @@ Detailed notes (`MAT PRINT`)
 - Each entry may be written as `A`, `ROW A` or `COL A`; `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
 - `MAT PRINT` only accepts array references in those forms; it does not accept expressions such as `TRN(A)` or `A+B`. To print a computed result first assign it with `MAT B = ...` and then print `B`.
 - `USING` uses the same masks as `PRINT USING`. With `;`, spaces are inserted between columns; with `,`, each field occupies 22 characters.
-- With no arguments, it prints a blank line.
+- With no arguments, `MAT PRINT` produces no output. Use `PRINT` to insert a blank line.
 
 Detailed notes (`MAT INPUT` / `MAT READ`)
 - `MAT INPUT` traverses the elements by rows and respects the current base. For text, quotes are mandatory; empty ENTER or CTRL+C fill the rest with `0` or `""`.
@@ -283,6 +316,7 @@ Related functions
 - The reserved words `CON`, `ZER`, `IDN`, `TRN` and `INV` can only be used in the context of `MAT`.
 
 Example
+```basic
 10 MAT BASE 1
 20 DIM A(2,2), B(2,2)
 30 DATA 1, 3, 5, 7, 2, 3, 4, 5
@@ -293,6 +327,7 @@ Example
 80 PRINT : MAT PRINT C;D
 90 MAT BASE 1 : MAT A = IDN
 100 PRINT : MAT PRINT A
+```
 
 5. Text input/output in the console
 
@@ -413,14 +448,16 @@ Notes on GINPUT
 - `LINE INPUT` and `MAT INPUT` remain console commands; there is no `GLINE INPUT` or `MAT GINPUT`.
 
 Example
+```basic
 10 x=13 : y=8 : m=2 : s$=" *   *   *   *   *   *   * "
-20 MODE 640 : SMALLFONT OPAQUE
+20 SCREEN : MODE 640 : SMALLFONT OPAQUE
 30 FOR i=y TO y+12
 40   PAPER m : INK 0 : LOCATE x,i : GPRINT SPACE$(53); : m=3-m
 50   IF i<y+7 THEN PAPER 4 : INK 1 : LOCATE x,i : GPRINT MID$(s$,m+m-1,23);
 60 NEXT i
 70 PAPER 0 : INK 1 : BIGFONT OPAQUE : LOCATE 17,25 : GPRINT "U.S.A."
 80 END
+```
 
 5.2 Sequential data files
 
@@ -527,6 +564,7 @@ Channel lifetime and errors
   ERR, ERL and RESUME in the same way as other runtime errors.
 
 Example: save and recover scores
+```basic
 10 OPEN "scores.csv" FOR OUTPUT AS #1
 20 WRITE #1,"PLAYER ONE",1250
 30 WRITE #1,"PLAYER TWO",980
@@ -536,6 +574,7 @@ Example: save and recover scores
 70 INPUT #1,N$,S : PRINT N$;": ";S
 80 WEND
 90 CLOSE #1
+```
 
 More examples: samples/f-scores.bas, samples/f-text.bas and samples/f-records.bas.
 Each creates or replaces its own named demonstration file beside the program.
@@ -582,8 +621,8 @@ Quick notes
   * `SCREEN : CLG` first restores the complete graphics state, including `PAPER 0`.
   * `ORIGIN : CLG` preserves the other graphics settings and any active `SCALE`, and resets only the origin and viewport before clearing. Use `SCALE : ORIGIN : CLG` if you also want to return to physical coordinates.
   * `SCREEN : ORIGIN : CLG` is also valid; after `SCREEN`, bare `ORIGIN` is idempotent.
-- `FRAME` refreshes the screen immediately. By default, the screen is only refreshed when the program ends.
-  * That is, you should use `FRAME` whenever you want the result of a graphics instruction to appear on screen immediately.
+- In a running program, ordinary drawing changes the graphics buffer; `FRAME` presents the completed image immediately. The buffer is also presented when the program ends, and by commands with an explicit visible update such as `CLG` and `SCREEN`. Drawing in immediate mode is shown immediately.
+  * Use `FRAME` after completing the drawing for an animation frame.
   * During `DEBUG`, the graphics buffer is also presented at each debugger pause (see "Notes on DEBUG"). This inspection update does not execute `FRAME` or apply its FPS limiter.
 - `CLG` clears and presents the active viewport immediately. In animation loops
   that draw a complete frame before `FRAME`, this may show a mid-frame clear
@@ -599,7 +638,8 @@ Quick notes
   animation loops to cap rendering at about 60 FPS.
 
 Example (`SCALE` with border and axes in user units)
-10 SCREEN : CLG
+```basic
+10 SCREEN : MODE 640 : CLG
 12 B=80
 15 SCALE 1960,1990,0,200,B
 20 CROSSAT 1960,0
@@ -607,6 +647,7 @@ Example (`SCALE` with border and axes in user units)
 60 YAXIS 30,0,200
 65 PENWIDTH 4 : INK 2
 80 PLOT 1975,90
+```
 
 Sample `samples/g-origin-scale.bas` draws four graphics examples, each with its own scale, in four `ORIGIN` viewports without clearing the earlier ones.
 
@@ -663,14 +704,15 @@ Quick notes (plotting)
                                       Textured filled triangle
 + TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3
                                       Textured filled quadrilateral
-+ FILL [x,y[,c]]                    Flood-fill; without coordinates it fills from the current position
++ FILL [c]                         Flood-fill from the graphics cursor, using `c` or the current `INK`
++ FILL x,y[,c]                     Flood-fill from the specified position
 
 Quick notes (figures)
 - The angles of `CIRCLE/FCIRCLE` respect `DEG` or `RAD` (see 8).
 - Angular reference on screen: `0 deg` right, `90 deg` down, `180 deg` left, `270 deg` up (increasing clockwise).
 - `asp` controls the aspect ratio of the circle (Y/X).
 - Radius `r` is in user units (if `SCALE` is active, it adapts automatically).
-- `RECTANGLE/TRIANGLE` and their relative versions respect `MASK` and `PENWIDTH` just like `DRAW`.
+- `RECTANGLE/TRIANGLE` respect `MASK` and `PENWIDTH` just like `DRAW`.
 - `TRECTANGLE/TTRIANGLE/TQUAD` use a `gscr$` texture, typically loaded with `BLOAD "img.png",T$` or captured with `SPRITE$`.
 - In `TRECTANGLE`, `(u0,v0)` is assigned to `(x0,y0)` and `(u1,v1)` to `(x1,y1)`; the other two corners use `(u1,v0)` and `(u0,v1)`.
 - In `TTRIANGLE/TQUAD`, each vertex pairs a screen position `(x,y)` with a texture position `(u,v)`. The renderer linearly interpolates `u,v` inside each triangle, so scaling, rotation, mirroring, and shearing are inferred from those vertex correspondences.
@@ -686,7 +728,7 @@ Quick notes (figures)
 
 Where `c` may be a color in one of the following formats:
 - 0-31            Predefined palette
-- 32-16777215     Packed RGB. For clarity, it is better to use hexadecimal: `&HRRGGBB` (see section 11)
+- 32-16777215     Packed RGB. For clarity, it is better to use hexadecimal: `&HRRGGBB` (see section 12)
 - "steelblue"     Predefined color name (X11/Tk)
 - "255,0,0"       String `"r,g,b"`
 - 255,0,0         Three numeric arguments (outside STRING)
@@ -710,9 +752,12 @@ Quick notes
 - Sample `g-colors.bas` shows several of these combinations visually.
 
 Example
-10 DIM Char$(10)
-15 PAPER 0 : INK 5 'INK "1,1,1" so the base text becomes effectively invisible
-20 SMALLFONT : CLG
+The small yellow text is the source image sampled to build the enlarged letters.
+
+```basic
+10 SCREEN : MODE 640 : DIM Char$(9)
+15 PAPER 0 : INK 5
+20 SMALLFONT OPAQUE : CLG
 25 MOVE 0,15
 30 FOR C=0 TO 9 : READ Char$(C) : LABEL Char$(C) : NEXT
 35 PAPER 2 : INK 5
@@ -724,6 +769,7 @@ Example
 65 NEXT y
 70 SCREEN
 75 DATA " ", A, V, L, " ", B, A, S, I, C
+```
 
 Predefined palette
 #  Color         #   Color
@@ -748,6 +794,7 @@ Quick notes
 - The predefined color names are the historical X11/Tk names, which largely match the HTML/CSS names. They are case-insensitive.
 
 Example (show all colors from the predefined palette on screen)
+```basic
 10 SCREEN : MODE 640 : SMALLFONT TRANSPARENT
 15 MOVE 0,120 : DRAW 640,120
 20 MOVE 0,240 : DRAW 640,240
@@ -759,10 +806,13 @@ Example (show all colors from the predefined palette on screen)
 50 FOR I=0 TO 7
 55 FOR C=0 TO 24 STEP 8
 60 MOVER 0,-120 : FILL I+C
-65 INK -(I+C=0) : LOCATE 4+10*I,C+3-C\16 : GPRINT USING "0#";I+C;
+62 K=I+C : INK 0
+63 IF K=0 OR K=3 OR K=4 OR K=9 OR K=10 OR K=19 OR K=27 OR K=28 OR K=30 THEN INK 1
+65 LOCATE 4+10*I,C+3-C\16 : GPRINT USING "0#";K;
 70 NEXT C
 75 MOVER 80,480
 80 NEXT I
+```
 
 6.5 Automatic axes
 
@@ -822,13 +872,15 @@ Compatibility with earlier programs
 - Omitting the tick spacing now selects it automatically. To retain the earlier default step, write `XAXIS 1` or `YAXIS 1` explicitly. Dense explicit steps retain a regular subset with marks and labels. Use `XAXIS 0` or `YAXIS 0` for the axis line alone.
 
 Example
-10 CLG : B=80
+```basic
+10 SCREEN : MODE 640 : CLG : B=80
 20 SCALE 1960,1990,0,200,B
 30 CROSSAT 1960,0
 50 XAXIS 10,1960,1990,0,1
 60 YAXIS 30,0,200
 65 PENWIDTH 4 : INK 2
 80 PLOT 1975,90
+```
 
 6.6 Screenshots and graphics files
 
@@ -846,16 +898,20 @@ Quick notes
 - In immediate mode, relative paths in `BLOAD/BSAVE` are resolved from the current virtual directory.
 - Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.
 
-Example
-10 MODE 640
-20 BLOAD "img1.png",a$ 'The screen alternates between the two images at high speed
-30 BLOAD "img2.png",b$
+Example (rapid screen-restoration benchmark)
+This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets` and have the required 640x480 size. Use the package-root setup from section 1. `SCREEN a$` presents each image directly; no additional `FRAME` is needed. The distributed `samples/g-swap.bas` demonstrates the same technique.
+
+```basic
+10 SCREEN : MODE 640
+20 BLOAD "samples/assets/z-tree12.png",a$
+30 BLOAD "samples/assets/z-3dplot0.png",b$
 40 t=TIME
 50 FOR c=1 TO 1000
-60 SCREEN a$
-70 SWAP a$,b$
-80 NEXT
+60   SCREEN a$
+70   SWAP a$,b$
+80 NEXT c
 90 PRINT 1000/(TIME-t);" fps"
+```
 
 6.7 Sprites
 
@@ -877,7 +933,7 @@ Collision functions
 + HITID                         Internal id of the first sprite collided with (0 if there was no collision).
 
 General notes
-- Sprites use the same format as `SCREEN$` and files saved with `BSAVE`: `width x height:hexdata`. You can store them in variables or files and reuse them.
+- Sprite strings and `SCREEN$` use the in-memory format `widthxheight:hexdata`. `BSAVE` converts these strings into PNG files, and `BLOAD` converts PNG files back into graphics strings. Store strings in variables or save PNGs to reuse them.
 - `SPRITE$` applies `ORIGIN` and the logical window. If the capture goes outside the screen, it keeps the requested size and fills the out-of-bounds physical areas with black.
 - `SPRITE` respects `ORIGIN`, the graphics window, and canvas clipping. It does not force a refresh; call `FRAME` when you want to display the result.
 - Remember the anchor: `SPRITE ... ,X,Y` uses `Y` as the bottom edge. If you are coming from `LABEL` with `MOVE X,Y` (top edge), convert `Y` with `Ysprite = Ytext - (height - 1)`.
@@ -946,7 +1002,7 @@ What `id` adds (and why it matters)
 - That enables a useful `HITID` (knowing what you collided with).
 - That enables `SPRITE MOVE id,...` (moving using the image already registered for that `id`).
 - That enables `SPRITE DEL id` (removing it from the collision map).
-- In demos like `samples/g-sprite5.bas`, the first `SPRITE ...,id` pass is used to seed the initial state (screen + map + `SPRITE MOVE` registration).
+- A successful `SPRITE ...,id` registers that image and transparency for later `SPRITE MOVE id,...` calls. The collision example below, also available as `samples/g-sprite5.bas`, redraws with `SPRITE` directly.
 
 Recommended pattern for a fixed background (without `CLG` per frame)
 - 1. Restore the old sprite backgrounds in `COLMODE 0`.
@@ -964,57 +1020,83 @@ Typical errors (and their cause)
 - "Contaminated" backgrounds: capturing the new background after other sprites from the same frame have already been drawn.
 
 Example (capture and transparency)
+Press any key after inspecting the four transparency variants.
+
+```basic
 10 SCREEN : MODE 640 : PAPER 0 : CLG
 20 INK 14 : FRECTANGLE 160,80,240,160
 30 INK 4 : FCIRCLE 200,120,30
 40 cara$ = SPRITE$(150,70,250,170)
 50 PAPER 1 : CLG
-60 INK 2 : BIGFONT OPAQUE : LOCATE 2,24 : GPRINT "SPRITE$ + SPRITE WITH TRANSPARENCY EXAMPLE"
+60 INK 2 : BIGFONT OPAQUE : LOCATE 2,1 : GPRINT "SPRITE$ + TRANSPARENCY"
 70 SPRITE cara$,40,40,14 'Gray (14) transparent
 80 SPRITE cara$,140,40,4 'Blue (4) transparent
 90 SPRITE cara$,90,100,0 'Black (0) transparent
 100 SPRITE cara$,280,200 'Sprite without transparency
+110 FRAME
+120 PAUSE
+130 END
+```
 
 Example (color collisions + sprite-sprite with explicit id)
-10 MODE 640 : SCREEN : PAPER 0 : CLG : SMALLFONT
-20 R=9 : S=2*R+1 : B=16 : DIM S$(3),X(3),Y(3),DX(3),DY(3)
-30 GOSUB 900
-40 X(1)=120 : Y(1)=120 : DX(1)=2 : DY(1)=1
-50 X(2)=320 : Y(2)=220 : DX(2)=-2 : DY(2)=2
-60 X(3)=500 : Y(3)=140 : DX(3)=-1 : DY(3)=-2
-70 MSG$="" : TMSG=0 : TX=264 : TY=34 : BIGFONT
-80 CLG : GOSUB 800
-90 GOTO 100
-100 COLMODE 1 : COLCOLOR 1
-110 FOR I=1 TO 3
-120   OLDX=X(I) : X(I)=X(I)+DX(I)
-130   SPRITE S$(I),X(I),Y(I),0,I
-140   IF HITCOLOR<>0 THEN
-150     X(I)=OLDX : DX(I)=-DX(I)
-160   ENDIF
-170   OLDY=Y(I) : Y(I)=Y(I)+DY(I)
-180   SPRITE S$(I),X(I),Y(I),0,I
-190   IF HITCOLOR<>0 THEN
-200     Y(I)=OLDY : DY(I)=-DY(I)
-210   ENDIF
-220 NEXT I
-230 CLG : GOSUB 800
-240 COLMODE 2
+This complete example is based on `samples/g-sprite5.bas`. The three sprites bounce against the walls and triangle, and exchange velocities when sprite collisions are detected. Press `Ctrl+C` to stop it.
+
+```basic
+100 REM Minimal example of the sprite collision engine
+110 REM 1) COLMODE 1 + HITTEST to bounce against the background
+120 REM 2) COLMODE 2 + HITSPRITE/HITID to detect sprite-sprite collisions
+130 MODE 640 : SCREEN : PAPER 0 : CLG : SMALLFONT
+140 R=9 : S=2*R+1 : B=16
+150 DIM S$(3),X(3),Y(3),DX(3),DY(3)
+160 GOSUB 560
+170 X(1)=120 : Y(1)=120 : DX(1)=2 : DY(1)=1
+180 X(2)=500 : Y(2)=220 : DX(2)=-2 : DY(2)=2
+190 X(3)=500 : Y(3)=140 : DX(3)=-1 : DY(3)=-2
+200 MSG$="" : TMSG=0 : BIGFONT
+210 GOSUB 520
+220 GOTO 230
+230 REM Phase 1: bounce against walls AND TRIANGLE by color
+240 COLMODE 1 : COLCOLOR 1
 250 FOR I=1 TO 3
-260   SPRITE S$(I),X(I),Y(I),0,I
-270   IF HITSPRITE THEN
-280     J=HITID
-290     IF J>=1 AND J<=3 THEN
-300       X(I)=X(I)-DX(I) : Y(I)=Y(I)-DY(I)
-310       T=DX(I) : DX(I)=DX(J) : DX(J)=T
-320       T=DY(I) : DY(I)=DY(J) : DY(J)=T
-330       SPRITE S$(I),X(I),Y(I),0,I
-340       MSG$=TRIM$(STR$(J))+" <-> "+TRIM$(STR$(I)) : TMSG=25
-350     ENDIF
-360   ENDIF
-370 NEXT I
-380 IF TMSG>0 THEN MOVE TX,TY : LABEL MSG$,15,-1 : TMSG=TMSG-1
-400 FRAME : PAUSE 10 : GOTO 100
+260   OLDX=X(I) : X(I)=X(I)+DX(I)
+270   SPRITE HITTEST S$(I),X(I),Y(I),0,I
+280   IF HITCOLOR<>0 THEN X(I)=OLDX:DX(I)=-DX(I)
+290   OLDY=Y(I) : Y(I)=Y(I)+DY(I)
+300   SPRITE HITTEST S$(I),X(I),Y(I),0,I
+310   IF HITCOLOR<>0 THEN Y(I)=OLDY:DY(I)=-DY(I)
+320 NEXT I
+330 REM Phase 2: drawing AND SPRITE-SPRITE detection with explicit id
+340 GOSUB 520
+350 COLMODE 2
+360 FOR I=1 TO 3
+370   SPRITE S$(I),X(I),Y(I),0,I
+380   IF HITSPRITE THEN
+390     J=HITID
+400     IF J>=1 AND J<=3 THEN
+410       X(I)=X(I)-DX(I) : Y(I)=Y(I)-DY(I)
+420       T=DX(I) : DX(I)=DX(J) : DX(J)=T
+430       T=DY(I) : DY(I)=DY(J) : DY(J)=T
+440       SPRITE S$(I),X(I),Y(I),0,I
+450       MSG$=CHR$(48+J)+" <-> "+CHR$(48+I)
+460       TMSG=75
+470     ENDIF
+480   ENDIF
+490 NEXT I
+500 IF TMSG>0 THEN MOVE 275,22:LABEL MSG$,15,-1:TMSG=TMSG-1
+510 FRAME 60 : GOTO 230
+520 REM Fixed background for color-based collisions
+530 CLG OFFSCREEN : INK 1 : RECTANGLE B,B+15,WIDTH-1-B,HEIGHT-1-B
+540 FTRIANGLE WIDTH\2-100,HEIGHT\2-80,WIDTH\2+100,HEIGHT\2-80,WIDTH\2,HEIGHT\2+80,1
+550 RETURN
+560 REM Build three numbered sprites
+570 CLG : INK 2 : FCIRCLE 40,40,R : MOVE 36,46 : LABEL "1",0,-1
+580 S$(1)=SPRITE$(40-R,40-R,40+R,40+R)
+590 CLG : INK 12 : FCIRCLE 40,40,R : MOVE 36,46 : LABEL "2",0,-1
+600 S$(2)=SPRITE$(40-R,40-R,40+R,40+R)
+610 CLG : INK 8 : FCIRCLE 40,40,R : MOVE 36,46 : LABEL "3",0,-1
+620 S$(3)=SPRITE$(40-R,40-R,40+R,40+R)
+630 RETURN
+```
 
 File `samples/g-sprite5.bas` includes this complete example, including the construction of numbered sprites 1, 2 and 3.
 
@@ -1029,8 +1111,8 @@ Commands
 Available events: `MOVE`, `LEFTDOWN`, `LEFTUP`, `LEFTDRAG`, `RIGHTDOWN`, `RIGHTUP`, `RIGHTDRAG`. The `DRAG` events correspond to mouse movement while the button is held down (`<B1-Motion>` and `<B3-Motion>`).
 
 Helper functions
-+ MOUSEX / MOUSEY                  Logical cursor coordinates (same system as `PLOT` and `INK`).
-+ MOUSELEFT / MOUSERIGHT           1 if the button is pressed, 0 if it is released.
++ MOUSEX / MOUSEY                  Logical cursor coordinates (same system as `PLOT` and `DRAW`).
++ MOUSELEFT / MOUSERIGHT           -1 if the button is pressed, 0 if it is released.
 + MOUSEEVENT$                      Name of the last received event (for example, `"LEFTUP"`).
 
 Notes
@@ -1041,6 +1123,9 @@ Notes
 - Combine `LEFTDOWN` + `LEFTDRAG` + `LEFTUP` (or their right-button equivalents) to implement drag selections. `MOVE` emits motion events even when no buttons are pressed.
 
 Examples (right button exits)
+Run these as two separate programs. The first draws rectangles between a left-button press and release; pressing any key also ends its `PAUSE`. The second draws while dragging with the left button. Release the right button to end either program.
+
+```basic
 10 CLG : MODE 1024
 15 ON MOUSE LEFTDOWN GOSUB 35
 20 ON MOUSE LEFTUP GOSUB 45
@@ -1054,7 +1139,9 @@ Examples (right button exits)
 55 RETURN
 60 SCREEN CLOSE
 65 END
+```
 
+```basic
 10 CLG : MODE 1024 : MASK &X11000011
 15 ON MOUSE LEFTDOWN GOSUB 35
 20 ON MOUSE LEFTDRAG GOSUB 45
@@ -1067,10 +1154,11 @@ Examples (right button exits)
 55 RETURN
 60 SCREEN CLOSE
 65 END
+```
 
 7. Interrupts
 
-+ AFTER <timer delay>[, <timer number>] GOSUB [line number]
++ AFTER <timer delay>[, <timer number>] GOSUB <line number>
 + EVERY <time period>[, <timer number>] GOSUB <line number>
 + EI              Enables timer, mouse and sound-queue interrupts previously inhibited with `DI`.
 + DI              Inhibits timer, mouse and sound-queue interrupts; it does not inhibit `CTRL+C` or stop sound playback.
@@ -1083,20 +1171,33 @@ Units and control
 - `CANCEL n`: permanently disables the specified timer.
 - `REMAIN(n)`: returns the remaining timer count in ticks (it does not modify the timer).
 
-Example
-10 DEF FNSOL$=CHR$(INT(RND*26+97))
-15 s$=FNSOL$
-20 EVERY 10,1 GOSUB 60   'Generates a letter every 0.2 seconds
-25 AFTER 250,0 GOSUB 50  'Ends after 5 seconds
-30 PRINT "Will I 'guess' the letter I myself picked in 5 seconds? ;)"
-35 IF a$<>s$ THEN 35
-40 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!"
-45 BEEP : PAUSE 120 : END
-50 PRINT : PRINT "Too late. I win too! :DDD"
-55 END
-60 a$=FNSOL$
-65 PRINT UPPER$(a$);" ";
-70 RETURN
+Example (cooperating timer interrupts)
+Based on `samples/interrupts.bas`: one timer generates guesses, a higher-priority timer checks them, and a third limits the game to five seconds. `RANDOMIZE` varies the game on each run. The main program waits with `PAUSE`, so pressing any key also ends the example.
+
+```basic
+90 RANDOMIZE
+100 DEF FNSOL$=CHR$(INT(RND*26+97))
+110 s$=FNSOL$
+120 EVERY 10,1 GOSUB 250  'Generate one guess every 0.2 seconds
+130 EVERY 5,2 GOSUB 290   'Check the current guess every 0.1 seconds
+140 AFTER 250,0 GOSUB 220 'End after 5 seconds
+150 PRINT "Will I guess the letter I picked myself (";UPPER$(s$);") in 5 seconds? ;)"
+160 PAUSE
+170 END
+180 REM The latest guess was correct
+190 PRINT : PRINT "'";UPPER$(a$);"' is correct. I win!";
+200 BEEP : PAUSE 120 : END
+210 REM Time is up
+220 PRINT : PRINT "Too late. I still win! :DDD"
+230 END
+240 REM Generate and print one guess
+250 a$=FNSOL$
+260 PRINT UPPER$(a$);" ";
+270 RETURN
+280 REM Check whether the current guess is correct
+290 IF a$=s$ THEN DI:GOTO 190 'If so, disable interrupts before continuing
+300 RETURN
+```
 
 Notes
 - `AFTER` and `EVERY` timers have a priority equal to their number. When an interrupt routine is entered, AVL BASIC saves the current `DI`/`EI` state and raises the current priority to that interrupt's priority.
@@ -1140,6 +1241,7 @@ Queue queries and events
 - `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress.
 
 Example
+```basic
 10 ENV 1,12,-1,2
 20 SOUND 65,478,30,12,1
 30 SOUND 66,379,30,12,1
@@ -1149,6 +1251,7 @@ Example
 70 PAUSE 10
 80 WEND
 90 END
+```
 
 See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.bas` for music supplied by a rearmed `ON SQ` handler.
 `samples/s-cpc-duet.bas` adapts the two-channel score from the English `CPC6128 User Instructions` (AMSOFT), chapter 9, pp. 46-47, with channel rendezvous and fractional tone periods. It preserves the original English comments and score. AVL-BASIC adaptations omit integer-variable suffixes (`%`), rename `scale`/`scale$` to `notes`/`notes$` because `SCALE` is reserved, use `&H` hexadecimal prefixes and wait for both sound queues before `END`.
@@ -1180,49 +1283,58 @@ See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.
 - Sample channel/slot numbers, the loop flag, and `fade_ms` in the `AUDIO` family must be exact integers. Classic sound uses the rounding described in 7.1. Out-of-range arguments report error 26. File operations use the existing file errors (40, 61, or 62).
 
 Example
-10 AUDIO LOAD 1,"assets/audio/chime.wav"
+```basic
+10 AUDIO LOAD 1,"samples/assets/audio/chime.wav"
 20 IF AUDIOAVAILABLE=0 THEN PRINT AUDIOERROR$
 30 AUDIO PLAY 1,1,0,0.4
 40 WHILE AUDIOSTATE(1)<>0
 50 PAUSE 10
 60 WEND
 70 END
+```
 
 Run `samples/s-audio.bas` for looping, pan/rate changes, fades, pause and resume using the included generated WAV.
 
-8. System, time and debugging
+8. System, time and tracing
+
+`TRON` and `TROFF` are legacy line-tracing commands. They print the lines executed without pausing the program. For interactive debugging, breakpoints, inspecting variables and stepping through statements, use `DEBUG` in section 9.2.
 
 + RANDOMIZE [seed]
 + PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed
 + BEEP                  Short asynchronous tone, equivalent to `SOUND 1,142,10,10`
-+ TRON | TROFF          Step-by-step trace
++ TRON | TROFF          Enable/disable legacy line tracing
 + DEG | RAD             Trigonometry in degrees/radians
 + EXIT | QUIT | SYSTEM  Leave the interpreter
 
 Quick notes
-- Regardless of the timer, `PAUSE` always exits the wait when a key is pressed, in both console and graphics programs.
+- With no timeout, `PAUSE` waits for a key. With a timeout, it waits until that time expires or a key is pressed, in both console and graphics programs.
   * This lets `PAUSE` be used to implement the typical "Press a key to continue" behavior, without needing a loop with `INKEY$`.
 - `PAUSE` is also valid in immediate mode and may precede other statements on the same line; for example, `PAUSE 2*60*60*1000 : RUN` waits up to two hours before running the program. A key press ends the wait early.
 - Mouse activity never ends `PAUSE`, but registered `ON MOUSE` handlers continue to run while it waits. A handler may still terminate or redirect the program. See the `ON MOUSE` examples.
 - `TRON` shows the execution trace by lines; `TROFF` disables it.
 - `TRON` shows the current line number in the format `[n]`.
-- `DEG/RAD` affect both trigonometry and drawing angles.
+- `DEG/RAD` affect trigonometry and the angles of `CIRCLE/FCIRCLE` and their relative forms. `LDIR` always uses degrees; `RTD/DTR` perform explicit conversions independently of this mode.
 
-Example (to obtain the expected output, `TRON` must have been executed beforehand)
+Example (enables and disables its own trace)
+```basic
+5 TRON
 10 k=10
 20 FOR j=1 TO 2
 30 l=k+10
 40 PRINT j;k;l
 50 k=k+10
 60 NEXT
-70 END
+70 TROFF : END
+```
 
 Expected output
+```output trace
 [10][20][30][40] 1  10  20
 [50][60][30][40] 2  20  30
 [50][60][70]
+```
 
-8.1 Execution and resumption (`RUN` - `STOP` - `CONT` - `END` - `CTRL+C`)
+8.1 Execution and resumption (`RUN` · `STOP` · `CONT` · `END` · `CTRL+C`)
 
 + STOP                  Stops execution while keeping the state (current line, stacks and variables) and displays `Line n. Program stopped.` using the interpreter's interruption/error style. This is a status notice, not an error: it does not alter `ERR`/`ERL` or invoke `ON ERROR`. Execution can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
 + CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. Modifying the stored program cancels the stopped context; use `RUN` after editing. If the interruption was caused by closing a graphics window, `CONT` is not available.
@@ -1254,14 +1366,24 @@ Flow and notes
 - Re-entries: if a new error occurs while the handler is running, execution aborts with "Error in the error handler ...".
 - `ERROR n`: if error `n` is not among the interpreter's predefined ones, it is treated as a custom error number.
 
-Example
+Example (handled error followed by an intentional unhandled error)
+The first error is custom error 200 and is handled by lines 60–70. Line 30 then disables the handler. Line 40 deliberately jumps to missing line 100, demonstrating the normal error report; the missing destination is part of this example.
+
+```basic
 10 ON ERROR GOTO 60
 20 ERROR 200 'Custom error
 30 ON ERROR GOTO 0 'Disable custom error handling
-40 GOTO 100 'This error will be shown normally because of ON ERROR GOTO 0 on line 30
+40 GOTO 100 'Deliberately missing destination: now reported normally
 50 END
 60 IF (ERR=200) AND (ERL=20) THEN PRINT "Error 200 occurred on line 20"
 70 RESUME NEXT
+```
+
+Expected output from the preceding example
+```output error=2
+Error 200 occurred on line 20
+Line 40. Target line does not exist.
+```
 
 Complete table of error codes
 1  Instruction not allowed in a program.
@@ -1347,7 +1469,7 @@ Range formats
 3 `-m`       From the beginning to line `m`
 4 `n-`       From `n` to the end
 
-9.2 Program editing and debugging (`EDIT` - `DEBUG` - `RENUM` - `DELETE`)
+9.2 Program editing and debugging (`EDIT` · `DEBUG` · `RENUM` · `DELETE`)
 
 + EDIT                            In the Rust runtime, opens a full-screen editor for the program in memory
 + EDIT n                          Opens a line editor with the contents of line `n` prefilled
@@ -1405,13 +1527,15 @@ Notes on `RENUM`
 - If any reference points to a non-existent line, a warning is shown and that number is left unchanged.
 - It does not delete variables or functions; it clears control stacks and adjusts active timer targets so they point to the new lines.
 
-Examples
+Immediate command examples (apply them separately to your own loaded program)
+```console
 EDIT 150         'Edits line 150 (the number can be changed to turn it into another line).
 DELETE 200-400   'Deletes the block of lines 200 to 400.
 RENUM 100,5      'Renumbers starting at 100 with an increment of 5.
 RENUM 1000,10,500 'Renumbers only the block from line 500 onward.
 RENUM 21,7,20,40 'Renumbers only the block between lines 20 and 40.
 RENUM 295,1,190,215 'Moves block 190-215 into the 295-298 gap.
+```
 
 9.3 Other immediate utilities
 
@@ -1558,7 +1682,7 @@ System
 - `ERR`: numeric code of the last runtime error (0 if none is active).
 - `ERL`: line number where the last error occurred (0 if none is active).
 - `INKEY$`: handles one discrete key press from the active graphics window or from the console keyboard.
-- `INKEY$` returns 1 character. Special keys are normalized to the same code in the console and GUI; use `ASC(INKEY$)` to obtain it.
+- `INKEY$` returns one character for a pending key press, or `""` when no key is available. Read it once into a variable, for example `K$=INKEY$`, and use `ASC(K$)` only after checking `K$<>""`. Special keys use the same codes in the console and graphics window.
 - `KEYDOWN(code)`: returns `-1` if the key is currently pressed and `0` otherwise.
 - `KEYDOWN` is intended for games (continuous state). `INKEY$` is still useful for discrete key presses.
 - In graphics mode, `INKEY$` and `KEYDOWN` require the window to have keyboard focus.
@@ -1571,15 +1695,33 @@ System
 - `13` Enter and `27` Escape.
 - `128` through `139`: F1 through F12, respectively.
 
-Example (move with arrows or A/D)
-10 K$=INKEY$
-20 IF K$<>"" THEN A=ASC(K$)
-30 IF A=28 OR K$="A" OR K$="a" THEN X=X-1
-40 IF A=29 OR K$="D" OR K$="d" THEN X=X+1
+Example (one move per key event; arrows or A/D, Esc exits)
+```basic
+10 MODE 640 : SCREEN : PAPER 0 : SMALLFONT : X=WIDTH/2
+20 K$=INKEY$ : A=0
+30 IF K$<>"" THEN A=ASC(K$)
+40 IF A=27 THEN SCREEN CLOSE : END
+50 IF A=28 OR K$="A" OR K$="a" THEN X=X-8
+60 IF A=29 OR K$="D" OR K$="d" THEN X=X+8
+70 X=MAX(10,MIN(WIDTH-11,X))
+80 CLG OFFSCREEN
+90 MOVE 16,HEIGHT-16 : LABEL "Arrows or A/D: move. Esc: exit.",15,-1
+100 FCIRCLE X,HEIGHT/2,8,10
+110 FRAME 60 : GOTO 20
+```
 
-Example for games (key state)
-10 IF KEYDOWN(28) THEN X=X-1
-20 IF KEYDOWN(29) THEN X=X+1
+Example for games (hold the arrow keys to move; Esc exits)
+```basic
+10 MODE 640 : SCREEN : PAPER 0 : SMALLFONT : X=WIDTH/2
+20 IF KEYDOWN(27) THEN SCREEN CLOSE : END
+30 IF KEYDOWN(28) THEN X=X-4
+40 IF KEYDOWN(29) THEN X=X+4
+50 X=MAX(10,MIN(WIDTH-11,X))
+60 CLG OFFSCREEN
+70 MOVE 16,HEIGHT-16 : LABEL "Hold the arrow keys to move. Esc: exit.",15,-1
+80 FCIRCLE X,HEIGHT/2,8,10
+90 FRAME 60 : GOTO 20
+```
 
 Interrupts
 + REMAIN(<timer number>)    Returns the remaining count (in ticks, 1/50 s) of the specified timer (0 to 3).
@@ -1628,23 +1770,28 @@ executing its body.
   - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
   - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the function body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
 
 Definition and usage example
-10 PRINT FNCIRC(5) : REM -> 31.4159
+```basic
+10 PRINT FNCIRC(5) : REM -> approximately 31.4159
 20 END
 100 DEF FNCIRC(Radius)
 110 LET FNCIRC = 2 * PI * Radius
 120 FNEND
+```
 
 Function returning text
+```basic
 10 DEF FNWELCOME$(Name$)
 20 FNWELCOME$ = "Hello " + Name$
 30 FNEND
 40 PRINT FNWELCOME$("AVL")
+```
 
 Using the function name as a local variable
+```basic
 10 DEF FNF(N)
 20 LET FNF=1
 30 FOR K=1 TO N
@@ -1652,8 +1799,10 @@ Using the function name as a local variable
 50 NEXT K
 60 FNEND
 70 PRINT FNF(5)
+```
 
 Array parameters as a local copy
+```basic
 10 DIM T(15)
 20 T(12)=3
 30 DEF FNSET(A,I,V)
@@ -1662,8 +1811,10 @@ Array parameters as a local copy
 60 FNEND
 70 PRINT FNSET(T,12,8) : REM -> 8
 80 PRINT T(12)         : REM -> 3
+```
 
 Array return with MAT
+```basic
 10 DEF FNSUMA(X,Y)
 20 MAT FNSUMA=X+Y
 30 FNEND
@@ -1672,6 +1823,7 @@ Array return with MAT
 60 MAT B=2*A
 70 MAT C=FNSUMA(A,B)
 80 MAT PRINT C
+```
 
 Multiline subroutines
 + DEF SUB name(arg,...)
@@ -1688,11 +1840,12 @@ Multiline subroutines
   - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - Inside the block, the subroutine name may be used as a local variable. Its previous value is restored on exit.
   - Indirect calls between subroutines are allowed, but a subroutine may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and immediate-control commands are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
   - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the subroutine body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
-  - `ON ERROR`, `RESUME NEXT`, and `TRON` work inside `CALL` exactly as they do in multiline functions, with the same jump restrictions.
+  - An error handler established by the calling program can handle an error raised during `CALL`, just as for a multiline function. The handler may use `RESUME NEXT` subject to the same jump restrictions. This does not permit `ON ERROR` or `RESUME` in the routine body. `TRON` also traces the executed routine lines.
 
 Subroutine example
+```basic
 10 DEF SUB TOUCH(X,A)
 20 X=X+1
 30 A(1)=9
@@ -1704,6 +1857,7 @@ Subroutine example
 90 CALL TOUCH(Y,Z)
 100 PRINT Y       : REM -> 4
 110 PRINT Z(1)    : REM -> 9
+```
 
 12. Hexadecimal/Binary and bitwise logic
 

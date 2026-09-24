@@ -13,7 +13,9 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from package_windows_release import ROOT, RELEASE_DIR, copy_tree, language_version
+from package_windows_release import (
+    ROOT, RELEASE_DIR, build_html_manuals, copy_tree, language_version,
+)
 
 
 def glibc_requirement(binary: Path) -> str:
@@ -54,11 +56,11 @@ def build_package(skip_build: bool) -> Path:
     stage.mkdir(parents=True)
     shutil.copy2(binary, stage / "avl-basic")
     (stage / "avl-basic").chmod(0o755)
-    for name in ["README.md", "README.png", "README-console.png",
-                 "MANUAL.txt", "MANUAL.es.txt", "COPYING", "LICENSES"]:
+    for name in ["README.md", "README.png", "README-console.png", "COPYING", "LICENSES"]:
         shutil.copy2(ROOT / name, stage / name)
     for name in ["samples", "assets/linux"]:
         copy_tree(ROOT / name, stage / name)
+    build_html_manuals(stage)
     (stage / "packaging" / "linux").mkdir(parents=True)
     for name in ["install_linux_desktop.sh", "linux/avl-basic.desktop.in"]:
         # A Windows checkout can have CRLF even when packaging through WSL.
@@ -83,6 +85,11 @@ You can also launch an example directly:
 
     ./avl-basic samples/g-old-school.bas
 
+Open MANUAL.html in your browser for the English manual or MANUAL.es.html
+for Spanish. Both manuals are beside the executable and work offline.
+To try a complete example, enter NEW and CD "/", paste it, then enter RUN.
+Start the interpreter in this package folder so samples/assets paths resolve.
+
 Requirements
 ------------
 This binary requires glibc {glibc} or later, libasound.so.2, libgcc_s.so.1,
@@ -105,7 +112,8 @@ Included files
 --------------
 - avl-basic: native Linux interpreter
 - samples/: BASIC programs, gallery, catalog, images and audio assets
-- MANUAL.txt and MANUAL.es.txt: English and Spanish manuals
+- MANUAL.html: offline English manual with navigation, search and copyable examples
+- MANUAL.es.html: offline Spanish manual with the same features
 - COPYING: MIT project license
 - LICENSES: third-party licenses and copyright notices
 - packaging/ and assets/linux/: optional desktop launcher and icons

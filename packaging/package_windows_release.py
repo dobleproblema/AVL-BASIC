@@ -10,6 +10,7 @@ import argparse
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -40,6 +41,15 @@ def copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=ignore)
 
 
+def build_html_manuals(destination: Path) -> None:
+    subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "render_manuals.py"),
+         "--output", str(destination)],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def write_first_readme(dst: Path, version: str) -> None:
     dst.write_text(
         f"""AVL BASIC {version} for Windows
@@ -64,6 +74,11 @@ is fully self-contained. The samples directory contains optional material
 distributed with this package for exploration; its visual gallery and annotated
 catalog are in samples\\README.md.
 
+Open MANUAL.html in your browser for the English manual or MANUAL.es.html
+for Spanish. Both manuals are beside the executable and work offline.
+To try a complete example, enter NEW and CD "/", paste it, then enter RUN.
+Start the interpreter in this package folder so samples/assets paths resolve.
+
 This package uses the native Rust runtime. You do not need to install Rust or
 Cargo to use it.
 
@@ -72,8 +87,8 @@ Included files
 
 - avl-basic.exe: native Windows interpreter
 - samples/: optional collection of BASIC programs, gallery, catalog, and assets
-- MANUAL.txt: English manual
-- MANUAL.es.txt: Spanish manual
+- MANUAL.html: offline English manual with navigation, search and copyable examples
+- MANUAL.es.html: offline Spanish manual with the same features
 - COPYING: MIT project license
 - LICENSES: third-party licenses and copyright notices
 """,
@@ -107,14 +122,13 @@ def build_package(skip_build: bool) -> Path:
         "README.md",
         "README.png",
         "README-console.png",
-        "MANUAL.txt",
-        "MANUAL.es.txt",
         "COPYING",
         "LICENSES",
     ]:
         shutil.copy2(ROOT / name, stage / name)
 
     copy_tree(ROOT / "samples", stage / "samples")
+    build_html_manuals(stage)
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", RELEASE_DIR, package_name)
     return zip_path
 
