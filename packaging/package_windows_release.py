@@ -75,7 +75,7 @@ Included files
 - MANUAL.txt: English manual
 - MANUAL.es.txt: Spanish manual
 - COPYING: MIT project license
-- LICENSES.txt: third-party licenses and copyright notices
+- LICENSES: third-party licenses and copyright notices
 """,
         encoding="utf-8",
         newline="\r\n",
@@ -110,7 +110,7 @@ def build_package(skip_build: bool) -> Path:
         "MANUAL.txt",
         "MANUAL.es.txt",
         "COPYING",
-        "LICENSES.txt",
+        "LICENSES",
     ]:
         shutil.copy2(ROOT / name, stage / name)
 

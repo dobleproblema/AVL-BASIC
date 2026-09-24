@@ -176,7 +176,7 @@ silence. `AVL_BASIC_AUDIO=off` starts with output disabled.
 WSLg uses a small Rust adapter for its PulseAudio server, with bounded buffers
 and a connection that can be interrupted. It uses the existing `pulseaudio`
 protocol crate and needs no additional native library. Third-party notices
-are collected in `LICENSES.txt`. Finishing or stopping a program
+are collected in `LICENSES`. Finishing or stopping a program
 releases the audio output; a later `RUN` retries it if necessary. An unresponsive
 output is detected so CPC sound queues can continue silently.
 
@@ -284,5 +284,5 @@ Windows and Linux packages are published in GitHub Releases.
 AVL BASIC is free software released under the MIT License. See [`COPYING`](COPYING).
 
 The licenses and copyright notices for third-party dependencies are collected
-in [`LICENSES.txt`](LICENSES.txt), included in both
+in [`LICENSES`](LICENSES), included in both
 desktop packages alongside [`COPYING`](COPYING).

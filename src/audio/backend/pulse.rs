@@ -4,7 +4,7 @@
 //! buffers select a zero device latency on RDPSink, causing excessive wakeups.
 //! This adapter negotiates 100 ms of stream buffering and an 80 ms sink latency.
 // Wire protocol sequence based on pulseaudio-rs examples/playback.rs:
-// Copyright 2023 Colin Marc, MIT; see LICENSES.txt.
+// Copyright 2023 Colin Marc, MIT; see LICENSES.
 use super::Failure;
 use kira::backend::Renderer;
 use pulseaudio::protocol;
