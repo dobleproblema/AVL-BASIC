@@ -14,7 +14,7 @@ import tarfile
 from pathlib import Path
 
 from package_windows_release import (
-    ROOT, RELEASE_DIR, build_html_manuals, copy_tree, language_version,
+    ROOT, RELEASE_DIR, build_html_manuals, build_html_readme, copy_tree, language_version,
 )
 
 
@@ -56,11 +56,12 @@ def build_package(skip_build: bool) -> Path:
     stage.mkdir(parents=True)
     shutil.copy2(binary, stage / "avl-basic")
     (stage / "avl-basic").chmod(0o755)
-    for name in ["README.md", "README.png", "README-console.png", "COPYING", "LICENSES"]:
+    for name in ["COPYING", "LICENSES"]:
         shutil.copy2(ROOT / name, stage / name)
     for name in ["samples", "assets/linux"]:
         copy_tree(ROOT / name, stage / name)
     build_html_manuals(stage)
+    build_html_readme(stage)
     (stage / "packaging" / "linux").mkdir(parents=True)
     for name in ["install_linux_desktop.sh", "linux/avl-basic.desktop.in"]:
         # A Windows checkout can have CRLF even when packaging through WSL.
@@ -84,6 +85,9 @@ Inside AVL BASIC:
 You can also launch an example directly:
 
     ./avl-basic samples/g-old-school.bas
+
+Open README.html in your browser for the project overview and image gallery.
+Its images are embedded, so the document works offline.
 
 Open MANUAL.html in your browser for the English manual or MANUAL.es.html
 for Spanish. Both manuals are beside the executable and work offline.
@@ -111,6 +115,7 @@ From this folder:
 Included files
 --------------
 - avl-basic: native Linux interpreter
+- README.html: offline project overview with embedded images
 - samples/: BASIC programs, gallery, catalog, images and audio assets
 - MANUAL.html: offline English manual with navigation, search and copyable examples
 - MANUAL.es.html: offline Spanish manual with the same features

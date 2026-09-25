@@ -152,7 +152,7 @@ Pese a que las mayúsculas/minúsculas no son significativas, las variables cons
 
 2. Sintaxis esencial
 
-Reglas                Detalle
+Reglas de sintaxis
 + Nº de línea         Entero > 0, obligatorio. Gobiernan flujo (`GOTO`, `GOSUB`, etc.).
 + Separador           : Varias instrucciones en la misma línea o tras `THEN/ELSE`.
 + Comentarios         REM …  ·  ' … (este último no necesita : antes).
@@ -174,15 +174,15 @@ Notas rápidas
 + IF expresion GOTO línea [ELSE cláusula-else]                 El `ELSE` siempre abarca hasta el fin de la línea.
 + IF expresion THEN cláusula-then [ELSE cláusula-else]         Las cláusulas pueden estar formadas por varias instrucciones separadas por `:`
 + IF expresion THEN                                            Forma en bloque; detalles más abajo.
-+ FOR variable=x TO y [STEP z]
-+ NEXT [variable]
++ FOR variable=x TO y [STEP z]                                Inicia un bucle con contador
++ NEXT [variable]                                            Avanza o termina el bucle `FOR` actual
 + EXIT FOR                                                     Sale anticipadamente del bucle `FOR` actual
 + WHILE expresión                                              El bucle se ejecuta mientras `expresión` sea distinto de 0
 + WEND                                                         Cierra el bucle `WHILE`
 + EXIT WHILE                                                   Sale anticipadamente del bucle `WHILE` actual
 + ON n GOTO 100,120,140                                        Índice 1-based
-+ ON n GOSUB 100,200,300
-+ ON ERROR GOTO línea
++ ON n GOSUB 100,200,300                                      Llama a la subrutina seleccionada por el índice `n`, contado desde 1
++ ON ERROR GOTO línea                                        Activa un procesador de errores en la línea indicada
 + ON ERROR RESUME NEXT                                        Activa el modo “ignorar error y seguir”
 + RESUME [NEXT]                                                Tras un error, continua en la instrucción que lo provocó o la siguiente
 + RESUME línea                                                 o en la primera instrucción de la línea indicada
@@ -219,8 +219,8 @@ Cambia `V=75` por `V=0` o `V=25` para probar las otras dos ramas.
 + DIM var(dim1[,dim2,...])       Límites superiores inclusivos; por ejemplo, `DIM A(10,5)` tiene índices 0..10 y 0..5
 + REDIM var(dim1[,dim2,...])     Cambia límites sin perder los datos existentes dentro del nuevo rango
 + LET var1[=var2...]=valor       LET es opcional
-+ READ lista-variables
-+ DATA lista-constantes
++ READ lista-variables           Lee valores de `DATA` en las variables
++ DATA lista-constantes          Almacena constantes para lecturas secuenciales con `READ`
 + RESTORE [línea]                Sitúa el puntero `DATA` al principio o en la línea DATA indicada
 + SWAP v1,v2                     Intercambia
 + CLEAR                          Borra todas las variables
@@ -265,11 +265,11 @@ Funciones
 + CNORM(expr) | CNORMCOL           Norma de columna y columna correspondiente
 + DOT(v1,v2)                       Producto escalar de dos vectores numéricos compatibles
 + FNORM(expr)                      Norma de Frobenius
-+ LBND(array[,dimensión])          Variante matricial de `LBOUND`
++ LBOUND(array[,dimensión])        Límite inferior de cualquier dimensión existente del array
 + MAXAB(expr) | MAXABCOL | MAXABROW  Mayor valor absoluto y su columna/fila asociada
 + RNORM(expr) | RNORMROW           Norma de fila y fila correspondiente
 + SUM(expr)                        Suma algebraica de todos los elementos
-+ UBND(array[,dimensión])          Variante matricial de `UBOUND`
++ UBOUND(array[,dimensión])        Límite superior inclusivo de cualquier dimensión existente del array
 
 Notas generales
 - `MAT` trabaja con arrays de 1 o 2 dimensiones. Los nombres sin `$` manejan números; los que terminan en `$` manejan texto.
@@ -312,7 +312,7 @@ Funciones relacionadas
 - `MAXAB(expr)` devuelve el valor absoluto máximo del array, conservando aparte la fila y la columna donde apareció.
 - `FNORM(expr)` es la raíz cuadrada de la suma de cuadrados de todos los elementos (norma de Frobenius).
 - `DOT(v1,v2)` exige dos vectores numéricos de la misma longitud. Los arrays de una dimensión y las matrices de una sola columna se aceptan indistintamente.
-- `LBND/UBND` son las variantes del ROM matricial de `LBOUND/UBOUND`: solo aceptan arrays de una o dos dimensiones y redondean la dimensión igual que `ROUND`, de modo que `UBND(A,1.6)` consulta la segunda dimensión.
+- `LBOUND/UBOUND` consultan los límites de cualquier dimensión existente de un array, vector o matriz. La dimensión opcional vale 1 por defecto y debe ser entera; los argumentos fraccionarios producen `Invalid argument` (argumento no válido). Utiliza `INT`, `FIX` o `ROUND` explícitamente si necesitas convertir el argumento.
 - Las palabras reservadas `CON`, `ZER`, `IDN`, `TRN` e `INV` solo pueden usarse en el contexto de `MAT`.
 
 Ejemplo
@@ -384,7 +384,7 @@ Notas detalladas (INPUT)
 + GPRINT [lista]                                 Equivalente gráfico de PRINT en coordenadas de texto (ignora ORIGIN).
 + GINPUT ["prompt"][,|;] var1[,var2…]          Equivalente gráfico de INPUT en coordenadas de texto.
 + LABEL txt$[,tinta][,papel]                   Dibuja una cadena en coordenadas gráficas.
-+ c$ = TESTCHR$[(columna,fila)] Lee el carácter reconocible en una celda de texto.
++ c$ = TESTCHR$[(columna,fila)]  Lee el carácter reconocible en una celda de texto.
 + LDIR grados                 Orientación del texto de LABEL. LDIR 0 = horizontal.
 
 Notas rápidas
@@ -736,8 +736,8 @@ Notas rápidas (figuras)
 
 6.4 Colores
 
-+ INK c|r,g,b|"r,g,b"|"nombretk"     'Color que se va a usar para dibujar.      
-+ PAPER c|r,g,b|"r,g,b"|"nombretk"   'Color usado por CLG y, en modo OPAQUE, como fondo de GPRINT y LABEL.
++ INK c|r,g,b|"r,g,b"|"nombretk"     Color que se va a usar para dibujar.
++ PAPER c|r,g,b|"r,g,b"|"nombretk"   Color usado por `CLG` y, en modo `OPAQUE`, como fondo de `GPRINT` y `LABEL`.
 
 Donde c puede ser un color en uno de los siguientes formatos:
 - 0-31            Paleta predefinida
@@ -831,10 +831,10 @@ Ejemplo (muestra en pantalla todos los colores de la paleta predefinida)
 
 + CROSSAT xint,yint            Fija el cruce preferido entre ejes (opcional)
 + CROSSAT                      Borra el cruce preferido
-+ XAXIS [tics][,xmin,xmax][,lado][,orient][,subdiv]
-+ YAXIS [tics][,ymin,ymax][,lado][,subdiv]
++ XAXIS [tics][,xmin,xmax][,lado][,orient][,subdiv]  Dibuja un eje horizontal con separación automática o explícita entre marcas
++ YAXIS [tics][,ymin,ymax][,lado][,subdiv]  Dibuja un eje vertical con separación automática o explícita entre marcas
 
-Parámetro                Significado
+Parámetros
 - tics                   Distancia entre marcas (unidades de usuario). Omitido o vacío: automático. Con `0`, solo se dibuja la línea del eje, sin marcas, sub-tics ni etiquetas.
 - xmin,xmax / ymin,ymax  Valores de etiquetas en los extremos; con `SCALE` activo también delimitan el tramo del eje que se dibuja.
 - lado                   Posición de los rótulos respecto al eje. 0 = debajo/izq · 1 = encima/der · <0 = sin rótulos (solo marcas).
@@ -1171,8 +1171,8 @@ Ejecuta estos dos programas por separado. El primero dibuja rectángulos entre u
 
 7. Interrupciones
 
-+ AFTER <retardo>[, <número de temporizador>] GOSUB <número de línea>
-+ EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <número de línea>
++ AFTER <retardo>[, <número de temporizador>] GOSUB <número de línea>  Programa una interrupción de temporizador de una sola ejecución
++ EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <número de línea>  Programa una interrupción periódica de temporizador
 + EI              Habilita las interrupciones de temporizador, ratón y cola de sonido inhibidas previamente con `DI`.
 + DI              Inhibe las interrupciones de temporizador, ratón y cola de sonido; no inhibe `CTRL+C` ni detiene la reproducción.
 + CANCEL n        Desactiva permanentemente el temporizador n actual
@@ -1312,7 +1312,7 @@ Ejecuta `samples/s-audio.bas` para probar bucles, cambios de balance y velocidad
 
 `TRON` y `TROFF` son órdenes clásicas («legacy») de trazado por líneas. Muestran las líneas ejecutadas sin pausar el programa. Para depuración interactiva, puntos de ruptura, inspección de variables y ejecución paso a paso, utiliza `DEBUG` en la sección 9.2.
 
-+ RANDOMIZE [semilla]
++ RANDOMIZE [semilla]    Inicializa la semilla del generador de números aleatorios
 + PAUSE [ms]            Espera el número de milisegundos especificado o hasta que se pulsa una tecla
 + BEEP                  Tono asíncrono corto, equivalente a `SOUND 1,142,10,10`
 + TRON | TROFF          Activa/desactiva el trazado clásico por líneas
@@ -1489,7 +1489,7 @@ Formato de rangos
 + DEBUG                           En la versión Rust, abre el depurador y se detiene antes de la primera instrucción
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
-+ RENUM [inicio[, paso[, desde[, hasta]]]] Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
++ RENUM [inicio[, paso[, desde[, hasta]]]]  Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
 
 Notas sobre EDIT
 - `EDIT` sin número permite recorrer y modificar el programa completo. F12 aplica los cambios en memoria y sale; Esc los descarta. Para guardar en disco hay que usar `SAVE`.
@@ -1613,7 +1613,7 @@ Las de cero argumentos se usan sin paréntesis.
 
 Numéricas y conversiones
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
-+ SQR | LOG | LOG10 | EXP | 
++ SQR | LOG | LOG10 | EXP
 + SIN | COS | TAN | ASN | ACS | ATN | COT | RTD | DTR | PI | INF
 + RND 
 + TIME
@@ -1622,18 +1622,16 @@ Numéricas y conversiones
 
 Cadenas
 + LEN | LEFT$ | RIGHT$ | MID$ | INSTR 
-+ ASC | CHR$  | STR$ 
++ ASC | CHR$ | STR$
 + BIN$ | HEX$ | DEC$
 + UPPER$ | LOWER$ 
 + SPACE$ | STRING$ | TRIM$
 
 Ficheros de datos
-+ EOF(channel)
-  EOF(canal) devuelve -1 al final de un canal INPUT abierto y 0 en otro caso; ver 5.2.
++ EOF(canal)  Devuelve -1 al final de un canal `INPUT` abierto y 0 en otro caso; ver sección 5.2.
 
 Arrays
 + LBOUND(array[,dimensión]) | UBOUND(array[,dimensión])
-+ LBND(array[,dimensión]) | UBND(array[,dimensión])   Alias matriciales para arrays de 1 o 2 dimensiones
 
 Notas aclaratorias para algunas funciones
 - ROUND(n[,d]): redondeo "medio hacia afuera" (away-from-zero).
@@ -1667,21 +1665,20 @@ Notas aclaratorias para algunas funciones
   • Ejemplo europeo: `DEC$(1234567.23, ",#,###,###.##")` -> 1.234.567,23
   • Ejemplo exponencial: `DEC$(12345, "0.00^^^^")` -> 1.23E+04
 - LBOUND(array[,dimensión]) | UBOUND(array[,dimensión]): Devuelve los límites inferior o superior de las dimensiones de un array.
+  • Estas funciones sirven para arrays de cualquier número de dimensiones, incluidos vectores y matrices. Las dimensiones se numeran desde 1.
+  • `dimensión` debe ser un entero finito. Un valor fraccionario produce `Invalid argument` (argumento no válido); un entero que no corresponde a una dimensión existente produce `Index out of range` (índice fuera de rango).
+  • No se redondea ni se trunca implícitamente. Por ejemplo, `UBOUND(A,INT(1.6))` y `UBOUND(A,FIX(1.6))` consultan la dimensión 1, mientras que `UBOUND(A,ROUND(1.6))` consulta la dimensión 2 si existe.
   • `array` es el nombre de la variable de array a comprobar.
   • `dimensión` es un parámetro opcional utilizado para indicar, para arrays de múltiples dimensiones, la dimensión de la que queremos obtener el límite. Si no se indica, el valor por defecto es 1.
   • El límite inferior siempre será 0 o 1, siendo igual al valor actual de MAT BASE.
-- `LBND(array[,dimensión]) | UBND(array[,dimensión])`: versiones inspiradas en el módulo matricial del HP-85.
-  • Solo admiten arrays de una o dos dimensiones.
-  • Si `dimensión` tiene parte decimal, se redondea con el mismo criterio que `ROUND`.
-  • `LBND` devuelve 0 o 1 según el `MAT BASE` activo; `UBND` devuelve el índice superior inclusivo de la dimensión seleccionada.
 
 Color & pantalla
-+ RGB(n|r,g,b|"r,g,b"|"colortk") → número
-+ RGB$(n|r,g,b|"r,g,b"|"colortk") → cadena "r,g,b"
-+ WIDTH HEIGHT → tamaño en píxeles de la pantalla
-+ XMIN XMAX YMIN YMAX BORDER → parámetros de escala actuales
-+ XPOS YPOS HPOS VPOS (cursor gráfico/texto)
-+ TEST(x,y) → color del píxel en las coordenadas x,y
++ RGB(n|r,g,b|"r,g,b"|"colortk")  Devuelve un color RGB numérico
++ RGB$(n|r,g,b|"r,g,b"|"colortk")  Devuelve un color como cadena `"r,g,b"`
++ WIDTH | HEIGHT  Ancho y alto de la pantalla en píxeles
++ XMIN | XMAX | YMIN | YMAX | BORDER  Parámetros de escala actuales
++ XPOS | YPOS | HPOS | VPOS  Coordenadas del cursor gráfico y del cursor de texto
++ TEST(x,y)  Devuelve el color del píxel en las coordenadas `(x,y)`
 
 - `XMIN/XMAX/YMIN/YMAX/BORDER` devuelven la escala activa de la ventana gráfica.
 - Si no hay ventana gráfica activa, devuelven la escala física: `XMIN=0`, `XMAX=WIDTH-1`, `YMIN=0`, `YMAX=HEIGHT-1`, `BORDER=0`.
@@ -1769,8 +1766,8 @@ durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
   descartan las definiciones inmediatas; las declaraciones del programa almacenado
   siguen disponibles.
 
-+ DEF FNname(arg,…)=expr (una sola línea).
-+ DEF FNname(arg,...) (bloque multilínea).
++ DEF FNname(arg,...)=expr  Función de una sola línea
++ DEF FNname(arg,...)  Función multilínea
   - Todos los parámetros de `DEF FN` son locales y se pasan por valor; en las funciones multilínea los arrays se copian localmente, y en las funciones de una sola línea no se admiten arrays como argumentos.
   - El identificador que sigue a `FN` puede reutilizar el nombre de una función integrada. Por ejemplo, `DEF FNSIN=125` y `DEF FNSUM(X)=X+1` son válidas.
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
@@ -1843,8 +1840,8 @@ Retorno de array con MAT
 ```
 
 Subrutinas multilínea
-+ DEF SUB nombre(arg,...)
-+ CALL nombre(...) o CALL nombre (sin paréntesis si no hay argumentos).
++ DEF SUB nombre(arg,...)  Define una subrutina multilínea
++ CALL nombre(...) | CALL nombre  Llama a la subrutina; omite los paréntesis si no hay argumentos
   - Tras la linea `DEF SUB` se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con `SUBEND`. Si falta, el interprete avisara con "Subrutina mal definida".
   - `EXIT SUB` permite salir antes de llegar a `SUBEND`. `SUBEXIT` es un alias.

@@ -178,6 +178,16 @@ mod tests {
     }
 
     #[test]
+    fn removed_bound_aliases_are_not_language_words_or_help_topics() {
+        for name in ["LBND", "UBND"] {
+            assert!(!is_known_word(name));
+            assert!(!is_builtin_function(name));
+            assert!(!is_reserved_base_name(name));
+            assert!(topic(name).is_none());
+        }
+    }
+
+    #[test]
     fn help_is_the_only_contextual_metacommand() {
         let metacommands = topics()
             .iter()

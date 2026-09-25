@@ -1083,10 +1083,7 @@ fn eval_array_name_args(
         };
         return Ok(vec![Value::string(left), Value::string(right)]);
     }
-    let max_args = if matches!(
-        function.to_ascii_uppercase().as_str(),
-        "LBOUND" | "UBOUND" | "LBND" | "UBND"
-    ) {
+    let max_args = if matches!(function.to_ascii_uppercase().as_str(), "LBOUND" | "UBOUND") {
         2
     } else {
         1

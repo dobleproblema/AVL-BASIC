@@ -1916,6 +1916,82 @@ fn mat_base_controls_lbound_and_ubound_reports_dimensions() {
 }
 
 #[test]
+fn array_bounds_accept_all_dimensions_and_explicit_conversion() {
+    assert_eq!(
+        run_rust(
+            r#"10 MAT BASE 1
+20 DIM A(3,5,7),S$(2,4,6),V(4),M(2,3)
+30 MAT C=M
+40 IF LBOUND(A)<>1 OR UBOUND(V)<>4 THEN PRINT "FAIL"
+50 IF LBOUND(S$,3)<>1 OR UBOUND(S$,3)<>6 THEN PRINT "FAIL"
+60 IF UBOUND(A,3.0)<>7 OR UBOUND(C,2)<>3 THEN PRINT "FAIL"
+70 IF UBOUND(A,INT(1.6))<>3 OR UBOUND(A,FIX(1.6))<>3 THEN PRINT "FAIL"
+80 IF UBOUND(A,ROUND(1.6))<>5 THEN PRINT "FAIL"
+90 MAT BASE 0
+100 IF LBOUND(A,3)<>0 OR UBOUND(A,3)<>7 THEN PRINT "FAIL"
+110 PRINT "OK""#
+        ),
+        "OK\n"
+    );
+}
+
+#[test]
+fn array_bounds_reject_fractional_dimensions_without_coercion() {
+    for function in ["LBOUND", "UBOUND"] {
+        for array in ["A", "S$"] {
+            for dimension in [
+                "0.5",
+                "1.1",
+                "1.4",
+                "1.5",
+                "1.6",
+                "2.9",
+                "3.1",
+                "-1.2",
+                "1+2^(-52)",
+            ] {
+                let program =
+                    format!("10 DIM A(3,5,7),S$(3,5,7)\n20 PRINT {function}({array},{dimension})");
+                assert_eq!(
+                    run_rust_error_code(&program),
+                    ErrorCode::InvalidArgument,
+                    "{program}"
+                );
+            }
+            for dimension in ["0", "-1", "4", "1E20"] {
+                let program =
+                    format!("10 DIM A(3,5,7),S$(3,5,7)\n20 PRINT {function}({array},{dimension})");
+                assert_eq!(
+                    run_rust_error_code(&program),
+                    ErrorCode::IndexOutOfRange,
+                    "{program}"
+                );
+            }
+            assert_eq!(
+                run_rust_error_code(&format!(
+                    "10 DIM A(3,5,7),S$(3,5,7)\n20 PRINT {function}({array},\"2\")"
+                )),
+                ErrorCode::TypeMismatch
+            );
+        }
+    }
+}
+
+#[test]
+fn removed_bound_function_names_are_available_for_variables_and_arrays() {
+    assert_eq!(
+        run_rust(
+            r#"10 LBND=7:UBND=9
+20 DIM LBND(2),UBND(2)
+30 LBND(1)=11:UBND(2)=13
+40 IF LBND<>7 OR UBND<>9 OR LBND(1)<>11 OR UBND(2)<>13 THEN PRINT "FAIL"
+50 PRINT "OK""#
+        ),
+        "OK\n"
+    );
+}
+
+#[test]
 fn row_col_and_base_are_reserved_like_python() {
     for name in ["ROW", "COL", "BASE", "ROW$", "COL$", "BASE$"] {
         let value = if name.ends_with('$') { r#""x""# } else { "1" };
@@ -2190,11 +2266,11 @@ fn mat_stat_functions_update_context_values() {
 100 IF CNORM(A)<>10 OR CNORMCOL<>1 THEN PRINT "E4"
 110 IF DOT(V1,V2)<>12 THEN PRINT "E5"
 120 IF ROUND(FNORM(A),2)<>10.54 THEN PRINT "E6"
-130 IF LBND(A)<>1 THEN PRINT "E7"
+130 IF LBOUND(A)<>1 THEN PRINT "E7"
 140 IF MAXAB(A)<>5 OR MAXABCOL<>1 OR MAXABROW<>2 THEN PRINT "E8"
 150 IF RNORM(A)<>13 OR RNORMROW<>2 THEN PRINT "E9"
 160 IF SUM(A)<>15 THEN PRINT "E10"
-170 IF UBND(B,1.4)<>3 OR UBND(B,1.6)<>5 THEN PRINT "E11"
+170 IF UBOUND(B,1)<>3 OR UBOUND(B,2)<>5 THEN PRINT "E11"
 180 PRINT "OK""#,
     );
     assert_eq!(output, "OK\n");

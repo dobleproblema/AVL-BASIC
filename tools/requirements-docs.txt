@@ -1,0 +1,2 @@
+# Maintainer dependency for tools/render_readme.py (Python 3.10+).
+Markdown==3.10.3

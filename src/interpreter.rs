@@ -13380,7 +13380,7 @@ impl EvalContext for Interpreter {
                 }
                 return Ok(Value::number(1.0 / t));
             }
-            "LBOUND" | "UBOUND" | "LBND" | "UBND" => {
+            "LBOUND" | "UBOUND" => {
                 return self.call_array_bound_function(name, args);
             }
             "DET" => {
@@ -13595,27 +13595,19 @@ impl Interpreter {
         let Some(array) = self.array_ref(&array_name) else {
             return Err(self.err(ErrorCode::Undefined));
         };
-        let round_dimension = matches!(name.to_ascii_uppercase().as_str(), "LBND" | "UBND");
         let dimension = if args.len() == 2 {
-            let raw = args[1].as_number()?;
-            if round_dimension {
-                round_half_away(raw, 0) as usize
-            } else {
-                raw as usize
-            }
+            args[1].as_number()?
         } else {
-            1
+            1.0
         };
-        let max_dimension = if round_dimension {
-            array.dims.len().min(2)
-        } else {
-            array.dims.len()
-        };
-        if dimension == 0 || dimension > max_dimension {
+        if !dimension.is_finite() || dimension.fract() != 0.0 {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
+        if dimension < 1.0 || dimension > array.dims.len() as f64 {
             return Err(self.err(ErrorCode::IndexOutOfRange));
         }
-        let upper = name.to_ascii_uppercase();
-        let value = if upper == "LBOUND" || upper == "LBND" {
+        let dimension = dimension as usize;
+        let value = if name.eq_ignore_ascii_case("LBOUND") {
             self.mat_base as f64
         } else {
             array.dims[dimension - 1] as f64
@@ -18676,14 +18668,12 @@ fn is_reserved_matrix_function_name(name: &str) -> bool {
             | "CNORMCOL"
             | "DOT"
             | "FNORM"
-            | "LBND"
             | "MAXAB"
             | "MAXABCOL"
             | "MAXABROW"
             | "RNORM"
             | "RNORMROW"
             | "SUM"
-            | "UBND"
     )
 }
 

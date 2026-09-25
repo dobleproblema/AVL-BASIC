@@ -153,18 +153,31 @@ class Renderer:
                 continue
             if s.startswith('+ ') and line==line.lstrip():
                 rows=[]
-                while i<len(lines) and lines[i][1].startswith('+ '):rows.append(lines[i]);i+=1
-                paired=[]
-                for rn,row in rows:
+                while i<len(lines) and lines[i][1].startswith('+ '):
+                    rn,row=lines[i]
                     value=row[2:].strip();parts=re.split(r' {2,}',value,maxsplit=1)
-                    if len(parts)==2:paired.append((rn,parts))
-                    else:paired.append((rn,[value,'']))
-                if any(desc for _,(_,desc) in paired):
-                    content=''.join('<dt>'+inline('`'+sig+'`' if '`' not in sig else sig)+'</dt><dd>'+inline(desc)+'</dd>' for _,(sig,desc) in paired)
-                    raw=plain_markup(' '.join(sig+' '+desc for _,(sig,desc) in paired))
-                    out.append(self.block('dl',content,raw,[rn for rn,_ in rows],'reference'))
+                    sig=parts[0];description=parts[1:] if len(parts)==2 else []
+                    indices=[rn];i+=1
+                    # Wrapped explanations belong to the same definition, not
+                    # to a new paragraph or a heading outside the table.
+                    while i<len(lines):
+                        cn,continuation=lines[i]
+                        if (not continuation.strip() or not continuation[0].isspace()
+                                or BULLET.match(continuation) or continuation.lstrip().startswith('```')):
+                            break
+                        indices.append(cn);description.append(continuation.strip());i+=1
+                    rows.append((indices,sig,' '.join(description)))
+                if any(desc for _,_,desc in rows):
+                    for indices,sig,desc in rows:
+                        if not desc or desc.startswith('|'):
+                            raise ValueError(f'{self.lang}: incomplete reference row at line {indices[0]+1}: '
+                                             'separate syntax and description with at least two spaces '
+                                             'or put the description on an indented continuation line')
+                    content=''.join('<dt>'+inline('`'+sig+'`' if '`' not in sig else sig)+'</dt><dd>'+inline(desc)+'</dd>' for _,sig,desc in rows)
+                    raw=plain_markup(' '.join(sig+' '+desc for _,sig,desc in rows))
+                    out.append(self.block('dl',content,raw,[rn for indices,_,_ in rows for rn in indices],'reference'))
                 else:
-                    for rn,(sig,_) in paired:out.append(self.block('div',inline('`'+sig+'`' if '`' not in sig else sig),plain_markup(sig),[rn],'syntax'))
+                    for indices,sig,_ in rows:out.append(self.block('div',inline('`'+sig+'`' if '`' not in sig else sig),plain_markup(sig),indices,'syntax'))
                 continue
             bullet=BULLET.match(line)
             if bullet:
@@ -280,7 +293,8 @@ class Links(HTMLParser):
 
 def validate_links(output):
     from urllib.parse import unquote, urlsplit
-    pages={path.name:Links() for path in output.glob('*.html')}
+    # Only the manuals belong to this renderer; a package also contains README.html.
+    pages={name:Links() for name in ('MANUAL.html','MANUAL.es.html')}
     for name, parser in pages.items():parser.feed((output/name).read_text(encoding='utf-8'))
     count=0
     for name, parser in pages.items():

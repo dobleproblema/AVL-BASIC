@@ -378,8 +378,8 @@ function	expression	STRING$		STRING$(length, character) || STRING$(length, code)
 function	expression	TRIM$		TRIM$(text$)	text$: string expression	Removes leading and trailing whitespace.	-	builtin,pure
 
 # Array and matrix functions
-function	expression	LBOUND	LBND	LBOUND(array[, dimension]) || LBND(array[, dimension])	array: array name; dimension: optional 1-based dimension, default 1 (LBND rounds it and accepts only 1D/2D arrays)	Returns the inclusive lower bound selected by MAT BASE.	UBOUND,MAT BASE	builtin,array-name
-function	expression	UBOUND	UBND	UBOUND(array[, dimension]) || UBND(array[, dimension])	array: array name; dimension: optional 1-based dimension, default 1 (UBND rounds it and accepts only 1D/2D arrays)	Returns the inclusive upper bound of a dimension.	LBOUND,DIM	builtin,array-name
+function	expression	LBOUND		LBOUND(array[, dimension])	array: array name; dimension: optional finite integer identifying an existing dimension, numbered from 1, default 1; fractional values raise Invalid argument	Returns the inclusive lower bound selected by MAT BASE. Works with any array dimension, including vectors and matrices. Use INT, FIX or ROUND explicitly to convert a fractional dimension.	UBOUND,MAT BASE	builtin,array-name
+function	expression	UBOUND		UBOUND(array[, dimension])	array: array name; dimension: optional finite integer identifying an existing dimension, numbered from 1, default 1; fractional values raise Invalid argument	Returns the inclusive upper bound of a dimension. Works with any array dimension, including vectors and matrices. Use INT, FIX or ROUND explicitly to convert a fractional dimension.	LBOUND,DIM	builtin,array-name
 function	expression	DET		DET(array)	array: square numeric matrix name	Returns the determinant of the active MAT BASE block.	INV,MAT	builtin,array-name
 function	expression	ABSUM		ABSUM(array)	array: numeric array name	Returns the sum of the absolute element values.	SUM,FNORM	builtin,array-name
 function	expression	AMAX		AMAX(array)	array: numeric array name	Returns the largest element and records its position.	AMAXCOL,AMAXROW,AMIN	builtin,array-name

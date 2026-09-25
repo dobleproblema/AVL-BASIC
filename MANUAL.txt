@@ -152,7 +152,7 @@ Although uppercase/lowercase is not significant, variables keep the style used t
 
 2. Essential syntax
 
-Rules                Detail
+Syntax rules
 + Line number        Integer > 0, mandatory. It controls flow (`GOTO`, `GOSUB`, etc.).
 + Separator          : Several statements on the same line or after `THEN/ELSE`.
 + Comments           REM ... | ' ... (the latter does not need `:` before it).
@@ -174,15 +174,15 @@ Quick notes
 + IF expression GOTO line [ELSE else-clause]                  `ELSE` always extends to the end of the line.
 + IF expression THEN then-clause [ELSE else-clause]          Clauses may contain several statements separated by `:`
 + IF expression THEN                                         Block form; details below.
-+ FOR variable=x TO y [STEP z]
-+ NEXT [variable]
++ FOR variable=x TO y [STEP z]                                Starts a counted loop
++ NEXT [variable]                                            Advances or ends the current `FOR` loop
 + EXIT FOR                                                   Leaves the current `FOR` loop early
 + WHILE expression                                           The loop runs while `expression` is different from 0
 + WEND                                                       Closes the `WHILE` loop
 + EXIT WHILE                                                 Leaves the current `WHILE` loop early
 + ON n GOTO 100,120,140                                      1-based index
-+ ON n GOSUB 100,200,300
-+ ON ERROR GOTO line
++ ON n GOSUB 100,200,300                                      Calls the subroutine selected by the 1-based index `n`
++ ON ERROR GOTO line                                         Installs an error handler at the indicated line
 + ON ERROR RESUME NEXT                                       Enables the "ignore error and continue" mode
 + RESUME [NEXT]                                              After an error, continues at the statement that caused it or the next one
 + RESUME line                                                or at the first statement of the indicated line
@@ -219,8 +219,8 @@ Change `V=75` to `V=0` or `V=25` to try the other two branches.
 + DIM var(dim1[,dim2,...])       Inclusive upper bounds; for example `DIM A(10,5)` has indices 0..10 and 0..5
 + REDIM var(dim1[,dim2,...])     Changes bounds without losing the existing data that still fits in the new range
 + LET var1[=var2...]=value       LET is optional
-+ READ variable-list
-+ DATA constant-list
++ READ variable-list             Reads values from `DATA` into variables
++ DATA constant-list             Stores constants for sequential `READ` operations
 + RESTORE [line]                 Resets the `DATA` pointer to the beginning or to the specified DATA line
 + SWAP v1,v2                     Swaps values
 + CLEAR                          Clears all variables
@@ -265,11 +265,11 @@ Functions
 + CNORM(expr) | CNORMCOL          Column norm and the corresponding column
 + DOT(v1,v2)                      Dot product of two compatible numeric vectors
 + FNORM(expr)                     Frobenius norm
-+ LBND(array[,dimension])         Matrix-ROM variant of `LBOUND`
++ LBOUND(array[,dimension])       Lower bound of any existing array dimension
 + MAXAB(expr) | MAXABCOL | MAXABROW  Largest absolute value and its associated column/row
 + RNORM(expr) | RNORMROW          Row norm and the corresponding row
 + SUM(expr)                       Algebraic sum of all elements
-+ UBND(array[,dimension])         Matrix-ROM variant of `UBOUND`
++ UBOUND(array[,dimension])       Inclusive upper bound of any existing array dimension
 
 General notes
 - `MAT` works with 1D or 2D arrays. Names without `$` hold numbers; names ending in `$` hold text.
@@ -312,7 +312,7 @@ Related functions
 - `MAXAB(expr)` returns the largest absolute value in the array, while separately keeping the row and column where it appeared.
 - `FNORM(expr)` is the square root of the sum of squares of all elements (Frobenius norm).
 - `DOT(v1,v2)` requires two numeric vectors of the same length. One-dimensional arrays and one-column matrices are accepted interchangeably.
-- `LBND/UBND` are the HP-85 Matrix ROM style variants of `LBOUND/UBOUND`: they only accept one- or two-dimensional arrays and round the dimension the same way as `ROUND`, so `UBND(A,1.6)` queries the second dimension.
+- `LBOUND/UBOUND` query the bounds of any existing dimension of an array, vector or matrix. The optional dimension defaults to 1 and must be an integer; fractional arguments raise `Invalid argument`. Use `INT`, `FIX` or `ROUND` explicitly when conversion is intended.
 - The reserved words `CON`, `ZER`, `IDN`, `TRN` and `INV` can only be used in the context of `MAT`.
 
 Example
@@ -333,7 +333,7 @@ Example
 
 + PRINT [list]                        `;` as separator concatenates items; `,` advances to the next print zone
 + ZONE n                              Sets the print-zone width used by commas in `PRINT` (1..255, default 22)
-+ INPUT ["prompt"][,|;] var1[,var2...] Interactive input
++ INPUT ["prompt"][,|;] var1[,var2...]  Interactive input
 + LINE INPUT ["prompt"][,|;] v$       Same as INPUT but reads a single string and keeps commas as part of the input instead of separators
 + CLS                                 Clears the contents of the console
 
@@ -384,7 +384,7 @@ Detailed notes (INPUT)
 + GPRINT [list]                                 Graphics equivalent of PRINT in text coordinates (ignores ORIGIN)
 + GINPUT ["prompt"][,|;] var1[,var2...]       Graphics equivalent of INPUT in text coordinates
 + LABEL txt$[,ink][,paper]                    Draws one string in graphics coordinates
-+ c$ = TESTCHR$[(column,row)] Reads the recognizable character in a text cell
++ c$ = TESTCHR$[(column,row)]  Reads the recognizable character in a text cell
 + LDIR degrees               Orientation of LABEL text. `LDIR 0` = horizontal
 
 Quick notes
@@ -818,10 +818,10 @@ Example (show all colors from the predefined palette on screen)
 
 + CROSSAT xint,yint            Sets the preferred axis crossing point (optional)
 + CROSSAT                      Clears the preferred crossing point
-+ XAXIS [ticks][,xmin,xmax][,side][,orient][,subdiv]
-+ YAXIS [ticks][,ymin,ymax][,side][,subdiv]
++ XAXIS [ticks][,xmin,xmax][,side][,orient][,subdiv]  Draws a horizontal axis with automatic or explicit tick spacing
++ YAXIS [ticks][,ymin,ymax][,side][,subdiv]  Draws a vertical axis with automatic or explicit tick spacing
 
-Parameter                Meaning
+Parameters
 - ticks                  Distance between tick marks (user units). Omitted or empty: automatic. With `0`, only the axis line is drawn, without tick marks, sub-ticks or labels.
 - xmin,xmax / ymin,ymax  Label values at the ends; with `SCALE` active they also delimit the segment of the axis that is drawn.
 - side                   Position of labels relative to the axis. 0 = below/left . 1 = above/right . <0 = no labels (tick marks only).
@@ -1158,8 +1158,8 @@ Run these as two separate programs. The first draws rectangles between a left-bu
 
 7. Interrupts
 
-+ AFTER <timer delay>[, <timer number>] GOSUB <line number>
-+ EVERY <time period>[, <timer number>] GOSUB <line number>
++ AFTER <timer delay>[, <timer number>] GOSUB <line number>  Schedules a one-shot timer interrupt
++ EVERY <time period>[, <timer number>] GOSUB <line number>  Schedules a repeating timer interrupt
 + EI              Enables timer, mouse and sound-queue interrupts previously inhibited with `DI`.
 + DI              Inhibits timer, mouse and sound-queue interrupts; it does not inhibit `CTRL+C` or stop sound playback.
 + CANCEL n        Permanently disables current timer `n`
@@ -1299,7 +1299,7 @@ Run `samples/s-audio.bas` for looping, pan/rate changes, fades, pause and resume
 
 `TRON` and `TROFF` are legacy line-tracing commands. They print the lines executed without pausing the program. For interactive debugging, breakpoints, inspecting variables and stepping through statements, use `DEBUG` in section 9.2.
 
-+ RANDOMIZE [seed]
++ RANDOMIZE [seed]      Seeds the random-number generator
 + PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed
 + BEEP                  Short asynchronous tone, equivalent to `SOUND 1,142,10,10`
 + TRON | TROFF          Enable/disable legacy line tracing
@@ -1476,7 +1476,7 @@ Range formats
 + DEBUG                           In the Rust runtime, opens the debugger and pauses before the first statement
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
-+ RENUM [start[, step[, from[, to]]]] Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`, unlimited `to`.
++ RENUM [start[, step[, from[, to]]]]  Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`, unlimited `to`.
 
 Notes on `EDIT`
 - `EDIT` with no line number lets you browse and modify the whole program. F12 applies changes in memory and exits; Esc discards them. Use `SAVE` to write the program to disk.
@@ -1600,7 +1600,7 @@ Zero-argument functions are used without parentheses.
 
 Numeric and conversions
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
-+ SQR | LOG | LOG10 | EXP |
++ SQR | LOG | LOG10 | EXP
 + SIN | COS | TAN | ASN | ACS | ATN | COT | RTD | DTR | PI | INF
 + RND
 + TIME
@@ -1615,12 +1615,10 @@ Strings
 + SPACE$ | STRING$ | TRIM$
 
 Data files
-+ EOF(channel)
-  EOF(channel) returns -1 at end of an open INPUT channel, otherwise 0; see section 5.2.
++ EOF(channel)  Returns -1 at end of an open `INPUT` channel, otherwise 0; see section 5.2.
 
 Arrays
 + LBOUND(array[,dimension]) | UBOUND(array[,dimension])
-+ LBND(array[,dimension]) | UBND(array[,dimension])   Matrix-style aliases for 1D or 2D arrays
 
 Clarifying notes for some functions
 - `ROUND(n[,d])`: "half away from zero" rounding.
@@ -1654,21 +1652,20 @@ Clarifying notes for some functions
   * European example: `DEC$(1234567.23, ",#,###,###.##")` -> 1.234.567,23
   * Exponential example: `DEC$(12345, "0.00^^^^")` -> 1.23E+04
 - `LBOUND(array[,dimension]) | UBOUND(array[,dimension])`: returns the lower or upper bounds of an array's dimensions.
+  * These functions work with arrays of any rank, including vectors and matrices. Dimensions are numbered from 1.
+  * `dimension` must be a finite integer. Fractional values raise `Invalid argument`; an integer outside the existing dimensions raises `Index out of range`.
+  * No implicit rounding or truncation is performed. For example, `UBOUND(A,INT(1.6))` and `UBOUND(A,FIX(1.6))` query dimension 1, while `UBOUND(A,ROUND(1.6))` queries dimension 2 if it exists.
   * `array` is the name of the array variable to inspect.
   * `dimension` is an optional parameter used, for multidimensional arrays, to indicate which dimension you want the bound from. If omitted, the default value is 1.
   * The lower bound will always be 0 or 1, equal to the current value of `MAT BASE`.
-- `LBND(array[,dimension]) | UBND(array[,dimension])`: variants inspired by the HP-85 Matrix ROM.
-  * They only accept one- or two-dimensional arrays.
-  * If `dimension` has a fractional part, it is rounded using the same rule as `ROUND`.
-  * `LBND` returns 0 or 1 according to the active `MAT BASE`; `UBND` returns the inclusive upper index of the selected dimension.
 
 Color & screen
-+ RGB(n|r,g,b|"r,g,b"|"tkcolor") -> number
-+ RGB$(n|r,g,b|"r,g,b"|"tkcolor") -> string `"r,g,b"`
-+ WIDTH HEIGHT -> screen size in pixels
-+ XMIN XMAX YMIN YMAX BORDER -> current scale parameters
-+ XPOS YPOS HPOS VPOS (graphics/text cursor)
-+ TEST(x,y) -> pixel color at coordinates x,y
++ RGB(n|r,g,b|"r,g,b"|"tkcolor")  Returns a numeric RGB color
++ RGB$(n|r,g,b|"r,g,b"|"tkcolor")  Returns a color as an `"r,g,b"` string
++ WIDTH | HEIGHT  Screen width and height in pixels
++ XMIN | XMAX | YMIN | YMAX | BORDER  Current scale parameters
++ XPOS | YPOS | HPOS | VPOS  Graphics and text cursor coordinates
++ TEST(x,y)  Returns the pixel color at coordinates `(x,y)`
 
 - `XMIN/XMAX/YMIN/YMAX/BORDER` return the active scale of the graphics window.
 - If there is no active graphics window, they return the physical scale: `XMIN=0`, `XMAX=WIDTH-1`, `YMIN=0`, `YMAX=HEIGHT-1`, `BORDER=0`.
@@ -1752,8 +1749,8 @@ executing its body.
   the session, including stored definitions. `CLEAR` and a clean `RUN` discard
   immediate definitions; the stored program's declarations remain available.
 
-+ DEF FNname(arg,...)=expr (single line).
-+ DEF FNname(arg,...) (multiline block).
++ DEF FNname(arg,...)=expr  Single-line function
++ DEF FNname(arg,...)  Multiline function
   - All `DEF FN` parameters are local and passed by value; in multiline functions arrays are copied locally, and in single-line functions arrays are not accepted as arguments.
   - The identifier that follows `FN` may reuse the name of a built-in function. For example, `DEF FNSIN=125` and `DEF FNSUM(X)=X+1` are valid.
   - After the `DEF FN` line, the body statements are written as normal BASIC lines.
@@ -1826,8 +1823,8 @@ Array return with MAT
 ```
 
 Multiline subroutines
-+ DEF SUB name(arg,...)
-+ CALL name(...) or CALL name (without parentheses if there are no arguments).
++ DEF SUB name(arg,...)  Defines a multiline subroutine
++ CALL name(...) | CALL name  Calls the subroutine; omit parentheses when there are no arguments
   - After the `DEF SUB` line, the body statements are written as normal BASIC lines.
   - The block must be closed with `SUBEND`. If it is missing, the interpreter warns with "Subroutine badly defined".
   - `EXIT SUB` leaves the subroutine before reaching `SUBEND`. `SUBEXIT` is an alias.
@@ -1869,7 +1866,7 @@ Numeric literals
 - Inside strings, they are not interpreted; convert them with `VAL` if needed.
 - With no digits (`&H`, `&X` alone), they are treated as 0 when converting/reading.
 
-`HEX$` and `BIN$` functions
+Functions `HEX$` and `BIN$`
 - `HEX$(n[, w])`: uppercase hexadecimal string, without prefix.
   * Without `w`: for `n>=0`, the minimum number of digits; for `n<0`, the minimum multiple of 2 digits (whole bytes) in two's complement.
   * With `w`: `w` must be nonnegative; it uses exactly `w` digits and masks the least significant `w*4` bits (higher bits are truncated).
