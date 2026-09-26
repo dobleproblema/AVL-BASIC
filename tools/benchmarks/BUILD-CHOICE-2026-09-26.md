@@ -1,5 +1,10 @@
 # Configuración elegida tras las pruebas — 26 de septiembre de 2026
 
+**Publicación posterior:** esta configuración se emplea en la versión 1.6.7;
+sus nuevos binarios y mediciones están en la [verificación de publicación](RELEASE-1.6.7.md).
+Los hashes y copias que se detallan a continuación corresponden a la selección
+local inicial sobre 1.6.6.
+
 Se conservan los dos atributos Windows `link_section` y el perfil release
 actual. No se introducen más cambios del intérprete ni opciones experimentales.
 

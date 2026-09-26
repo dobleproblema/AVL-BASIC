@@ -2,6 +2,8 @@
 
 Informes en español:
 
+- [Verificación de los ejecutables publicados en 1.6.7: 26 de septiembre de 2026](RELEASE-1.6.7.md).
+
 - [Configuración elegida para Windows y WSL tras las pruebas: 26 de septiembre de 2026](BUILD-CHOICE-2026-09-26.md).
 
 - [Primera ronda: 4 de septiembre de 2026](RESULTS-2026-09-04.md).
