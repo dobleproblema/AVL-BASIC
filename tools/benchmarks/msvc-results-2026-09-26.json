@@ -1,0 +1,3985 @@
+{
+  "date": "2026-09-26",
+  "scope": "Completed MSVC14.35 vs14.44 comparisons with Rust1.95 and1.98.1, after installation",
+  "source": "AVL-BASIC1.6.6 plus the existing two Windows-only link_section attributes; no runtime edits in this experiment",
+  "builds": {
+    "rust195-old": {
+      "time": "2026-09-25T21:36:16.666012+00:00",
+      "label": "rust195-old",
+      "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+      "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)\nrelease: 1.95.0\ncommit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850\ncommit-date: 2026-03-21\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "link_path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\link.exe",
+      "link_sha256": "6fac48476c6009b5f0d66ec957789264aca73d5b8852c3d51c2ef0a93913a467",
+      "link_version": "Microsoft (R) Incremental Linker Version 14.35.32217.1",
+      "environment": {
+        "VCToolsVersion": "14.35.32215",
+        "VCToolsInstallDir": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\",
+        "WindowsSDKVersion": "10.0.22000.0\\",
+        "WindowsSdkDir": "C:\\Program Files (x86)\\Windows Kits\\10\\",
+        "INCLUDE": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\include;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\include;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\VS\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22000.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\um;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\cppwinrt;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "LIB": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\lib\\um\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22000.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\\\lib\\10.0.22000.0\\\\um\\x64",
+        "LIBPATH": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22000.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22000.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\link.exe",
+        "CC_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\cl.exe",
+        "CXX_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\cl.exe",
+        "AR_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\lib.exe",
+        "RUSTFLAGS": null
+      },
+      "sources": {
+        "Cargo.lock": "80b7ec997d929b798e7f06fc959e7419d8b380dcdc2f17ba4c99cb7012f08e70",
+        "Cargo.toml": "fee8bc9bbb377d88f375be741fd15d0b56d5f04b1cbbe0462ab111651f513704",
+        "build.rs": "9047808c6da877f8bbd738b625a6c6ad130408db1c0fd1fc317f2c2d23b3b26a",
+        "src/audio/backend.rs": "fc86d52efb86074a2e351967d9fdb0ab27c59ff3ec7945ceb44d779eeee820e5",
+        "src/audio/backend/pulse.rs": "3433dbbdcac5329d46eae3fa2326e3de98757e463cecee77ac6febb1e4057ad6",
+        "src/audio/cpc.rs": "836f9f1d91c0093264e5e75c9f4ad3081d8809503a8403679b737c0a4172aa65",
+        "src/audio/mod.rs": "33724b5ac19b17d320bb5af6087497e08029583ff169382451b0ef7e3c1001d1",
+        "src/audio/shared_cpc.rs": "b6c2371eedabdf3cef430bd8e45c936c5c815b557d594e58269a2c1603350801",
+        "src/console.rs": "0dbbfaf69a9a95c3250f67c1e8adca5b4ae955fe38c02c8f2703bd86bc49d467",
+        "src/console/inspector.rs": "42750fc5dfe03c2a4157b8079127e6e870220c2d8425446820ba9ecf38322293",
+        "src/console/inspector/edit.rs": "550ebf1045788528d74981eab72784972a8bdea1107ac997b6545c44f4080cc7",
+        "src/console/navigation.rs": "d7eeeb8f542519a1497d7505ef75e220dacaaca9642834902dd55210eccc3345",
+        "src/data_files.rs": "eec5d4aaf2f8aa733fabdcda56c7118c74ae5bea6efc427c019f635a658ccd16",
+        "src/debugger.rs": "e4dc9c4d13947f0812df2386f6ef2f90072c6d16c3ddb451c85f332f2fc34581",
+        "src/error.rs": "a8734915314d192f840b39b3a148554bed8bd132f644fda8f3aa47ba43637eb3",
+        "src/expr.rs": "94bf64c8f7166cc4556800791b005285bcf1836aa368fcef1a641012e6d22e13",
+        "src/fonts.rs": "4d166d5b02c6ac6199d38171652475ab13c4a5e36865912d0b62068b1c6a421a",
+        "src/graphics.rs": "47ed5f54a5172d7294bd16df17cd802c76ed5e5d2aa20df9e69f575df6778e2e",
+        "src/help.rs": "2a33cad48cc5369fb1592517ca645e67b413362fbfc108d970a51dc5abaddb21",
+        "src/interpreter.rs": "21d6b7ab580e87c9c275724a1fa22d28d586b4b4aeaee79c79e12ad9954217e9",
+        "src/interpreter/audio_commands.rs": "305bf1687c0fd9c8371066f8e1d4b99f2ef63ad5ba92b5fecd217effbc0a6d77",
+        "src/interpreter/debug_navigation.rs": "1969aa34381995f1fb6cbca9c4468e1f64ca60f0edfd2b417a172930b76f088e",
+        "src/keyboard.rs": "a50b44a1dd694069467d34f3d6c4b911eed74b6bba21a7adba953ef8be866405",
+        "src/language.rs": "e3c1098adfb5325f149a90697e59ba75fb849157b142b626cc46b56178d7b2c9",
+        "src/language/catalog.tsv": "35dbfca58c9d30fead22e4a574a1f7ea381d3d35c69ce8e5673b7221928c94f9",
+        "src/lexer.rs": "96587bc80e1436dc9d1b747ba2d11b4953561e5c52b995e10c0a6ff3c8e4e36d",
+        "src/lib.rs": "66f2805bf58a18c021e2746e71b49f262cebb5ca33c18318a1770fb7cbc2d259",
+        "src/main.rs": "ae63430b339cfee9349834bbd1f8c32162d62a4592e0c9edcb7c2ae944267c15",
+        "src/program.rs": "0b119a98452876c6feec7052dd27109417747cfbf101c606e5caaa6149b8e42c",
+        "src/reserved.rs": "c34959918a29d6151e31ff7d4f973cfe7ddd4261258dd0db3e6c12eb5112b546",
+        "src/using_format.rs": "e99a46b5434a456fd7f35eca95e798456c264aeee9b27e07c7dc75683ea1840c",
+        "src/value.rs": "f6c720ff65049d3d36686d9e3eb8a5ad1f9fe719365ef2944bc8593e58c7df37",
+        "src/window.rs": "016e54d7be1a2a4c0a2a11d05533d9866457aab4fedc2d4a16fe5b05cbdcea0c"
+      },
+      "command": [
+        "rustup",
+        "run",
+        "stable",
+        "cargo",
+        "build",
+        "--locked",
+        "--target-dir",
+        "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-old-target",
+        "--release"
+      ],
+      "exit_code": 0,
+      "binary": {
+        "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-old.exe",
+        "sha256": "6ba8594b0b69ed509090ba2d6b29e35863b00a7ecc40da772bf9be8cae35423d",
+        "bytes": 3070976
+      }
+    },
+    "rust195-new": {
+      "time": "2026-09-26T00:05:43.340024+00:00",
+      "label": "rust195-new",
+      "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+      "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)\nrelease: 1.95.0\ncommit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850\ncommit-date: 2026-03-21\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "link_path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "link_sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f",
+      "link_version": "Microsoft (R) Incremental Linker Version 14.44.35229.0",
+      "environment": {
+        "VCToolsVersion": "14.44.35207",
+        "VCToolsInstallDir": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\",
+        "WindowsSDKVersion": "10.0.22000.0\\",
+        "WindowsSdkDir": "C:\\Program Files (x86)\\Windows Kits\\10\\",
+        "INCLUDE": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\include;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\VS\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22000.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\um;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\cppwinrt;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "LIB": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\lib\\um\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22000.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\\\lib\\10.0.22000.0\\\\um\\x64",
+        "LIBPATH": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22000.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22000.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+        "CC_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+        "CXX_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+        "AR_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\lib.exe",
+        "RUSTFLAGS": null
+      },
+      "sources": {
+        "Cargo.lock": "80b7ec997d929b798e7f06fc959e7419d8b380dcdc2f17ba4c99cb7012f08e70",
+        "Cargo.toml": "fee8bc9bbb377d88f375be741fd15d0b56d5f04b1cbbe0462ab111651f513704",
+        "build.rs": "9047808c6da877f8bbd738b625a6c6ad130408db1c0fd1fc317f2c2d23b3b26a",
+        "src/audio/backend.rs": "fc86d52efb86074a2e351967d9fdb0ab27c59ff3ec7945ceb44d779eeee820e5",
+        "src/audio/backend/pulse.rs": "3433dbbdcac5329d46eae3fa2326e3de98757e463cecee77ac6febb1e4057ad6",
+        "src/audio/cpc.rs": "836f9f1d91c0093264e5e75c9f4ad3081d8809503a8403679b737c0a4172aa65",
+        "src/audio/mod.rs": "33724b5ac19b17d320bb5af6087497e08029583ff169382451b0ef7e3c1001d1",
+        "src/audio/shared_cpc.rs": "b6c2371eedabdf3cef430bd8e45c936c5c815b557d594e58269a2c1603350801",
+        "src/console.rs": "0dbbfaf69a9a95c3250f67c1e8adca5b4ae955fe38c02c8f2703bd86bc49d467",
+        "src/console/inspector.rs": "42750fc5dfe03c2a4157b8079127e6e870220c2d8425446820ba9ecf38322293",
+        "src/console/inspector/edit.rs": "550ebf1045788528d74981eab72784972a8bdea1107ac997b6545c44f4080cc7",
+        "src/console/navigation.rs": "d7eeeb8f542519a1497d7505ef75e220dacaaca9642834902dd55210eccc3345",
+        "src/data_files.rs": "eec5d4aaf2f8aa733fabdcda56c7118c74ae5bea6efc427c019f635a658ccd16",
+        "src/debugger.rs": "e4dc9c4d13947f0812df2386f6ef2f90072c6d16c3ddb451c85f332f2fc34581",
+        "src/error.rs": "a8734915314d192f840b39b3a148554bed8bd132f644fda8f3aa47ba43637eb3",
+        "src/expr.rs": "94bf64c8f7166cc4556800791b005285bcf1836aa368fcef1a641012e6d22e13",
+        "src/fonts.rs": "4d166d5b02c6ac6199d38171652475ab13c4a5e36865912d0b62068b1c6a421a",
+        "src/graphics.rs": "47ed5f54a5172d7294bd16df17cd802c76ed5e5d2aa20df9e69f575df6778e2e",
+        "src/help.rs": "2a33cad48cc5369fb1592517ca645e67b413362fbfc108d970a51dc5abaddb21",
+        "src/interpreter.rs": "21d6b7ab580e87c9c275724a1fa22d28d586b4b4aeaee79c79e12ad9954217e9",
+        "src/interpreter/audio_commands.rs": "305bf1687c0fd9c8371066f8e1d4b99f2ef63ad5ba92b5fecd217effbc0a6d77",
+        "src/interpreter/debug_navigation.rs": "1969aa34381995f1fb6cbca9c4468e1f64ca60f0edfd2b417a172930b76f088e",
+        "src/keyboard.rs": "a50b44a1dd694069467d34f3d6c4b911eed74b6bba21a7adba953ef8be866405",
+        "src/language.rs": "e3c1098adfb5325f149a90697e59ba75fb849157b142b626cc46b56178d7b2c9",
+        "src/language/catalog.tsv": "35dbfca58c9d30fead22e4a574a1f7ea381d3d35c69ce8e5673b7221928c94f9",
+        "src/lexer.rs": "96587bc80e1436dc9d1b747ba2d11b4953561e5c52b995e10c0a6ff3c8e4e36d",
+        "src/lib.rs": "66f2805bf58a18c021e2746e71b49f262cebb5ca33c18318a1770fb7cbc2d259",
+        "src/main.rs": "ae63430b339cfee9349834bbd1f8c32162d62a4592e0c9edcb7c2ae944267c15",
+        "src/program.rs": "0b119a98452876c6feec7052dd27109417747cfbf101c606e5caaa6149b8e42c",
+        "src/reserved.rs": "c34959918a29d6151e31ff7d4f973cfe7ddd4261258dd0db3e6c12eb5112b546",
+        "src/using_format.rs": "e99a46b5434a456fd7f35eca95e798456c264aeee9b27e07c7dc75683ea1840c",
+        "src/value.rs": "f6c720ff65049d3d36686d9e3eb8a5ad1f9fe719365ef2944bc8593e58c7df37",
+        "src/window.rs": "016e54d7be1a2a4c0a2a11d05533d9866457aab4fedc2d4a16fe5b05cbdcea0c"
+      },
+      "command": [
+        "rustup",
+        "run",
+        "stable",
+        "cargo",
+        "build",
+        "--locked",
+        "--target-dir",
+        "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-new-target",
+        "--release"
+      ],
+      "exit_code": 0,
+      "binary": {
+        "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-new.exe",
+        "sha256": "e012f173b42dde7328f0e212fbf147d407d51204e36ef2c6fae2f3dd6575d3e5",
+        "bytes": 3070976
+      }
+    },
+    "rust198-old": {
+      "time": "2026-09-25T21:39:47.796123+00:00",
+      "label": "rust198-old",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8",
+      "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\nrelease: 1.98.1\ncommit-hash: 797e8a9bca276c1c9f9f738d2a20f484fa4eea9d\ncommit-date: 2026-08-05\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.4 (sys:0.21.0 vendored)\nlibcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "link_path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\link.exe",
+      "link_sha256": "6fac48476c6009b5f0d66ec957789264aca73d5b8852c3d51c2ef0a93913a467",
+      "link_version": "Microsoft (R) Incremental Linker Version 14.35.32217.1",
+      "environment": {
+        "VCToolsVersion": "14.35.32215",
+        "VCToolsInstallDir": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\",
+        "WindowsSDKVersion": "10.0.22000.0\\",
+        "WindowsSdkDir": "C:\\Program Files (x86)\\Windows Kits\\10\\",
+        "INCLUDE": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\include;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\include;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\VS\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22000.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\um;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\cppwinrt;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "LIB": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\lib\\um\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22000.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\\\lib\\10.0.22000.0\\\\um\\x64",
+        "LIBPATH": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\ATLMFC\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64;C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22000.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22000.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\link.exe",
+        "CC_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\cl.exe",
+        "CXX_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\cl.exe",
+        "AR_x86_64_pc_windows_msvc": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\lib.exe",
+        "RUSTFLAGS": null
+      },
+      "sources": {
+        "Cargo.lock": "80b7ec997d929b798e7f06fc959e7419d8b380dcdc2f17ba4c99cb7012f08e70",
+        "Cargo.toml": "fee8bc9bbb377d88f375be741fd15d0b56d5f04b1cbbe0462ab111651f513704",
+        "build.rs": "9047808c6da877f8bbd738b625a6c6ad130408db1c0fd1fc317f2c2d23b3b26a",
+        "src/audio/backend.rs": "fc86d52efb86074a2e351967d9fdb0ab27c59ff3ec7945ceb44d779eeee820e5",
+        "src/audio/backend/pulse.rs": "3433dbbdcac5329d46eae3fa2326e3de98757e463cecee77ac6febb1e4057ad6",
+        "src/audio/cpc.rs": "836f9f1d91c0093264e5e75c9f4ad3081d8809503a8403679b737c0a4172aa65",
+        "src/audio/mod.rs": "33724b5ac19b17d320bb5af6087497e08029583ff169382451b0ef7e3c1001d1",
+        "src/audio/shared_cpc.rs": "b6c2371eedabdf3cef430bd8e45c936c5c815b557d594e58269a2c1603350801",
+        "src/console.rs": "0dbbfaf69a9a95c3250f67c1e8adca5b4ae955fe38c02c8f2703bd86bc49d467",
+        "src/console/inspector.rs": "42750fc5dfe03c2a4157b8079127e6e870220c2d8425446820ba9ecf38322293",
+        "src/console/inspector/edit.rs": "550ebf1045788528d74981eab72784972a8bdea1107ac997b6545c44f4080cc7",
+        "src/console/navigation.rs": "d7eeeb8f542519a1497d7505ef75e220dacaaca9642834902dd55210eccc3345",
+        "src/data_files.rs": "eec5d4aaf2f8aa733fabdcda56c7118c74ae5bea6efc427c019f635a658ccd16",
+        "src/debugger.rs": "e4dc9c4d13947f0812df2386f6ef2f90072c6d16c3ddb451c85f332f2fc34581",
+        "src/error.rs": "a8734915314d192f840b39b3a148554bed8bd132f644fda8f3aa47ba43637eb3",
+        "src/expr.rs": "94bf64c8f7166cc4556800791b005285bcf1836aa368fcef1a641012e6d22e13",
+        "src/fonts.rs": "4d166d5b02c6ac6199d38171652475ab13c4a5e36865912d0b62068b1c6a421a",
+        "src/graphics.rs": "47ed5f54a5172d7294bd16df17cd802c76ed5e5d2aa20df9e69f575df6778e2e",
+        "src/help.rs": "2a33cad48cc5369fb1592517ca645e67b413362fbfc108d970a51dc5abaddb21",
+        "src/interpreter.rs": "21d6b7ab580e87c9c275724a1fa22d28d586b4b4aeaee79c79e12ad9954217e9",
+        "src/interpreter/audio_commands.rs": "305bf1687c0fd9c8371066f8e1d4b99f2ef63ad5ba92b5fecd217effbc0a6d77",
+        "src/interpreter/debug_navigation.rs": "1969aa34381995f1fb6cbca9c4468e1f64ca60f0edfd2b417a172930b76f088e",
+        "src/keyboard.rs": "a50b44a1dd694069467d34f3d6c4b911eed74b6bba21a7adba953ef8be866405",
+        "src/language.rs": "e3c1098adfb5325f149a90697e59ba75fb849157b142b626cc46b56178d7b2c9",
+        "src/language/catalog.tsv": "35dbfca58c9d30fead22e4a574a1f7ea381d3d35c69ce8e5673b7221928c94f9",
+        "src/lexer.rs": "96587bc80e1436dc9d1b747ba2d11b4953561e5c52b995e10c0a6ff3c8e4e36d",
+        "src/lib.rs": "66f2805bf58a18c021e2746e71b49f262cebb5ca33c18318a1770fb7cbc2d259",
+        "src/main.rs": "ae63430b339cfee9349834bbd1f8c32162d62a4592e0c9edcb7c2ae944267c15",
+        "src/program.rs": "0b119a98452876c6feec7052dd27109417747cfbf101c606e5caaa6149b8e42c",
+        "src/reserved.rs": "c34959918a29d6151e31ff7d4f973cfe7ddd4261258dd0db3e6c12eb5112b546",
+        "src/using_format.rs": "e99a46b5434a456fd7f35eca95e798456c264aeee9b27e07c7dc75683ea1840c",
+        "src/value.rs": "f6c720ff65049d3d36686d9e3eb8a5ad1f9fe719365ef2944bc8593e58c7df37",
+        "src/window.rs": "016e54d7be1a2a4c0a2a11d05533d9866457aab4fedc2d4a16fe5b05cbdcea0c"
+      },
+      "command": [
+        "rustup",
+        "run",
+        "1.98.1",
+        "cargo",
+        "build",
+        "--locked",
+        "--target-dir",
+        "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-old-target",
+        "--release"
+      ],
+      "exit_code": 0,
+      "binary": {
+        "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-old.exe",
+        "sha256": "3186e5cdba0565e6815177f88c6c4a1830419641b6c5699de414749e033decbd",
+        "bytes": 3022848
+      }
+    },
+    "rust198-new": {
+      "time": "2026-09-26T00:06:41.898844+00:00",
+      "label": "rust198-new",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8",
+      "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\nrelease: 1.98.1\ncommit-hash: 797e8a9bca276c1c9f9f738d2a20f484fa4eea9d\ncommit-date: 2026-08-05\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.4 (sys:0.21.0 vendored)\nlibcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "link_path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+      "link_sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f",
+      "link_version": "Microsoft (R) Incremental Linker Version 14.44.35229.0",
+      "environment": {
+        "VCToolsVersion": "14.44.35207",
+        "VCToolsInstallDir": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\",
+        "WindowsSDKVersion": "10.0.22000.0\\",
+        "WindowsSdkDir": "C:\\Program Files (x86)\\Windows Kits\\10\\",
+        "INCLUDE": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\include;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\VS\\include;C:\\Program Files (x86)\\Windows Kits\\10\\include\\10.0.22000.0\\ucrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\um;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\shared;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\winrt;C:\\Program Files (x86)\\Windows Kits\\10\\\\include\\10.0.22000.0\\\\cppwinrt;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\include\\um",
+        "LIB": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\NETFXSDK\\4.8\\lib\\um\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.22000.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\\\lib\\10.0.22000.0\\\\um\\x64",
+        "LIBPATH": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x86\\store\\references;C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.22000.0;C:\\Program Files (x86)\\Windows Kits\\10\\References\\10.0.22000.0;C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+        "CC_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+        "CXX_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+        "AR_x86_64_pc_windows_msvc": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\lib.exe",
+        "RUSTFLAGS": null
+      },
+      "sources": {
+        "Cargo.lock": "80b7ec997d929b798e7f06fc959e7419d8b380dcdc2f17ba4c99cb7012f08e70",
+        "Cargo.toml": "fee8bc9bbb377d88f375be741fd15d0b56d5f04b1cbbe0462ab111651f513704",
+        "build.rs": "9047808c6da877f8bbd738b625a6c6ad130408db1c0fd1fc317f2c2d23b3b26a",
+        "src/audio/backend.rs": "fc86d52efb86074a2e351967d9fdb0ab27c59ff3ec7945ceb44d779eeee820e5",
+        "src/audio/backend/pulse.rs": "3433dbbdcac5329d46eae3fa2326e3de98757e463cecee77ac6febb1e4057ad6",
+        "src/audio/cpc.rs": "836f9f1d91c0093264e5e75c9f4ad3081d8809503a8403679b737c0a4172aa65",
+        "src/audio/mod.rs": "33724b5ac19b17d320bb5af6087497e08029583ff169382451b0ef7e3c1001d1",
+        "src/audio/shared_cpc.rs": "b6c2371eedabdf3cef430bd8e45c936c5c815b557d594e58269a2c1603350801",
+        "src/console.rs": "0dbbfaf69a9a95c3250f67c1e8adca5b4ae955fe38c02c8f2703bd86bc49d467",
+        "src/console/inspector.rs": "42750fc5dfe03c2a4157b8079127e6e870220c2d8425446820ba9ecf38322293",
+        "src/console/inspector/edit.rs": "550ebf1045788528d74981eab72784972a8bdea1107ac997b6545c44f4080cc7",
+        "src/console/navigation.rs": "d7eeeb8f542519a1497d7505ef75e220dacaaca9642834902dd55210eccc3345",
+        "src/data_files.rs": "eec5d4aaf2f8aa733fabdcda56c7118c74ae5bea6efc427c019f635a658ccd16",
+        "src/debugger.rs": "e4dc9c4d13947f0812df2386f6ef2f90072c6d16c3ddb451c85f332f2fc34581",
+        "src/error.rs": "a8734915314d192f840b39b3a148554bed8bd132f644fda8f3aa47ba43637eb3",
+        "src/expr.rs": "94bf64c8f7166cc4556800791b005285bcf1836aa368fcef1a641012e6d22e13",
+        "src/fonts.rs": "4d166d5b02c6ac6199d38171652475ab13c4a5e36865912d0b62068b1c6a421a",
+        "src/graphics.rs": "47ed5f54a5172d7294bd16df17cd802c76ed5e5d2aa20df9e69f575df6778e2e",
+        "src/help.rs": "2a33cad48cc5369fb1592517ca645e67b413362fbfc108d970a51dc5abaddb21",
+        "src/interpreter.rs": "21d6b7ab580e87c9c275724a1fa22d28d586b4b4aeaee79c79e12ad9954217e9",
+        "src/interpreter/audio_commands.rs": "305bf1687c0fd9c8371066f8e1d4b99f2ef63ad5ba92b5fecd217effbc0a6d77",
+        "src/interpreter/debug_navigation.rs": "1969aa34381995f1fb6cbca9c4468e1f64ca60f0edfd2b417a172930b76f088e",
+        "src/keyboard.rs": "a50b44a1dd694069467d34f3d6c4b911eed74b6bba21a7adba953ef8be866405",
+        "src/language.rs": "e3c1098adfb5325f149a90697e59ba75fb849157b142b626cc46b56178d7b2c9",
+        "src/language/catalog.tsv": "35dbfca58c9d30fead22e4a574a1f7ea381d3d35c69ce8e5673b7221928c94f9",
+        "src/lexer.rs": "96587bc80e1436dc9d1b747ba2d11b4953561e5c52b995e10c0a6ff3c8e4e36d",
+        "src/lib.rs": "66f2805bf58a18c021e2746e71b49f262cebb5ca33c18318a1770fb7cbc2d259",
+        "src/main.rs": "ae63430b339cfee9349834bbd1f8c32162d62a4592e0c9edcb7c2ae944267c15",
+        "src/program.rs": "0b119a98452876c6feec7052dd27109417747cfbf101c606e5caaa6149b8e42c",
+        "src/reserved.rs": "c34959918a29d6151e31ff7d4f973cfe7ddd4261258dd0db3e6c12eb5112b546",
+        "src/using_format.rs": "e99a46b5434a456fd7f35eca95e798456c264aeee9b27e07c7dc75683ea1840c",
+        "src/value.rs": "f6c720ff65049d3d36686d9e3eb8a5ad1f9fe719365ef2944bc8593e58c7df37",
+        "src/window.rs": "016e54d7be1a2a4c0a2a11d05533d9866457aab4fedc2d4a16fe5b05cbdcea0c"
+      },
+      "command": [
+        "rustup",
+        "run",
+        "1.98.1",
+        "cargo",
+        "build",
+        "--locked",
+        "--target-dir",
+        "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-new-target",
+        "--release"
+      ],
+      "exit_code": 0,
+      "binary": {
+        "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-new.exe",
+        "sha256": "dc81240fa43a6e7ea7fba3038fd49083945c8a69448a40314ba73ecbec6f4502",
+        "bytes": 3023360
+      }
+    }
+  },
+  "tests": {
+    "rust195-new": {
+      "passed": 765,
+      "failed": 0,
+      "ignored": 7,
+      "log_sha256": "dec5b896a19c12ffe4782b881e223a0c7109e04090050f303fe0e3309c9a122b"
+    },
+    "rust198-new": {
+      "passed": 765,
+      "failed": 0,
+      "ignored": 7,
+      "log_sha256": "22a14d7c0610a965cf1d62af43f453fa7c71829f4aee8947fa9b03de6a5867ee"
+    }
+  },
+  "comparisons": {
+    "msvc-rust195-suite": {
+      "created_utc": "2026-09-26T00:09:27.007961+00:00",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.14 (tags/v3.13.14:fd17997, Jun 10 2026, 13:03:48) [MSC v.1944 64 bit (AMD64)]",
+      "metric": "elapsed_s",
+      "configuration": {
+        "runs": 4,
+        "warmups": 1,
+        "timeout": 180,
+        "AVL_BASIC_WINDOW": "0",
+        "order": "rotating workloads; alternating AB/BA"
+      },
+      "executables": {
+        "baseline": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-old.exe",
+          "sha256": "6ba8594b0b69ed509090ba2d6b29e35863b00a7ecc40da772bf9be8cae35423d"
+        },
+        "candidate": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-new.exe",
+          "sha256": "e012f173b42dde7328f0e212fbf147d407d51204e36ef2c6fae2f3dd6575d3e5"
+        }
+      },
+      "workloads": {
+        "raytracer": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-raytracer.bas",
+            "width": 640,
+            "height": 480
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\raytracer\\raytracer.bas",
+          "source_sha256": "8d9544571aa3b8a5e6448d414f183732cbabcf1d739a930ac84545f505db9134",
+          "program_sha256": "d97250b18260a42cb1e3d473e46a8c03f7690306f8d4242056abe32d15b96fc5"
+        },
+        "pimachin": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/pimachin.bas",
+            "digits": 10000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\pimachin\\pimachin.bas",
+          "source_sha256": "114b96a1887d240e098235785a17138b3c1c50e784ff584a2cc9551b1e4ee221",
+          "program_sha256": "68e4437a6af50af24d9fbd30a6a3690d6031f06e78710ca60329ee3b9f82f07c"
+        },
+        "nqueens": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/nqueens.bas",
+            "size": 16,
+            "repeats": 16
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\nqueens\\nqueens.bas",
+          "source_sha256": "9796e5ae2142dbbe1b710e5ee24052df78015c303234d8cf78b391a81d1701d4",
+          "program_sha256": "5de8f7a5c8e7eda41ab11ade208abef6dc01136f1fa7ef44ba28dc7ff549abe3"
+        },
+        "jelly": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-jelly.bas",
+            "points": 10000,
+            "frames": 320
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\jelly\\jelly.bas",
+          "source_sha256": "9e7672ab423aef799251d9cd077637890954126ce5ce5a4eebc9ee47613a2686",
+          "program_sha256": "0a263aadb79374ee5fcaa890b0f2bb44d5726810c5755495a933d866f059696d"
+        },
+        "mandelbrot": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-fmandelbrot.bas",
+            "width": 640,
+            "height": 480,
+            "iterations": 80
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\mandelbrot\\mandelbrot.bas",
+          "source_sha256": "8471578135c1570929b80ad97bbf02ecc0faac3f59fb175b6c5c66f96aa79976",
+          "program_sha256": "79bc460f557b0221eca472f5846be70b376a0ee0bbe02769824c227489edf789"
+        },
+        "strings": {
+          "spec": {
+            "group": "tuning",
+            "source": "tools/benchmarks/record-strings.bas",
+            "records": 256,
+            "passes": 1000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\strings\\strings.bas",
+          "source_sha256": "4e30844fe853840241f90e051a5ae0eed45b534e92b18d644419e30d85dbbe61",
+          "program_sha256": "8b3b449aceb7bdddda88b206daf57f9d2f1aea666ccba6f8848491700b7e6e28"
+        },
+        "modern": {
+          "spec": {
+            "group": "validation",
+            "source": "samples/pimachin-modern.bas",
+            "digits": 10000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\modern\\modern.bas",
+          "source_sha256": "ccaa7a4d8a68d1c986495ae1f5d48c00d90068e6ad7bbd87cafacf049aa91c72",
+          "program_sha256": "2ccc2c6b578329499569ed7ef449950da95fd0894f4b7993972610ae23b8948a"
+        },
+        "matrices": {
+          "spec": {
+            "group": "validation",
+            "source": "tools/benchmarks/matrix-transform.bas",
+            "repeats": 150000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-suite\\matrices\\matrices.bas",
+          "source_sha256": "dc4fd463e223cbff8bf8f0206ea5f496da44527f3718e9de60faba9a92dadfcd",
+          "program_sha256": "bf449064855c32182d428f790f8275c2a9dbefdae420499c8892d8870ef35cce"
+        }
+      },
+      "summary": {
+        "raytracer": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 2.2819909500249196,
+            "min_s": 2.268721000000369,
+            "max_s": 2.301495200023055,
+            "mad_s": 0.009769950003828853,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 2.28207804998965,
+            "min_s": 2.2712555999751203,
+            "max_s": 2.2905629000160843,
+            "mad_s": 0.006995600007940084,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.00381684093573309,
+          "speedup": 0.9999618330474146
+        },
+        "pimachin": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.7635737000091467,
+            "min_s": 1.7580969000118785,
+            "max_s": 1.763757099979557,
+            "mad_s": 0.00018149998504668474,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.7670928000006825,
+            "min_s": 1.7635034000268206,
+            "max_s": 1.7824595000129193,
+            "mad_s": 0.0029112499905750155,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.19954368742953754,
+          "speedup": 0.9980085369644796
+        },
+        "nqueens": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.397058750008,
+            "min_s": 1.3896633999538608,
+            "max_s": 1.4024034999893047,
+            "mad_s": 0.0028502499917522073,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.3934870499942917,
+            "min_s": 1.3853611000231467,
+            "max_s": 1.3976128000067547,
+            "mad_s": 0.002099300007103011,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.25565854075126904,
+          "speedup": 1.0025631382894609
+        },
+        "jelly": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.0057701999903657,
+            "min_s": 1.0030524999601766,
+            "max_s": 1.0099750999943353,
+            "mad_s": 0.001511100010247901,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.0015264499816112,
+            "min_s": 0.9966690000146627,
+            "max_s": 1.0113404000294395,
+            "mad_s": 0.0036207499797455966,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.4219403208401973,
+          "speedup": 1.0042372820097087
+        },
+        "mandelbrot": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 0.6528160000161733,
+            "min_s": 0.6461343999835663,
+            "max_s": 0.6585406999802217,
+            "mad_s": 0.003280249977251515,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 0.6501452999946196,
+            "min_s": 0.648160699987784,
+            "max_s": 0.6510617000167258,
+            "mad_s": 0.0008593000238761306,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.409104559552409,
+          "speedup": 1.00410785100127
+        },
+        "strings": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.3699604500143323,
+            "min_s": 1.3618258999777026,
+            "max_s": 1.3800623000133783,
+            "mad_s": 0.0044093000178691,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.3622442500200123,
+            "min_s": 1.359316200017929,
+            "max_s": 1.372547599952668,
+            "mad_s": 0.00203945001703687,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.5632425369826777,
+          "speedup": 1.0056643292817764
+        },
+        "modern": {
+          "group": "validation",
+          "baseline": {
+            "median_s": 2.091964849998476,
+            "min_s": 2.0867105000070296,
+            "max_s": 2.104888400004711,
+            "mad_s": 0.0034222000103909522,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 2.106422700016992,
+            "min_s": 2.099431300011929,
+            "max_s": 2.1081312999594957,
+            "mad_s": 0.0013755499676335603,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.6911134294883992,
+          "speedup": 0.9931363016461987
+        },
+        "matrices": {
+          "group": "validation",
+          "baseline": {
+            "median_s": 1.0148208000173327,
+            "min_s": 1.0073442999855615,
+            "max_s": 1.0260274999891408,
+            "mad_s": 0.005187800008570775,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.0064669499988668,
+            "min_s": 0.9941336999763735,
+            "max_s": 1.013879900041502,
+            "mad_s": 0.004307900002459064,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.8231847453583185,
+          "speedup": 1.0083001732133134
+        }
+      },
+      "aggregate": {
+        "tuning": {
+          "time_reduction_pct": 0.24144732681513625,
+          "speedup": 1.0024203170589907
+        },
+        "validation": {
+          "time_reduction_pct": 0.06890396688055134,
+          "speedup": 1.0006895147718355
+        },
+        "all": {
+          "time_reduction_pct": 0.19833943669950171,
+          "speedup": 1.0019873360380982
+        }
+      },
+      "runs": [
+        {
+          "elapsed_s": 2.256516500026919,
+          "body_s": 2.2266044616699,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.330773899971973,
+          "body_s": 2.227340221405,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.7581945999991149,
+          "body_s": 1.7410047054291,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.7545978999696672,
+          "body_s": 1.7380058765411,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.391903200012166,
+          "body_s": 1.3761425018311,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.382846900029108,
+          "body_s": 1.3655269145966,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.9882610999629833,
+          "body_s": 0.97100448608398,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.0063535000081174,
+          "body_s": 0.98321747779846,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.6503967000171542,
+          "body_s": 0.63157677650452,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.6547412000363693,
+          "body_s": 0.6350462436676,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.3754532000166364,
+          "body_s": 1.3585042953491,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.3747012999956496,
+          "body_s": 1.3572118282318,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.0957449999987148,
+          "body_s": 2.0784313678741,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.1344940999988467,
+          "body_s": 2.1167993545532,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.0137167999637313,
+          "body_s": 0.99855947494507,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.022199200000614,
+          "body_s": 1.0061485767365,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.2757210000418127,
+          "body_s": 2.251615524292,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2905629000160843,
+          "body_s": 2.2660992145538,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7648596999933943,
+          "body_s": 1.7502319812775,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7633941000094637,
+          "body_s": 1.7456135749817,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3967030000058003,
+          "body_s": 1.3814973831177,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3976128000067547,
+          "body_s": 1.3818027973175,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.003910499974154,
+          "body_s": 0.98171377182007,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0054657000000589,
+          "body_s": 0.97975873947144,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.653651800006628,
+          "body_s": 0.63582158088684,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6493430999689735,
+          "body_s": 0.633056640625,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.359316200017929,
+          "body_s": 1.3452010154724,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3618258999777026,
+          "body_s": 1.3469390869141,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0935549000278115,
+          "body_s": 2.0779590606689,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.1081312999594957,
+          "body_s": 2.0932552814484,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0052641000365838,
+          "body_s": 0.99060106277466,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0260274999891408,
+          "body_s": 1.0091474056244,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7580969000118785,
+          "body_s": 1.7435712814331,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7693259000079706,
+          "body_s": 1.7537002563477,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3853611000231467,
+          "body_s": 1.3699884414673,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3974145000101998,
+          "body_s": 1.3822700977325,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0099750999943353,
+          "body_s": 0.98276829719543,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9966690000146627,
+          "body_s": 0.97810959815979,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.648160699987784,
+          "body_s": 0.63123321533203,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6461343999835663,
+          "body_s": 0.62897515296936,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3692764000152238,
+          "body_s": 1.3533709049225,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3633951000520028,
+          "body_s": 1.3476445674896,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.107465200009756,
+          "body_s": 2.0914883613586,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0867105000070296,
+          "body_s": 2.0716006755829,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0073442999855615,
+          "body_s": 0.9897255897522,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9941336999763735,
+          "body_s": 0.97721433639526,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.276571700000204,
+          "body_s": 2.2526559829712,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.301495200023055,
+          "body_s": 2.2826035022736,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3896633999538608,
+          "body_s": 1.3746521472931,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3934141999925487,
+          "body_s": 1.3787593841553,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0113404000294395,
+          "body_s": 0.98865127563477,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0060746999806724,
+          "body_s": 0.98637652397156,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6519802000257187,
+          "body_s": 0.62904477119446,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6509475000202656,
+          "body_s": 0.62737059593201,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3610933999880217,
+          "body_s": 1.3468308448792,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3800623000133783,
+          "body_s": 1.3647689819336,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0903747999691404,
+          "body_s": 2.0746228694916,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.099431300011929,
+          "body_s": 2.0838739871979,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0076697999611497,
+          "body_s": 0.9937596321106,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.017719900002703,
+          "body_s": 1.0006666183472,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.268721000000369,
+          "body_s": 2.2425832748413,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2712555999751203,
+          "body_s": 2.2519035339355,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7635034000268206,
+          "body_s": 1.7490558624268,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.763757099979557,
+          "body_s": 1.7481172084808,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0030524999601766,
+          "body_s": 0.98033809661865,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9991423999890685,
+          "body_s": 0.98371148109436,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6510617000167258,
+          "body_s": 0.6343982219696,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6585406999802217,
+          "body_s": 0.6333909034729,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3706445000134408,
+          "body_s": 1.3544385433197,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.372547599952668,
+          "body_s": 1.358612537384,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.1053802000242285,
+          "body_s": 2.090802192688,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.104888400004711,
+          "body_s": 2.0889074802399,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0119217000319622,
+          "body_s": 0.99676418304443,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.013879900041502,
+          "body_s": 0.99618530273438,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.287584399979096,
+          "body_s": 2.262891292572,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2882609000080265,
+          "body_s": 2.2621912956238,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7637533000088297,
+          "body_s": 1.7471413612366,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7824595000129193,
+          "body_s": 1.7674255371094,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3935598999960348,
+          "body_s": 1.3790829181671,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.4024034999893047,
+          "body_s": 1.3864104747772,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        }
+      ],
+      "raw_sha256": "2834abfe48db94e9a09f0c7e3e41b8e66aefdf9882eb54d366af7d5750763826"
+    },
+    "msvc-rust198-suite": {
+      "created_utc": "2026-09-26T00:12:25.222124+00:00",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.14 (tags/v3.13.14:fd17997, Jun 10 2026, 13:03:48) [MSC v.1944 64 bit (AMD64)]",
+      "metric": "elapsed_s",
+      "configuration": {
+        "runs": 4,
+        "warmups": 1,
+        "timeout": 180,
+        "AVL_BASIC_WINDOW": "0",
+        "order": "rotating workloads; alternating AB/BA"
+      },
+      "executables": {
+        "baseline": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-old.exe",
+          "sha256": "3186e5cdba0565e6815177f88c6c4a1830419641b6c5699de414749e033decbd"
+        },
+        "candidate": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-new.exe",
+          "sha256": "dc81240fa43a6e7ea7fba3038fd49083945c8a69448a40314ba73ecbec6f4502"
+        }
+      },
+      "workloads": {
+        "raytracer": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-raytracer.bas",
+            "width": 640,
+            "height": 480
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\raytracer\\raytracer.bas",
+          "source_sha256": "8d9544571aa3b8a5e6448d414f183732cbabcf1d739a930ac84545f505db9134",
+          "program_sha256": "d97250b18260a42cb1e3d473e46a8c03f7690306f8d4242056abe32d15b96fc5"
+        },
+        "pimachin": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/pimachin.bas",
+            "digits": 10000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\pimachin\\pimachin.bas",
+          "source_sha256": "114b96a1887d240e098235785a17138b3c1c50e784ff584a2cc9551b1e4ee221",
+          "program_sha256": "68e4437a6af50af24d9fbd30a6a3690d6031f06e78710ca60329ee3b9f82f07c"
+        },
+        "nqueens": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/nqueens.bas",
+            "size": 16,
+            "repeats": 16
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\nqueens\\nqueens.bas",
+          "source_sha256": "9796e5ae2142dbbe1b710e5ee24052df78015c303234d8cf78b391a81d1701d4",
+          "program_sha256": "5de8f7a5c8e7eda41ab11ade208abef6dc01136f1fa7ef44ba28dc7ff549abe3"
+        },
+        "jelly": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-jelly.bas",
+            "points": 10000,
+            "frames": 320
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\jelly\\jelly.bas",
+          "source_sha256": "9e7672ab423aef799251d9cd077637890954126ce5ce5a4eebc9ee47613a2686",
+          "program_sha256": "0a263aadb79374ee5fcaa890b0f2bb44d5726810c5755495a933d866f059696d"
+        },
+        "mandelbrot": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-fmandelbrot.bas",
+            "width": 640,
+            "height": 480,
+            "iterations": 80
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\mandelbrot\\mandelbrot.bas",
+          "source_sha256": "8471578135c1570929b80ad97bbf02ecc0faac3f59fb175b6c5c66f96aa79976",
+          "program_sha256": "79bc460f557b0221eca472f5846be70b376a0ee0bbe02769824c227489edf789"
+        },
+        "strings": {
+          "spec": {
+            "group": "tuning",
+            "source": "tools/benchmarks/record-strings.bas",
+            "records": 256,
+            "passes": 1000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\strings\\strings.bas",
+          "source_sha256": "4e30844fe853840241f90e051a5ae0eed45b534e92b18d644419e30d85dbbe61",
+          "program_sha256": "8b3b449aceb7bdddda88b206daf57f9d2f1aea666ccba6f8848491700b7e6e28"
+        },
+        "modern": {
+          "spec": {
+            "group": "validation",
+            "source": "samples/pimachin-modern.bas",
+            "digits": 10000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\modern\\modern.bas",
+          "source_sha256": "ccaa7a4d8a68d1c986495ae1f5d48c00d90068e6ad7bbd87cafacf049aa91c72",
+          "program_sha256": "2ccc2c6b578329499569ed7ef449950da95fd0894f4b7993972610ae23b8948a"
+        },
+        "matrices": {
+          "spec": {
+            "group": "validation",
+            "source": "tools/benchmarks/matrix-transform.bas",
+            "repeats": 150000
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-suite\\matrices\\matrices.bas",
+          "source_sha256": "dc4fd463e223cbff8bf8f0206ea5f496da44527f3718e9de60faba9a92dadfcd",
+          "program_sha256": "bf449064855c32182d428f790f8275c2a9dbefdae420499c8892d8870ef35cce"
+        }
+      },
+      "summary": {
+        "raytracer": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 2.301741899980698,
+            "min_s": 2.295345999998972,
+            "max_s": 2.3140741999959573,
+            "mad_s": 0.0033076999825425446,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 2.2844347000063863,
+            "min_s": 2.2747117999824695,
+            "max_s": 2.2881980999954976,
+            "mad_s": 0.002841150009771809,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.751917492332943,
+          "speedup": 1.007576141254667
+        },
+        "pimachin": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.8029098000261001,
+            "min_s": 1.7915772999986075,
+            "max_s": 1.8122726999572478,
+            "mad_s": 0.00666934996843338,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.7930234000086784,
+            "min_s": 1.7863373999716714,
+            "max_s": 1.8068592999479733,
+            "mad_s": 0.003697300038766116,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.5483579942423433,
+          "speedup": 1.0055138153899017
+        },
+        "nqueens": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.3519780000206083,
+            "min_s": 1.3446791000314988,
+            "max_s": 1.3531703999615274,
+            "mad_s": 0.0008337499748449773,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.3449174000124913,
+            "min_s": 1.3397042999858968,
+            "max_s": 1.3681375999585725,
+            "mad_s": 0.003546450025169179,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.5222422264274607,
+          "speedup": 1.005249839141089
+        },
+        "jelly": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 0.9978445500019006,
+            "min_s": 0.9788352000177838,
+            "max_s": 1.0098401999566704,
+            "mad_s": 0.008071749965893105,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 0.9973200000240467,
+            "min_s": 0.99148080003215,
+            "max_s": 1.0022586000268348,
+            "mad_s": 0.004502499999944121,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.052568306140765575,
+          "speedup": 1.0005259595494338
+        },
+        "mandelbrot": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 0.688316699990537,
+            "min_s": 0.6731877999845892,
+            "max_s": 0.7166338000097312,
+            "mad_s": 0.009666149999247864,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 0.6871730500133708,
+            "min_s": 0.6794754000147805,
+            "max_s": 0.6920219999738038,
+            "mad_s": 0.0025055999867618084,
+            "samples": 4
+          },
+          "time_reduction_pct": 0.1661517114406652,
+          "speedup": 1.001664282348011
+        },
+        "strings": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 1.3730746000364888,
+            "min_s": 1.3629647999769077,
+            "max_s": 1.3780130000086501,
+            "mad_s": 0.004279349988792092,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 1.355844449979486,
+            "min_s": 1.3472328999778256,
+            "max_s": 1.364447999978438,
+            "mad_s": 0.0053043499938212335,
+            "samples": 4
+          },
+          "time_reduction_pct": 1.2548589899299745,
+          "speedup": 1.0127080581089252
+        },
+        "modern": {
+          "group": "validation",
+          "baseline": {
+            "median_s": 2.091517799999565,
+            "min_s": 2.080397399957292,
+            "max_s": 2.098976799985394,
+            "mad_s": 0.006933549972018227,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 2.0925764499988873,
+            "min_s": 2.0847356999875046,
+            "max_s": 2.165883000008762,
+            "mad_s": 0.004863949987338856,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.05061635140386489,
+          "speedup": 0.99949409255785
+        },
+        "matrices": {
+          "group": "validation",
+          "baseline": {
+            "median_s": 0.9854559500236064,
+            "min_s": 0.9771337000420317,
+            "max_s": 0.9905807999894023,
+            "mad_s": 0.002831049991073087,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 0.9885595499945339,
+            "min_s": 0.9847823000163771,
+            "max_s": 1.0070787000004202,
+            "mad_s": 0.0031900499889161438,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.31494050757450154,
+          "speedup": 0.99686048253649
+        }
+      },
+      "aggregate": {
+        "tuning": {
+          "time_reduction_pct": 0.5501323953604254,
+          "speedup": 1.0055317559350352
+        },
+        "validation": {
+          "time_reduction_pct": -0.18269125471346292,
+          "speedup": 0.998176418975919
+        },
+        "all": {
+          "time_reduction_pct": 0.3674305688566859,
+          "speedup": 1.003687855998842
+        }
+      },
+      "runs": [
+        {
+          "elapsed_s": 2.295375000045169,
+          "body_s": 2.2722465991974,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.3897603999939747,
+          "body_s": 2.2674102783203,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.7972099999897182,
+          "body_s": 1.7818703651428,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.8018627999699675,
+          "body_s": 1.7858273983002,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.351628599979449,
+          "body_s": 1.332722902298,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.347427400003653,
+          "body_s": 1.3306367397308,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.00001900002826,
+          "body_s": 0.98279309272766,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.9986608999897726,
+          "body_s": 0.98128247261047,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.6859069000347517,
+          "body_s": 0.66054058074951,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.6874132999801077,
+          "body_s": 0.66183352470398,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.3580291999969631,
+          "body_s": 1.3403465747833,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 1.3652747999876738,
+          "body_s": 1.3494391441345,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.0893682000460103,
+          "body_s": 2.0729377269745,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.0975573000032455,
+          "body_s": 2.0800266265869,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.99316989997169,
+          "body_s": 0.97772789001465,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 0.992306100029964,
+          "body_s": 0.97678470611572,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 2.295345999998972,
+          "body_s": 2.2764413356781,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2881980999954976,
+          "body_s": 2.2680337429047,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7937320000492036,
+          "body_s": 1.7786076068878,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.798934000020381,
+          "body_s": 1.7831163406372,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3515029000118375,
+          "body_s": 1.3335039615631,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3467972000362352,
+          "body_s": 1.3308691978455,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9932536000269465,
+          "body_s": 0.97674584388733,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0098401999566704,
+          "body_s": 0.99159169197083,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6841132999979891,
+          "body_s": 0.662517786026,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6920219999738038,
+          "body_s": 0.66604948043823,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3578495999681763,
+          "body_s": 1.3414134979248,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3629647999769077,
+          "body_s": 1.3474359512329,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.098976799985394,
+          "body_s": 2.0831923484802,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0944635999621823,
+          "body_s": 2.0787582397461,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9911623999942094,
+          "body_s": 0.97691321372986,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9905807999894023,
+          "body_s": 0.97543692588806,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.8068856000318192,
+          "body_s": 1.7921140193939,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.8068592999479733,
+          "body_s": 1.7898998260498,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3430375999887474,
+          "body_s": 1.3282947540283,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3531703999615274,
+          "body_s": 1.3383882045746,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9936967000248842,
+          "body_s": 0.97519779205322,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0022586000268348,
+          "body_s": 0.97807812690735,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6873353000264615,
+          "body_s": 0.66404604911804,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.7166338000097312,
+          "body_s": 0.69829893112183,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3766949000419118,
+          "body_s": 1.3624660968781,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3538392999907956,
+          "body_s": 1.3382887840271,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.165883000008762,
+          "body_s": 2.1503467559814,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0851097000413574,
+          "body_s": 2.0697116851807,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9859932000399567,
+          "body_s": 0.97116351127625,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.0070787000004202,
+          "body_s": 0.99355936050415,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.282515799975954,
+          "body_s": 2.2632832527161,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.3140741999959573,
+          "body_s": 2.2905731201172,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3446791000314988,
+          "body_s": 1.3304841518402,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3397042999858968,
+          "body_s": 1.325394153595,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.99148080003215,
+          "body_s": 0.97638034820557,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9788352000177838,
+          "body_s": 0.96277976036072,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.692520099983085,
+          "body_s": 0.67677903175354,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6794754000147805,
+          "body_s": 0.66290760040283,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3472328999778256,
+          "body_s": 1.3332257270813,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.369454300031066,
+          "body_s": 1.3539955615997,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.080397399957292,
+          "body_s": 2.0641829967499,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0847356999875046,
+          "body_s": 2.0692374706268,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9859566999948584,
+          "body_s": 0.97183156013489,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9771337000420317,
+          "body_s": 0.96272730827332,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.301961399964057,
+          "body_s": 2.2764065265656,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2747117999824695,
+          "body_s": 2.2561159133911,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7923147999681532,
+          "body_s": 1.7780590057373,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7915772999986075,
+          "body_s": 1.777111530304,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.001992399978917,
+          "body_s": 0.97653746604919,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.001386400021147,
+          "body_s": 0.97988080978394,
+          "correctness_sha256": "35abeb68050137ae641f95d6fe256108fa1c899fc46f9ab1c781e80ac6bb1170",
+          "frame_sha256": "f81745da4154d0aa23d6218becb3f917d83e6222c3ace3449d32acae6adcdfed",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6870108000002801,
+          "body_s": 0.6657657623291,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.6731877999845892,
+          "body_s": 0.65744304656982,
+          "correctness_sha256": "83f38c44d2ffd6ee77f30f4dc7ed5de51f82c46e972a17c9e5aca8b4dff15d8d",
+          "frame_sha256": "edec0f272154843c79b7838f037bd0e657392ef08b6fea3906dcb1218a60cf89",
+          "workload": "mandelbrot",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3780130000086501,
+          "body_s": 1.3638160228729,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.364447999978438,
+          "body_s": 1.3504710197449,
+          "correctness_sha256": "6998c6f9750c0848cf53f33a3b13f9d911c39f4f8a84a74e8f375efed7bed015",
+          "frame_sha256": null,
+          "workload": "strings",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.090689300035592,
+          "body_s": 2.075492143631,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.0979258999577723,
+          "body_s": 2.0827004909515,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "modern",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9849187000072561,
+          "body_s": 0.96953272819519,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 0.9847823000163771,
+          "body_s": 0.96897315979004,
+          "correctness_sha256": "33b9a37b68450fd47b32167767d271782528f2791f3a971ba3c72ced9712e4ca",
+          "frame_sha256": null,
+          "workload": "matrices",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.2863536000368185,
+          "body_s": 2.2602956295013,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 2.3015223999973387,
+          "body_s": 2.2835695743561,
+          "correctness_sha256": "b240dc8ede6c4169c4750315d76670e3367a57c536561c1975ba1d5e18c5dd17",
+          "frame_sha256": "1ce6b395a17975832478e3b16d65949e5d91133167420ef0ce27e97bcb3de00e",
+          "workload": "raytracer",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.8122726999572478,
+          "body_s": 1.795480966568,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.7863373999716714,
+          "body_s": 1.7709519863129,
+          "correctness_sha256": "5204cd36d98663cbd1c8347f6e3cb97a1072afde31527f069bb8677ada34364a",
+          "frame_sha256": null,
+          "workload": "pimachin",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3681375999585725,
+          "body_s": 1.3527598381042,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 1.3524531000293791,
+          "body_s": 1.3377621173859,
+          "correctness_sha256": "ee6193f0a010201f1665ea38d68e556de4b8fd2955f692e40da200ab868b8049",
+          "frame_sha256": null,
+          "workload": "nqueens",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        }
+      ],
+      "raw_sha256": "dae76d09a0e989118a20604df449eaf956bcf01cf5e4de0cdea0c398f61d8364"
+    },
+    "msvc-rust195-window": {
+      "created_utc": "2026-09-26T00:14:35.157696+00:00",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.14 (tags/v3.13.14:fd17997, Jun 10 2026, 13:03:48) [MSC v.1944 64 bit (AMD64)]",
+      "metric": "elapsed_s",
+      "configuration": {
+        "runs": 4,
+        "warmups": 1,
+        "timeout": 180,
+        "AVL_BASIC_WINDOW": "1",
+        "order": "rotating workloads; alternating AB/BA"
+      },
+      "executables": {
+        "baseline": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-old.exe",
+          "sha256": "6ba8594b0b69ed509090ba2d6b29e35863b00a7ecc40da772bf9be8cae35423d"
+        },
+        "candidate": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust195-new.exe",
+          "sha256": "e012f173b42dde7328f0e212fbf147d407d51204e36ef2c6fae2f3dd6575d3e5"
+        }
+      },
+      "workloads": {
+        "jelly": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-jelly.bas",
+            "points": 10000,
+            "frames": 1600
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust195-window\\jelly\\jelly.bas",
+          "source_sha256": "9e7672ab423aef799251d9cd077637890954126ce5ce5a4eebc9ee47613a2686",
+          "program_sha256": "ba3c54548f288e1c3f7a7b6cd69aa0dc0c416a61c5fbe0f7b707de4b52767f40"
+        }
+      },
+      "summary": {
+        "jelly": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 5.053400949982461,
+            "min_s": 5.034425100020599,
+            "max_s": 5.065919300017413,
+            "mad_s": 0.01128530001733452,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 5.069245450024027,
+            "min_s": 5.049229800002649,
+            "max_s": 5.083716599969193,
+            "mad_s": 0.008838799985824153,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.313541319962396,
+          "speedup": 0.9968743868889812
+        }
+      },
+      "aggregate": {
+        "tuning": {
+          "time_reduction_pct": -0.313541319962396,
+          "speedup": 0.9968743868889812
+        },
+        "all": {
+          "time_reduction_pct": -0.313541319962396,
+          "speedup": 0.9968743868889812
+        }
+      },
+      "runs": [
+        {
+          "elapsed_s": 5.03610219998518,
+          "body_s": 5.0060367584229,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 5.045216700003948,
+          "body_s": 5.019514799118,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 5.034425100020599,
+          "body_s": 5.0072093009949,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.049229800002649,
+          "body_s": 5.0237979888916,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.066038999997545,
+          "body_s": 5.0383734703064,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.065919300017413,
+          "body_s": 5.0351383686066,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.0634531999821775,
+          "body_s": 5.0329461097717,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.083716599969193,
+          "body_s": 5.0531871318817,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.07245190005051,
+          "body_s": 5.0472574234009,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.043348699982744,
+          "body_s": 5.021192073822,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        }
+      ],
+      "raw_sha256": "cf4129cd3d9f7859e06d3b81cceb1e52fdd325c10767e7fd6bfc4db92fd57bdf",
+      "fps_from_body_median": {
+        "baseline": 318.27690663947175,
+        "candidate": 317.28307665875093
+      }
+    },
+    "msvc-rust198-window": {
+      "created_utc": "2026-09-26T00:15:44.120237+00:00",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.14 (tags/v3.13.14:fd17997, Jun 10 2026, 13:03:48) [MSC v.1944 64 bit (AMD64)]",
+      "metric": "elapsed_s",
+      "configuration": {
+        "runs": 4,
+        "warmups": 1,
+        "timeout": 180,
+        "AVL_BASIC_WINDOW": "1",
+        "order": "rotating workloads; alternating AB/BA"
+      },
+      "executables": {
+        "baseline": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-old.exe",
+          "sha256": "3186e5cdba0565e6815177f88c6c4a1830419641b6c5699de414749e033decbd"
+        },
+        "candidate": {
+          "path": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\rust198-new.exe",
+          "sha256": "dc81240fa43a6e7ea7fba3038fd49083945c8a69448a40314ba73ecbec6f4502"
+        }
+      },
+      "workloads": {
+        "jelly": {
+          "spec": {
+            "group": "tuning",
+            "source": "samples/g-jelly.bas",
+            "points": 10000,
+            "frames": 1600
+          },
+          "program": "C:\\Users\\josea\\Documents\\Rust\\AVL-BASIC\\target\\toolchain-comparison-20260925\\msvc-rust198-window\\jelly\\jelly.bas",
+          "source_sha256": "9e7672ab423aef799251d9cd077637890954126ce5ce5a4eebc9ee47613a2686",
+          "program_sha256": "ba3c54548f288e1c3f7a7b6cd69aa0dc0c416a61c5fbe0f7b707de4b52767f40"
+        }
+      },
+      "summary": {
+        "jelly": {
+          "group": "tuning",
+          "baseline": {
+            "median_s": 5.132361049996689,
+            "min_s": 5.123781000031158,
+            "max_s": 5.1366148999659345,
+            "mad_s": 0.003155199985485524,
+            "samples": 4
+          },
+          "candidate": {
+            "median_s": 5.136148449993925,
+            "min_s": 5.11727680003969,
+            "max_s": 5.13726669998141,
+            "mad_s": 0.0007457500032614917,
+            "samples": 4
+          },
+          "time_reduction_pct": -0.07379449653563963,
+          "speedup": 0.9992625991958545
+        }
+      },
+      "aggregate": {
+        "tuning": {
+          "time_reduction_pct": -0.07379449653563963,
+          "speedup": 0.9992625991958545
+        },
+        "all": {
+          "time_reduction_pct": -0.07379449653563963,
+          "speedup": 0.9992625991958545
+        }
+      },
+      "runs": [
+        {
+          "elapsed_s": 5.116957599995658,
+          "body_s": 5.0937993526459,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 5.123936199990567,
+          "body_s": 5.0984745025635,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": true
+        },
+        {
+          "elapsed_s": 5.130304499994963,
+          "body_s": 5.0963063240051,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.135775199974887,
+          "body_s": 5.1034038066864,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 0,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.13726669998141,
+          "body_s": 5.1056134700775,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.1344175999984145,
+          "body_s": 5.1066505908966,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 1,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.123781000031158,
+          "body_s": 5.1005911827087,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.136521700012963,
+          "body_s": 5.112086057663,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 2,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.11727680003969,
+          "body_s": 5.0843794345856,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "candidate",
+          "repetition": 3,
+          "warmup": false
+        },
+        {
+          "elapsed_s": 5.1366148999659345,
+          "body_s": 5.1114981174469,
+          "correctness_sha256": "c16896160066b5439e411c2303631ac10212c407a032faa057e3b98854298289",
+          "frame_sha256": "1f47efdfd9002c78af128ecb1c0f70dd76031e443079217a1819442dc8aa3d76",
+          "workload": "jelly",
+          "label": "baseline",
+          "repetition": 3,
+          "warmup": false
+        }
+      ],
+      "raw_sha256": "808c03a65ca4a553d742a8010a5c1165acc5f01df4859d2d6df9ec8ca238618c",
+      "fps_from_body_median": {
+        "baseline": 313.502910088288,
+        "candidate": 313.4483871707533
+      }
+    }
+  },
+  "installation": {
+    "created_utc": "2026-09-26T00:07:16.0004198Z",
+    "scope": "Read-only post-installation inventory; no build, benchmark, installation, or process termination",
+    "instances": [
+      {
+        "instanceId": "becea002",
+        "installDate": "2026-09-26T00:00:37Z",
+        "installationName": "VisualStudio/17.14.41+37710.0.-september.2026-",
+        "installationPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools",
+        "installationVersion": "17.14.37710.0",
+        "productId": "Microsoft.VisualStudio.Product.BuildTools",
+        "productPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\LaunchDevCmd.bat",
+        "state": 4294967295,
+        "isComplete": true,
+        "isLaunchable": true,
+        "isPrerelease": false,
+        "isRebootRequired": false,
+        "displayName": "Visual Studio Build Tools 2022",
+        "description": "Visual Studio Build Tools permite compilar aplicaciones nativas y administradas basadas en MSBuild sin el IDE de Visual Studio. Hay opciones para instalar los compiladores y las bibliotecas de Visual C++, MFC, ATL y la compatibilidad con C++/CLI.",
+        "channelId": "VisualStudio.17.Release",
+        "channelUri": "https://aka.ms/vs/17/release/channel",
+        "enginePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\resources\\app\\ServiceHub\\Services\\Microsoft.VisualStudio.Setup.Service",
+        "installedChannelId": "VisualStudio.17.Release",
+        "installedChannelUri": "https://aka.ms/vs/17/release/channel",
+        "releaseNotes": "https://docs.microsoft.com/en-us/visualstudio/releases/2022/release-notes-v17.14#17.14.41",
+        "resolvedInstallationPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools",
+        "thirdPartyNotices": "https://go.microsoft.com/fwlink/?LinkId=661288",
+        "updateDate": "2026-09-26T00:00:37.2888235Z",
+        "catalog": {
+          "buildBranch": "d17.14",
+          "buildVersion": "17.14.37710.0",
+          "id": "VisualStudio/17.14.41+37710.0.-september.2026-",
+          "localBuild": "build-lab",
+          "manifestName": "VisualStudio",
+          "manifestType": "installer",
+          "productDisplayVersion": "17.14.41 (September 2026)",
+          "productLine": "Dev17",
+          "productLineVersion": "2022",
+          "productMilestone": "RTW",
+          "productMilestoneIsPreRelease": "False",
+          "productName": "Visual Studio",
+          "productPatchVersion": "41",
+          "productPreReleaseMilestoneSuffix": "1.0",
+          "productReleaseNameSuffix": "(September 2026)",
+          "productSemanticVersion": "17.14.41+37710.0.-september.2026-",
+          "requiredEngineVersion": "3.14.2094.42856"
+        },
+        "properties": {
+          "campaignId": "",
+          "channelManifestId": "VisualStudio.17.Release/17.14.41+37710.0.-september.2026-",
+          "includeRecommended": "0",
+          "nickname": "2",
+          "setupEngineFilePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe"
+        }
+      },
+      {
+        "instanceId": "c0a4e09d",
+        "installDate": "2025-01-25T18:53:29Z",
+        "installationName": "VisualStudio/16.11.43+35706.149",
+        "installationPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools",
+        "installationVersion": "16.11.35706.149",
+        "productId": "Microsoft.VisualStudio.Product.BuildTools",
+        "productPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\Common7\\Tools\\LaunchDevCmd.bat",
+        "state": 4294967295,
+        "isComplete": true,
+        "isLaunchable": true,
+        "isPrerelease": false,
+        "isRebootRequired": false,
+        "displayName": "Visual Studio Build Tools 2019",
+        "description": "Visual Studio Build Tools permite compilar aplicaciones nativas y administradas basadas en MSBuild sin el IDE de Visual Studio. Hay opciones para instalar los compiladores y las bibliotecas de Visual C++, MFC, ATL y la compatibilidad con C++/CLI.",
+        "channelId": "VisualStudio.16.Release",
+        "channelUri": "https://aka.ms/vs/16/release/channel",
+        "enginePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\resources\\app\\ServiceHub\\Services\\Microsoft.VisualStudio.Setup.Service",
+        "installedChannelId": "VisualStudio.16.Release",
+        "installedChannelUri": "https://aka.ms/vs/16/release/channel",
+        "releaseNotes": "https://docs.microsoft.com/en-us/visualstudio/releases/2019/release-notes-v16.11#16.11.43",
+        "resolvedInstallationPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools",
+        "thirdPartyNotices": "https://go.microsoft.com/fwlink/?LinkId=660909",
+        "updateDate": "2025-01-25T18:53:29.3556903Z",
+        "catalog": {
+          "buildBranch": "d16.11",
+          "buildVersion": "16.11.35706.149",
+          "id": "VisualStudio/16.11.43+35706.149",
+          "localBuild": "build-lab",
+          "manifestName": "VisualStudio",
+          "manifestType": "installer",
+          "productDisplayVersion": "16.11.43",
+          "productLine": "Dev16",
+          "productLineVersion": "2019",
+          "productMilestone": "RTW",
+          "productMilestoneIsPreRelease": "False",
+          "productName": "Visual Studio",
+          "productPatchVersion": "43",
+          "productPreReleaseMilestoneSuffix": "1.0",
+          "productSemanticVersion": "16.11.43+35706.149",
+          "requiredEngineVersion": "2.11.72.18200"
+        },
+        "properties": {
+          "campaignId": "",
+          "channelManifestId": "VisualStudio.16.Release/16.11.43+35706.149",
+          "includeRecommended": "0",
+          "nickname": "",
+          "setupEngineFilePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe"
+        }
+      },
+      {
+        "instanceId": "c91f6aab",
+        "installDate": "2023-05-07T08:42:29Z",
+        "installationName": "VisualStudio/17.5.5+33627.172",
+        "installationPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
+        "installationVersion": "17.5.33627.172",
+        "productId": "Microsoft.VisualStudio.Product.Community",
+        "productPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+        "state": 4294967295,
+        "isComplete": true,
+        "isLaunchable": true,
+        "isPrerelease": false,
+        "isRebootRequired": false,
+        "displayName": "Visual Studio Community 2022",
+        "description": "IDE con un gran potencial, gratis para estudiantes, colaboradores de código abierto y personas",
+        "channelId": "VisualStudio.17.Release",
+        "channelUri": "https://aka.ms/vs/17/release/channel",
+        "enginePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\resources\\app\\ServiceHub\\Services\\Microsoft.VisualStudio.Setup.Service",
+        "installedChannelId": "VisualStudio.17.Release",
+        "installedChannelUri": "https://aka.ms/vs/17/release/channel",
+        "releaseNotes": "https://docs.microsoft.com/en-us/visualstudio/releases/2022/release-notes-v17.5#17.5.5",
+        "resolvedInstallationPath": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
+        "thirdPartyNotices": "https://go.microsoft.com/fwlink/?LinkId=661288",
+        "updateDate": "2023-05-07T08:42:29.5990526Z",
+        "catalog": {
+          "buildBranch": "d17.5",
+          "buildVersion": "17.5.33627.172",
+          "id": "VisualStudio/17.5.5+33627.172",
+          "localBuild": "build-lab",
+          "manifestName": "VisualStudio",
+          "manifestType": "installer",
+          "productDisplayVersion": "17.5.5",
+          "productLine": "Dev17",
+          "productLineVersion": "2022",
+          "productMilestone": "RTW",
+          "productMilestoneIsPreRelease": "False",
+          "productName": "Visual Studio",
+          "productPatchVersion": "5",
+          "productPreReleaseMilestoneSuffix": "1.0",
+          "productSemanticVersion": "17.5.5+33627.172",
+          "requiredEngineVersion": "3.5.2150.18781"
+        },
+        "properties": {
+          "campaignId": "2000",
+          "channelManifestId": "VisualStudio.17.Release/17.5.5+33627.172",
+          "nickname": "",
+          "setupEngineFilePath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe"
+        }
+      }
+    ],
+    "msvc": [
+      {
+        "vs_root": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
+        "default_toolset": "14.35.32215",
+        "tools_and_libraries": [
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\link.exe",
+            "exists": true,
+            "bytes": 2376624,
+            "file_version": "14.35.32217.1",
+            "product_version": "14.35.32217.1",
+            "modified_utc": "2023-05-07T08:46:42.9227175Z",
+            "sha256": "6fac48476c6009b5f0d66ec957789264aca73d5b8852c3d51c2ef0a93913a467"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\cl.exe",
+            "exists": true,
+            "bytes": 804800,
+            "file_version": "19.35.32217.1",
+            "product_version": "14.35.32217.1",
+            "modified_utc": "2023-05-07T08:46:42.8527179Z",
+            "sha256": "2ca2e80391d33c76dd2ad17a79b997e5f667aa6d8bedaa8bb28eb0e87a083e3f"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\bin\\Hostx64\\x64\\lib.exe",
+            "exists": true,
+            "bytes": 23456,
+            "file_version": "14.35.32217.1",
+            "product_version": "14.35.32217.1",
+            "modified_utc": "2023-05-07T08:46:42.9027185Z",
+            "sha256": "df0b5bc0f663f695b9ab7909978315f5a4999815954b5da14da3ad32d110224b"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64\\libcmt.lib",
+            "exists": true,
+            "bytes": 6532204,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2023-05-07T08:46:33.6581366Z",
+            "sha256": "d80ab0c588980833f829cdbfad6a8d066685fe39c1f90da594ddd890618d059f"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64\\libvcruntime.lib",
+            "exists": true,
+            "bytes": 1821422,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2023-05-07T08:46:34.8402922Z",
+            "sha256": "277e4b49a7b95cac0f98d94d18a54f5aa4f47ae306616e7464cc35585a59a6c8"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64\\vcruntime.lib",
+            "exists": true,
+            "bytes": 121596,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2023-05-07T08:46:40.1963316Z",
+            "sha256": "c5d44e712dcaa1bd4ef364628871a17fa5eefadd7a3c5556f77e79430c97d5c2"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64\\msvcprt.lib",
+            "exists": true,
+            "bytes": 1991234,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2023-05-07T08:46:39.7942332Z",
+            "sha256": "11a87d0312be1943d606c4ca8fb13ad6e1fe6249c9606e3469991874b4b193e2"
+          },
+          {
+            "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.35.32215\\lib\\x64\\msvcrt.lib",
+            "exists": true,
+            "bytes": 7965248,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2023-05-07T08:46:39.8464890Z",
+            "sha256": "214c604741a8f3af09e6c5d3cda521b90d67df3aa4bac3a4e222f57652944bf9"
+          }
+        ]
+      },
+      {
+        "vs_root": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools",
+        "default_toolset": "14.44.35207",
+        "tools_and_libraries": [
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+            "exists": true,
+            "bytes": 3252616,
+            "file_version": "14.44.35229.0",
+            "product_version": "14.44.35229.0",
+            "modified_utc": "2026-09-26T00:01:05.5778144Z",
+            "sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe",
+            "exists": true,
+            "bytes": 677776,
+            "file_version": "19.44.35229.0",
+            "product_version": "14.44.35229.0",
+            "modified_utc": "2026-09-26T00:01:05.4853862Z",
+            "sha256": "fe251ef50a1545b1b0835ee17b1e785459712b38d79e45b5c1d3d28970a36619"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\lib.exe",
+            "exists": true,
+            "bytes": 23376,
+            "file_version": "14.44.35229.0",
+            "product_version": "14.44.35229.0",
+            "modified_utc": "2026-09-26T00:01:05.5520550Z",
+            "sha256": "fde148a275981855689c45f932dda56b10dc9289a0290826a0fb93478da34929"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64\\libcmt.lib",
+            "exists": true,
+            "bytes": 6534094,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2026-09-26T00:00:44.9062724Z",
+            "sha256": "8fe40dd342b90b35d62b8f5d55b4e92df7785c122976618365cfe3b014cc857a"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64\\libvcruntime.lib",
+            "exists": true,
+            "bytes": 2087406,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2026-09-26T00:00:45.6653061Z",
+            "sha256": "e4f8daf356d63592ff6d6f7ad90c8c9da4c1230273ad113a9a2b56afd6bfcb04"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64\\vcruntime.lib",
+            "exists": true,
+            "bytes": 285940,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2026-09-26T00:00:47.2848915Z",
+            "sha256": "1acbd98b43a4be8373e25c65dcae4412f36f6111d6b64e47e4a2a97a1d16b27b"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64\\msvcprt.lib",
+            "exists": true,
+            "bytes": 4050616,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2026-09-26T00:00:46.8682485Z",
+            "sha256": "59d3ab1065f0a14bd9b27debef4008a91eafbc7411290013f61091bf12dfca0f"
+          },
+          {
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64\\msvcrt.lib",
+            "exists": true,
+            "bytes": 8031888,
+            "file_version": null,
+            "product_version": null,
+            "modified_utc": "2026-09-26T00:00:46.9369612Z",
+            "sha256": "07670951a39739b6d1b50421ae61707ef23c8dff50cdf35f99408711478f3a7c"
+          }
+        ]
+      }
+    ],
+    "windows_sdk_22000": [
+      {
+        "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.22000.0\\um\\Windows.h",
+        "exists": true,
+        "bytes": 7153,
+        "file_version": null,
+        "product_version": null,
+        "modified_utc": "2022-07-15T14:07:30.0000000Z",
+        "sha256": "65ccd069fe343519a7ec0698ccaf5a6f0388f1af180b959b8271902b983cb099"
+      },
+      {
+        "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22000.0\\um\\x64\\kernel32.lib",
+        "exists": true,
+        "bytes": 310466,
+        "file_version": null,
+        "product_version": null,
+        "modified_utc": "2022-07-15T14:27:12.0000000Z",
+        "sha256": "330c66f4f60c28522500cedfa23f12e72c124d62606553bc64dcbc955801d8fc"
+      },
+      {
+        "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22000.0\\ucrt\\x64\\ucrt.lib",
+        "exists": true,
+        "bytes": 285588,
+        "file_version": null,
+        "product_version": null,
+        "modified_utc": "2022-07-15T14:23:14.0000000Z",
+        "sha256": "7ef4eac926bf597d2f243f16cdfed7e0db22cb3ca34a1d7e088a84c994a03d66"
+      },
+      {
+        "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22000.0\\ucrt\\x64\\libucrt.lib",
+        "exists": true,
+        "bytes": 39797546,
+        "file_version": null,
+        "product_version": null,
+        "modified_utc": "2022-07-15T15:11:28.0000000Z",
+        "sha256": "9990ab11a36ab720a5ad68e13c75eeebd2bc1841a66c45b034540aa65e1d7946"
+      },
+      {
+        "path": "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22000.0\\x64\\rc.exe",
+        "exists": true,
+        "bytes": 50680,
+        "file_version": "10.0.22000.832 (WinBuild.160101.0800)",
+        "product_version": "10.0.22000.832",
+        "modified_utc": "2022-07-15T23:41:40.0000000Z",
+        "sha256": "54bca8318dcb7583b11956671be5695836fcb7984bc8242d4931c947a6959324"
+      }
+    ],
+    "runtime_files": [
+      {
+        "path": "C:\\Windows\\System32\\vcruntime140.dll",
+        "exists": true,
+        "bytes": 178616,
+        "file_version": "14.51.36247.0",
+        "product_version": "14.51.36247.0",
+        "modified_utc": "2026-05-27T02:59:40.0000000Z",
+        "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+      },
+      {
+        "path": "C:\\Windows\\System32\\vcruntime140_1.dll",
+        "exists": true,
+        "bytes": 50112,
+        "file_version": "14.51.36247.0",
+        "product_version": "14.51.36247.0",
+        "modified_utc": "2026-05-27T02:59:40.0000000Z",
+        "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+      },
+      {
+        "path": "C:\\Windows\\System32\\msvcp140.dll",
+        "exists": true,
+        "bytes": 643512,
+        "file_version": "14.51.36247.0",
+        "product_version": "14.51.36247.0",
+        "modified_utc": "2026-05-27T02:59:36.0000000Z",
+        "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca"
+      },
+      {
+        "path": "C:\\Windows\\System32\\concrt140.dll",
+        "exists": true,
+        "bytes": 374200,
+        "file_version": "14.51.36247.0",
+        "product_version": "14.51.36247.0",
+        "modified_utc": "2026-05-27T02:59:34.0000000Z",
+        "sha256": "54716f0738af891f283d213b5c8d11b25896bb8ee3097d301eae718560cf974e"
+      },
+      {
+        "path": "C:\\Windows\\System32\\ucrtbase.dll",
+        "exists": true,
+        "bytes": 1377512,
+        "file_version": "10.0.26100.9444 (WinBuild.160101.0800)",
+        "product_version": "10.0.26100.9444",
+        "modified_utc": "2026-09-09T03:02:30.7733129Z",
+        "sha256": "5c52e3a303baaac0e0af8bd9b96134993da34bc9d834a31ef37e1d2cdc7fe192"
+      },
+      {
+        "path": "C:\\Windows\\SysWOW64\\vcruntime140.dll",
+        "exists": true,
+        "bytes": 91296,
+        "file_version": "14.50.35719.0",
+        "product_version": "14.50.35719.0",
+        "modified_utc": "2025-11-21T21:00:40.0000000Z",
+        "sha256": "87fc734e0f2884985514edace58cf649a8ad67cb058dc7b7a4068f77af86810a"
+      },
+      {
+        "path": "C:\\Windows\\SysWOW64\\vcruntime140_1.dll",
+        "exists": false
+      },
+      {
+        "path": "C:\\Windows\\SysWOW64\\msvcp140.dll",
+        "exists": true,
+        "bytes": 447568,
+        "file_version": "14.50.35719.0",
+        "product_version": "14.50.35719.0",
+        "modified_utc": "2025-11-21T21:00:38.0000000Z",
+        "sha256": "546ee2af2ffff02a34dbc1139bc6eb0eb5d67d83b3be782cfead374d29c8e01e"
+      },
+      {
+        "path": "C:\\Windows\\SysWOW64\\concrt140.dll",
+        "exists": true,
+        "bytes": 258128,
+        "file_version": "14.50.35719.0",
+        "product_version": "14.50.35719.0",
+        "modified_utc": "2025-11-21T21:00:36.0000000Z",
+        "sha256": "1a084b2275c02b4df2b0ae395a5312a3ad3143f5ace9ba08cfd4fc42cdf9bf61"
+      },
+      {
+        "path": "C:\\Windows\\SysWOW64\\ucrtbase.dll",
+        "exists": true,
+        "bytes": 1114240,
+        "file_version": "10.0.26100.9444 (WinBuild.160101.0800)",
+        "product_version": "10.0.26100.9444",
+        "modified_utc": "2026-09-09T03:02:30.8088965Z",
+        "sha256": "60c5a497b52de80a3a0677564270dbea7e486086637debd567b4dffb28584c1b"
+      }
+    ],
+    "runtime_registry": [
+      {
+        "key": "HKLM:\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64",
+        "version": "v14.51.36247.00",
+        "installed": 1,
+        "major": 14,
+        "minor": 51,
+        "bld": 36247,
+        "rbld": 0
+      },
+      {
+        "key": "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64",
+        "version": "v14.44.35211.00",
+        "installed": 1,
+        "major": 14,
+        "minor": 44,
+        "bld": 35211,
+        "rbld": 0
+      },
+      {
+        "key": "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x86",
+        "version": "v14.44.35211.00",
+        "installed": 1,
+        "major": 14,
+        "minor": 44,
+        "bld": 35211,
+        "rbld": 0
+      }
+    ],
+    "redistributables": [
+      {
+        "name": "Microsoft Visual C++ 2022 X64 Additional Runtime - 14.51.36247",
+        "version": "14.51.36247",
+        "install_date": "20260812"
+      },
+      {
+        "name": "Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.51.36247",
+        "version": "14.51.36247",
+        "install_date": "20260812"
+      },
+      {
+        "name": "Microsoft Visual C++ 2022 X64 Debug Runtime - 14.44.35211",
+        "version": "14.44.35211",
+        "install_date": "20260926"
+      },
+      {
+        "name": "Microsoft Visual C++ v14 Redistributable (x64) - 14.51.36247",
+        "version": "14.51.36247.0",
+        "install_date": null
+      },
+      {
+        "name": "Microsoft Visual C++ v14 Redistributable (x86) - 14.50.35719",
+        "version": "14.50.35719.0",
+        "install_date": null
+      },
+      {
+        "name": "Microsoft Visual C++ 2022 X86 Minimum Runtime - 14.50.35719",
+        "version": "14.50.35719",
+        "install_date": "20260731"
+      },
+      {
+        "name": "Microsoft Visual C++ 2022 X86 Additional Runtime - 14.50.35719",
+        "version": "14.50.35719",
+        "install_date": "20260731"
+      },
+      {
+        "name": "Microsoft Visual C++ 2022 X86 Debug Runtime - 14.44.35211",
+        "version": "14.44.35211",
+        "install_date": "20260926"
+      }
+    ],
+    "installer_activity": {
+      "first": {
+        "timestamp_utc": "2026-09-26T00:07:03.7843639Z",
+        "processes": [
+          {
+            "pid": 40700,
+            "parent_pid": 41468,
+            "name": "setup.exe",
+            "kernel_time_100ns": 58906250,
+            "user_time_100ns": 180156250,
+            "read_operations": 42511,
+            "write_operations": 3694,
+            "read_bytes": 264604358,
+            "write_bytes": 77837859,
+            "executable_path": null,
+            "command_line": null
+          },
+          {
+            "pid": 40288,
+            "parent_pid": 1876,
+            "name": "msiexec.exe",
+            "kernel_time_100ns": 253437500,
+            "user_time_100ns": 166875000,
+            "read_operations": 314550,
+            "write_operations": 199331,
+            "read_bytes": 1216235350,
+            "write_bytes": 2097788241,
+            "executable_path": null,
+            "command_line": null
+          }
+        ]
+      },
+      "second": {
+        "timestamp_utc": "2026-09-26T00:07:15.9704650Z",
+        "processes": [
+          {
+            "pid": 40700,
+            "parent_pid": 41468,
+            "name": "setup.exe",
+            "kernel_time_100ns": 58906250,
+            "user_time_100ns": 180156250,
+            "read_operations": 42511,
+            "write_operations": 3694,
+            "read_bytes": 264604358,
+            "write_bytes": 77837859,
+            "executable_path": null,
+            "command_line": null
+          },
+          {
+            "pid": 40288,
+            "parent_pid": 1876,
+            "name": "msiexec.exe",
+            "kernel_time_100ns": 253437500,
+            "user_time_100ns": 166875000,
+            "read_operations": 314550,
+            "write_operations": 199331,
+            "read_bytes": 1216235350,
+            "write_bytes": 2097788241,
+            "executable_path": null,
+            "command_line": null
+          }
+        ]
+      },
+      "deltas": [
+        {
+          "pid": 40700,
+          "name": "setup.exe",
+          "exited": false,
+          "cpu_seconds_delta": 0.0,
+          "read_bytes_delta": 0.0,
+          "write_bytes_delta": 0.0,
+          "read_operations_delta": 0.0,
+          "write_operations_delta": 0.0
+        },
+        {
+          "pid": 40288,
+          "name": "msiexec.exe",
+          "exited": false,
+          "cpu_seconds_delta": 0.0,
+          "read_bytes_delta": 0.0,
+          "write_bytes_delta": 0.0,
+          "read_operations_delta": 0.0,
+          "write_operations_delta": 0.0
+        }
+      ]
+    },
+    "limits": [
+      "No complete pre-installation VC runtime snapshot is available in this inventory; post-install versions do not prove which files changed.",
+      "Toolset comparison selects compiler, linker, headers and CRT libraries together; it does not isolate link.exe.",
+      "A bounded quiet installer sample is evidence of inactivity during the sample, not a guarantee against future background activity."
+    ],
+    "frozen_binary_direct_dll_dependencies": {
+      "rust195-old": [
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "kernel32.dll",
+        "user32.dll",
+        "ntdll.dll",
+        "oleaut32.dll",
+        "combase.dll",
+        "ole32.dll",
+        "mmdevapi.dll",
+        "api-ms-win-core-winrt-error-l1-1-0.dll",
+        "bcryptprimitives.dll",
+        "KERNEL32.dll",
+        "USER32.dll",
+        "GDI32.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-conio-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll"
+      ],
+      "rust198-old": [
+        "kernel32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "user32.dll",
+        "ntdll.dll",
+        "oleaut32.dll",
+        "ole32.dll",
+        "combase.dll",
+        "mmdevapi.dll",
+        "api-ms-win-core-winrt-error-l1-1-0.dll",
+        "bcryptprimitives.dll",
+        "KERNEL32.dll",
+        "USER32.dll",
+        "GDI32.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-conio-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll"
+      ]
+    },
+    "old_linker_hash_unchanged_from_preinstall_manifest": true,
+    "selected_sdk_version_for_comparison": "10.0.22000.0",
+    "comparison_recommendation": "Measure both frozen old-toolset executables and new-toolset executables after this installation so all runs share the current system DLLs; label the factor MSVC toolset, not linker-only."
+  },
+  "binary_audit": {
+    "scope": "Read-only static audit of MSVC 14.35 versus 14.44 for each Rust version; no timing inference",
+    "detail_file": "target/toolchain-comparison-20260925/msvc-binary-audit/comparison.json",
+    "detail_sha256": "2b9ca69ecff3651f9e0e6bb879c06ec16f4e4afe90b9bf6eab6413a1800811f0",
+    "named_function_detail_sha256": "c19f87f42ee67b33b2ce7ba3c06d5db51fbc517fcde632b50934211138855546",
+    "source_provenance": {
+      "all_four_recorded_sources_equal": true,
+      "source_file_count": 33,
+      "source_map_sha256": "dccde0b089032ca4bc8cd500ef2ebbd776dabf916b1f7809523244d38812b259",
+      "source_map_encoding": "UTF-8 JSON of manifest sources, sorted keys, separators comma and colon",
+      "cargo_lock_sha256": "80b7ec997d929b798e7f06fc959e7419d8b380dcdc2f17ba4c99cb7012f08e70",
+      "interpreter_sha256": "21d6b7ab580e87c9c275724a1fa22d28d586b4b4aeaee79c79e12ad9954217e9",
+      "all_four_generated_outputs_equal": true,
+      "generated": {
+        "error_codes.rs": [
+          "9d7ea28b42d3c58767dd14480012bbbbe581af2234385cad924e7becbde84502"
+        ],
+        "font_tables.rs": [
+          "f5059001e65e48be5aecd6ad4e58d7bb0a15f3b81bab47cd46b13fc3dec0933c"
+        ],
+        "language_catalog.rs": [
+          "96f92380f643c360c33921b7081668f9b8e60861abc849a5c9acda7c9c7b1752"
+        ],
+        "windows.lib": [
+          "de38aa11673ae21be93265820b07aa2f4d58600f2d829aacf3c6462ce534d51c"
+        ]
+      }
+    },
+    "images": {
+      "rust195-old": {
+        "sha256": "6ba8594b0b69ed509090ba2d6b29e35863b00a7ecc40da772bf9be8cae35423d",
+        "file_bytes": 3070976,
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+        "link_version": "Microsoft (R) Incremental Linker Version 14.35.32217.1",
+        "link_sha256": "6fac48476c6009b5f0d66ec957789264aca73d5b8852c3d51c2ef0a93913a467",
+        "toolset": "14.35.32215",
+        "windows_sdk": "10.0.22000.0\\",
+        "pe_linker_version": [
+          14,
+          35
+        ],
+        "pdb_identity": {
+          "guid": "3b701d33-dbb6-484d-84be-a5507daade61",
+          "age": 1,
+          "version": 20000404,
+          "signature": 1790372224,
+          "sha256": "d88f62037995ffae2f12e38d1b627b60f78a95222674ed8167113817dfbaf101"
+        },
+        "checks": {
+          "manifest_hash_matches": true,
+          "selected_linker_hash_matches": true,
+          "recorded_sources_match_current": true,
+          "pdb_match": true,
+          "pdata_strictly_sorted": true,
+          "pdata_errors": []
+        },
+        "hot_sections_ok": true,
+        "section_alignment": 4096,
+        "image_size": 3088384,
+        "pdata_count": 2430,
+        "hot_sections": [
+          {
+            "name": ".avlrun",
+            "rva": "0x25c000",
+            "preferred_address": "0x14025c000",
+            "virtual_size": 20035,
+            "raw_size": 20480,
+            "flags": "0x60000020",
+            "function_size": 20035,
+            "end_rva": "0x260e43",
+            "unwind_rva": "0x2c6c34",
+            "unwind_version": 1
+          },
+          {
+            "name": ".avleval",
+            "rva": "0x261000",
+            "preferred_address": "0x140261000",
+            "virtual_size": 6155,
+            "raw_size": 6656,
+            "flags": "0x60000020",
+            "function_size": 6155,
+            "end_rva": "0x26280b",
+            "unwind_rva": "0x2c6c5c",
+            "unwind_version": 1
+          }
+        ]
+      },
+      "rust195-new": {
+        "sha256": "e012f173b42dde7328f0e212fbf147d407d51204e36ef2c6fae2f3dd6575d3e5",
+        "file_bytes": 3070976,
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+        "link_version": "Microsoft (R) Incremental Linker Version 14.44.35229.0",
+        "link_sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f",
+        "toolset": "14.44.35207",
+        "windows_sdk": "10.0.22000.0\\",
+        "pe_linker_version": [
+          14,
+          44
+        ],
+        "pdb_identity": {
+          "guid": "f42b6652-34b2-45b1-9cee-33a417ee5073",
+          "age": 1,
+          "version": 20000404,
+          "signature": 1790381187,
+          "sha256": "efd1d92ac81b6cfcb79d9de5c2912e044fe6641a6887e2f19ae07b863e0b875a"
+        },
+        "checks": {
+          "manifest_hash_matches": true,
+          "selected_linker_hash_matches": true,
+          "recorded_sources_match_current": true,
+          "pdb_match": true,
+          "pdata_strictly_sorted": true,
+          "pdata_errors": []
+        },
+        "hot_sections_ok": true,
+        "section_alignment": 4096,
+        "image_size": 3088384,
+        "pdata_count": 2430,
+        "hot_sections": [
+          {
+            "name": ".avlrun",
+            "rva": "0x25c000",
+            "preferred_address": "0x14025c000",
+            "virtual_size": 20035,
+            "raw_size": 20480,
+            "flags": "0x60000020",
+            "function_size": 20035,
+            "end_rva": "0x260e43",
+            "unwind_rva": "0x2c6c3c",
+            "unwind_version": 1
+          },
+          {
+            "name": ".avleval",
+            "rva": "0x261000",
+            "preferred_address": "0x140261000",
+            "virtual_size": 6155,
+            "raw_size": 6656,
+            "flags": "0x60000020",
+            "function_size": 6155,
+            "end_rva": "0x26280b",
+            "unwind_rva": "0x2c6c64",
+            "unwind_version": 1
+          }
+        ]
+      },
+      "rust198-old": {
+        "sha256": "3186e5cdba0565e6815177f88c6c4a1830419641b6c5699de414749e033decbd",
+        "file_bytes": 3022848,
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+        "link_version": "Microsoft (R) Incremental Linker Version 14.35.32217.1",
+        "link_sha256": "6fac48476c6009b5f0d66ec957789264aca73d5b8852c3d51c2ef0a93913a467",
+        "toolset": "14.35.32215",
+        "windows_sdk": "10.0.22000.0\\",
+        "pe_linker_version": [
+          14,
+          35
+        ],
+        "pdb_identity": {
+          "guid": "45336893-6582-49d6-b236-1683cfe588d4",
+          "age": 1,
+          "version": 20000404,
+          "signature": 1790372433,
+          "sha256": "927ac16fe49ed051f466bbee840fbf6354a370514d94b5bbce6d4840ee09b7d6"
+        },
+        "checks": {
+          "manifest_hash_matches": true,
+          "selected_linker_hash_matches": true,
+          "recorded_sources_match_current": true,
+          "pdb_match": true,
+          "pdata_strictly_sorted": true,
+          "pdata_errors": []
+        },
+        "hot_sections_ok": true,
+        "section_alignment": 4096,
+        "image_size": 3039232,
+        "pdata_count": 2436,
+        "hot_sections": [
+          {
+            "name": ".avlrun",
+            "rva": "0x258000",
+            "preferred_address": "0x140258000",
+            "virtual_size": 19615,
+            "raw_size": 19968,
+            "flags": "0x60000020",
+            "function_size": 19615,
+            "end_rva": "0x25cc9f",
+            "unwind_rva": "0x2bae1c",
+            "unwind_version": 1
+          },
+          {
+            "name": ".avleval",
+            "rva": "0x256000",
+            "preferred_address": "0x140256000",
+            "virtual_size": 5932,
+            "raw_size": 6144,
+            "flags": "0x60000020",
+            "function_size": 5932,
+            "end_rva": "0x25772c",
+            "unwind_rva": "0x2badfc",
+            "unwind_version": 1
+          }
+        ]
+      },
+      "rust198-new": {
+        "sha256": "dc81240fa43a6e7ea7fba3038fd49083945c8a69448a40314ba73ecbec6f4502",
+        "file_bytes": 3023360,
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+        "link_version": "Microsoft (R) Incremental Linker Version 14.44.35229.0",
+        "link_sha256": "a364af801a8539e4324d9489313dbf001d959128451fc99a27b24676bbac058f",
+        "toolset": "14.44.35207",
+        "windows_sdk": "10.0.22000.0\\",
+        "pe_linker_version": [
+          14,
+          44
+        ],
+        "pdb_identity": {
+          "guid": "7e75b9f3-9796-4b8d-8c85-32a2146e445e",
+          "age": 1,
+          "version": 20000404,
+          "signature": 1790381247,
+          "sha256": "728f21d8ebe6b31dfc3c63e3580c8112a838e6155efb3b5109f752691e7e9bc7"
+        },
+        "checks": {
+          "manifest_hash_matches": true,
+          "selected_linker_hash_matches": true,
+          "recorded_sources_match_current": true,
+          "pdb_match": true,
+          "pdata_strictly_sorted": true,
+          "pdata_errors": []
+        },
+        "hot_sections_ok": true,
+        "section_alignment": 4096,
+        "image_size": 3039232,
+        "pdata_count": 2436,
+        "hot_sections": [
+          {
+            "name": ".avlrun",
+            "rva": "0x258000",
+            "preferred_address": "0x140258000",
+            "virtual_size": 19615,
+            "raw_size": 19968,
+            "flags": "0x60000020",
+            "function_size": 19615,
+            "end_rva": "0x25cc9f",
+            "unwind_rva": "0x2bae24",
+            "unwind_version": 1
+          },
+          {
+            "name": ".avleval",
+            "rva": "0x256000",
+            "preferred_address": "0x140256000",
+            "virtual_size": 5932,
+            "raw_size": 6144,
+            "flags": "0x60000020",
+            "function_size": 5932,
+            "end_rva": "0x25772c",
+            "unwind_rva": "0x2bae04",
+            "unwind_version": 1
+          }
+        ]
+      }
+    },
+    "comparisons": {
+      "rust195": {
+        "source_hashes_equal": true,
+        "rustc_equal": true,
+        "cargo_equal": true,
+        "sdk_equal": true,
+        "linker_changed": true,
+        "generated_equal": true,
+        "imports_equal": true,
+        "delay_imports_equal": true,
+        "file_size_delta": 0,
+        "hot_functions": {
+          ".avlrun": {
+            "old_rva": "0x25c000",
+            "new_rva": "0x25c000",
+            "old_bytes": 20035,
+            "new_bytes": 20035,
+            "old_instructions": 3753,
+            "new_instructions": 3753,
+            "bytes_equal": false,
+            "normalized_instructions_equal": true,
+            "unwind_bytes_equal": true,
+            "first_normalized_differences": []
+          },
+          ".avleval": {
+            "old_rva": "0x261000",
+            "new_rva": "0x261000",
+            "old_bytes": 6155,
+            "new_bytes": 6155,
+            "old_instructions": 1317,
+            "new_instructions": 1317,
+            "bytes_equal": false,
+            "normalized_instructions_equal": true,
+            "unwind_bytes_equal": true,
+            "first_normalized_differences": []
+          }
+        },
+        "executable_sections": {
+          ".text": {
+            "old_rva": "0x1000",
+            "new_rva": "0x1000",
+            "old_size": 2468072,
+            "new_size": 2468312,
+            "bytes_equal": false
+          },
+          ".avlrun": {
+            "old_rva": "0x25c000",
+            "new_rva": "0x25c000",
+            "old_size": 20035,
+            "new_size": 20035,
+            "bytes_equal": false
+          },
+          ".avleval": {
+            "old_rva": "0x261000",
+            "new_rva": "0x261000",
+            "old_size": 6155,
+            "new_size": 6155,
+            "bytes_equal": false
+          }
+        },
+        "named_crt_size_changes": [
+          {
+            "symbol": "__isa_available_init",
+            "old_rva": "0x2433e0",
+            "new_rva": "0x2433e0",
+            "old_bytes": 428,
+            "new_bytes": 661,
+            "delta_bytes": 233
+          },
+          {
+            "symbol": "__scrt_initialize_crt",
+            "old_rva": "0x242e14",
+            "new_rva": "0x242e14",
+            "old_bytes": 73,
+            "new_bytes": 58,
+            "delta_bytes": -15
+          },
+          {
+            "symbol": "__scrt_is_managed_app",
+            "old_rva": "0x2432a0",
+            "new_rva": "0x243298",
+            "old_bytes": 81,
+            "new_bytes": 82,
+            "delta_bytes": 1
+          },
+          {
+            "symbol": "__scrt_unhandled_exception_filter",
+            "old_rva": "0x243304",
+            "new_rva": "0x2432fc",
+            "old_bytes": 91,
+            "new_bytes": 99,
+            "delta_bytes": 8
+          },
+          {
+            "symbol": "__security_init_cookie",
+            "old_rva": "0x243028",
+            "new_rva": "0x243018",
+            "old_bytes": 172,
+            "new_bytes": 175,
+            "delta_bytes": 3
+          }
+        ],
+        "named_crt_size_delta_sum": 230
+      },
+      "rust198": {
+        "source_hashes_equal": true,
+        "rustc_equal": true,
+        "cargo_equal": true,
+        "sdk_equal": true,
+        "linker_changed": true,
+        "generated_equal": true,
+        "imports_equal": true,
+        "delay_imports_equal": true,
+        "file_size_delta": 512,
+        "hot_functions": {
+          ".avlrun": {
+            "old_rva": "0x258000",
+            "new_rva": "0x258000",
+            "old_bytes": 19615,
+            "new_bytes": 19615,
+            "old_instructions": 3702,
+            "new_instructions": 3702,
+            "bytes_equal": false,
+            "normalized_instructions_equal": true,
+            "unwind_bytes_equal": true,
+            "first_normalized_differences": []
+          },
+          ".avleval": {
+            "old_rva": "0x256000",
+            "new_rva": "0x256000",
+            "old_bytes": 5932,
+            "new_bytes": 5932,
+            "old_instructions": 1271,
+            "new_instructions": 1271,
+            "bytes_equal": false,
+            "normalized_instructions_equal": true,
+            "unwind_bytes_equal": true,
+            "first_normalized_differences": []
+          }
+        },
+        "executable_sections": {
+          ".text": {
+            "old_rva": "0x1000",
+            "new_rva": "0x1000",
+            "old_size": 2444281,
+            "new_size": 2444521,
+            "bytes_equal": false
+          },
+          ".avleval": {
+            "old_rva": "0x256000",
+            "new_rva": "0x256000",
+            "old_size": 5932,
+            "new_size": 5932,
+            "bytes_equal": false
+          },
+          ".avlrun": {
+            "old_rva": "0x258000",
+            "new_rva": "0x258000",
+            "old_size": 19615,
+            "new_size": 19615,
+            "bytes_equal": false
+          }
+        },
+        "named_crt_size_changes": [
+          {
+            "symbol": "__isa_available_init",
+            "old_rva": "0x23c740",
+            "new_rva": "0x23c730",
+            "old_bytes": 428,
+            "new_bytes": 661,
+            "delta_bytes": 233
+          },
+          {
+            "symbol": "__scrt_initialize_crt",
+            "old_rva": "0x23c28c",
+            "new_rva": "0x23c28c",
+            "old_bytes": 73,
+            "new_bytes": 58,
+            "delta_bytes": -15
+          },
+          {
+            "symbol": "__scrt_is_managed_app",
+            "old_rva": "0x23ca60",
+            "new_rva": "0x23cb40",
+            "old_bytes": 81,
+            "new_bytes": 82,
+            "delta_bytes": 1
+          },
+          {
+            "symbol": "__scrt_unhandled_exception_filter",
+            "old_rva": "0x23cac4",
+            "new_rva": "0x23cba4",
+            "old_bytes": 91,
+            "new_bytes": 99,
+            "delta_bytes": 8
+          },
+          {
+            "symbol": "__security_init_cookie",
+            "old_rva": "0x23cb2c",
+            "new_rva": "0x23cc14",
+            "old_bytes": 172,
+            "new_bytes": 175,
+            "delta_bytes": 3
+          }
+        ],
+        "named_crt_size_delta_sum": 230
+      }
+    },
+    "limitations": [
+      "The MSVC factor includes native libraries/tool selection, not only link.exe.",
+      "Selected environment and source manifests are not a full hermetic-build proof.",
+      "Address normalization is not a semantic-equivalence proof; static counts are not timings.",
+      "Imported DLL names do not identify statically linked code or runtime-loaded libraries.",
+      "Normalized hot instructions mask external image addresses; this is not whole-program semantic equivalence.",
+      "CRT size deltas concern matched public PDB symbols, with aliases deduplicated; not all code was compared.",
+      "MSVC update changes compiler, native libraries, headers and linker together; effects cannot be assigned to link.exe alone."
+    ]
+  },
+  "detailed_binary_audit_sha256": "2b9ca69ecff3651f9e0e6bb879c06ec16f4e4afe90b9bf6eab6413a1800811f0",
+  "limitations": [
+    "MSVC toolset and libraries change together, not linker alone",
+    "Both binaries in every pair run after installation, against the same current shared runtime",
+    "Output and final PNG checked, not every rendered frame",
+    "Default Rust versions and development executables retained"
+  ]
+}

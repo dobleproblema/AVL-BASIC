@@ -1731,6 +1731,12 @@ impl CompiledColorExpr {
 }
 
 impl FastNumberExpr {
+    // Keep the emitted recursive body independent of unrelated .text growth.
+    // SAFETY: this function-only PE section is read/execute, never writable.
+    #[cfg_attr(
+        all(windows, target_arch = "x86_64", target_env = "msvc"),
+        unsafe(link_section = ".avleval")
+    )]
     #[inline(always)]
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
         match self {
@@ -3520,6 +3526,13 @@ impl Interpreter {
     }
 
     #[inline(never)]
+    // Give the hot loop its own page-aligned entry, independently of cold code.
+    // SAFETY: this function-only PE section is read/execute, never writable.
+    // See tools/benchmarks/CODE-PLACEMENT-2026-09-25.md for measured scope.
+    #[cfg_attr(
+        all(windows, target_arch = "x86_64", target_env = "msvc"),
+        unsafe(link_section = ".avlrun")
+    )]
     fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();

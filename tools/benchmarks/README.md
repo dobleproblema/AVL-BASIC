@@ -2,6 +2,8 @@
 
 Informes en español:
 
+- [Configuración elegida para Windows y WSL tras las pruebas: 26 de septiembre de 2026](BUILD-CHOICE-2026-09-26.md).
+
 - [Primera ronda: 4 de septiembre de 2026](RESULTS-2026-09-04.md).
 - [Diagnóstico con perfiles y decisión: 5 de septiembre de 2026](PROFILING-2026-09-05.md).
 - [Regresión de MERGE y corrección: 11 de septiembre de 2026](REGRESSION-2026-09-11.md).
@@ -9,6 +11,9 @@ Informes en español:
 - [Optimización de índices numéricos en Windows: 18 de septiembre de 2026](INDEX-LEAVES-2026-09-18.md).
 - [Comprobación tras los ejes automáticos: 19 de septiembre de 2026](AXIS-AUTO-2026-09-19.md).
 - [Comprobación tras unificar marcas y etiquetas: 19 de septiembre de 2026](AXIS-CADENCE-2026-09-19.md).
+- [Disposición del código y regresión de 1.6.6: 25 de septiembre de 2026](CODE-PLACEMENT-2026-09-25.md).
+- [Comparación de Rust 1.95 y 1.98.1: 25 de septiembre de 2026](TOOLCHAIN-2026-09-25.md).
+- [Comparación de MSVC 14.35 y 14.44: 26 de septiembre de 2026](MSVC-2026-09-26.md).
 
 Los informes distinguen las correcciones incorporadas de los candidatos
 descartados. Se conservan las mediciones, conclusiones y herramientas de diagnóstico.
@@ -20,7 +25,18 @@ Las herramientas Python requieren Python 3.10 o posterior.
 `representative.py` compara ejecutables release existentes. No compila ni cambia
 los ejemplos originales. Utilizar el mismo compilador, perfil, máquina y
 condiciones para ambos binarios, sin otras compilaciones ni mediciones en paralelo.
+Cuando el compilador sea la variable estudiada, fijar las demás herramientas,
+dependencias y fuentes, registrar ambas versiones y conservar sus ejecutables.
 Los comandos siguientes parten de la raíz del repositorio Rust.
+
+Después de compilar para Windows x64 MSVC, comprueba las secciones ejecutables
+del bucle y del evaluador numérico con
+`python tools/benchmarks/check_hot_sections.py target/release/avl-basic.exe`.
+Verifica su alineación, permisos y registros de desenrollado sin ejecutar el
+binario. Esta comprobación estructural no sustituye a medir Pi y Jelly contra
+la referencia conservada, incluyendo Jelly con ventana real, sobre el mismo
+ejecutable que se va a entregar. Un cambio ajeno al bucle puede modificar su
+rendimiento aunque el compilador emita las mismas instrucciones.
 
 ```powershell
 python tools/benchmarks/representative.py --baseline C:/bench/baseline.exe --candidate target/release/avl-basic.exe --output C:/bench/comparison --runs 6 --warmups 1
