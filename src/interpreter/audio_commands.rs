@@ -725,11 +725,83 @@ mod tests {
     }
 
     #[test]
-    fn audio_end_and_stop_silence_classic_queues() {
-        for ending in ["END", "STOP"] {
-            let mut i = run(&format!("10 SOUND 1,142,1000\n20 {ending}"));
+    fn audio_end_and_natural_completion_preserve_classic_queues() {
+        for debug in [false, true] {
+            for ending in ["\n20 END", ""] {
+                let mut i = silent();
+                if debug {
+                    i.set_debugger(Debugger::scripted([]));
+                }
+                i.program
+                    .load_text(&format!("10 SOUND 1,142,1000{ending}"))
+                    .unwrap();
+                assert_eq!(i.run_loaded().unwrap(), RunOutcome::End);
+                assert_eq!(i.audio.sq(1), 132);
+                i.process_immediate("END").unwrap();
+                assert_eq!(i.audio.sq(1), 132);
+            }
+        }
+    }
+
+    #[test]
+    fn audio_stop_and_unhandled_error_still_silence_classic_queues() {
+        for ending in ["STOP", "ERROR 26"] {
+            let mut i = silent();
+            i.program
+                .load_text(&format!("10 SOUND 1,142,1000\n20 {ending}"))
+                .unwrap();
+            let result = i.run_loaded();
+            assert!(matches!(result, Err(_) | Ok(RunOutcome::Stop)));
             assert_eq!(i.audio.sq(1), 4);
         }
+    }
+
+    #[test]
+    fn audio_end_preserves_held_notes_for_release_and_flush_at_the_prompt() {
+        let mut i = run("10 SOUND 65,142,1000\n20 END");
+        assert_eq!(i.audio.sq(1), 67);
+        i.process_immediate("RELEASE 1").unwrap();
+        assert_eq!(i.audio.sq(1), 132);
+        i.process_immediate("SOUND 1+128,0").unwrap();
+        assert_ne!(i.audio.sq(1) & 128, 0);
+        i.process_immediate("CLEAR").unwrap();
+        assert_eq!(i.audio.sq(1), 4);
+        assert!(!i.audio.poll_after_program());
+    }
+
+    #[test]
+    fn audio_end_does_not_resume_old_queue_handlers_from_the_prompt() {
+        let mut i = run(
+            "10 COUNT=0:DI\n20 SOUND 1,142,1000\n30 ON SQ(1) GOSUB 100\n\
+             40 END\n100 COUNT=COUNT+1:RETURN",
+        );
+        assert_eq!(i.numeric_variables.get("COUNT"), Some(&0.0));
+        assert!(i.audio.poll_after_program());
+        assert!(i.sound_handlers.iter().all(Option::is_none));
+        i.process_immediate("EI:PAUSE 30").unwrap();
+        assert_eq!(i.numeric_variables.get("COUNT"), Some(&0.0));
+    }
+
+    #[test]
+    fn audio_prompt_interrupt_stops_pending_audio_and_keeps_the_interpreter() {
+        let mut i = run("10 SOUND 65,142,1000\n20 END");
+        assert!(i.stop_prompt_audio());
+        assert_eq!(i.audio.sq(1), 4);
+        i.process_immediate("PRINT 42").unwrap();
+        assert_eq!(i.take_output(), " 42\n");
+        assert!(!i.stop_prompt_audio());
+    }
+
+    #[test]
+    fn audio_wait_can_be_interrupted_without_resuming_finished_basic() {
+        let mut i = run("10 SOUND 65,142,1000\n20 END");
+        i.request_interrupt_for_test();
+        i.wait_for_audio().unwrap();
+        assert_eq!(i.audio.sq(1), 4);
+        assert!(i.stopped_cursor.is_none());
+        assert!(!i.test_interrupt_requested);
+        i.process_immediate("PRINT 42").unwrap();
+        assert_eq!(i.take_output(), " 42\n");
     }
 
     #[test]

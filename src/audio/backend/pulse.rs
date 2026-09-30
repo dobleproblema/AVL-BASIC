@@ -5,14 +5,14 @@
 //! This adapter negotiates 100 ms of stream buffering and an 80 ms sink latency.
 // Wire protocol sequence based on pulseaudio-rs examples/playback.rs:
 // Copyright 2023 Colin Marc, MIT; see LICENSES.
-use super::Failure;
+use super::{output_drain_delay, Failure};
 use kira::backend::Renderer;
 use pulseaudio::protocol;
 use std::ffi::CString;
 use std::io::{BufReader, Cursor, Read};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -68,12 +68,20 @@ fn validate_buffer(attributes: protocol::stream::BufferAttr) -> Result<(), Strin
     Ok(())
 }
 
+fn drain_delay(buffered_bytes: u32, sink_latency: u64) -> Duration {
+    let buffered =
+        Duration::from_secs_f64(f64::from(buffered_bytes) / f64::from(SAMPLE_RATE * FRAME_BYTES));
+    output_drain_delay(Duration::from_micros(sink_latency), buffered)
+}
+
 struct Connection {
     socket: BufReader<UnixStream>,
     packet: Vec<u8>,
     version: u16,
     channel: u32,
     initial_bytes: u32,
+    sink_latency: u64,
+    drain_nanos: Arc<AtomicU64>,
 }
 
 struct PlaybackReply {
@@ -83,6 +91,7 @@ struct PlaybackReply {
     sample_spec: protocol::SampleSpec,
     channel_map: protocol::ChannelMap,
     suspended: bool,
+    sink_latency: u64,
 }
 
 fn protocol_error(error: protocol::ProtocolError) -> String {
@@ -103,6 +112,8 @@ impl Connection {
             version: protocol::MAX_VERSION,
             channel: 0,
             initial_bytes: 0,
+            sink_latency: 0,
+            drain_nanos: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -181,7 +192,7 @@ impl Connection {
             let _sink_index = reader.read_index()?;
             let _sink_name = reader.read_string()?;
             let suspended = reader.read_bool()?;
-            let _sink_latency = reader.read_usec()?;
+            let sink_latency = reader.read_usec()?;
             // FormatInfo/Props extensions are irrelevant to our fixed PCM format.
             // Do not decode arbitrary blobs whose internal length fields could
             // allocate independently of the already bounded packet size.
@@ -192,6 +203,7 @@ impl Connection {
                 sample_spec,
                 channel_map,
                 suspended,
+                sink_latency,
             })
         })
     }
@@ -254,7 +266,15 @@ impl Connection {
         validate_request(info.requested_bytes)?;
         self.channel = info.channel;
         self.initial_bytes = info.requested_bytes;
+        self.update_drain_delay(info.buffer_attr, info.sink_latency);
         Ok(())
+    }
+
+    fn update_drain_delay(&mut self, attributes: protocol::stream::BufferAttr, sink_latency: u64) {
+        self.sink_latency = sink_latency;
+        let delay = drain_delay(attributes.target_length, sink_latency);
+        self.drain_nanos
+            .fetch_max(delay.as_nanos() as u64, Ordering::Relaxed);
     }
 
     fn next_request(&mut self) -> Result<Option<u32>, String> {
@@ -272,6 +292,11 @@ impl Connection {
                     return Err("PulseAudio requested an unknown output stream".into());
                 }
                 validate_request(request.length)?;
+                // A request can exceed a subsequently reduced target length;
+                // preserve enough time for the whole accepted PCM burst.
+                let delay = drain_delay(request.length, self.sink_latency);
+                self.drain_nanos
+                    .fetch_max(delay.as_nanos() as u64, Ordering::Relaxed);
                 Ok(Some(request.length))
             }
             protocol::CommandTag::Error => {
@@ -302,6 +327,7 @@ impl Connection {
                     return Err("PulseAudio output moved to a suspended device".into());
                 }
                 validate_buffer(state.buffer_attr)?;
+                self.update_drain_delay(state.buffer_attr, state.configured_sink_latency);
                 Ok(None)
             }
             protocol::CommandTag::PlaybackBufferAttrChanged => {
@@ -309,6 +335,7 @@ impl Connection {
                     .read::<protocol::PlaybackBufferAttrChanged>()
                     .map_err(protocol_error)?;
                 validate_buffer(state.buffer_attr)?;
+                self.update_drain_delay(state.buffer_attr, state.sink_input_latency);
                 Ok(None)
             }
             // An underrun can recover with the next server request. Progress is
@@ -379,6 +406,7 @@ pub(super) struct PulseOutput {
     shutdown_socket: UnixStream,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    drain_nanos: Arc<AtomicU64>,
 }
 
 impl PulseOutput {
@@ -397,11 +425,13 @@ impl PulseOutput {
             .get_ref()
             .set_read_timeout(Some(PLAYBACK_READ_TIMEOUT))
             .map_err(|error| error.to_string())?;
+        let drain_nanos = connection.drain_nanos.clone();
         Ok(Self {
             connection: Some(connection),
             shutdown_socket,
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
+            drain_nanos,
         })
     }
 
@@ -432,6 +462,10 @@ impl PulseOutput {
     pub(super) fn is_started(&self) -> bool {
         self.worker.is_some()
     }
+
+    pub(super) fn drain_delay(&self) -> Duration {
+        Duration::from_nanos(self.drain_nanos.load(Ordering::Relaxed))
+    }
 }
 
 impl Drop for PulseOutput {
@@ -452,6 +486,51 @@ mod tests {
     use std::io::Write;
     use std::sync::mpsc;
     use std::time::Instant;
+
+    #[test]
+    fn pulse_drain_covers_negotiated_buffer_and_sink_latency_without_waiting() {
+        assert_eq!(
+            drain_delay(TARGET_BYTES, 80_000),
+            Duration::from_millis(200)
+        );
+        assert_eq!(drain_delay(TARGET_BYTES / 2, 0), Duration::from_millis(70));
+        assert_eq!(
+            drain_delay(TARGET_BYTES, u64::MAX),
+            super::super::CALLBACK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn pulse_drain_preserves_earlier_buffering_and_larger_valid_requests() {
+        let (mut connection, mut server) = pair(Duration::from_secs(1));
+        let mut attributes = buffer_attributes();
+        attributes.target_length = TARGET_BYTES / 2;
+        connection.update_drain_delay(attributes, 80_000);
+        assert_eq!(
+            Duration::from_nanos(connection.drain_nanos.load(Ordering::Relaxed)),
+            Duration::from_millis(150)
+        );
+        protocol::write_command_message(
+            &mut server,
+            99,
+            &protocol::Command::Request(protocol::Request {
+                channel: 0,
+                length: TARGET_BYTES,
+            }),
+            protocol::MAX_VERSION,
+        )
+        .unwrap();
+        assert_eq!(connection.next_request().unwrap(), Some(TARGET_BYTES));
+        assert_eq!(
+            Duration::from_nanos(connection.drain_nanos.load(Ordering::Relaxed)),
+            Duration::from_millis(200)
+        );
+        connection.update_drain_delay(attributes, 0);
+        assert_eq!(
+            Duration::from_nanos(connection.drain_nanos.load(Ordering::Relaxed)),
+            Duration::from_millis(200)
+        );
+    }
 
     fn pair(timeout: Duration) -> (Connection, UnixStream) {
         let (client, server) = UnixStream::pair().unwrap();
@@ -614,6 +693,7 @@ mod tests {
             attributes.pre_buffering = TARGET_BYTES;
             let reply = protocol::CreatePlaybackStreamReply {
                 requested_bytes: TARGET_BYTES,
+                stream_latency: 80_000,
                 sample_spec: protocol::SampleSpec {
                     format: protocol::SampleFormat::S16Le,
                     channels: 2,
@@ -628,6 +708,10 @@ mod tests {
             if rate == SAMPLE_RATE {
                 result.unwrap();
                 assert_eq!(connection.initial_bytes, TARGET_BYTES);
+                assert_eq!(
+                    Duration::from_nanos(connection.drain_nanos.load(Ordering::Relaxed)),
+                    Duration::from_millis(200)
+                );
             } else {
                 assert!(result.unwrap_err().contains("unsupported"));
             }

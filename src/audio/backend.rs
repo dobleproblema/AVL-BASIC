@@ -16,8 +16,23 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
+const DRAIN_MARGIN: Duration = Duration::from_millis(20);
 #[cfg(target_os = "linux")]
 const PULSE_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+// Timestamp differences describe the first frame; the complete block must also
+// reach the device. Bound nonsensical driver timestamps without introducing a
+// blocking drain into STOP or device destruction.
+fn output_drain_delay(latency: Duration, buffered: Duration) -> Duration {
+    latency
+        .saturating_add(buffered)
+        .saturating_add(DRAIN_MARGIN)
+        .min(CALLBACK_TIMEOUT)
+}
+
+fn frames_duration(frames: usize, sample_rate: u32) -> Duration {
+    Duration::from_secs_f64(frames as f64 / f64::from(sample_rate.max(1)))
+}
 
 pub(super) fn open_output() -> Result<AudioManager<OutputBackend>, String> {
     fn create() -> Result<AudioManager<OutputBackend>, String> {
@@ -236,6 +251,7 @@ pub(super) struct BackendSettings {
 struct Failure {
     failed: AtomicBool,
     frames: AtomicU64,
+    drain_nanos: AtomicU64,
     message: Mutex<Option<String>>,
 }
 
@@ -277,6 +293,18 @@ pub(super) struct OutputBackend {
 }
 
 impl OutputBackend {
+    /// Time allowed for already rendered PCM to reach the output device.
+    /// This is polled by BASIC's natural-completion path; cancellation never
+    /// waits here. Remember the largest observed delay for this output so a
+    /// later, shorter callback cannot truncate an earlier buffered block.
+    pub(super) fn drain_delay(&self) -> Duration {
+        #[cfg(target_os = "linux")]
+        if let Some(output) = &self.pulse {
+            return output.drain_delay();
+        }
+        Duration::from_nanos(self.failure.drain_nanos.load(Ordering::Relaxed))
+    }
+
     pub fn error(&mut self) -> Option<String> {
         let started = self.stream.is_some();
         #[cfg(target_os = "linux")]
@@ -307,6 +335,7 @@ impl OutputBackend {
         T: cpal::SizedSample + cpal::FromSample<f32>,
     {
         let channels = config.channels as usize;
+        let sample_rate = config.sample_rate;
         // CPAL may supply larger buffers than requested. Process them in bounded,
         // frame-aligned chunks without allocating on the audio thread.
         let mut scratch = vec![0.0_f32; channels * 1024];
@@ -317,7 +346,7 @@ impl OutputBackend {
             .ok_or_else(|| "No CPAL device was selected".to_string())?
             .build_output_stream(
                 config.clone(),
-                move |out: &mut [T], _| {
+                move |out: &mut [T], info| {
                     out.fill(T::from_sample(0.0));
                     if failure.failed.load(Ordering::Acquire) {
                         return;
@@ -325,6 +354,16 @@ impl OutputBackend {
                     let Ok(mut renderer) = renderer.try_lock() else {
                         return;
                     };
+                    let timestamp = info.timestamp();
+                    let delay = output_drain_delay(
+                        timestamp.playback.duration_since(timestamp.callback),
+                        frames_duration(out.len() / channels, sample_rate),
+                    );
+                    // Publish before rendering: the synthesizer can report an
+                    // empty queue to BASIC from inside this very callback.
+                    failure
+                        .drain_nanos
+                        .fetch_max(delay.as_nanos() as u64, Ordering::Relaxed);
                     renderer.on_start_processing();
                     for chunk in out.chunks_mut(scratch.len()) {
                         let aligned = chunk.len() / channels * channels;
@@ -504,6 +543,39 @@ impl Backend for OutputBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpal_drain_covers_playback_timestamp_and_the_actual_callback_block() {
+        let timestamp = cpal::OutputStreamTimestamp {
+            callback: cpal::StreamInstant::from_millis(100),
+            playback: cpal::StreamInstant::from_millis(175),
+        };
+        let delay = output_drain_delay(
+            timestamp.playback.duration_since(timestamp.callback),
+            frames_duration(4800, 48000),
+        );
+        assert_eq!(delay, Duration::from_millis(195));
+        // Default-buffer fallback may supply more frames than the requested
+        // 1024: use its complete block rather than the scratch-buffer length.
+        assert!(
+            output_drain_delay(Duration::ZERO, frames_duration(8192, 48000))
+                > Duration::from_millis(190)
+        );
+    }
+
+    #[test]
+    fn invalid_output_timing_is_bounded_and_reverse_timestamps_keep_the_block() {
+        assert_eq!(
+            output_drain_delay(Duration::MAX, Duration::from_secs(1)),
+            CALLBACK_TIMEOUT
+        );
+        let earlier = cpal::StreamInstant::from_millis(50);
+        let later = cpal::StreamInstant::from_millis(100);
+        assert_eq!(
+            output_drain_delay(earlier.duration_since(later), frames_duration(480, 48000)),
+            Duration::from_millis(30)
+        );
+    }
 
     #[test]
     fn disabled_backend_returns_an_error_without_opening_devices() {

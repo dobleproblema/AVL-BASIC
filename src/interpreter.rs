@@ -2398,6 +2398,7 @@ impl Interpreter {
         print!("{}", self.take_output());
         let mut suppress_ready = false;
         loop {
+            self.current_line = None;
             if !suppress_ready {
                 println!("{}", console::prompt_text(self.ansi_output, "Ready"));
             }
@@ -2435,6 +2436,10 @@ impl Interpreter {
                 }
                 Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return 0,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    if self.stop_prompt_audio() {
+                        suppress_ready = false;
+                        continue;
+                    }
                     println!(
                         "{}",
                         console::error_text(
@@ -2447,6 +2452,36 @@ impl Interpreter {
                 Err(_) => return 1,
             }
         }
+    }
+
+    fn stop_prompt_audio(&mut self) -> bool {
+        if !self.audio.poll_after_program() {
+            return false;
+        }
+        self.audio.stop_all();
+        self.pending_sounds.clear();
+        console::clear_interrupt_requested();
+        true
+    }
+
+    /// Keeps a directly launched program alive until its remaining audio ends.
+    /// Ctrl+C cancels playback; BASIC event handlers are never resumed here.
+    pub fn wait_for_audio(&mut self) -> BasicResult<()> {
+        self.current_line = None;
+        while self.audio.poll_after_program() {
+            if let Err(error) = self.pump_graphics_window_if_due() {
+                self.audio.stop_all();
+                return Err(error);
+            }
+            if self.test_interrupt_requested || console::take_interrupt_requested() {
+                self.test_interrupt_requested = false;
+                self.audio.stop_all();
+                console::flush_pending_input();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
     }
 
     pub fn load_file(&mut self, path: &Path) -> BasicResult<()> {
@@ -3494,7 +3529,6 @@ impl Interpreter {
             self.active_line_plan = caller_plan;
         }
         if self.run_depth == 0 {
-            self.audio.stop_all();
             self.pending_sounds.clear();
             let resumable_interrupt = result.as_ref().err().is_some_and(|error| {
                 error.code == ErrorCode::KeyboardInterrupt
@@ -3508,6 +3542,14 @@ impl Interpreter {
                         result = Err(error);
                     }
                 }
+            }
+            if matches!(result, Ok(RunOutcome::End)) {
+                self.sound_handlers = [None; 3];
+                self.has_sound_handlers = false;
+                self.sound_isr_markers.clear();
+                self.audio.poll_after_program();
+            } else {
+                self.audio.stop_all();
             }
             if self.should_refocus_console_after_run(closed_graphics_window) {
                 focus_console_window(self.graphics_window.as_mut());
@@ -4989,7 +5031,6 @@ impl Interpreter {
             "ENDIF" => self.execute_end_if(cursor),
             "END" => {
                 self.data_files.close_all()?;
-                self.audio.stop_all();
                 self.finish_output_line();
                 if self.current_line.is_none() {
                     self.stopped_cursor = None;
@@ -10756,6 +10797,7 @@ impl Interpreter {
     }
 
     fn pump_graphics_window_for_console(&mut self) -> io::Result<()> {
+        self.audio.poll_after_program();
         self.pump_graphics_window_if_due()
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.display_for_basic()))?;
         if console::take_interrupt_requested() {

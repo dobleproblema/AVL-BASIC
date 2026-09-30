@@ -1,4 +1,4 @@
-use avl_basic::{console, Interpreter};
+use avl_basic::{console, Interpreter, RunOutcome};
 use std::env;
 use std::path::PathBuf;
 
@@ -15,7 +15,12 @@ fn main() {
     let code = match interpreter
         .load_file(&path)
         .and_then(|_| interpreter.run_loaded())
-    {
+        .and_then(|outcome| {
+            if outcome == RunOutcome::End {
+                interpreter.wait_for_audio()?;
+            }
+            Ok(outcome)
+        }) {
         Ok(_) => 0,
         Err(err) => {
             eprintln!("{}", err.display_for_basic());

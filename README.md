@@ -127,6 +127,12 @@ Amstrad CPC-style music, or `AUDIO` to load and play WAV, MP3, Ogg Vorbis and
 FLAC with independent playback channels, volume, stereo pan, playback rate
 and fades. `BEEP` now plays a short synthesized tone.
 
+`END` and normal program completion leave pending sound playing while the
+interpreter returns to `Ready`. Press `Ctrl+C` at the prompt to stop all
+pending notes and sample voices; with no pending audio it exits the interpreter.
+Direct command-line execution waits for audio to finish before exiting,
+with `Ctrl+C` available to cancel it.
+
 Try the [Old-School Demo with original looping music](samples/g-old-school.bas),
 the [CPC manual duet](samples/s-cpc-duet.bas), the
 [playback controls example](samples/s-audio.bas), or
@@ -176,8 +182,8 @@ silence. `AVL_BASIC_AUDIO=off` starts with output disabled.
 WSLg uses a small Rust adapter for its PulseAudio server, with bounded buffers
 and a connection that can be interrupted. It uses the existing `pulseaudio`
 protocol crate and needs no additional native library. Third-party notices
-are collected in `LICENSES`. Finishing or stopping a program
-releases the audio output; a later `RUN` retries it if necessary. An unresponsive
+are collected in `LICENSES`. Audio output is released when playback finishes
+or is cancelled; later playback retries it if necessary. An unresponsive
 output is detected so CPC sound queues can continue silently.
 
 The sound examples are `samples/s-melody.bas` (CPC-style envelopes),

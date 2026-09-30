@@ -1251,7 +1251,7 @@ Consultas y eventos de cola
 - `SQ(canal)` acepta exactamente 1, 2 o 4. Los bits 0..2 indican el número de posiciones pendientes libres (0..4); los bits 3..5 describen una sincronización pendiente; el bit 6 indica una nota retenida a la cabeza; el bit 7 indica una nota en reproducción. Los estados de reproducción, retención y sincronización son excluyentes. Un canal vacío e inactivo devuelve 4.
 - `(SQ(1) AND 7)>0` comprueba si queda espacio en la cola del canal A. `SQ(1)=4` indica que todas sus notas han terminado.
 - `ON SQ(canal) GOSUB linea` activa un evento de un solo disparo cuando hay espacio en la cola, incluso si ya lo hay. Hay que volver a registrarlo para recibir otro evento; `ON SQ(canal) GOSUB 0` lo desactiva. El manejador debe terminar con `RETURN` y no puede interrumpirse a sí mismo: registrarlo de nuevo desde el propio manejador surte efecto tras el retorno.
-- `ON SQ` solo se admite en programas y no puede registrarse dentro de `DEF FN` ni `DEF SUB`. Respeta `DI`/`EI`; inhibir los manejadores no pausa el audio ni el avance de las colas.
+- `ON SQ` solo se admite en programas y no puede registrarse dentro de `DEF FN` ni `DEF SUB`. Respeta `DI`/`EI`; inhibir los manejadores no pausa el audio ni el avance de las colas. Los manejadores dejan de ejecutarse al terminar el programa; las notas ya encoladas siguen sonando.
 
 Ejemplo
 ```basic
@@ -1260,14 +1260,11 @@ Ejemplo
 30 SOUND 66,379,30,12,1
 40 SOUND 68,319,30,12,1
 50 RELEASE 7
-60 WHILE SQ(1)<>4 OR SQ(2)<>4 OR SQ(4)<>4
-70 PAUSE 10
-80 WEND
-90 END
+60 END
 ```
 
 Ver `samples/s-melody.bas` para envolventes y un acorde retenido, y `samples/s-queue.bas` para música alimentada por un manejador `ON SQ` que se registra de nuevo.
-`samples/s-cpc-duet.bas` adapta la partitura a dos voces del manual inglés `CPC6128 User Instructions` (AMSOFT), capítulo 9, pp. 46-47, con sincronización entre canales y periodos de tono fraccionarios. Conserva los comentarios originales en inglés y la partitura. Las adaptaciones para AVL-BASIC omiten los sufijos de variables enteras (`%`), cambian `scale`/`scale$` por `notes`/`notes$` porque `SCALE` está reservado, usan prefijos hexadecimales `&H` y esperan a que terminen ambas colas de sonido antes de `END`.
+`samples/s-cpc-duet.bas` adapta la partitura a dos voces del manual inglés `CPC6128 User Instructions` (AMSOFT), capítulo 9, pp. 46-47, con sincronización entre canales y periodos de tono fraccionarios. Conserva los comentarios originales en inglés y la partitura. Las adaptaciones para AVL-BASIC omiten los sufijos de variables enteras (`%`), cambian `scale`/`scale$` por `notes`/`notes$` porque `SCALE` está reservado, usan prefijos hexadecimales `&H` y mantienen el programa en ejecución hasta que sus manejadores `ON SQ` han enviado toda la partitura a las colas. Las últimas notas encoladas siguen sonando después de `END`.
 
 7.2 Archivos de audio y controles de reproducción
 
@@ -1291,8 +1288,10 @@ Ver `samples/s-melody.bas` para envolventes y un acorde retenido, y `samples/s-q
 - `AUDIOAVAILABLE` devuelve -1 si hay salida de audio real disponible y 0 en caso contrario. Inicializa la salida de forma diferida al consultarla por primera vez. `AUDIOERROR$` proporciona un diagnóstico cuando no se puede abrir el audio. Ninguna lleva argumentos ni paréntesis.
 - `AUDIO OFF` detiene los sonidos actuales y desactiva la salida, conservando las muestras cargadas. Los siguientes `SOUND` y `AUDIO PLAY` siguen avanzando en silencio, incluidos los eventos de cola, las posiciones y el final de reproducción. `AUDIO ON` habilita la salida para nuevas reproducciones y permite otro intento de abrir un dispositivo. Las voces de muestras que ya empezaron en silencio siguen en silencio; usa un nuevo `AUDIO PLAY` para escucharlas. Si no se puede abrir un dispositivo, se utiliza la misma temporización silenciosa y el programa BASIC puede continuar sin sonido. Los argumentos incorrectos y los archivos ilegibles siguen produciendo los errores normales.
 - Establece la variable de entorno `AVL_BASIC_AUDIO=off` antes de iniciar el intérprete para forzar el funcionamiento en silencio, por ejemplo en pruebas automáticas. La síntesis y la decodificación son internas; no se ejecuta ningún reproductor externo.
-- `RUN`, `NEW`, `CLEAR` y `CHAIN` reinician las colas, las envolventes, las muestras cargadas y los manejadores de eventos de sonido. `END`, un error de ejecución no capturado, `STOP` y `CTRL+C` detienen las voces y descartan las notas pendientes. `CONT` reanuda el programa sin recuperar esos sonidos. Como la reproducción es asíncrona, espera a que termine antes de `END` si quieres que la última nota o muestra se escuche completa.
-- Al detener o finalizar un programa se libera también la salida de audio. El siguiente `RUN` vuelve a intentar abrirla cuando la necesita, aunque un intento anterior haya fallado. Si la salida deja de responder durante la reproducción, las colas clásicas continúan en silencio, las voces de muestras se detienen y `AUDIOERROR$` conserva el diagnóstico. `AUDIO ON` permite reintentar sin salir del intérprete. En WSLg se utiliza directamente su servidor PulseAudio.
+- `RUN`, `NEW`, `CLEAR` y `CHAIN` reinician las colas, las envolventes, las muestras cargadas y los manejadores de eventos de sonido. `STOP`, un error de ejecución no capturado o `CTRL+C` durante la ejecución de BASIC detienen las voces y descartan las notas pendientes. `CONT` reanuda el programa sin recuperar esos sonidos.
+- `END` y el final normal del programa dejan las notas encoladas y las muestras reproduciéndose al volver a `Ready`. No hace falta una espera final. En el prompt, `CTRL+C` detiene todas las notas y voces pendientes y permanece en `Ready`; sin audio pendiente sale del intérprete.
+- Al iniciar con `avl-basic programa.bas`, el proceso espera después del final del programa hasta que termine el audio o se cancele con `CTRL+C`. Las muestras en bucle o en pausa y las notas retenidas pueden mantenerlo esperando; detenlas desde BASIC o pulsa `CTRL+C`.
+- La salida de audio se libera cuando termina o se cancela la reproducción. Las reproducciones posteriores vuelven a intentar abrirla cuando la necesitan, aunque un intento anterior haya fallado. Si la salida deja de responder durante la reproducción, las colas clásicas continúan en silencio, las voces de muestras se detienen y `AUDIOERROR$` conserva el diagnóstico. `AUDIO ON` permite reintentar sin salir del intérprete. En WSLg se utiliza directamente su servidor PulseAudio.
 - Los números de canal y muestra, el indicador de bucle y `fade_ms` de la familia `AUDIO` deben ser enteros exactos. El sonido clásico utiliza el redondeo descrito en 7.1. Los argumentos fuera de rango producen el error 26. Las operaciones con archivos utilizan los errores existentes (40, 61 o 62).
 
 Ejemplo
@@ -1300,10 +1299,7 @@ Ejemplo
 10 AUDIO LOAD 1,"samples/assets/audio/chime.wav"
 20 IF AUDIOAVAILABLE=0 THEN PRINT AUDIOERROR$
 30 AUDIO PLAY 1,1,0,0.4
-40 WHILE AUDIOSTATE(1)<>0
-50 PAUSE 10
-60 WEND
-70 END
+40 END
 ```
 
 Ejecuta `samples/s-audio.bas` para probar bucles, cambios de balance y velocidad, transiciones graduales, pausa y reanudación con el WAV generado incluido.
@@ -1351,15 +1347,15 @@ Salida esperada
 
 + STOP                  Detiene la ejecución manteniendo el estado (línea actual, pilas y variables) y muestra `Line n. Program stopped.` con el estilo de interrupciones/errores del intérprete. Es un aviso de estado, no un error: no modifica `ERR`/`ERL` ni activa `ON ERROR`. Permite reanudar con `CONT` desde el punto donde se detuvo o, con `GOTO n`, desde cualquier línea.
 + CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Modificar el programa almacenado cancela el contexto detenido; usa `RUN` después de editar. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
-+ END                   Finaliza el programa. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 46) porque no hay ejecución pendiente que continuar.
++ END                   Finaliza el programa, dejando sonar el audio pendiente. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 46) porque no hay ejecución pendiente que continuar.
 + RUN [numlin]          Si se incluye el número de línea, el programa se ejecuta desde esa línea.
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
-- Detener o finalizar la ejecución también detiene el audio y vacía las notas pendientes. `CONT` reanuda BASIC, pero no recupera esos sonidos; ver apartados 7.1 y 7.2.
+- `END` y el final normal conservan el audio pendiente; los manejadores de eventos de sonido terminan con el programa. `STOP`, un error no capturado y una interrupción durante la ejecución de BASIC detienen el audio y vacían las notas pendientes. `CONT` reanuda BASIC sin recuperar esos sonidos; ver apartados 7.1 y 7.2.
 - Durante un programa numerado, `CTRL+C` interrumpe la ejecución de forma equivalente a `STOP`; se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
 - Mientras se ejecutan instrucciones o bucles introducidos en el prompt, `CTRL+C` cancela esa ejecución inmediata y vuelve a `Ready`, conservando las variables actuales y los canales de datos abiertos. El propio comando inmediato no se puede reanudar con `CONT`; si ya había un programa detenido antes, `CONT` sigue reanudando ese programa.
-- En el prompt ocioso, `CTRL+C` sale del intérprete.
+- En el prompt, `CTRL+C` detiene las notas y voces pendientes y permanece en `Ready`. Si no hay audio pendiente, sale del intérprete. Al ejecutar un programa directamente desde la línea de comandos, el final espera al audio pendiente; `CTRL+C` cancela la reproducción y permite salir del proceso.
 
 8.2 Procesamiento de errores
 
@@ -1881,7 +1877,6 @@ Literales numéricos
 - Se puede usar un número hexadecimal o binario en cualquier lugar donde se pueda usar un número decimal normal.
   • Ejemplo: `PRINT 12^&X110`, `X$=LEFT$(STRING$(&H1A2,"_"),&HF)`
 - Dentro de cadenas no se interpretan; conviértalos con `VAL` si hace falta.
-- Sin dígitos (`&H`, `&X` solos) se consideran 0 al convertir/leer.
 
 Funciones `HEX$` y `BIN$`
 - `HEX$(n[, w])`: cadena hexadecimal en mayúsculas, sin prefijo.

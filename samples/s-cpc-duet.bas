@@ -12,7 +12,7 @@
 110 DEF FNM$(s$,s)=MID$(s$,s,1)
 120 ch1=1:GOSUB 200
 130 ch2=1:GOSUB 380
-140 IF ch1+ch2>0 OR SQ(1)<>4 OR SQ(2)<>4 THEN PAUSE 10:GOTO 140 'Wait for both queues without busy-waiting
+140 IF ch1+ch2>0 THEN PAUSE 10:GOTO 140 'Keep ON SQ handlers running until the whole score is queued
 150 END
 160 DATA &H777,&H70c,&H6a7,&H647,&H5ed,&H598
 170 DATA &H547,&H4fc,&H4b4,&H470,&H431,&H3f4

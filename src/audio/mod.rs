@@ -112,6 +112,7 @@ pub struct AudioSystem {
     assets: BTreeMap<u8, StaticSoundData>,
     voices: Vec<Option<Voice>>,
     last_tick: Instant,
+    idle_since: Option<Instant>,
 }
 
 impl fmt::Debug for AudioSystem {
@@ -165,6 +166,7 @@ impl AudioSystem {
             assets: BTreeMap::new(),
             voices: (0..CHANNELS).map(|_| None).collect(),
             last_tick: Instant::now(),
+            idle_since: None,
         }
     }
 
@@ -238,6 +240,45 @@ impl AudioSystem {
         self.advance(seconds);
     }
 
+    /// Advances playback after BASIC has finished and reports pending sounds.
+    /// Paused samples and held or rendezvous notes remain pending until resumed,
+    /// released or stopped. Once everything finishes, the output is retired after
+    /// its buffered frames drain. Loaded assets, envelope definitions and final
+    /// sample positions survive.
+    pub fn poll_after_program(&mut self) -> bool {
+        self.tick();
+        if !self.engaged && self.manager.is_some() {
+            // Paused playback does not need a clock, but its device can still
+            // fail while BASIC is at Ready. Retain the usual failure handling.
+            self.advance(0.0);
+        }
+        if !self.synth.is_idle() || self.voices.iter().flatten().any(|voice| !voice.stopped) {
+            self.idle_since = None;
+            return true;
+        }
+        if let Some(manager) = &mut self.manager {
+            // Rendering the final frame precedes hearing it. Closing the device
+            // immediately would discard the trailing PCM still in its buffers.
+            let delay = manager.backend_mut().drain_delay();
+            if !self.output_has_drained(Instant::now(), delay) {
+                return true;
+            }
+        }
+        if self.manager.is_some() || self.attempted {
+            self.synth.end_output();
+            self.manager = None;
+        }
+        self.attempted = false;
+        self.engaged = false;
+        self.idle_since = None;
+        false
+    }
+
+    fn output_has_drained(&mut self, now: Instant, delay: Duration) -> bool {
+        let idle_since = self.idle_since.get_or_insert(now);
+        now.saturating_duration_since(*idle_since) >= delay
+    }
+
     fn advance(&mut self, seconds: f64) {
         let backend_error = self.manager.as_mut().and_then(|m| m.backend_mut().error());
         if let Some(error) = backend_error {
@@ -264,6 +305,7 @@ impl AudioSystem {
 
     fn fail_output(&mut self, error: String) {
         self.last_error = error;
+        self.idle_since = None;
         for voice in self.voices.iter_mut().flatten() {
             voice.stop();
         }
@@ -274,6 +316,7 @@ impl AudioSystem {
     }
 
     pub fn enqueue(&mut self, note: Note) -> bool {
+        self.idle_since = None;
         self.engage();
         self.tick();
         self.engaged = true;
@@ -305,11 +348,12 @@ impl AudioSystem {
     /// Stops playback while retaining loaded samples and envelope definitions.
     pub fn stop_all(&mut self) {
         self.stop(None);
+        self.idle_since = None;
         self.synth.end_output();
         self.manager = None;
         self.synth.stop();
-        // Ready must not retain a device or a failed opening attempt. The next
-        // program opens a fresh output when it first needs audio.
+        // Explicit cancellation retires the device and failed opening attempt.
+        // Ordinary program completion can retain playback while BASIC is at Ready.
         self.attempted = false;
         self.engaged = false;
     }
@@ -403,6 +447,7 @@ impl AudioSystem {
         if looping {
             data = data.loop_region(..);
         }
+        self.idle_since = None;
         self.engage();
         self.tick();
         self.ensure_output();
@@ -464,6 +509,7 @@ impl AudioSystem {
                 if let Some(voice) = voice {
                     if !voice.stopped {
                         voice.paused = false;
+                        self.idle_since = None;
                         self.engaged = true;
                         if let Some(handle) = &mut voice.handle {
                             handle.resume(instant_tween());
@@ -634,6 +680,220 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(&wav).unwrap();
         file
+    }
+
+    fn note(state: u8) -> Note {
+        Note {
+            state,
+            period: 284,
+            duration: 10,
+            volume: 12,
+            volume_env: 0,
+            tone_env: 0,
+            noise: 0,
+        }
+    }
+
+    #[test]
+    fn output_drain_deadline_is_anchored_to_the_first_idle_poll() {
+        let mut audio = AudioSystem::new_disabled();
+        let now = Instant::now();
+        let delay = Duration::from_millis(250);
+        assert!(!audio.output_has_drained(now, delay));
+        assert!(!audio.output_has_drained(now + Duration::from_millis(249), delay));
+        assert_eq!(audio.idle_since, Some(now));
+        assert!(audio.output_has_drained(now + delay, delay));
+        assert!(audio.output_has_drained(now + Duration::from_secs(1), delay));
+
+        audio.idle_since = None;
+        assert!(audio.output_has_drained(now, Duration::ZERO));
+    }
+
+    #[test]
+    fn new_sounds_restart_the_output_drain_deadline() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        let now = Instant::now();
+        let delay = Duration::from_millis(250);
+        assert!(!audio.output_has_drained(now, delay));
+        assert!(audio.enqueue(note(1)));
+        assert!(audio.idle_since.is_none());
+        assert!(audio.poll_after_program());
+        audio.advance(0.11);
+        assert!(!audio.poll_after_program());
+
+        assert!(!audio.output_has_drained(now, delay));
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.idle_since.is_none());
+        assert!(audio.poll_after_program());
+        audio.advance(1.1);
+        assert!(!audio.poll_after_program());
+        let next_idle = now + Duration::from_secs(2);
+        assert!(!audio.output_has_drained(next_idle, delay));
+        assert_eq!(audio.idle_since, Some(next_idle));
+        assert!(!audio.output_has_drained(next_idle + Duration::from_millis(249), delay));
+    }
+
+    #[test]
+    fn cancellation_failed_or_missing_outputs_do_not_wait_for_drain() {
+        let mut audio = AudioSystem::new_disabled();
+        let now = Instant::now();
+        let delay = Duration::from_secs(1);
+        assert!(!audio.output_has_drained(now, delay));
+        audio.stop_all();
+        assert!(audio.idle_since.is_none());
+        assert!(!audio.poll_after_program());
+
+        assert!(!audio.output_has_drained(now, delay));
+        audio.reset();
+        assert!(audio.idle_since.is_none());
+        assert!(!audio.poll_after_program());
+
+        assert!(!audio.output_has_drained(now, delay));
+        audio.fail_output("Device disconnected".to_string());
+        assert!(audio.idle_since.is_none());
+        assert!(!audio.poll_after_program());
+
+        assert!(!audio.output_has_drained(now, delay));
+        assert!(!audio.poll_after_program());
+        assert!(audio.idle_since.is_none());
+    }
+
+    #[test]
+    fn completed_playback_retires_output_and_preserves_positions_assets_and_envelopes() {
+        use kira::sound::Sound;
+
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        audio.define_volume(
+            1,
+            vec![Section::Step {
+                steps: 3,
+                delta: -1,
+                ticks: 10,
+            }],
+        );
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.enqueue(note(1)));
+        assert!(audio.enqueue(note(1)));
+        let renderer = audio.synth.begin_output();
+        audio.attempted = true;
+        assert!(audio.poll_after_program());
+        assert!(!renderer.finished());
+        assert!(audio.attempted);
+
+        // Polling at Ready owns the silent clock; no running BASIC program is
+        // required for queued notes or the longer sample to finish.
+        audio.last_tick = Instant::now() - Duration::from_millis(250);
+        assert!(audio.poll_after_program());
+        assert_eq!(audio.sq(1), 4);
+        assert!(!renderer.finished());
+        audio.last_tick = Instant::now() - Duration::from_secs(1);
+        assert!(!audio.poll_after_program());
+        assert!(renderer.finished());
+        assert!(audio.manager.is_none());
+        assert!(!audio.attempted);
+        assert!(!audio.engaged);
+        assert_eq!(audio.state(1), 0);
+        assert_eq!(audio.position(1), 1.0);
+        assert!(!audio.poll_after_program());
+        assert_eq!(audio.position(1), 1.0);
+
+        // A duration derived from ENV distinguishes a preserved definition
+        // (0.3 seconds) from the default envelope (2 seconds).
+        assert!(audio.enqueue(Note {
+            duration: 0,
+            volume_env: 1,
+            ..note(1)
+        }));
+        audio.advance(0.31);
+        assert!(!audio.poll_after_program());
+        audio.play(2, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.poll_after_program());
+    }
+
+    #[test]
+    fn held_and_rendezvous_notes_remain_pending_after_program_completion() {
+        for state in [65, 17] {
+            let mut audio = AudioSystem::new_disabled();
+            assert!(audio.enqueue(note(state)));
+            audio.last_tick = Instant::now() - Duration::from_secs(10);
+            assert!(audio.poll_after_program());
+            assert_ne!(audio.sq(1), 4);
+            if state == 65 {
+                audio.release(1);
+            } else {
+                // A waits for B; B must request A in turn.
+                assert!(audio.enqueue(note(10)));
+            }
+            audio.last_tick = Instant::now() - Duration::from_millis(150);
+            assert!(!audio.poll_after_program());
+            assert_eq!(audio.sq(1), 4);
+            assert_eq!(audio.sq(2), 4);
+        }
+    }
+
+    #[test]
+    fn paused_samples_remain_pending_and_resume_from_their_previous_position() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        audio.advance(0.25);
+        audio.pause(Some(1));
+        audio.last_tick = Instant::now() - Duration::from_secs(10);
+        assert!(audio.poll_after_program());
+        assert!(!audio.engaged);
+        assert_eq!(audio.state(1), 2);
+        assert!((audio.position(1) - 0.25).abs() < 0.01);
+        assert!(audio.poll_after_program());
+        audio.resume(Some(1));
+        assert!((audio.position(1) - 0.25).abs() < 0.01);
+        audio.last_tick = Instant::now() - Duration::from_secs(1);
+        assert!(!audio.poll_after_program());
+        assert_eq!(audio.position(1), 1.0);
+    }
+
+    #[test]
+    fn looping_samples_remain_pending_until_explicit_cancellation() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        audio.play(1, 1, true, 1.0, 0.0, 1.0).unwrap();
+        audio.last_tick = Instant::now() - Duration::from_secs(10);
+        assert!(audio.poll_after_program());
+        assert_eq!(audio.state(1), 1);
+        assert!((0.0..1.0).contains(&audio.position(1)));
+        audio.stop_all();
+        assert!(!audio.poll_after_program());
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.poll_after_program());
+    }
+
+    #[test]
+    fn failed_output_after_program_completion_drains_cpc_and_allows_a_later_retry() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        audio.play(1, 1, true, 1.0, 0.0, 1.0).unwrap();
+        audio.advance(0.25);
+        assert!(audio.enqueue(note(1)));
+        assert!(audio.enqueue(note(1)));
+        audio.attempted = true;
+        audio.fail_output("Audio output stopped responding".to_string());
+        assert!(audio.poll_after_program());
+        assert!(audio.attempted);
+        assert_eq!(audio.state(1), 0);
+        let final_position = audio.position(1);
+        audio.last_tick = Instant::now() - Duration::from_millis(250);
+        assert!(!audio.poll_after_program());
+        assert!(!audio.attempted);
+        assert_eq!(audio.position(1), final_position);
+        assert_eq!(audio.error(), "Audio output stopped responding");
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.poll_after_program());
     }
 
     #[test]

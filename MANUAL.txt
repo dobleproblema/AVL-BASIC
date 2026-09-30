@@ -1238,7 +1238,7 @@ Queue queries and events
 - `SQ(channel)` accepts exactly 1, 2, or 4. Bits 0..2 give the number of free pending slots (0..4); bits 3..5 describe a pending rendezvous; bit 6 indicates a held head note; bit 7 indicates a playing note. The playing, held and rendezvous states are exclusive. An empty idle channel returns 4.
 - `(SQ(1) AND 7)>0` tests whether channel A has queue room. `SQ(1)=4` means all of its notes have finished.
 - `ON SQ(channel) GOSUB line` arms a one-shot event for queue room, including a queue that already has room. Rearm it to receive another event; `ON SQ(channel) GOSUB 0` disables it. The handler must finish with `RETURN` and cannot interrupt itself: rearming inside it takes effect after return.
-- `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress.
+- `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress. Handlers stop when the program ends; notes already queued continue playing.
 
 Example
 ```basic
@@ -1247,14 +1247,11 @@ Example
 30 SOUND 66,379,30,12,1
 40 SOUND 68,319,30,12,1
 50 RELEASE 7
-60 WHILE SQ(1)<>4 OR SQ(2)<>4 OR SQ(4)<>4
-70 PAUSE 10
-80 WEND
-90 END
+60 END
 ```
 
 See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.bas` for music supplied by a rearmed `ON SQ` handler.
-`samples/s-cpc-duet.bas` adapts the two-channel score from the English `CPC6128 User Instructions` (AMSOFT), chapter 9, pp. 46-47, with channel rendezvous and fractional tone periods. It preserves the original English comments and score. AVL-BASIC adaptations omit integer-variable suffixes (`%`), rename `scale`/`scale$` to `notes`/`notes$` because `SCALE` is reserved, use `&H` hexadecimal prefixes and wait for both sound queues before `END`.
+`samples/s-cpc-duet.bas` adapts the two-channel score from the English `CPC6128 User Instructions` (AMSOFT), chapter 9, pp. 46-47, with channel rendezvous and fractional tone periods. It preserves the original English comments and score. AVL-BASIC adaptations omit integer-variable suffixes (`%`), rename `scale`/`scale$` to `notes`/`notes$` because `SCALE` is reserved, use `&H` hexadecimal prefixes and keep the program running until its `ON SQ` handlers have queued the whole score. The final queued notes continue after `END`.
 
 7.2 Audio files and playback controls
 
@@ -1278,8 +1275,10 @@ See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.
 - `AUDIOAVAILABLE` returns -1 when real audio output is available, otherwise 0. It initializes output lazily on first use. `AUDIOERROR$` gives a diagnostic when audio cannot be opened. Neither function takes arguments or parentheses.
 - `AUDIO OFF` stops current sounds and disables output while retaining loaded samples. Later `SOUND` and `AUDIO PLAY` still advance silently, including queue events, positions and completion. `AUDIO ON` enables output for future playback and permits another attempt to open a device. Sample voices that already started silently remain silent; use a new `AUDIO PLAY` to hear them. The same silent timing is used when no output device can be opened, so a BASIC program can continue without sound. Invalid arguments or unreadable audio files still produce normal errors.
 - Set the environment variable `AVL_BASIC_AUDIO=off` before launching the interpreter to force silent operation, for example in automated tests. Audio synthesis and decoding are internal; no external player is launched.
-- `RUN`, `NEW`, `CLEAR`, and `CHAIN` reset sound queues, envelopes, loaded samples, and sound-event handlers. `END`, an unhandled execution error, `STOP`, and `CTRL+C` stop voices and discard queued notes. `CONT` resumes the program, without restoring those sounds. Because playback is asynchronous, wait for completion before `END` if you want the final note or sample to finish.
-- Stopping or finishing a program also releases the audio output. The next `RUN` attempts to open it again when needed, even if an earlier attempt failed. If output stops responding during playback, classic queues continue silently, sample voices stop, and `AUDIOERROR$` retains the diagnostic. `AUDIO ON` permits another attempt without leaving the interpreter. WSLg uses its PulseAudio server directly.
+- `RUN`, `NEW`, `CLEAR`, and `CHAIN` reset sound queues, envelopes, loaded samples, and sound-event handlers. `STOP`, an unhandled execution error, or `CTRL+C` during BASIC execution stop voices and discard queued notes. `CONT` resumes the program without restoring those sounds.
+- `END` and normal program completion leave queued notes and sample playback running after returning to `Ready`. No final wait is needed. At the prompt, `CTRL+C` stops all pending notes and sample voices and stays in `Ready`; with no pending audio it exits the interpreter.
+- When launched as `avl-basic program.bas`, the process waits after the program ends until audio finishes or `CTRL+C` cancels it. Looping or paused samples and held notes can keep it waiting; stop them in BASIC or press `CTRL+C`.
+- The audio output is released when playback finishes or is cancelled. Later playback attempts to open it again when needed, even if an earlier attempt failed. If output stops responding during playback, classic queues continue silently, sample voices stop, and `AUDIOERROR$` retains the diagnostic. `AUDIO ON` permits another attempt without leaving the interpreter. WSLg uses its PulseAudio server directly.
 - Sample channel/slot numbers, the loop flag, and `fade_ms` in the `AUDIO` family must be exact integers. Classic sound uses the rounding described in 7.1. Out-of-range arguments report error 26. File operations use the existing file errors (40, 61, or 62).
 
 Example
@@ -1287,10 +1286,7 @@ Example
 10 AUDIO LOAD 1,"samples/assets/audio/chime.wav"
 20 IF AUDIOAVAILABLE=0 THEN PRINT AUDIOERROR$
 30 AUDIO PLAY 1,1,0,0.4
-40 WHILE AUDIOSTATE(1)<>0
-50 PAUSE 10
-60 WEND
-70 END
+40 END
 ```
 
 Run `samples/s-audio.bas` for looping, pan/rate changes, fades, pause and resume using the included generated WAV.
@@ -1338,15 +1334,15 @@ Expected output
 
 + STOP                  Stops execution while keeping the state (current line, stacks and variables) and displays `Line n. Program stopped.` using the interpreter's interruption/error style. This is a status notice, not an error: it does not alter `ERR`/`ERL` or invoke `ON ERROR`. Execution can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
 + CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. Modifying the stored program cancels the stopped context; use `RUN` after editing. If the interruption was caused by closing a graphics window, `CONT` is not available.
-+ END                   Ends the program. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 46) because there is no pending execution to continue.
++ END                   Ends the program, leaving pending audio playing. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 46) because there is no pending execution to continue.
 + RUN [line]            If a line number is included, the program runs from that line.
 
 Notes
 - `RUN` starts execution with a clean start (state reset). Use `CONT` or `GOTO n` only when you have stopped with `STOP`/`CTRL+C` and want to continue without restarting.
-- Stopping or ending execution also stops audio and clears pending notes. `CONT` resumes BASIC execution but does not restart those sounds; see sections 7.1 and 7.2.
+- `END` and normal completion preserve pending audio; sound-event handlers stop with the program. `STOP`, an unhandled error, and interruption during BASIC execution stop audio and clear pending notes. `CONT` resumes BASIC without restarting those sounds; see sections 7.1 and 7.2.
 - During a numbered program, `CTRL+C` interrupts execution in the same way as `STOP`; it can be resumed with `CONT` without losing state, except when that interruption was triggered by closing a graphics window.
 - While statements or loops entered at the prompt are running, `CTRL+C` cancels that immediate execution and returns to `Ready`, preserving current variables and open data-file channels. The immediate command itself cannot be resumed with `CONT`; if a program was already stopped beforehand, `CONT` still resumes that program.
-- At an idle prompt, `CTRL+C` exits the interpreter.
+- At the prompt, `CTRL+C` stops pending notes and sample voices and remains in `Ready`. If there is no pending audio, it exits the interpreter. When executing a program directly from the command line, completion waits for pending audio; `CTRL+C` cancels playback and allows the process to exit.
 
 8.2 Error handling
 
@@ -1864,7 +1860,6 @@ Numeric literals
 - A hexadecimal or binary number can be used anywhere a normal decimal number can be used.
   * Example: `PRINT 12^&X110`, `X$=LEFT$(STRING$(&H1A2,"_"),&HF)`
 - Inside strings, they are not interpreted; convert them with `VAL` if needed.
-- With no digits (`&H`, `&X` alone), they are treated as 0 when converting/reading.
 
 Functions `HEX$` and `BIN$`
 - `HEX$(n[, w])`: uppercase hexadecimal string, without prefix.
