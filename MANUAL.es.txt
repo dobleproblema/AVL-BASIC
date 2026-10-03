@@ -1607,6 +1607,9 @@ Notas
 
 Las de cero argumentos se usan sin paréntesis.
 
+Selección condicional
++ IIF(condición,expresión-verdadera,expresión-falsa)
+
 Numéricas y conversiones
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP
@@ -1630,6 +1633,14 @@ Arrays
 + LBOUND(array[,dimensión]) | UBOUND(array[,dimensión])
 
 Notas aclaratorias para algunas funciones
+- `IIF(condición,expresión-verdadera,expresión-falsa)` exige exactamente tres expresiones de argumento no vacías; `""` es una expresión de cadena válida.
+  • Evalúa la condición numérica una sola vez: cero es falso y cualquier valor distinto de cero es verdadero.
+  • Evalúa únicamente la expresión elegida. La otra rama no puede producir un error en ejecución, consumir `RND` ni llamar a una función definida por el usuario.
+  • Devuelve el valor elegido conservando su tipo numérico o de cadena. Las ramas pueden tener tipos diferentes; la función siempre se llama `IIF`, sin sufijo `$`. La expresión o asignación que la contiene debe admitir el tipo elegido.
+  • Ambas ramas deben tener sintaxis válida, aunque no se elijan. Se pueden anidar llamadas a `IIF`.
+  • Ejemplos: `X=0 : PRINT IIF(X<>0,10/X,0)` muestra 0 sin dividir por cero; `PRINT IIF(1,"OK","NO")` muestra OK; `PRINT IIF(0,42,"N/A")` muestra N/A.
+  • Ejemplo anidado: `PRINT IIF(1,IIF(0,1/0,2),1/0)` muestra 2.
+  • Esta evaluación selectiva difiere deliberadamente de `IIf` en VBA, que evalúa ambas ramas.
 - ROUND(n[,d]): redondeo "medio hacia afuera" (away-from-zero).
   • d>0: decimales; d=0: enteros; d<0: decenas/centenas/...
   • Ejemplos: `ROUND(2.5)` -> 3; `ROUND(-2.5)` -> -3; `ROUND(1234.5678,3)` -> 1234.568; `ROUND(1234.5678,-2)` -> 1200.

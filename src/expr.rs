@@ -141,6 +141,9 @@ impl Expr {
                 if *kind == ArrayOrCallKind::Array {
                     return eval_array_number(ctx, name, args);
                 }
+                if name.eq_ignore_ascii_case("IIF") {
+                    return select_iif_branch(ctx, args)?.eval_number(ctx);
+                }
                 if let Some(result) = eval_direct_numeric_function(ctx, name, args)? {
                     return Ok(result);
                 }
@@ -311,6 +314,12 @@ impl Expr {
                     return eval_array_value(ctx, name, args);
                 }
                 match name.to_ascii_uppercase().as_str() {
+                    "IIF" => {
+                        return match select_iif_branch(ctx, args)?.eval(ctx)? {
+                            Value::ArrayRef(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+                            value => Ok(value),
+                        };
+                    }
                     "LEN" => return eval_len_function(ctx, args),
                     "ASC" => return eval_asc_function(ctx, args),
                     "INSTR" => return eval_instr_function(ctx, args),
@@ -716,6 +725,9 @@ impl Parser {
             }
             Expr::ArrayOrCall { name, args, kind }
         } else {
+            if name.eq_ignore_ascii_case("IIF") {
+                return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+            }
             if is_reserved_identifier_name(&name)
                 && !is_zero_arg_function(&name)
                 && !is_numeric_constant(&name)
@@ -1228,6 +1240,17 @@ fn eval_index(ctx: &mut impl EvalContext, expr: &Expr) -> BasicResult<i32> {
         return Err(BasicError::new(ErrorCode::InvalidIndex));
     }
     Ok(n as i32)
+}
+
+fn select_iif_branch<'a>(ctx: &mut impl EvalContext, args: &'a [Expr]) -> BasicResult<&'a Expr> {
+    let [condition, when_true, when_false] = args else {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    };
+    if condition.eval_number(ctx)? != 0.0 {
+        Ok(when_true)
+    } else {
+        Ok(when_false)
+    }
 }
 
 fn eval_call_args(

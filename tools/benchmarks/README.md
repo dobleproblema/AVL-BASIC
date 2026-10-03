@@ -2,6 +2,15 @@
 
 Informes en español:
 
+- [Ink Reactor Lite: comparación histórica de la variante descartada, 3 de octubre de 2026](INK-REACTOR-LITE-2026-10-03.md).
+
+- [Smoke (antes Ink Reactor): mediciones históricas de las variantes a 128 × 80 en Windows, 3 de octubre de 2026](INK-REACTOR-2026-10-03.md). Incluye el método de comparación mediante `ink_reactor.py`, con y sin ventana.
+
+- [Voxel Flight: comparación histórica de la estabilidad del terreno, 3 de octubre de 2026](VOXEL-FLIGHT-2026-10-03.md).
+- [Voxel Flight: comparación histórica de bandas de color, 3 de octubre de 2026](VOXEL-FLIGHT-BANDS-2026-10-03.md).
+- [Comparación entre dos equipos: resultados y límites, 1 de octubre de 2026](CROSS-CPU-2026-10-01.md).
+- [Lector experimental de contadores PMC: estado y requisitos, 1 de octubre de 2026](PMU-NEXT-2026-10-01.md).
+
 - [Verificación de los ejecutables publicados en 1.6.7: 26 de septiembre de 2026](RELEASE-1.6.7.md).
 
 - [Configuración elegida para Windows y WSL tras las pruebas: 26 de septiembre de 2026](BUILD-CHOICE-2026-09-26.md).
@@ -19,6 +28,16 @@ Informes en español:
 
 Los informes distinguen las correcciones incorporadas de los candidatos
 descartados. Se conservan las mediciones, conclusiones y herramientas de diagnóstico.
+
+Las comparaciones de Smoke e Ink Reactor Lite y los informes Voxel Flight
+corresponden a las fuentes históricas identificadas por sus hashes. Las muestras
+actuales `samples/g-smoke.bas` y `samples/g-voxel.bas` tienen cambios posteriores;
+aquellas cifras no describen su rendimiento ni una aceleración del intérprete
+publicado. Algunas variantes y evidencias sólo se conservaron localmente: un
+clon nuevo requiere restaurarlas y cotejar sus hashes antes de repetir esos
+comandos. El lanzador `tools/compare_ink_reactor.ps1` exige las muestras históricas
+original y Lite. Las herramientas PMU siguen siendo experimentales; la validación
+sintáctica no acredita capturas reales ni medidas de IPC.
 
 Las herramientas Python requieren Python 3.10 o posterior.
 

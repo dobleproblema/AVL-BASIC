@@ -19,6 +19,10 @@ plain text and recoverable CSV records. Start with the compact examples for
 [scores](samples/f-scores.bas), [text and append](samples/f-text.bas), and
 [CSV records](samples/f-records.bas); manual section 5.2 defines the syntax.
 
+`IIF(condition,true-expression,false-expression)` selects a numeric or string
+result. It requires all three arguments, evaluates the condition once, and
+evaluates only the chosen branch. See [the IIF example](samples/iif.bas).
+
 ## Interactive by design
 
 AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
@@ -54,14 +58,14 @@ not mockups or engine screenshots:
   Block-sampled texture mapping implemented directly in BASIC.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-origin"><img src="samples/showcase/g-origin.png" alt="Rotating cube inside a bouncing viewport" width="100%"></a><br>
-  <strong>Bouncing Viewport Cube</strong><br>
-  A moving viewport clips and carries a rotating 3D scene.
+  <a href="samples/README.md#highlight-g-voxel"><img src="samples/showcase/g-voxel.png" alt="Flight over a procedural voxel landscape" width="100%"></a><br>
+  <strong>Voxel World</strong><br>
+  Fly over procedural terrain with filtered lighting and fog.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-dot-tunnel"><img src="samples/showcase/g-dot-tunnel.png" alt="Twisting 3D dot tunnel" width="100%"></a><br>
-  <strong>Twisting Dot Tunnel</strong><br>
-  Procedural 3D projection, depth motion, and a star backdrop.
+  <a href="samples/README.md#highlight-g-smoke"><img src="samples/showcase/g-smoke.png" alt="Colorful two-dimensional smoke simulation" width="100%"></a><br>
+  <strong>Smoke Simulation</strong><br>
+  Swirling dye driven by pressure projection and vorticity.
 </td>
 </tr>
 <tr>
@@ -76,9 +80,9 @@ not mockups or engine screenshots:
   Deep fractal detail rendered directly with AVL BASIC graphics.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-cube-tquad"><img src="samples/showcase/g-cube-tquad.png" alt="Textured cube" width="100%"></a><br>
-  <strong>Textured Cube</strong><br>
-  Projection, hidden-face removal, and affine textured quads.
+  <a href="samples/README.md#highlight-g-dungeon"><img src="samples/showcase/g-dungeon.png" alt="Textured first-person dungeon with a lantern" width="100%"></a><br>
+  <strong>AVL Dungeon</strong><br>
+  Find the key and escape a textured maze with original audio.
 </td>
 </tr>
 <tr>
@@ -100,7 +104,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 123-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 127-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -158,7 +162,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-123 sample programs and their visual gallery are optional companion material.
+127 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -293,7 +297,7 @@ with a directory outside the HTML output.
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
 - [`tools/`](tools/): maintainer validation and benchmark tools
-- [`samples/`](samples/): 123 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 127 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Capture one profile at a time on a verified P-core. These profiles record
+  cumulative PMU counters at context switches, not overflow samples.
+  Counter availability must be checked on each machine with wpr -pmcsources.
+  Strict mode makes resource/configuration failures explicit.
+  Merely listing this file's profiles does not validate a real PMU capture.
+-->
+<WindowsPerformanceRecorder Version="1.0">
+  <Profiles>
+    <SystemCollector Id="AvlCrossCpuSystemCollector" Name="AvlCrossCpuSystemCollector">
+      <BufferSize Value="1024" />
+      <Buffers Value="256" />
+    </SystemCollector>
+
+    <SystemProvider Id="AvlCrossCpuSystemProvider">
+      <Keywords>
+        <Keyword Value="ProcessThread" />
+        <Keyword Value="Loader" />
+        <Keyword Value="CSwitch" />
+      </Keywords>
+    </SystemProvider>
+
+    <HardwareCounter Id="AvlCrossCpuIpcCounters" Strict="true">
+      <Counters>
+        <Counter Value="InstructionRetired" />
+        <Counter Value="UnhaltedCoreCycles" />
+        <Counter Value="UnhaltedReferenceCycles" />
+      </Counters>
+      <Events>
+        <Event Value="CSwitch" />
+      </Events>
+    </HardwareCounter>
+
+    <HardwareCounter Id="AvlCrossCpuBranchCounters" Strict="true">
+      <Counters>
+        <Counter Value="InstructionRetired" />
+        <Counter Value="BranchInstructionRetired" />
+        <Counter Value="BranchMispredictsRetired" />
+      </Counters>
+      <Events>
+        <Event Value="CSwitch" />
+      </Events>
+    </HardwareCounter>
+
+    <HardwareCounter Id="AvlCrossCpuLlcCounters" Strict="true">
+      <Counters>
+        <Counter Value="InstructionRetired" />
+        <Counter Value="LLCReference" />
+        <Counter Value="LLCMisses" />
+      </Counters>
+      <Events>
+        <Event Value="CSwitch" />
+      </Events>
+    </HardwareCounter>
+
+    <Profile Id="AvlCpuIPC.Verbose.File" Name="AvlCpuIPC"
+             LoggingMode="File" DetailLevel="Verbose"
+             Description="AVL-BASIC: instructions, core cycles and reference cycles at context switches">
+      <Collectors Operation="Add">
+        <SystemCollectorId Value="AvlCrossCpuSystemCollector">
+          <SystemProviderId Value="AvlCrossCpuSystemProvider" />
+          <HardwareCounterId Value="AvlCrossCpuIpcCounters" />
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+
+    <Profile Id="AvlCpuBranches.Verbose.File" Name="AvlCpuBranches"
+             LoggingMode="File" DetailLevel="Verbose"
+             Description="AVL-BASIC: instructions, retired branches and branch mispredictions at context switches">
+      <Collectors Operation="Add">
+        <SystemCollectorId Value="AvlCrossCpuSystemCollector">
+          <SystemProviderId Value="AvlCrossCpuSystemProvider" />
+          <HardwareCounterId Value="AvlCrossCpuBranchCounters" />
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+
+    <Profile Id="AvlCpuLLC.Verbose.File" Name="AvlCpuLLC"
+             LoggingMode="File" DetailLevel="Verbose"
+             Description="AVL-BASIC: instructions, LLC references and LLC misses at context switches">
+      <Collectors Operation="Add">
+        <SystemCollectorId Value="AvlCrossCpuSystemCollector">
+          <SystemProviderId Value="AvlCrossCpuSystemProvider" />
+          <HardwareCounterId Value="AvlCrossCpuLlcCounters" />
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

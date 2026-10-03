@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **123 runnable programs**. They are not filler or API
+AVL BASIC ships with **127 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-123-program catalog. On GitHub, select any image or program name
+127-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -60,12 +60,12 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-cube-tquad"></a>
-  <a href="g-cube-tquad.bas"><img src="showcase/g-cube-tquad.png" alt="Textured Cube running in AVL BASIC" width="100%"></a><br>
-  <strong>6. Textured Cube</strong><br>
-  A spinning textured cube built from projection math and affine quads.<br>
-  <sub><strong>Shows:</strong> 3D projection · back-face culling · TQUAD</sub><br>
-  <code>RUN "/samples/g-cube-tquad.bas"</code>
+  <a id="highlight-g-dungeon"></a>
+  <a href="g-dungeon.bas"><img src="showcase/g-dungeon.png" alt="AVL Dungeon running in AVL BASIC" width="100%"></a><br>
+  <strong>6. AVL Dungeon</strong><br>
+  Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects.<br>
+  <sub><strong>Shows:</strong> DDA raycasting · TRECTANGLE · TQUAD · depth testing · AUDIO · WAV</sub><br>
+  <code>RUN "/samples/g-dungeon.bas"</code>
 </td>
 <td width="50%" valign="top">
   <a id="highlight-g-gouraud"></a>
@@ -78,20 +78,20 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-origin"></a>
-  <a href="g-origin.bas"><img src="showcase/g-origin.png" alt="Bouncing Viewport Cube running in AVL BASIC" width="100%"></a><br>
-  <strong>8. Bouncing Viewport Cube</strong><br>
-  Rotating cube moves inside a bouncing viewport.<br>
-  <sub><strong>Shows:</strong> ORIGIN · 3D projection · viewport animation</sub><br>
-  <code>RUN "/samples/g-origin.bas"</code>
+  <a id="highlight-g-voxel"></a>
+  <a href="g-voxel.bas"><img src="showcase/g-voxel.png" alt="Voxel World running in AVL BASIC" width="100%"></a><br>
+  <strong>8. Voxel World</strong><br>
+  Fly over a procedural landscape with filtered lighting, cached fog colors and adjustable viewing distance.<br>
+  <sub><strong>Shows:</strong> voxel terrain · procedural generation · lighting · fog · FRAME</sub><br>
+  <code>RUN "/samples/g-voxel.bas"</code>
 </td>
 <td width="50%" valign="top">
-  <a id="highlight-g-dot-tunnel"></a>
-  <a href="g-dot-tunnel.bas"><img src="showcase/g-dot-tunnel.png" alt="Twisting Dot Tunnel running in AVL BASIC" width="100%"></a><br>
-  <strong>9. Twisting Dot Tunnel</strong><br>
-  Twisting 3D dot tunnel with star backdrop.<br>
-  <sub><strong>Shows:</strong> 3D projection · procedural animation · FRAME</sub><br>
-  <code>RUN "/samples/g-dot-tunnel.bas"</code>
+  <a id="highlight-g-smoke"></a>
+  <a href="g-smoke.bas"><img src="showcase/g-smoke.png" alt="Smoke Simulation running in AVL BASIC" width="100%"></a><br>
+  <strong>9. Smoke Simulation</strong><br>
+  Interactive two-dimensional fluid simulation with pressure projection, vorticity and smoothly shaded dye.<br>
+  <sub><strong>Shows:</strong> fluid simulation · MAT · bilinear interpolation · FRAME</sub><br>
+  <code>RUN "/samples/g-smoke.bas"</code>
 </td>
 </tr>
 <tr>
@@ -219,13 +219,13 @@ python tools/generate_showcase.py
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 123 programs
+## Full catalog — 127 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
 demo.
 
-### Showcase animations and retro effects (17)
+### Showcase animations and retro effects (18)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -234,12 +234,13 @@ demo.
 | <a id="sample-g-bigbang"></a>[`g-bigbang.bas`](g-bigbang.bas) [★](#highlight-g-bigbang) | Thousands of pixels explode into particles and reassemble as a second image. | BLOAD, TEST, particle morphing |
 | <a id="sample-g-bobs"></a>[`g-bobs.bas`](g-bobs.bas) | Six depth-sorted circles orbit in simulated 3D. | 3D projection, depth sorting, FCIRCLE |
 | <a id="sample-g-cooperative"></a>[`g-cooperative.bas`](g-cooperative.bas) | Two animations redraw sequentially on each timer pulse. | EVERY, ORIGIN, sequential redraw |
-| <a id="sample-g-dot-tunnel"></a>[`g-dot-tunnel.bas`](g-dot-tunnel.bas) [★](#highlight-g-dot-tunnel) | Twisting 3D dot tunnel with star backdrop. | 3D projection, procedural animation, FRAME |
+| <a id="sample-g-dot-tunnel"></a>[`g-dot-tunnel.bas`](g-dot-tunnel.bas) | Twisting 3D dot tunnel with star backdrop. | 3D projection, procedural animation, FRAME |
 | <a id="sample-g-jelly"></a>[`g-jelly.bas`](g-jelly.bas) [★](#highlight-g-jelly) | Ten thousand points fold into a living neon form. | parametric plotting, offscreen rendering, FRAME |
 | <a id="sample-g-old-school"></a>[`g-old-school.bas`](g-old-school.bas) [★](#highlight-g-old-school) | A demoscene postcard with a starfield, copper bars, sine scroller and original looping music. | 3D starfield, SPRITE$, sine scroller, AUDIO, WAV |
 | <a id="sample-g-roulette"></a>[`g-roulette.bas`](g-roulette.bas) | Rotating colored circle sectors create a pinwheel. | FCIRCLE, animation, DEG |
 | <a id="sample-g-scroll"></a>[`g-scroll.bas`](g-scroll.bas) | Diagonal rotating-text scroll with offscreen redraw. | LDIR, LABEL, offscreen rendering |
 | <a id="sample-g-sine-scroll"></a>[`g-sine-scroll.bas`](g-sine-scroll.bas) | Hand-built bitmap font bends through a sine wave. | SPRITE$, TEST, bitmap font |
+| <a id="sample-g-smoke"></a>[`g-smoke.bas`](g-smoke.bas) [★](#highlight-g-smoke) | Interactive two-dimensional fluid simulation with pressure projection, vorticity and smoothly shaded dye. | fluid simulation, MAT, bilinear interpolation, FRAME |
 | <a id="sample-g-starfield"></a>[`g-starfield.bas`](g-starfield.bas) | Two thousand depth-recycled stars flow through 3D. | 3D projection, depth recycling, FRAME |
 | <a id="sample-g-sunflower"></a>[`g-sunflower.bas`](g-sunflower.bas) | Animated phyllotaxis spiral with hue cycling. | phyllotaxis, custom RGB, FRAME |
 | <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) [★](#highlight-g-tunnel-tquad) | A seamless textured tunnel turns a ring mesh into a fluid animated ride. | TQUAD, mesh generation, texture animation |
@@ -247,30 +248,32 @@ demo.
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
-### Games, applications, and algorithmic scenes (5)
+### Games, applications, and algorithmic scenes (6)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
+| <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects. | DDA raycasting, TRECTANGLE, TQUAD, depth testing, AUDIO, WAV |
 | <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) [★](#highlight-g-loan) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
 
-### 3D, lighting, and texture mapping (10)
+### 3D, lighting, and texture mapping (11)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
 | <a id="sample-g-cube2"></a>[`g-cube2.bas`](g-cube2.bas) | Two depth-sorted cubes orbit in opposite phases. | 3D projection, depth sorting, FTRIANGLE |
 | <a id="sample-g-cube3"></a>[`g-cube3.bas`](g-cube3.bas) | Rotating cube fills outlined faces using flood fill. | 3D projection, DRAW, FILL |
-| <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) [★](#highlight-g-cube-tquad) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
+| <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
 | <a id="sample-g-demo"></a>[`g-demo.bas`](g-demo.bas) | Filled rotating cube behind a diagonal text scroll. | 3D projection, FTRIANGLE, LDIR |
 | <a id="sample-g-gouraud"></a>[`g-gouraud.bas`](g-gouraud.bas) [★](#highlight-g-gouraud) | A mathematical surface rendered with a software Z-buffer and per-vertex lighting. | Z-buffer, barycentric rasterization, vertex lighting |
 | <a id="sample-g-lambert"></a>[`g-lambert.bas`](g-lambert.bas) | Painter-sorted surface uses flat Lambert lighting. | painter's algorithm, Lambert shading, quicksort |
-| <a id="sample-g-origin"></a>[`g-origin.bas`](g-origin.bas) [★](#highlight-g-origin) | Rotating cube moves inside a bouncing viewport. | ORIGIN, 3D projection, viewport animation |
+| <a id="sample-g-origin"></a>[`g-origin.bas`](g-origin.bas) | Rotating cube moves inside a bouncing viewport. | ORIGIN, 3D projection, viewport animation |
 | <a id="sample-g-raytracer"></a>[`g-raytracer.bas`](g-raytracer.bas) [★](#highlight-g-raytracer) | A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC. | ray tracing, Fresnel, reflection and refraction |
 | <a id="sample-g-sphere"></a>[`g-sphere.bas`](g-sphere.bas) | Parametric line sweep sketches a colored sphere. | parametric plotting, SCALE, DRAW |
+| <a id="sample-g-voxel"></a>[`g-voxel.bas`](g-voxel.bas) [★](#highlight-g-voxel) | Fly over a procedural landscape with filtered lighting, cached fog colors and adjustable viewing distance. | voxel terrain, procedural generation, lighting, fog, FRAME |
 
 ### Fractals, curves, and procedural geometry (15)
 
@@ -397,11 +400,12 @@ program, then reads it back.
 | <a id="sample-f-text"></a>[`f-text.bas`](f-text.bas) | Writes a formatted report and appends to an unfinished line. | PRINT #, USING, APPEND, LINE INPUT # |
 | <a id="sample-f-records"></a>[`f-records.bas`](f-records.bas) | Recovers quotes, commas, line breaks, empty strings, and numeric precision. | CSV quoting, CHR$, WRITE #, INPUT # |
 
-### Console algorithms and language features (9)
+### Console algorithms and language features (10)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-subsample"></a>[`g-subsample.bas`](g-subsample.bas) | Demonstrates DEF SUB locals, shared names, and scope failure. | DEF SUB, LOCAL, scope |
+| <a id="sample-iif"></a>[`iif.bas`](iif.bas) | Select numeric or string results with nested IIF expressions while safely skipping unused divisions by zero. | IIF, conditional evaluation, strings, nested expressions |
 | <a id="sample-loan"></a>[`loan.bas`](loan.bas) | Console loan calculator with first-year amortization table. | INPUT, DEF FN, formatted output |
 | <a id="sample-matrix"></a>[`matrix.bas`](matrix.bas) | Inverts, transposes, multiplies, and prints a matrix. | MAT INV, MAT TRN, DET |
 | <a id="sample-nqueens"></a>[`nqueens.bas`](nqueens.bas) | Backtracking solves and prints a sixteen-queen board. | backtracking, arrays, formatted output |

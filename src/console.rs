@@ -469,6 +469,66 @@ pub fn syntax_highlight_raw_with_cases(
     out
 }
 
+fn syntax_highlight_window_with_cases(
+    source: &str,
+    left_col: usize,
+    width: usize,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> String {
+    // Tokenize the complete source before clipping: either viewport edge can
+    // fall inside a keyword, identifier, string, DATA field, or comment.
+    let rendered = syntax_highlight_raw_with_cases(source, ansi, cases);
+    rendered_line_window(&rendered, left_col, width)
+}
+
+fn rendered_line_window(rendered: &str, left_col: usize, width: usize) -> String {
+    // Preserve the editor's character-column convention and replay all SGR
+    // attributes still active at the left edge; close them at the right edge.
+    let mut out = String::new();
+    let mut style = String::new();
+    let mut chars = rendered.chars().peekable();
+    let mut column = 0usize;
+    let end = left_col.saturating_add(width);
+    let mut started = false;
+    while column < end {
+        let Some(ch) = chars.next() else {
+            break;
+        };
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            let mut escape = String::from(ch);
+            escape.push(chars.next().unwrap());
+            for next in chars.by_ref() {
+                escape.push(next);
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            if escape == RESET {
+                style.clear();
+            } else if escape.ends_with('m') {
+                style.push_str(&escape);
+            }
+            if started {
+                out.push_str(&escape);
+            }
+        } else {
+            if column >= left_col {
+                if !started {
+                    out.push_str(&style);
+                    started = true;
+                }
+                out.push(ch);
+            }
+            column += 1;
+        }
+    }
+    if started && !style.is_empty() {
+        out.push_str(RESET);
+    }
+    out
+}
+
 pub fn read_highlighted_line(
     prompt: &str,
     prefill: &str,
@@ -3563,6 +3623,26 @@ fn debug_source_window(
     (visible, marker_col)
 }
 
+fn render_debug_source_window(
+    line: &[char],
+    left_col: usize,
+    width: usize,
+    statement: usize,
+    source_span: Option<&std::ops::Range<usize>>,
+    ansi: bool,
+    cases: Option<&HashMap<String, String>>,
+) -> String {
+    let (source, marker_col) = debug_source_window(line, 0, usize::MAX, statement, source_span);
+    let rendered = syntax_highlight_window_with_cases(&source, left_col, width, ansi, cases);
+    if let Some(marker_col) =
+        marker_col.filter(|column| *column >= left_col && *column < left_col.saturating_add(width))
+    {
+        finish_debug_statement_marker(&rendered, ansi, marker_col - left_col)
+    } else {
+        rendered
+    }
+}
+
 fn finish_debug_statement_marker(rendered: &str, ansi: bool, marker_col: usize) -> String {
     finish_debug_statement_marker_for_theme(rendered, ansi, marker_col, current_syntax_theme())
 }
@@ -3754,28 +3834,24 @@ fn render_fullscreen_debugger(
                 write!(stdout, "{gutter}")?;
                 rendered_width += layout.gutter_width;
             }
-            let (visible, statement_marker_col) = if current {
-                debug_source_window(
+            let rendered = if current {
+                render_debug_source_window(
                     line,
                     editor.left_col,
                     layout.code_cols,
                     snapshot.location.statement,
                     snapshot.location.source_span.as_ref(),
+                    ansi,
+                    Some(&render_cases),
                 )
             } else {
-                (
-                    line.iter()
-                        .skip(editor.left_col)
-                        .take(layout.code_cols)
-                        .collect(),
-                    None,
+                syntax_highlight_window_with_cases(
+                    &line.iter().collect::<String>(),
+                    editor.left_col,
+                    layout.code_cols,
+                    ansi,
+                    Some(&render_cases),
                 )
-            };
-            let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
-            let rendered = if let Some(marker_col) = statement_marker_col {
-                finish_debug_statement_marker(&rendered, ansi, marker_col)
-            } else {
-                rendered
             };
             let rendered = if current {
                 apply_debug_execution_line_style(&rendered, ansi, layout.code_cols)
@@ -4019,8 +4095,8 @@ fn render_fullscreen_editor(
         let mut rendered_width = 0usize;
         if let Some(line) = editor.lines.get(editor.top_line + screen_row) {
             let line_index = editor.top_line + screen_row;
-            let visible: String = line.iter().skip(editor.left_col).take(code_cols).collect();
-            let visible_len = visible.chars().count();
+            let source: String = line.iter().collect();
+            let visible_len = line.len().saturating_sub(editor.left_col).min(code_cols);
             let selection =
                 editor
                     .selection_columns_for_line(line_index)
@@ -4034,7 +4110,13 @@ fn render_fullscreen_editor(
                         let end = end.saturating_sub(visible_start).min(visible_len);
                         (start < end).then_some((start, end))
                     });
-            let rendered = syntax_highlight_raw_with_cases(&visible, ansi, Some(&render_cases));
+            let rendered = syntax_highlight_window_with_cases(
+                &source,
+                editor.left_col,
+                code_cols,
+                ansi,
+                Some(&render_cases),
+            );
             let rendered = apply_selection_to_rendered(&rendered, ansi, selection);
             rendered_width += visible_width(&rendered);
             write!(stdout, "{rendered}")?;
@@ -5805,6 +5887,177 @@ fn is_signed_number_start(chars: &[char], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rendered_character_styles(rendered: &str) -> Vec<(char, String)> {
+        let mut result = Vec::new();
+        let mut style = String::new();
+        let mut chars = rendered.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' && chars.peek() == Some(&'[') {
+                let mut escape = String::from(ch);
+                escape.push(chars.next().unwrap());
+                for next in chars.by_ref() {
+                    escape.push(next);
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+                if escape == RESET {
+                    style.clear();
+                } else if escape.ends_with('m') {
+                    style.push_str(&escape);
+                }
+            } else {
+                result.push((ch, style.clone()));
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn fullscreen_windows_do_not_reclassify_clipped_words() {
+        let source = "10 PRINT printer : PRINTER=1 : PRINT h : PRINT";
+        let palette = current_syntax_palette();
+        let last_print = source.rfind("PRINT").unwrap();
+        let printer = source.find("printer").unwrap();
+        assert_eq!(
+            syntax_highlight_window_with_cases(source, last_print, 4, true, None),
+            format!("{}PRIN{RESET}", palette.keyword)
+        );
+        assert_eq!(
+            syntax_highlight_window_with_cases(source, last_print + 1, 3, true, None),
+            format!("{}RIN{RESET}", palette.keyword)
+        );
+        assert_eq!(
+            syntax_highlight_window_with_cases(source, printer, 5, true, None),
+            format!("{}print{RESET}", palette.variable)
+        );
+        assert_eq!(
+            syntax_highlight_window_with_cases("10020 PRINT &HFF", 1, 3, true, None),
+            format!("{}002{RESET}", palette.line_number)
+        );
+        let window = syntax_highlight_window_with_cases(source, last_print, 4, true, None);
+        assert_eq!(
+            apply_selection_to_rendered(&window, true, Some((1, 3))),
+            format!(
+                "{}P{SELECTION_STYLE}RI{SELECTION_END_STYLE}N{RESET}",
+                palette.keyword
+            )
+        );
+    }
+
+    #[test]
+    fn fullscreen_windows_preserve_styles_and_spelling_at_every_boundary() {
+        let cases = HashMap::from([
+            (String::from("PRINTER"), String::from("Printer")),
+            (String::from("MYPROC"), String::from("MyProc")),
+        ]);
+        for source in [
+            "10 PRINT \"hola\" : PRINT \"hola\" : PRINT h : PRINT",
+            "10020 PRINTER=PRINTED:PRINT PRINTER",
+            "10 PRINT \"PRINT REM : ' DATA áñΩ\":PRINT 1",
+            "10 PRINT \"unfinished PRINT REM",
+            "10 REM PRINT : \"hello\"",
+            "10 PRINT 1 ' PRINT : REM \"hello\"",
+            "10 DATA PRINT,HELLO,\"REM:X\",1 : PRINT 2",
+            "10 DEF SUB myproc(A,B): PRINT A",
+            "10 CALL myproc(1,2):PRINT h",
+            "10 PRINT &HFF+&X101+1E-9:END",
+        ] {
+            for ansi in [false, true] {
+                for cases in [None, Some(&cases)] {
+                    let full = syntax_highlight_raw_with_cases(source, ansi, cases);
+                    let expected = rendered_character_styles(&full);
+                    for left in 0..=expected.len() + 2 {
+                        for width in [0, 1, 2, 3, 4, 5, 8, 13, expected.len() + 1] {
+                            let window = syntax_highlight_window_with_cases(
+                                source, left, width, ansi, cases,
+                            );
+                            let start = left.min(expected.len());
+                            let end = left.saturating_add(width).min(expected.len());
+                            assert_eq!(
+                                rendered_character_styles(&window),
+                                expected[start..end],
+                                "{source:?}, left={left}, width={width}, ansi={ansi}"
+                            );
+                            assert!(visible_width(&window) <= width);
+                            assert_eq!(
+                                rendered_character_styles(&format!("{window}§")).last(),
+                                Some(&('§', String::new())),
+                                "style escaped viewport for {source:?}, left={left}, width={width}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rendered_windows_carry_stacked_styles_without_leaking_them() {
+        let rendered = format!("\x1b[97m\x1b[3mPRINT{RESET}X");
+        assert_eq!(
+            rendered_line_window(&rendered, 1, 3),
+            format!("\x1b[97m\x1b[3mRIN{RESET}")
+        );
+        assert_eq!(rendered_line_window(&rendered, 5, 1), "X");
+        assert_eq!(rendered_line_window(&rendered, 0, 0), "");
+        assert_eq!(rendered_line_window(&rendered, 6, 3), "");
+        assert_eq!(rendered_line_window("áñΩxy", 1, 3), "ñΩx");
+        assert_eq!(rendered_line_window("abc", usize::MAX, 2), "");
+    }
+
+    #[test]
+    fn debugger_windows_preserve_marker_and_complete_syntax_context() {
+        for (source, statement) in [
+            (
+                "10 IF 1 THEN PRINT \"PRINT\":DATA PRINT,\"REM\":REM PRINT",
+                "PRINT",
+            ),
+            ("10 DATA PRINT,\"REM\":PRINT PRINTER", "DATA"),
+            ("10 REM PRINT : DATA 1", "REM"),
+            ("10 PRINT \"PRINT : REM\":PRINT PRINTER", "PRINT PRINTER"),
+            ("10 PRINT \"\u{E001}\":END", "END"),
+        ] {
+            let line = source.chars().collect::<Vec<_>>();
+            let start = source.find(statement).unwrap();
+            let span = start..start + statement.len();
+            for ansi in [false, true] {
+                let full = render_debug_source_window(
+                    &line,
+                    0,
+                    usize::MAX,
+                    usize::MAX,
+                    Some(&span),
+                    ansi,
+                    None,
+                );
+                assert_eq!(full.matches('▶').count(), 1);
+                let expected = rendered_character_styles(&full);
+                for left in 0..=expected.len() + 2 {
+                    for width in [0, 1, 2, 3, 4, 5, 8, 13, expected.len() + 1] {
+                        let window = render_debug_source_window(
+                            &line,
+                            left,
+                            width,
+                            usize::MAX,
+                            Some(&span),
+                            ansi,
+                            None,
+                        );
+                        let start = left.min(expected.len());
+                        let end = left.saturating_add(width).min(expected.len());
+                        assert_eq!(
+                            rendered_character_styles(&window),
+                            expected[start..end],
+                            "{source:?}, left={left}, width={width}, ansi={ansi}"
+                        );
+                        assert!(visible_width(&window) <= width);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn input_line_layout_keeps_edge_caret_and_wrapped_tail() {

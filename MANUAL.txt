@@ -1594,6 +1594,9 @@ Notes
 
 Zero-argument functions are used without parentheses.
 
+Conditional selection
++ IIF(condition,true-expression,false-expression)
+
 Numeric and conversions
 + ABS | INT | FIX | SGN | FRAC | ROUND(n[,d])
 + SQR | LOG | LOG10 | EXP
@@ -1617,6 +1620,14 @@ Arrays
 + LBOUND(array[,dimension]) | UBOUND(array[,dimension])
 
 Clarifying notes for some functions
+- `IIF(condition,true-expression,false-expression)` requires exactly three nonempty argument expressions; `""` is a valid string expression.
+  * Evaluates the numeric condition once: zero is false and any nonzero value is true.
+  * Evaluates only the selected expression. The other branch cannot cause a runtime error, consume `RND`, or call a user-defined function.
+  * Returns the selected value with its original numeric or string type. Both branches may have different types; the function is always named `IIF`, without a `$` suffix. The surrounding expression or assignment must accept the selected type.
+  * Both branches must have valid syntax, even when not selected. Calls to `IIF` can be nested.
+  * Examples: `X=0 : PRINT IIF(X<>0,10/X,0)` prints 0 without dividing by zero; `PRINT IIF(1,"OK","NO")` prints OK; `PRINT IIF(0,42,"N/A")` prints N/A.
+  * Nested example: `PRINT IIF(1,IIF(0,1/0,2),1/0)` prints 2.
+  * This selective evaluation deliberately differs from VBA's `IIf`, which evaluates both branches.
 - `ROUND(n[,d])`: "half away from zero" rounding.
   * `d>0`: decimals; `d=0`: integers; `d<0`: tens/hundreds/...
   * Examples: `ROUND(2.5)` -> 3; `ROUND(-2.5)` -> -3; `ROUND(1234.5678,3)` -> 1234.568; `ROUND(1234.5678,-2)` -> 1200.

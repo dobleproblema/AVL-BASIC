@@ -357,6 +357,7 @@ function	expression	RND		RND	-	Returns a uniformly distributed number in the ran
 function	expression	TIME		TIME	-	Returns seconds since the Unix epoch.	PAUSE	builtin,zero-arg
 function	expression	MIN		MIN(number[, number...])	number: one or more numeric expressions	Returns the smallest argument.	MAX	builtin,pure
 function	expression	MAX		MAX(number[, number...])	number: one or more numeric expressions	Returns the largest argument.	MIN	builtin,pure
+function	expression	IIF		IIF(condition, when_true, when_false)	condition: numeric expression, zero is false; when_true and when_false: required numeric or string expressions	Evaluates the condition once and returns only the selected expression, preserving its type. The other expression is not evaluated.	IF	builtin
 function	expression	VAL		VAL(text$)	text$: string beginning with a decimal, &H, or &X number	Converts the leading numeric text to a number.	STR$,BIN$,HEX$	builtin,pure
 
 # String functions

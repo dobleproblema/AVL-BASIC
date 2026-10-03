@@ -2414,9 +2414,10 @@ impl Interpreter {
                     let line = line.trim_end_matches(&['\r', '\n'][..]);
                     let normalized = console::normalize_code(line);
                     let is_program_line = starts_with_line_number(normalized.trim());
-                    if line.eq_ignore_ascii_case("EXIT")
-                        || line.eq_ignore_ascii_case("QUIT")
-                        || line.eq_ignore_ascii_case("SYSTEM")
+                    let exit_command = line.trim();
+                    if exit_command.eq_ignore_ascii_case("EXIT")
+                        || exit_command.eq_ignore_ascii_case("QUIT")
+                        || exit_command.eq_ignore_ascii_case("SYSTEM")
                     {
                         if let Err(error) = self.data_files.close_all() {
                             eprintln!("{}", error.display_for_basic());

@@ -228,6 +228,52 @@ CAPTURES = (
             955: 'resp$="Y":GPRINT "Show first-year table (Y/N)? Y"',
         },
     ),
+    Capture(
+        "g-smoke.bas",
+        (
+            "651 SHOWFRAME=SHOWFRAME+1",
+            "652 IF SHOWFRAME<480 THEN 660",
+            '653 BSAVE "showcase/g-smoke.png"',
+            "654 SCREEN CLOSE : END",
+        ),
+        {
+            310: "NOW=SHOWFRAME/60 : DT=1/60 : LAST=NOW",
+            320: 'K$=""',
+            5520: 'LOCATE 2,1 : GPRINT "AVL-SMOKE   FLUID SIMULATION   SMOOTH ";IIF(SMOOTH,"ON","OFF")',
+        },
+    ),
+    Capture(
+        "g-voxel.bas",
+        (
+            "851 SHOWFRAME=SHOWFRAME+1",
+            "852 IF SHOWFRAME<72 THEN 860",
+            '853 BSAVE "showcase/g-voxel.png"',
+            "854 SCREEN CLOSE : END",
+        ),
+        {
+            440: "NOW=SHOWFRAME/60 : DT=1/60 : LAST=NOW : T=NOW",
+            450: 'K$=""',
+            1630: 'LOCATE 2,0 : GPRINT "VOXEL WORLD  -  SEED ";STR$(SEED);"  ALT ";STR$(INT(CH-GROUND));"  FAR ";STR$(FAR);"  WORLD 256x256  ";MD$',
+        },
+    ),
+    Capture(
+        "g-dungeon.bas",
+        (
+            "531 IF FRAMES<3 THEN 540",
+            '532 BSAVE "showcase/g-dungeon.png"',
+            "533 AUDIO STOP : SCREEN CLOSE : END",
+        ),
+        {
+            300: "NOW=FRAMES/60 : DT=1/60 : LAST=NOW : T=NOW",
+            310: 'K$=""',
+            # A reachable exit-room viewpoint includes the portal and wall torch.
+            1810: "PX=15.4 : PY=17.4 : ANG=-0.8 : PACE=0 : HAVE=0 : OPENED=0 : WON=0",
+            8070: 'LOCATE 2,0 : GPRINT "AVL DUNGEON  ";COLS;" COLS  KEY:";KS$;"  AUDIO:";AS$',
+            8090: 'GPRINT "FIND THE GOLD KEY - UNLOCK THE GATE - REACH THE PORTAL"',
+            # Explicit AUDIO ON overrides the environment; this capture is silent.
+            9010: "AUDIO OFF : MUSIC=0 : MUTED=1",
+        },
+    ),
 )
 
 

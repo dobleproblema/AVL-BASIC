@@ -4,12 +4,13 @@ g-bernoulli2.bas	Showcase animations and retro effects		Living Radial Curve	Time
 g-bigbang.bas	Showcase animations and retro effects	4	Big Bang	Thousands of pixels explode into particles and reassemble as a second image.	BLOAD;TEST;particle morphing
 g-bobs.bas	Showcase animations and retro effects		Orbiting Bobs	Six depth-sorted circles orbit in simulated 3D.	3D projection;depth sorting;FCIRCLE
 g-cooperative.bas	Showcase animations and retro effects		Cooperative Simulation	Two animations redraw sequentially on each timer pulse.	EVERY;ORIGIN;sequential redraw
-g-dot-tunnel.bas	Showcase animations and retro effects	9	Twisting Dot Tunnel	Twisting 3D dot tunnel with star backdrop.	3D projection;procedural animation;FRAME
+g-dot-tunnel.bas	Showcase animations and retro effects		Twisting Dot Tunnel	Twisting 3D dot tunnel with star backdrop.	3D projection;procedural animation;FRAME
 g-jelly.bas	Showcase animations and retro effects	13	Jelly	Ten thousand points fold into a living neon form.	parametric plotting;offscreen rendering;FRAME
 g-old-school.bas	Showcase animations and retro effects	1	Old-School Demo	A demoscene postcard with a starfield, copper bars, sine scroller and original looping music.	3D starfield;SPRITE$;sine scroller;AUDIO;WAV
 g-roulette.bas	Showcase animations and retro effects		Color Roulette	Rotating colored circle sectors create a pinwheel.	FCIRCLE;animation;DEG
 g-scroll.bas	Showcase animations and retro effects		Diagonal Text Scroll	Diagonal rotating-text scroll with offscreen redraw.	LDIR;LABEL;offscreen rendering
 g-sine-scroll.bas	Showcase animations and retro effects		Sine Scroller	Hand-built bitmap font bends through a sine wave.	SPRITE$;TEST;bitmap font
+g-smoke.bas	Showcase animations and retro effects	9	Smoke Simulation	Interactive two-dimensional fluid simulation with pressure projection, vorticity and smoothly shaded dye.	fluid simulation;MAT;bilinear interpolation;FRAME
 g-starfield.bas	Showcase animations and retro effects		3D Starfield	Two thousand depth-recycled stars flow through 3D.	3D projection;depth recycling;FRAME
 g-sunflower.bas	Showcase animations and retro effects		Sunflower	Animated phyllotaxis spiral with hue cycling.	phyllotaxis;custom RGB;FRAME
 g-tunnel-tquad.bas	Showcase animations and retro effects	19	Textured Tunnel	A seamless textured tunnel turns a ring mesh into a fluid animated ride.	TQUAD;mesh generation;texture animation
@@ -18,19 +19,21 @@ g-zoomer-tquad.bas	Showcase animations and retro effects		Textured Zoomer	One te
 g-zoomer.bas	Showcase animations and retro effects	5	BASIC Zoomer	Block-sampled texture mapping powers a retro zoomer.	BLOAD;TEST;block rendering
 g-arkanoid.bas	Games, applications, and algorithmic scenes	3	AVL Arkanoid	A playable brick-breaker with stereo sound effects and sprite/color collisions.	sprite collisions;color collisions;mouse input;AUDIO;WAV
 g-chess960.bas	Games, applications, and algorithmic scenes	11	Chess960 Generator	Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls.	DEF SUB;constrained randomization;sprites
+g-dungeon.bas	Games, applications, and algorithmic scenes	6	AVL Dungeon	Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects.	DDA raycasting;TRECTANGLE;TQUAD;depth testing;AUDIO;WAV
 g-loan.bas	Games, applications, and algorithmic scenes	18	Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
 g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
 g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
 g-cube.bas	3D, lighting, and texture mapping		Rotating Cube	Filled rotating cube with hidden-face removal.	3D projection;back-face culling;FTRIANGLE
 g-cube2.bas	3D, lighting, and texture mapping		Orbiting Cubes	Two depth-sorted cubes orbit in opposite phases.	3D projection;depth sorting;FTRIANGLE
 g-cube3.bas	3D, lighting, and texture mapping		Flood-Filled Cube	Rotating cube fills outlined faces using flood fill.	3D projection;DRAW;FILL
-g-cube-tquad.bas	3D, lighting, and texture mapping	6	Textured Cube	A spinning textured cube built from projection math and affine quads.	3D projection;back-face culling;TQUAD
+g-cube-tquad.bas	3D, lighting, and texture mapping		Textured Cube	A spinning textured cube built from projection math and affine quads.	3D projection;back-face culling;TQUAD
 g-demo.bas	3D, lighting, and texture mapping		Cube and Scroll Demo	Filled rotating cube behind a diagonal text scroll.	3D projection;FTRIANGLE;LDIR
 g-gouraud.bas	3D, lighting, and texture mapping	7	Gouraud Surface	A mathematical surface rendered with a software Z-buffer and per-vertex lighting.	Z-buffer;barycentric rasterization;vertex lighting
 g-lambert.bas	3D, lighting, and texture mapping		Lambert Surface	Painter-sorted surface uses flat Lambert lighting.	painter's algorithm;Lambert shading;quicksort
-g-origin.bas	3D, lighting, and texture mapping	8	Bouncing Viewport Cube	Rotating cube moves inside a bouncing viewport.	ORIGIN;3D projection;viewport animation
+g-origin.bas	3D, lighting, and texture mapping		Bouncing Viewport Cube	Rotating cube moves inside a bouncing viewport.	ORIGIN;3D projection;viewport animation
 g-raytracer.bas	3D, lighting, and texture mapping	2	Ray Tracer	A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC.	ray tracing;Fresnel;reflection and refraction
 g-sphere.bas	3D, lighting, and texture mapping		Parametric Sphere	Parametric line sweep sketches a colored sphere.	parametric plotting;SCALE;DRAW
+g-voxel.bas	3D, lighting, and texture mapping	8	Voxel World	Fly over a procedural landscape with filtered lighting, cached fog colors and adjustable viewing distance.	voxel terrain;procedural generation;lighting;fog;FRAME
 g-chords.bas	Fractals, curves, and procedural geometry		Circle Chords	Complete chord graph drawn around a circle.	polar coordinates;DRAW;FRAME
 g-fdragon.bas	Fractals, curves, and procedural geometry		Dragon Curve	Dragon curve drawn with simulated recursive calls.	simulated recursion;DRAWR;arrays
 g-fhilbert.bas	Fractals, curves, and procedural geometry		Hilbert Curve	Hilbert curve generated from an expanded L-system.	L-system;string rewriting;DRAWR
@@ -114,6 +117,7 @@ f-scores.bas	Sequential data files		Saved Scores	Saves scores, appends one playe
 f-text.bas	Sequential data files		Text Report	Writes a formatted report and appends to an unfinished line.	PRINT #;USING;APPEND;LINE INPUT #
 f-records.bas	Sequential data files		Recoverable CSV Records	Recovers quotes, commas, line breaks, empty strings, and numeric precision.	CSV quoting;CHR$;WRITE #;INPUT #
 g-subsample.bas	Console algorithms and language features		Local Scope Example	Demonstrates DEF SUB locals, shared names, and scope failure.	DEF SUB;LOCAL;scope
+iif.bas	Console algorithms and language features		Conditional Expressions	Select numeric or string results with nested IIF expressions while safely skipping unused divisions by zero.	IIF;conditional evaluation;strings;nested expressions
 loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
 matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
 nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output

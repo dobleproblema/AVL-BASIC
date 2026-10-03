@@ -1,0 +1,35 @@
+AVL-BASIC: piloto de contadores de hardware (1 de octubre de 2026)
+
+PRIMER PASO: ejecutar solo en el sobremesa FRACTAL.
+
+1. Abra esta carpeta (si recibe el ZIP, extraigalo primero).
+2. Pulse con el boton derecho sobre CAPTURAR-PMU.cmd y elija
+   "Ejecutar como administrador". Acepte el aviso de Windows.
+3. Deje el equipo sin usar y con la sesion desbloqueada. Hay 45 segundos
+   de espera antes de empezar. Si usa Moonlight, desconectelo en esa espera.
+4. Espere a que termine. Solo ejecuta Pi con 10.000 digitos: un calentamiento
+   y una medida en automatico, y lo mismo en un nucleo P fijo.
+   La grabacion y compresion pueden tardar mas que las cuatro ejecuciones.
+5. El ZIP de resultados aparecera en RESULTADOS-PMU, dentro de esta carpeta.
+   Avise cuando este disponible en OneDrive. Si falla, conserve tambien
+   el ZIP de diagnostico; no hace falta cambiar ajustes ni repetir a ciegas.
+
+La elevacion es necesaria para que Windows Performance Recorder lea los
+contadores. El paquete no instala programas, controladores ni servicios;
+no cambia ajustes de energia, BIOS o seguridad. Usa WPR incluido en Windows.
+Si ya existe una grabacion WPR o los contadores estan ocupados, se detiene.
+Solo finaliza la instancia de grabacion que el propio script ha creado.
+
+Se solicita contar instrucciones, ciclos y ciclos de referencia. Este piloto
+comprueba que los datos existen y se pueden atribuir a cada proceso. Todavia
+no es una medicion completa de IPC, frecuencia, saltos ni caches. No compare
+sus tiempos con los de la primera fase: la captura puede introducir coste.
+
+Se conserva el mismo ejecutable publicado 1.6.8 y los mismos programas de la
+primera fase, sin recompilacion. Todo se mide en una carpeta local bajo
+LOCALAPPDATA\AVL-BASIC-CpuComparison\PMU; el ZIP se copia aqui al terminar.
+El resultado incluye los programas, metadatos del sistema y una traza ETW
+de procesos, hilos y cambios de contexto durante esta breve grabacion.
+
+Tras comprobar este primer resultado se decidira la siguiente captura.
+No es necesario ejecutarlo aun en el GMKtec.
