@@ -1,5 +1,11 @@
 # Configuración elegida tras las pruebas — 26 de septiembre de 2026
 
+**Configuración actualizada el 6 de octubre de 2026:** Windows y WSL usan
+Rust 1.99.0, fijado en [`rust-toolchain.toml`](../../rust-toolchain.toml).
+Se han eliminado los overrides distintos por sistema. Las medidas y la nueva
+decisión están en la [comparación de Rust 1.99.0](TOOLCHAIN-2026-10-06.md).
+El resto de este informe conserva la selección histórica de septiembre.
+
 **Publicación posterior:** esta configuración se emplea en la versión 1.6.7;
 sus nuevos binarios y mediciones están en la [verificación de publicación](RELEASE-1.6.7.md).
 Los hashes y copias que se detallan a continuación corresponden a la selección

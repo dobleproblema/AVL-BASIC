@@ -168,8 +168,12 @@ source catalog, this README, the manuals, or the sample tree at runtime. The
 
 Requirements:
 
-- Rust stable toolchain
+- Rust 1.99.0 (selected by `rust-toolchain.toml` on every platform)
 - A native desktop environment for the graphics window
+
+Use rustup so the repository selects the same compiler on Windows and Linux/WSL.
+If this directory has an older local override, remove it with
+`rustup override unset` and check the selected version with `rustc --version`.
 
 Build the release interpreter:
 

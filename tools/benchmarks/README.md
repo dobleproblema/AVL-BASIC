@@ -2,6 +2,10 @@
 
 Informes en español:
 
+- [Verificación de los ejecutables definitivos 1.6.11: 6 de octubre de 2026](RELEASE-1.6.11.md).
+
+- [Rust 1.99.0 en Windows y WSL: actualización, mediciones y mitigación descartada, 6 de octubre de 2026](TOOLCHAIN-2026-10-06.md).
+
 - [Ink Reactor Lite: comparación histórica de la variante descartada, 3 de octubre de 2026](INK-REACTOR-LITE-2026-10-03.md).
 
 - [Smoke (antes Ink Reactor): mediciones históricas de las variantes a 128 × 80 en Windows, 3 de octubre de 2026](INK-REACTOR-2026-10-03.md). Incluye el método de comparación mediante `ink_reactor.py`, con y sin ventana.
