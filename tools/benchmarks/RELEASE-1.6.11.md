@@ -64,6 +64,9 @@ históricos como resultado de esta publicación.
 - Paridad: 392 programas de texto (389 con oráculo Python y tres extensiones
   Rust), 103 sesiones directas, 54 comprobaciones gráficas y tres sesiones
   gráficas directas. 90 comprobaciones de subarrays y 174 de expresiones MAT.
+- Manuales empaquetados: 66/66 escenarios superados en Windows y 66/66 en WSL,
+  correspondientes a 56 ejemplos publicados EN/ES, sin ventana y con audio
+  silencioso. Las adaptaciones de entrada y espera constan en los registros.
 - Formato, sincronización de 270 temas y 64 errores, y catálogo de 131 ejemplos:
   correctos. Las secciones Windows .avlrun y .avleval conservan alineación
   a 4 KiB, permisos RX y metadatos de desenrollado válidos.
@@ -83,3 +86,19 @@ hashes de ejecutables y fuentes, programas congelados y salidas normalizadas
 sin duplicación. Los stdout originales y los registros completos permanecen
 en la carpeta local de validación. Esta comparación mide estabilidad de la
 publicación elegida; no constituye una nueva búsqueda de optimizaciones.
+
+## Auditoría de paquetes
+
+Los ejecutables empaquetados imprimen 1.6.11 y resuelven PRINT 6*7 con 42.
+Cada archivo de las 273 muestras y recursos coincide con su fuente. Hay
+131 programas, 20 destacados, 11 imágenes incrustadas en README.html y 187
+enlaces HTML locales verificados en cada paquete. Los tres documentos HTML
+pasan la regeneración y comprobación de contenido. El archivo Linux conserva
+permisos 0755 para el ejecutable y los directorios e incluye lanzador e iconos;
+los archivos de integración usan LF y requiere glibc 2.39 o posterior. El instalador shell se
+invoca con sh y se distribuye con permisos 0644.
+
+| Archivo | SHA-256 |
+| --- | --- |
+| avl-basic-1.6.11-windows-x64.zip | `8c607b725f01328484a895b43ba0d8cc5275d99b19f857da0c9f4f4a2b7f687d` |
+| avl-basic-1.6.11-linux-x64.tar.gz | `ad7dd5df0d0dc134c83d2e098aeca16686ef2d576be4fdd0a1a63c8ec0ca48dc` |
