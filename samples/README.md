@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **127 runnable programs**. They are not filler or API
+AVL BASIC ships with **131 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-127-program catalog. On GitHub, select any image or program name
+131-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -219,7 +219,7 @@ python tools/generate_showcase.py
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 127 programs
+## Full catalog — 131 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -248,13 +248,14 @@ demo.
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
-### Games, applications, and algorithmic scenes (6)
+### Games, applications, and algorithmic scenes (7)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
 | <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects. | DDA raycasting, TRECTANGLE, TQUAD, depth testing, AUDIO, WAV |
+| <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play AVL Dungeon with the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting |
 | <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) [★](#highlight-g-loan) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
@@ -400,7 +401,7 @@ program, then reads it back.
 | <a id="sample-f-text"></a>[`f-text.bas`](f-text.bas) | Writes a formatted report and appends to an unfinished line. | PRINT #, USING, APPEND, LINE INPUT # |
 | <a id="sample-f-records"></a>[`f-records.bas`](f-records.bas) | Recovers quotes, commas, line breaks, empty strings, and numeric precision. | CSV quoting, CHR$, WRITE #, INPUT # |
 
-### Console algorithms and language features (10)
+### Console algorithms and language features (13)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -408,10 +409,13 @@ program, then reads it back.
 | <a id="sample-iif"></a>[`iif.bas`](iif.bas) | Select numeric or string results with nested IIF expressions while safely skipping unused divisions by zero. | IIF, conditional evaluation, strings, nested expressions |
 | <a id="sample-loan"></a>[`loan.bas`](loan.bas) | Console loan calculator with first-year amortization table. | INPUT, DEF FN, formatted output |
 | <a id="sample-matrix"></a>[`matrix.bas`](matrix.bas) | Inverts, transposes, multiplies, and prints a matrix. | MAT INV, MAT TRN, DET |
+| <a id="sample-matrix-expressions"></a>[`matrix-expressions.bas`](matrix-expressions.bas) | Combine matrix products, scalar operations, transposes, inverses, and statistics using BASIC expression precedence. | MAT, compound expressions, TRN, INV, SUM |
+| <a id="sample-matrix-subarrays"></a>[`matrix-subarrays.bas`](matrix-subarrays.bas) | Copy matrix blocks, rows, and columns, then demonstrate overlapping and reversed vector ranges. | MAT, subarrays, MAT BASE, overlapping copies |
 | <a id="sample-nqueens"></a>[`nqueens.bas`](nqueens.bas) | Backtracking solves and prints a sixteen-queen board. | backtracking, arrays, formatted output |
 | <a id="sample-nr-factorial"></a>[`nr-factorial.bas`](nr-factorial.bas) | Computes 100 factorial using nine-digit integer blocks. | arbitrary precision, arrays, PRINT USING |
 | <a id="sample-palette"></a>[`palette.bas`](palette.bas) | Lists named colors and their packed RGB values. | RGB, HEX$, DATA |
 | <a id="sample-pimachin"></a>[`pimachin.bas`](pimachin.bas) | GOSUB-based Machin algorithm computes 1,000 pi digits. | arbitrary precision, GOSUB, Machin formula |
+| <a id="sample-pimachin-mat"></a>[`pimachin-mat.bas`](pimachin-mat.bas) | Compute 1,000 pi digits with vector addition and subtraction, retaining BASIC loops for carries and borrows. | MAT, vector arithmetic, arbitrary precision, Machin formula |
 | <a id="sample-pimachin-modern"></a>[`pimachin-modern.bas`](pimachin-modern.bas) [★](#highlight-pimachin-modern) | Compute 1,000 digits of π with block arithmetic and structured, modern BASIC. | DEF SUB, LOCAL, arbitrary precision |
 | <a id="sample-powermul"></a>[`powermul.bas`](powermul.bas) | Computes arbitrary-precision integer powers by block multiplication. | DEF SUB, block multiplication, PRINT USING |
 

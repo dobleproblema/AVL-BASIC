@@ -679,23 +679,6 @@ pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
     extern "system" {
         fn GetConsoleWindow() -> *mut c_void;
     }
-
-    let console_window = unsafe { GetConsoleWindow() };
-    if console_window.is_null() {
-        return;
-    }
-    if let Some(window) = graphics_window {
-        window.settle_keyboard_before_console_focus();
-    }
-    focus_window_handle(console_window);
-}
-
-#[cfg(windows)]
-pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWindow>) {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetConsoleWindow() -> *mut c_void;
-    }
     #[link(name = "user32")]
     extern "system" {
         fn GetAncestor(hwnd: *mut c_void, flags: u32) -> *mut c_void;
@@ -730,14 +713,19 @@ pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWi
     .then_some(owner);
     let foreground = unsafe { GetForegroundWindow() };
     if let Some(target) =
-        debugger_console_activation_target(console_window, class_name, visible_owner, foreground)
+        console_activation_target(console_window, class_name, visible_owner, foreground)
     {
         focus_window_handle(target);
     }
 }
 
+#[cfg(windows)]
+pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWindow>) {
+    focus_console_window(graphics_window);
+}
+
 #[cfg(any(windows, test))]
-fn debugger_console_activation_target(
+fn console_activation_target(
     console_window: *mut c_void,
     class_name: &[u16],
     visible_owner: Option<*mut c_void>,
@@ -821,7 +809,7 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        code_to_key, debugger_console_activation_target, has_pending_pause_key, key_to_code,
+        code_to_key, console_activation_target, has_pending_pause_key, key_to_code,
         GraphicsInputCallback, GraphicsInputEvent, InputEventQueue,
     };
     use minifb::{InputCallback, Key};
@@ -832,7 +820,7 @@ mod tests {
     use super::embedded_linux_window_icon_argb;
 
     #[test]
-    fn debugger_console_focus_resolves_only_a_pseudoconsole_owner() {
+    fn console_focus_resolves_only_a_pseudoconsole_owner() {
         let console = 1usize as *mut c_void;
         let host = 2usize as *mut c_void;
         let other = 3usize as *mut c_void;
@@ -846,37 +834,37 @@ mod tests {
         ] {
             let class = class.encode_utf16().collect::<Vec<_>>();
             assert_eq!(
-                debugger_console_activation_target(console, &class, owner, other),
+                console_activation_target(console, &class, owner, other),
                 Some(expected)
             );
         }
     }
 
     #[test]
-    fn debugger_console_focus_skips_only_the_exact_active_target() {
+    fn console_focus_skips_only_the_exact_active_target() {
         let console = 1usize as *mut c_void;
         let host = 2usize as *mut c_void;
         let other = 3usize as *mut c_void;
         let pseudo = "PseudoConsoleWindow".encode_utf16().collect::<Vec<_>>();
         let classic = "ConsoleWindowClass".encode_utf16().collect::<Vec<_>>();
         assert_eq!(
-            debugger_console_activation_target(console, &pseudo, Some(host), host),
+            console_activation_target(console, &pseudo, Some(host), host),
             None
         );
         assert_eq!(
-            debugger_console_activation_target(console, &classic, None, console),
+            console_activation_target(console, &classic, None, console),
             None
         );
         assert_eq!(
-            debugger_console_activation_target(console, &pseudo, Some(host), other),
+            console_activation_target(console, &pseudo, Some(host), other),
             Some(host)
         );
         assert_eq!(
-            debugger_console_activation_target(console, &pseudo, Some(host), console),
+            console_activation_target(console, &pseudo, Some(host), console),
             Some(host)
         );
         assert_eq!(
-            debugger_console_activation_target(std::ptr::null_mut(), &pseudo, Some(host), other),
+            console_activation_target(std::ptr::null_mut(), &pseudo, Some(host), other),
             None
         );
     }

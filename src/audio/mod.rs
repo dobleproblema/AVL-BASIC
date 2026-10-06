@@ -111,6 +111,8 @@ pub struct AudioSystem {
     synth: Arc<SharedCpc>,
     assets: BTreeMap<u8, StaticSoundData>,
     voices: Vec<Option<Voice>>,
+    // False guarantees that every sample slot is empty; reset clears the latch.
+    sample_voices_seen: bool,
     last_tick: Instant,
     idle_since: Option<Instant>,
 }
@@ -165,6 +167,7 @@ impl AudioSystem {
             synth: Arc::new(SharedCpc::default()),
             assets: BTreeMap::new(),
             voices: (0..CHANNELS).map(|_| None).collect(),
+            sample_voices_seen: false,
             last_tick: Instant::now(),
             idle_since: None,
         }
@@ -290,6 +293,10 @@ impl AudioSystem {
         if self.manager.is_none() {
             self.synth.advance(seconds);
         }
+        if !self.sample_voices_seen {
+            self.engaged = !self.synth.is_idle();
+            return;
+        }
         for voice in self.voices.iter_mut().flatten() {
             voice.advance(seconds);
         }
@@ -361,6 +368,7 @@ impl AudioSystem {
     /// Program reset: settings survive, while sounds, assets and envelopes do not.
     pub fn reset(&mut self) {
         self.stop_all();
+        self.sample_voices_seen = false;
         self.synth.clear();
         self.assets.clear();
         self.engaged = false;
@@ -469,6 +477,7 @@ impl AudioSystem {
             rate_ramp: None,
             handle,
         });
+        self.sample_voices_seen = true;
         self.engaged = true;
         Ok(())
     }
@@ -658,6 +667,247 @@ fn instant_tween() -> Tween {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_sample_latch_sound(audio: &AudioSystem) {
+        assert_eq!(audio.voices.len(), CHANNELS);
+        if !audio.sample_voices_seen {
+            assert!(audio.voices.iter().all(Option::is_none));
+        }
+    }
+
+    #[test]
+    fn sample_latch_survives_slot_lifecycle_until_reset() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        assert_sample_latch_sound(&audio);
+        assert!(!audio.sample_voices_seen);
+        audio.load(1, file.path()).unwrap();
+        audio.load(2, file.path()).unwrap();
+        assert!(audio.play(32, 3, false, 1.0, 0.0, 1.0).is_err());
+        assert!(audio.play(32, 1, false, f64::NAN, 0.0, 1.0).is_err());
+        assert!(!audio.sample_voices_seen);
+        assert_sample_latch_sound(&audio);
+
+        audio.play(32, 1, true, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.sample_voices_seen);
+        assert!(audio.voices[31].as_ref().unwrap().handle.is_none());
+        audio.pause(Some(32));
+        audio.advance(0.2);
+        assert!(audio.voices[31].as_ref().unwrap().paused);
+        assert!(audio.sample_voices_seen);
+        audio.play(1, 2, false, 1.0, 0.0, 1.0).unwrap();
+        audio.advance(1.1);
+        assert!(audio.voices[0].as_ref().unwrap().stopped);
+        assert!(audio.sample_voices_seen);
+        audio.stop(Some(32));
+        audio.unload(Some(2));
+        assert!(audio.voices.iter().all(Option::is_none));
+        // This is a conservative historical latch, not an active-voice count.
+        assert!(audio.sample_voices_seen);
+        audio.advance(0.1);
+        assert_sample_latch_sound(&audio);
+        audio.reset();
+        assert!(!audio.sample_voices_seen);
+        assert_sample_latch_sound(&audio);
+
+        audio.load(1, file.path()).unwrap();
+        for channel in 1..=CHANNELS as u8 {
+            audio.play(channel, 1, true, 1.0, 0.0, 1.0).unwrap();
+            assert_sample_latch_sound(&audio);
+            assert!(audio.sample_voices_seen);
+        }
+        assert!(audio.voices.iter().all(Option::is_some));
+        audio.unload(None);
+        assert!(audio.voices.iter().all(Option::is_none));
+        assert!(audio.sample_voices_seen);
+        audio.stop_all();
+        assert!(audio.sample_voices_seen);
+        audio.reset();
+        assert!(!audio.sample_voices_seen);
+        assert_sample_latch_sound(&audio);
+    }
+
+    // Frozen pre-optimization advance path. It deliberately ignores the latch
+    // so the comparison below has an independent oracle for skipped scans.
+    fn original_advance_reference(audio: &mut AudioSystem, seconds: f64) {
+        let backend_error = audio.manager.as_mut().and_then(|m| m.backend_mut().error());
+        if let Some(error) = backend_error {
+            audio.fail_output(error);
+            return;
+        }
+        if audio.manager.is_none() {
+            audio.synth.advance(seconds);
+        }
+        for voice in audio.voices.iter_mut().flatten() {
+            voice.advance(seconds);
+        }
+        if !audio
+            .voices
+            .iter()
+            .flatten()
+            .any(|voice| !voice.stopped && (!voice.paused || voice.rate_ramp.is_some()))
+        {
+            audio.engaged = !audio.synth.is_idle();
+        }
+    }
+
+    fn advance_fixture(sample_count: usize, latched_empty: bool) -> AudioSystem {
+        let mut audio = AudioSystem::new_disabled();
+        audio.engaged = true;
+        audio.sample_voices_seen = sample_count != 0 || latched_empty;
+        audio.synth.define_volume(
+            1,
+            vec![Section::Step {
+                steps: 3,
+                delta: -1,
+                ticks: 10,
+            }],
+        );
+        // Held A, a later ENV-derived A note, and mutually synchronized B/C.
+        assert!(audio.synth.enqueue(note(65)));
+        assert!(audio.synth.enqueue(Note {
+            duration: 0,
+            volume_env: 1,
+            ..note(1)
+        }));
+        assert!(audio.synth.enqueue(note(34)));
+        assert!(audio.synth.enqueue(note(20)));
+        for index in 0..sample_count {
+            let slot = if sample_count == 1 {
+                CHANNELS - 1
+            } else {
+                index
+            };
+            audio.voices[slot] = Some(Voice {
+                asset: (index % 2 + 1) as u8,
+                duration: [0.4, 0.9, 2.0][index % 3],
+                position: 0.0,
+                looping: index % 3 == 1,
+                paused: index % 4 == 2,
+                stopped: index % 7 == 6,
+                rate: 0.5 + (index % 5) as f64 * 0.25,
+                rate_ramp: (index % 4 >= 2).then_some(RateRamp {
+                    from: 0.5,
+                    to: 2.0,
+                    duration: 0.5,
+                    elapsed: 0.0,
+                }),
+                handle: None,
+            });
+        }
+        audio
+    }
+
+    fn assert_advance_state_equal(actual: &AudioSystem, reference: &AudioSystem) {
+        assert_sample_latch_sound(actual);
+        assert_eq!(actual.engaged, reference.engaged);
+        assert_eq!(actual.last_error, reference.last_error);
+        assert_eq!(actual.synth.is_idle(), reference.synth.is_idle());
+        for channel in [1, 2, 4] {
+            assert_eq!(
+                actual.synth.status(channel),
+                reference.synth.status(channel)
+            );
+        }
+        for (actual, reference) in actual.voices.iter().zip(&reference.voices) {
+            match (actual, reference) {
+                (None, None) => (),
+                (Some(actual), Some(reference)) => {
+                    assert_eq!(actual.asset, reference.asset);
+                    assert_eq!(actual.duration, reference.duration);
+                    assert_eq!(actual.position.to_bits(), reference.position.to_bits());
+                    assert_eq!(actual.looping, reference.looping);
+                    assert_eq!(actual.paused, reference.paused);
+                    assert_eq!(actual.stopped, reference.stopped);
+                    assert_eq!(actual.rate.to_bits(), reference.rate.to_bits());
+                    assert_eq!(actual.rate_ramp.is_some(), reference.rate_ramp.is_some());
+                    if let (Some(actual), Some(reference)) =
+                        (&actual.rate_ramp, &reference.rate_ramp)
+                    {
+                        assert_eq!(actual.from.to_bits(), reference.from.to_bits());
+                        assert_eq!(actual.to.to_bits(), reference.to.to_bits());
+                        assert_eq!(actual.duration.to_bits(), reference.duration.to_bits());
+                        assert_eq!(actual.elapsed.to_bits(), reference.elapsed.to_bits());
+                    }
+                }
+                _ => panic!("Sample slot occupancy changed"),
+            }
+        }
+    }
+
+    #[test]
+    fn sample_latch_advance_matches_original_across_mixed_clock_sequences() {
+        for (sample_count, latched_empty) in
+            [(0, false), (0, true), (1, false), (8, false), (32, false)]
+        {
+            let mut actual = advance_fixture(sample_count, latched_empty);
+            let mut reference = advance_fixture(sample_count, latched_empty);
+            assert_advance_state_equal(&actual, &reference);
+            for (step, seconds) in [0.0, 0.025, 0.055, 0.12, 0.25, 0.6, 3.0]
+                .into_iter()
+                .enumerate()
+            {
+                if step == 2 {
+                    actual.synth.release(1);
+                    reference.synth.release(1);
+                }
+                if step == 3 {
+                    // Submit another note mid-sequence without clock jitter.
+                    assert!(actual.synth.enqueue(Note {
+                        duration: 20,
+                        ..note(4)
+                    }));
+                    assert!(reference.synth.enqueue(Note {
+                        duration: 20,
+                        ..note(4)
+                    }));
+                }
+                actual.advance(seconds);
+                original_advance_reference(&mut reference, seconds);
+                assert_advance_state_equal(&actual, &reference);
+            }
+            assert_eq!(actual.synth.status(1), 4);
+            assert_eq!(actual.synth.status(2), 4);
+            assert_eq!(actual.synth.status(4), 4);
+        }
+    }
+
+    #[test]
+    fn sample_latch_preserves_failed_output_positions_and_cpc_progress() {
+        let file = wav_file(1);
+        let mut audio = AudioSystem::new_disabled();
+        audio.load(1, file.path()).unwrap();
+        audio.play(32, 1, true, 1.0, 0.0, 1.0).unwrap();
+        audio.advance(0.25);
+        assert!(audio.enqueue(note(1)));
+        assert!(audio.enqueue(note(1)));
+        let final_position = audio.voices[31].as_ref().unwrap().position;
+        audio.attempted = true;
+        audio.fail_output("Synthetic device disconnect".to_string());
+        assert!(audio.sample_voices_seen);
+        assert!(audio.voices[31].as_ref().unwrap().stopped);
+        audio.advance(0.3);
+        assert_eq!(audio.synth.status(1), 4);
+        assert_eq!(audio.voices[31].as_ref().unwrap().position, final_position);
+        assert!(!audio.engaged);
+        assert!(!audio.poll_after_program());
+        assert_eq!(audio.last_error, "Synthetic device disconnect");
+        audio.stop(Some(32));
+        assert!(audio.voices.iter().all(Option::is_none));
+        assert!(audio.sample_voices_seen);
+        audio.play(1, 1, false, 1.0, 0.0, 1.0).unwrap();
+        assert!(audio.sample_voices_seen);
+        audio.advance(1.1);
+        assert!(audio.voices[0].as_ref().unwrap().stopped);
+        audio.reset();
+        assert!(!audio.sample_voices_seen);
+        assert_sample_latch_sound(&audio);
+        assert!(audio.enqueue(note(1)));
+        audio.advance(0.2);
+        assert_eq!(audio.synth.status(1), 4);
+        assert!(!audio.engaged);
+        assert!(!audio.sample_voices_seen);
+    }
 
     fn wav_file(seconds: u32) -> tempfile::NamedTempFile {
         use std::io::Write;

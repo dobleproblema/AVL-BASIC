@@ -7,6 +7,8 @@ impl Interpreter {
         self.audio.reset();
         self.sound_handlers = [None; 3];
         self.has_sound_handlers = false;
+        self.next_sound_poll = Instant::now();
+        self.sound_poll_forced = false;
         self.sound_isr_markers.clear();
         self.pending_sounds.clear();
     }
@@ -91,6 +93,7 @@ impl Interpreter {
         };
         loop {
             if self.audio.enqueue(note) {
+                self.sound_poll_forced = self.has_sound_handlers;
                 return Ok(());
             }
             // Retry the evaluated note after a GOSUB interrupt, not its expressions.
@@ -164,6 +167,7 @@ impl Interpreter {
         }
         let mask = self.cpc_integer(&args[0], 1, 7)? as u8;
         self.audio.release(mask);
+        self.sound_poll_forced = self.has_sound_handlers;
         Ok(())
     }
 
@@ -213,17 +217,27 @@ impl Interpreter {
         }
         self.sound_handlers[channel.trailing_zeros() as usize] = (target != 0).then_some(target);
         self.has_sound_handlers = self.sound_handlers.iter().any(Option::is_some);
+        if target != 0 {
+            self.sound_poll_forced = true;
+        }
         Ok(())
     }
 
+    // The run loops may query this without consuming a pending immediate poll.
+    pub(super) fn should_poll_sound_events(&self) -> bool {
+        self.has_sound_handlers
+            && self.sound_isr_markers.is_empty()
+            && self.current_interrupt_priority < 0
+            && self.interrupts_enabled
+            && (self.sound_poll_forced || Instant::now() >= self.next_sound_poll)
+    }
+
     pub(super) fn process_sound_events(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
-        if !self.has_sound_handlers
-            || !self.sound_isr_markers.is_empty()
-            || self.current_interrupt_priority >= 0
-            || !self.interrupts_enabled
-        {
+        if !self.should_poll_sound_events() {
             return Ok(false);
         }
+        self.sound_poll_forced = false;
+        self.next_sound_poll = Instant::now() + SOUND_EVENT_POLL_INTERVAL;
         for index in 0..3 {
             let Some(target) = self.sound_handlers[index] else {
                 continue;
@@ -261,6 +275,7 @@ impl Interpreter {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
                 self.audio.set_enabled(verb == "ON");
+                self.sound_poll_forced = self.has_sound_handlers;
             }
             "LOAD" => {
                 if args.len() != 2 {
@@ -376,7 +391,9 @@ impl Interpreter {
             }
             "SQ" if args.len() == 1 => {
                 let channel = self.sound_channel(args[0].as_number()?)?;
-                Ok(Value::number(self.audio.sq(channel) as f64))
+                let state = self.audio.sq(channel);
+                self.sound_poll_forced = self.has_sound_handlers;
+                Ok(Value::number(state as f64))
             }
             "AUDIOSTATE" | "AUDIOPOS" if args.len() == 1 => {
                 let channel = self.audio_integer_value(args[0].as_number()?, 1, 32)? as u8;
@@ -394,6 +411,279 @@ impl Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_cadence_output_toggle_wakes_full_queue_handler_before_end() {
+        for command in ["OFF", "ON"] {
+            let mut i =
+                cadence_program("10 REM DRIVER\n20 BEFOREEND=COUNT:END\n100 COUNT=COUNT+1:RETURN");
+            let mut cursor = i.cursor_for_line(10).unwrap();
+            i.execute_sound("65,142,1000", &mut cursor).unwrap();
+            for _ in 0..3 {
+                i.execute_sound("1,142,1000", &mut cursor).unwrap();
+            }
+            assert_eq!(i.audio.sq(1) & 7, 0);
+            i.execute_on_sq("ON SQ(1) GOSUB 100").unwrap();
+            assert!(!i.process_sound_events(&mut cursor).unwrap());
+            assert_eq!(i.sound_handlers[0], Some(100));
+            if command == "ON" {
+                // OFF clears the held queue first; defer again to isolate ON's
+                // wakeup. Enabling an empty device does not emit/open playback.
+                i.execute_audio("OFF").unwrap();
+            }
+            cadence_defer_poll(&mut i);
+            assert!(!i.should_poll_sound_events());
+            i.execute_audio(command).unwrap();
+            assert!(i.sound_poll_forced, "AUDIO {command}");
+            assert_eq!(i.audio.sq(1), 4);
+            assert!(i.should_poll_sound_events());
+            i.run_depth = 0;
+            let end = i.cursor_for_line(20).unwrap();
+            assert_eq!(i.run_from(end).unwrap(), RunOutcome::End);
+            assert_eq!(i.numeric_variables.get("COUNT"), Some(&1.0));
+            assert_eq!(i.numeric_variables.get("BEFOREEND"), Some(&1.0));
+            assert!(i.gosub_stack.is_empty());
+            assert!(i.sound_isr_markers.is_empty());
+        }
+    }
+
+    #[test]
+    fn audio_cadence_stop_preserves_forced_wakeup_for_immediate_cont() {
+        for debug in [false, true] {
+            let mut i = silent();
+            if debug {
+                i.set_debugger(Debugger::scripted([]));
+            }
+            i.program.load_text(
+                "10 COUNT=0:SOUND 65,142,1000:SOUND 1,142,1000:SOUND 1,142,1000:SOUND 1,142,1000\n\
+                 20 ON SQ(1) GOSUB 100\n30 STOP\n40 BEFOREEND=COUNT\n50 END\n\
+                 100 COUNT=COUNT+1:RETURN",
+            ).unwrap();
+            assert_eq!(i.run_loaded().unwrap(), RunOutcome::Stop);
+            assert_eq!(i.numeric_variables.get("COUNT"), Some(&0.0));
+            assert!(i.stopped_cursor.is_some());
+            assert_eq!(i.sound_handlers[0], Some(100));
+            assert!(i.has_sound_handlers);
+            assert_eq!(i.audio.sq(1), 4);
+            // Preserve STOP's forced bit and make deadline polling impossible.
+            // A late/slow test runner therefore cannot conceal a lost wakeup.
+            i.next_sound_poll = Instant::now() + Duration::from_secs(3600);
+            assert!(i.sound_poll_forced, "debug={debug}");
+            assert!(i.should_poll_sound_events());
+            i.process_immediate("CONT").unwrap();
+            assert_eq!(i.numeric_variables.get("COUNT"), Some(&1.0));
+            assert_eq!(i.numeric_variables.get("BEFOREEND"), Some(&1.0));
+            assert!(i.stopped_cursor.is_none());
+            assert!(i.gosub_stack.is_empty());
+            assert!(i.sound_isr_markers.is_empty());
+        }
+    }
+
+    fn cadence_program(source: &str) -> Interpreter {
+        let mut i = silent();
+        i.program.load_text(source).unwrap();
+        i.prepare_run().unwrap();
+        i.rebuild_data();
+        i.rebuild_command_cache();
+        i.ensure_routine_catalog().unwrap();
+        i.current_line = Some(10);
+        i.run_depth = 1;
+        cadence_defer_poll(&mut i);
+        i
+    }
+
+    fn cadence_defer_poll(i: &mut Interpreter) {
+        i.next_sound_poll = Instant::now() + Duration::from_secs(3600);
+        i.sound_poll_forced = false;
+    }
+
+    #[test]
+    fn audio_cadence_deadline_and_forced_poll_respect_all_interrupt_guards() {
+        let mut i = cadence_program("10 REM DRIVER\n20 END\n100 RETURN");
+        i.sound_handlers[0] = Some(100);
+        i.has_sound_handlers = true;
+        assert!(!i.should_poll_sound_events());
+        i.next_sound_poll = Instant::now() - Duration::from_secs(1);
+        assert!(i.should_poll_sound_events());
+        cadence_defer_poll(&mut i);
+        i.sound_poll_forced = true;
+        assert!(i.should_poll_sound_events());
+        i.interrupts_enabled = false;
+        assert!(!i.should_poll_sound_events());
+        assert!(i.sound_poll_forced);
+        i.interrupts_enabled = true;
+        i.sound_isr_markers.push((0, true));
+        assert!(!i.should_poll_sound_events());
+        i.sound_isr_markers.clear();
+        i.current_interrupt_priority = 0;
+        assert!(!i.should_poll_sound_events());
+        i.current_interrupt_priority = -1;
+        i.has_sound_handlers = false;
+        assert!(!i.should_poll_sound_events());
+        i.has_sound_handlers = true;
+        assert!(i.should_poll_sound_events());
+        i.reset_audio();
+        assert!(!i.sound_poll_forced);
+        assert!(!i.should_poll_sound_events());
+        assert!(i.sound_handlers.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn audio_cadence_normal_poll_waits_for_deadline_without_consuming_handler() {
+        let mut i = cadence_program("10 REM DRIVER\n20 END\n100 RETURN");
+        i.sound_handlers[0] = Some(100);
+        i.has_sound_handlers = true;
+        let mut cursor = i.cursor_for_line(10).unwrap();
+        let driver = cursor;
+        let future_deadline = i.next_sound_poll;
+        assert!(!i.process_sound_events(&mut cursor).unwrap());
+        assert_eq!(cursor, driver);
+        assert_eq!(i.next_sound_poll, future_deadline);
+        assert_eq!(i.sound_handlers[0], Some(100));
+        i.next_sound_poll = Instant::now() - Duration::from_secs(1);
+        let before = Instant::now();
+        assert!(i.process_sound_events(&mut cursor).unwrap());
+        assert_eq!(cursor, i.cursor_for_line(100).unwrap());
+        assert!(i.next_sound_poll >= before + SOUND_EVENT_POLL_INTERVAL);
+        assert!(!i.sound_poll_forced);
+        assert!(i.sound_handlers[0].is_none());
+        i.execute_return(&mut cursor).unwrap();
+        assert_eq!(cursor, driver);
+        assert!(i.gosub_stack.is_empty());
+    }
+
+    #[test]
+    fn audio_cadence_registration_immediately_before_end_is_not_lost() {
+        for debug in [false, true] {
+            let mut i =
+                cadence_program("10 COUNT=0:ON SQ(1) GOSUB 100\n20 END\n100 COUNT=COUNT+1:RETURN");
+            if debug {
+                i.set_debugger(Debugger::scripted([]));
+            }
+            i.run_depth = 0;
+            let start = i.cursor_for_line(10).unwrap();
+            // run_from preserves this deadline; run_loaded would reset it.
+            assert_eq!(i.run_from(start).unwrap(), RunOutcome::End);
+            assert_eq!(
+                i.numeric_variables.get("COUNT"),
+                Some(&1.0),
+                "debug={debug}"
+            );
+            assert!(i.gosub_stack.is_empty());
+            assert!(i.sound_isr_markers.is_empty());
+        }
+    }
+
+    #[test]
+    fn audio_cadence_return_refills_four_pending_slots_without_deadline_waits() {
+        for channel in [1, 2, 4] {
+            let mut i = cadence_program("10 REM DRIVER\n20 END\n100 RETURN");
+            let mut cursor = i.cursor_for_line(10).unwrap();
+            i.execute_sound(&format!("{},142,1000", channel + 64), &mut cursor)
+                .unwrap();
+            i.execute_on_sq(&format!("ON SQ({channel}) GOSUB 100"))
+                .unwrap();
+            // A held head plus three submitted notes fills all four queue slots.
+            // Advancing the silent clock cannot create a spare slot here.
+            for _ in 0..3 {
+                assert!(i.process_sound_events(&mut cursor).unwrap());
+                i.execute_sound(&format!("{channel},142,1000"), &mut cursor)
+                    .unwrap();
+                i.execute_on_sq(&format!("ON SQ({channel}) GOSUB 100"))
+                    .unwrap();
+                assert!(!i.should_poll_sound_events());
+                // Isolate RETURN's exception from ON SQ/SOUND's forced bits.
+                cadence_defer_poll(&mut i);
+                i.execute_return(&mut cursor).unwrap();
+                assert!(i.sound_poll_forced);
+                assert!(i.should_poll_sound_events());
+            }
+            assert_eq!(i.audio.sq(channel) & 7, 0);
+            assert!(!i.process_sound_events(&mut cursor).unwrap());
+            assert!(!i.sound_poll_forced);
+            assert_eq!(
+                i.sound_handlers[channel.trailing_zeros() as usize],
+                Some(100)
+            );
+            assert!(i.gosub_stack.is_empty());
+            assert!(i.sound_isr_markers.is_empty());
+        }
+    }
+
+    #[test]
+    fn audio_cadence_ei_and_timer_return_force_ready_handlers_immediately() {
+        let mut i = cadence_program("10 REM DRIVER\n20 END\n100 RETURN\n200 RETURN");
+        let mut cursor = i.cursor_for_line(10).unwrap();
+        i.execute_on_sq("ON SQ(1) GOSUB 100").unwrap();
+        i.execute_command("DI", &mut cursor, &[]).unwrap();
+        assert!(!i.process_sound_events(&mut cursor).unwrap());
+        assert!(i.sound_poll_forced);
+        cadence_defer_poll(&mut i);
+        i.execute_command("EI", &mut cursor, &[]).unwrap();
+        assert_eq!(cursor, i.cursor_for_line(100).unwrap());
+        i.execute_return(&mut cursor).unwrap();
+
+        i.execute_on_sq("ON SQ(2) GOSUB 100").unwrap();
+        i.execute_timer("1 GOSUB 200", false).unwrap();
+        i.timers[0].next_fire = Instant::now() - Duration::from_secs(1);
+        assert!(i.process_timers(&mut cursor).unwrap());
+        assert_eq!(cursor, i.cursor_for_line(200).unwrap());
+        cadence_defer_poll(&mut i);
+        assert!(!i.should_poll_sound_events());
+        i.execute_return(&mut cursor).unwrap();
+        assert!(i.sound_poll_forced);
+        assert!(i.process_sound_events(&mut cursor).unwrap());
+        assert_eq!(cursor, i.cursor_for_line(100).unwrap());
+        i.execute_return(&mut cursor).unwrap();
+        assert!(i.gosub_stack.is_empty());
+        assert!(i.timer_isr_markers.is_empty());
+        assert!(i.sound_isr_markers.is_empty());
+    }
+
+    #[test]
+    fn audio_cadence_successful_sound_release_and_explicit_sq_force_polling() {
+        let mut i = cadence_program("10 REM DRIVER\n20 END\n100 RETURN");
+        let mut cursor = i.cursor_for_line(10).unwrap();
+        i.execute_on_sq("ON SQ(1) GOSUB 100").unwrap();
+        cadence_defer_poll(&mut i);
+        assert!(i.execute_sound("1,4096,1000", &mut cursor).is_err());
+        assert!(!i.sound_poll_forced);
+        i.execute_sound("65,142,1000", &mut cursor).unwrap();
+        assert!(i.sound_poll_forced);
+        cadence_defer_poll(&mut i);
+        i.execute_sound_release("1").unwrap();
+        assert!(i.sound_poll_forced);
+        cadence_defer_poll(&mut i);
+        i.audio_function("SQ", &[Value::number(1.0)]).unwrap();
+        assert!(i.sound_poll_forced);
+        assert!(i.should_poll_sound_events());
+    }
+
+    #[test]
+    fn audio_cadence_three_one_centisecond_voices_progress_alongside_timer() {
+        let i = run(
+            "10 LIMIT=24:A=0:B=0:C=0:TIMERCOUNT=0:TIMERDURING=0\n\
+             20 DI:EVERY 1 GOSUB 400:ON SQ(1) GOSUB 100:ON SQ(2) GOSUB 200:ON SQ(4) GOSUB 300:EI\n\
+             30 PAUSE 1000\n40 CANCEL 0\n50 END\n\
+             100 A=A+1:SOUND 1,142,1:IF A<LIMIT THEN ON SQ(1) GOSUB 100\n110 RETURN\n\
+             200 B=B+1:SOUND 2,179,1:IF B<LIMIT THEN ON SQ(2) GOSUB 200\n210 RETURN\n\
+             300 C=C+1:SOUND 4,213,1:IF C<LIMIT THEN ON SQ(4) GOSUB 300\n310 RETURN\n\
+             400 TIMERCOUNT=TIMERCOUNT+1:IF A<LIMIT OR B<LIMIT OR C<LIMIT THEN TIMERDURING=TIMERDURING+1\n410 RETURN",
+        );
+        for name in ["A", "B", "C"] {
+            assert_eq!(i.numeric_variables.get(name), Some(&24.0), "voice={name}");
+        }
+        assert!(*i.numeric_variables.get("TIMERCOUNT").unwrap() > 0.0);
+        assert!(*i.numeric_variables.get("TIMERDURING").unwrap() > 0.0);
+        assert!(i.gosub_stack.is_empty());
+        assert!(i.sound_isr_markers.is_empty());
+        assert!(i.timer_isr_markers.is_empty());
+        assert!(i.pending_sounds.is_empty());
+        let mut i = i;
+        for channel in [1, 2, 4] {
+            assert_eq!(i.audio.sq(channel), 4);
+        }
+    }
 
     fn silent() -> Interpreter {
         let mut interpreter = Interpreter::new();

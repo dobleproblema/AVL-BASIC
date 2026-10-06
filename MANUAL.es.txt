@@ -148,7 +148,11 @@ Las comillas y la extensión `.bas` sugeridas pasan a ser caracteres editables d
 
 Durante la edición inmediata y `EDIT número`, las mayúsculas del resaltado son solo visuales: se conserva la escritura original hasta aceptar la línea. Así, al continuar `val` con `or`, queda `valor`, no `VALor`; lo mismo ocurre al borrar o unir palabras. Al pulsar Intro se normalizan las palabras clave completas.
 
-Pese a que las mayúsculas/minúsculas no son significativas, las variables conservan el estilo utilizado la primera vez que se usó la variable a lo largo de todo el programa. Si se quiere cambiar el estilo de una variable, hay que editar, con `EDIT`, cualquier línea del programa que la contenga y reescribirla con el nuevo estilo.
+Pese a que las mayúsculas/minúsculas no son significativas, las variables conservan el estilo utilizado la primera vez que se usó la variable a lo largo de todo el programa. Si se quiere cambiar el estilo de una variable, hay que editar, con `EDIT número`, cualquier línea del programa que la contenga y reescribirla con el nuevo estilo.
+
+Al aceptar una línea, se almacena con los nombres de variable normalizados. `LIST`, `EDIT` y `SAVE` utilizan esa misma escritura. Borrar la primera aparición de una variable no recupera las grafías originales de otras líneas; un cambio de estilo con `EDIT número` actualiza las referencias almacenadas en todo el programa. Se conserva el texto de cadenas, comentarios y valores de `DATA`.
+
+El editor a pantalla completa conserva las formas canónicas existentes, tanto al añadir referencias como al modificar las anteriores. Solo para variables nuevas adopta la escritura de su primera referencia en el texto del editor. Para cambiar una forma ya establecida se utiliza `EDIT número`.
 
 2. Sintaxis esencial
 
@@ -228,8 +232,9 @@ Cambia `V=75` por `V=0` o `V=25` para probar las otras dos ramas.
 
 Notas rápidas (arrays)
 - Cada dimensión de DIM/REDIM indica el índice superior inclusivo. Los índices de los arrays arrancan en 0 siempre, pero tras `MAT BASE 1` las operaciones `MAT` que recorren el bloque matricial activo ignoran los índices 0.
+- Los límites de `DIM`, `REDIM` y las declaraciones de arrays locales deben ser finitos y no negativos. Los decimales se truncan hacia cero; el entero resultante no puede superar 2147483647. Los límites inválidos o los tamaños que exceden la capacidad de almacenamiento del array producen un error BASIC antes de sustituir ese array.
 - `REDIM` solo actúa sobre arrays existentes y mantiene tipo y número de dimensiones. Los elementos que sigan dentro de los nuevos límites se conservan; el resto se descarta y las posiciones recién creadas se inicializan a `0` o `""`.
-- Si accedes normalmente a un array no declarado, se crea implícitamente con límites 0..10 en cada dimensión. Esto no se aplica a las instrucciones MAT.
+- Si accedes normalmente a un array no declarado, se crea implícitamente con límites 0..10 en cada dimensión. Las asignaciones MAT y las copias de subarrays tienen sus propias reglas de creación del destino (sección 4.1).
 
 Notas de `NEW`
 - Borra el programa en memoria (líneas y DATA) y restablece completamente el estado: variables, arrays, funciones `DEF FN` (incluidas de 0 argumentos), puntero `DATA`, temporizadores/ISR, y el modo trigonométrico (radianes).
@@ -251,7 +256,7 @@ Notas rápidas
 4.1 Matrices y MAT
 
 Comandos
-+ MAT nombre = expresión           Operaciones elementales sobre matrices y vectores
++ MAT nombre = expresión           Asignación y expresiones con matrices y vectores
 + MAT BASE 0|1                     Índice de partida para `MAT PRINT/INPUT/READ` y operaciones estructurales (por defecto 0)
 + MAT PRINT [USING f$;] lista      Imprime arrays por filas o columnas (admite `ROW`/`COL`)
 + MAT INPUT lista                  Solicita los elementos de los arrays en la consola
@@ -273,23 +278,43 @@ Funciones
 
 Notas generales
 - `MAT` trabaja con arrays de 1 o 2 dimensiones. Los nombres sin `$` manejan números; los que terminan en `$` manejan texto.
-- El array destino se crea automáticamente con las dimensiones del resultado salvo en `MAT A = CON/ZER/IDN` y `MAT A$ = "..."` o `MAT A = 5` , que requieren un `DIM` previo.
+- Un resultado matricial crea o redimensiona el array destino con las dimensiones del resultado; un resultado escalar conserva su tamaño. En las asignaciones con expresión, si el destino no existe, se crea primero un vector de índices 0 a 10; un resultado matricial sustituye después ese vector. `MAT A = CON/ZER/IDN` requiere un array previamente declarado.
 - Las dimensiones representan el índice superior inclusivo; combínalas con `REDIM` para ampliar o recortar matrices sin recrearlas desde cero.
 
 Notas detalladas (`MAT nombre = ...`)
-- Solo puede haber una operación matricial en la expresión. Por ejemplo, si `A`, `B` y `C` son matrices, `MAT C=A*B` es correcto, pero `MAT C=C+A*B` no lo es. En ese caso hay que descomponerlo en dos sentencias `MAT`: `MAT A=A*B : MAT C=C+A`.
-- En cuanto a los escalares, la parte numérica puede tener la complejidad que necesites siempre que el resultado final sea un único escalar. Por ejemplo, (siendo `A` un escalar y `B` un array) `MAT B=(A-7*SIN(A/2))*B` es válido, pero `MAT B=A*B-2` no, porque implicaría dos operaciones independientes sobre B.
+- Se pueden combinar varias operaciones matriciales y escalares en una expresión. `MAT C=C+A*B` calcula primero el producto y después la suma; `MAT C=(A+B)*0.5` suma antes de escalar.
+- La precedencia y los paréntesis son los de las expresiones BASIC. Las potencias encadenadas se asocian a la izquierda; `-A^2` cambia el signo del cuadrado, mientras `(-A)^2` eleva los valores negativos al cuadrado.
+- Los nombres de arrays sin índices representan arrays completos en MAT, incluso si existe un escalar con el mismo nombre. Dentro de una función escalar se conservan las reglas normales de BASIC; por ejemplo, `MAT C=A+ABS(A)` usa el array a la izquierda y el escalar A dentro de ABS si ambos existen.
+- Los escalares pueden contener expresiones y funciones. Cada función se evalúa una vez por aparición, de izquierda a derecha, no una vez por elemento. `MAT C=A+ABS(-1)` y `MAT C=ABS(-1)+A` son válidos.
+- Los cálculos puramente escalares conservan las comprobaciones de tipos, dominio y desbordamiento de BASIC. Un error en un operando impide evaluar los operandos posteriores que BASIC no alcanzaría.
+- Cada operando de array se copia cuando se alcanza durante la evaluación, de izquierda a derecha. Si una función modifica un array, las apariciones anteriores conservan su copia y las posteriores leen los valores modificados.
+- El resultado se asigna completo al terminar; `MAT A=A+B*A` utiliza los valores anteriores de A. Un error no escribe un resultado parcial, pero conserva la creación implícita del destino y los efectos de las funciones ya evaluadas.
+- Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión. Los rangos y ejes omitidos se reservan a las copias de subarrays.
 - `MAT A = B` copia otra matriz o vector. También admite escalares (`MAT A = 5`) que rellenan todas las posiciones del array.
   • Las palabras clave `CON`, `ZER` e `IDN` rellenan con 1, 0 o con la identidad (matrices cuadradas); `IDN` usa `MAT BASE` para situar la diagonal.
-- `MAT A = TRN(B)` calcula la traspuesta de un array numérico bidimensional.
-- `MAT A = INV(B)` invierte una matriz cuadrada; si es singular o no es cuadrada aparece "Valor no válido".
-- Operaciones aritméticas: `+` y `-` suman/restan arrays compatibles o mezclan con escalares; `*` realiza producto matricial o de escalar elemento a elemento; `/` divide por un escalar; `^` permite potencias elemento a elemento (`array ^ escalar` o `escalar ^ array`).
-- Los vectores, que son vectores columna, son equivalentes a arrays de una dimensión. Es decir, en todos aquellos sitios donde se pueda poner un vector definido como DIM A(5), también sera válida una matriz definida como A(5,0) (o A(5,1) con MAT BASE 1) y viceversa.
+- `MAT A = TRN(B)` calcula la traspuesta de un array numérico bidimensional; el argumento puede ser una expresión matricial como `TRN(B+C)`.
+- `MAT A = INV(B)` invierte una matriz cuadrada; también admite expresiones como `INV(B+C)`. Una matriz singular produce "Valor no válido"; un array que no sea bidimensional o una matriz no cuadrada produce "Número de dimensiones no válido".
+- Operaciones aritméticas: `+` y `-` suman/restan arrays compatibles o mezclan con escalares; `*` realiza producto matricial o de escalar elemento a elemento; `/` admite array dividido por escalar o escalar dividido por cada elemento de un array; `^` permite potencias elemento a elemento (`array ^ escalar` o `escalar ^ array`).
+- Las operaciones elemento a elemento conservan las dimensiones del array y recorren todos sus elementos almacenados, incluido el índice 0 con `MAT BASE 1`. El producto matricial, `TRN` e `INV` utilizan el bloque activo de `MAT BASE` y producen matrices de dos dimensiones. Con base 1, el producto y `TRN` dejan a cero el borde de índice 0; `INV` conserva ese borde del argumento. La copia completa `MAT A=B` conserva todos los valores del origen.
+- Un vector `DIM A(5)` se trata como una columna en el producto matricial. También puede combinarse con una matriz de una sola columna, `DIM B(5,0)` (o `DIM B(5,1)` con `MAT BASE 1`), en sumas/restas de formas activas compatibles, `DOT` y funciones estadísticas. Esto no cambia su número de dimensiones: `TRN` e `INV` requieren arrays bidimensionales y una copia completa conserva las dimensiones del origen.
 - El signo unario `-` aplica el cambio de signo a toda la matriz (`MAT A = -B`).
 - Con arrays de texto (`$`) solo se admite la suma: `MAT A$ = B$ + "sufijo"` concatena elemento a elemento; otras operaciones provocan "Expresión no permitida".
+- Las operaciones numéricas sobre arrays conservan la aritmética matricial IEEE: los resultados pueden contener infinitos o NaN. `INV` requiere una matriz finita y rechaza los casos cuyo resultado no puede calcularse como una inversa finita.
+- Las funciones de reducción como `SUM`, `DET`, `FNORM` y `DOT` reciben nombres de arrays, no expresiones matriciales. Para calcular `SUM(A+B)`, usa primero `MAT AUX=A+B` y después `SUM(AUX)`. `TRN` e `INV` sí admiten expresiones matriciales directamente.
+
+Notas detalladas (copia de subarrays)
+- `MAT B=A(1:3,2:4)` copia un bloque rectangular. `MAT B(2:4,1:3)=A(1:3,2:4)` inserta ese bloque en un array existente sin cambiar sus límites ni los demás elementos. Las copias admiten arrays numéricos o de texto del mismo tipo.
+- Usa un selector para un vector y dos separados por coma para una matriz. Cada selector es un índice, un rango inclusivo `primero:último` o un eje omitido: `A(3,)` selecciona una fila, `A(,2)` una columna y `A(,)` toda la matriz activa. Los límites pueden ser variables o expresiones; los valores fraccionarios se truncan hacia cero.
+- Los ejes omitidos empiezan en el `MAT BASE` actual; los índices explícitos acceden directamente a los elementos almacenados, incluido el índice 0 con `MAT BASE 1`. Al escribir un rango hay que indicar ambos límites.
+- Un destino seleccionado debe existir. Su forma debe coincidir con la del origen: las matrices necesitan el mismo número de filas y columnas. Un vector puede recibir una fila o columna, o proporcionar sus valores a cualquiera de ellas; para copiar una fila de una matriz en una columna de otra, utiliza un vector entre las dos copias.
+- Si el destino es un array completo, la copia de un subarray lo crea o redimensiona y coloca el primer valor copiado en `MAT BASE`. Un destino existente conserva su número de dimensiones; un vector copiado en una matriz se convierte en una sola columna. Un destino sin declarar toma el número de dimensiones del origen, por lo que debes declarar antes un vector si quieres extraer una fila o columna en él. Las posiciones anteriores a la base activa se inicializan a cero o texto vacío.
+- La copia utiliza los valores originales del origen aunque se solape con el destino. Los límites no válidos o las formas o tipos incompatibles dejan el destino intacto.
+- Los rangos siguen la convención del HP-85: `primero:último` incluye ambos límites cuando `primero<=último`; `primero=último+1` no selecciona elementos. Si `primero>último+1`, selecciona desde `primero-1` hasta `último+1`, en orden descendente. Por ejemplo, `V(4:-1)` selecciona los índices 3,2,1,0 en ese orden. Deben existir los índices seleccionados, no necesariamente esos límites exteriores.
+- Una copia vacía en una selección existente no cambia nada. Un destino completo puede adquirir una dimensión activa vacía con `MAT BASE 1` (límite superior 0); con `MAT BASE 0`, un resultado completo vacío no es válido.
+- Las selecciones se admiten solo en copias, no como operandos de aritmética matricial. Copia primero el bloque a un array auxiliar para operar con él. `MAT A=B` conserva el comportamiento anterior de copia del array completo. Con un destino completo, una referencia a la derecha que solo contenga índices individuales conserva las reglas anteriores para expresiones escalares; no solicita una copia de subarray. Usa un rango como `MAT A=B(2:2)` para copiar un subarray de un elemento.
 
 Notas detalladas (`MAT BASE`)
-- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV` y `DET`.
+- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV`, `DET` y los ejes omitidos/destinos redimensionados en las copias de subarrays.
 - No modifica los datos almacenados: únicamente determina qué filas/columnas se recorren y dónde se traza la diagonal principal en `IDN`. Con `MAT BASE 1`, el producto matricial deja fuera la fila y columna 0 del cálculo.
 
 Notas detalladas (`MAT PRINT`)
@@ -328,6 +353,20 @@ Ejemplo
 90 MAT BASE 1 : MAT A = IDN
 100 PRINT : MAT PRINT A
 ```
+
+Ejemplo de expresiones compuestas
+```basic
+10 MAT BASE 0
+20 DIM A(1,1), B(1,1)
+30 DATA 1,2,3,4,2,0,0,3
+40 MAT READ A,B
+50 MAT C = (A+B)*0.5
+60 MAT D = TRN(A+B)+ABS(-1)
+70 MAT E = INV(B+B)*B
+80 MAT PRINT C;D;E
+90 END
+```
+`C` contiene la media de ambas matrices; `D`, la traspuesta de su suma con 1 añadido a cada elemento; `E`, la identidad multiplicada por 0.5. Hay más ejemplos en `samples/matrix-expressions.bas`.
 
 5. Entrada / salida de texto en la consola
 
@@ -1252,6 +1291,7 @@ Consultas y eventos de cola
 - `(SQ(1) AND 7)>0` comprueba si queda espacio en la cola del canal A. `SQ(1)=4` indica que todas sus notas han terminado.
 - `ON SQ(canal) GOSUB linea` activa un evento de un solo disparo cuando hay espacio en la cola, incluso si ya lo hay. Hay que volver a registrarlo para recibir otro evento; `ON SQ(canal) GOSUB 0` lo desactiva. El manejador debe terminar con `RETURN` y no puede interrumpirse a sí mismo: registrarlo de nuevo desde el propio manejador surte efecto tras el retorno.
 - `ON SQ` solo se admite en programas y no puede registrarse dentro de `DEF FN` ni `DEF SUB`. Respeta `DI`/`EI`; inhibir los manejadores no pausa el audio ni el avance de las colas. Los manejadores dejan de ejecutarse al terminar el programa; las notas ya encoladas siguen sonando.
+- Los eventos de cola se atienden entre instrucciones BASIC, con una cadencia ordinaria objetivo de 1 ms. Registrar o rearmar un manejador solicita atención en el siguiente punto elegible; desde el propio manejador, espera a `RETURN`. Los cambios explícitos de cola y habilitar las interrupciones también solicitan atención inmediata. Las instrucciones largas pueden retrasarla. La reproducción y las duraciones de las notas conservan su reloj de audio.
 
 Ejemplo
 ```basic
@@ -1480,9 +1520,9 @@ Formato de rangos
 
 9.2 Edición y depuración (`EDIT` · `DEBUG` · `RENUM` · `DELETE`)
 
-+ EDIT                            En la versión Rust, abre un editor a pantalla completa para el programa en memoria
++ EDIT                            Abre un editor a pantalla completa para el programa en memoria
 + EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
-+ DEBUG                           En la versión Rust, abre el depurador y se detiene antes de la primera instrucción
++ DEBUG                           Abre el depurador y se detiene antes de la primera instrucción
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
 + RENUM [inicio[, paso[, desde[, hasta]]]]  Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
@@ -1492,7 +1532,7 @@ Notas sobre EDIT
 - En el editor a pantalla completa, las flechas, Inicio/Fin y RePag/AvPag navegan por el texto; Ctrl+Inicio/Ctrl+Fin saltan al principio/final del programa. Shift+flechas selecciona texto; F3 deshace, F4 rehace, F5 copia, F6 pega, F7/F8 busca/reemplaza y F9 renumera el buffer visible.
 - `EDIT n` permite modificar tanto el código como el número de línea. Enter aplica los cambios. Si dejas solo el número sin código, la línea se borra. Esc cancela y deja la línea como estaba.
 - `EDIT` a pantalla completa requiere soporte de terminal interactivo; en entornos sin este soporte no está disponible.
-- Tras aplicar los cambios, el intérprete normaliza la línea y actualiza el estilo de las variables en todo el programa.
+- Al aplicar `EDIT n`, el intérprete normaliza la línea y propaga los cambios de estilo de las variables a todo el programa. El editor a pantalla completa mantiene las formas existentes y normaliza sus referencias al aplicar F12.
 - F7/F8 en el editor hacen búsqueda/reemplazo literal sin distinguir mayúsculas/minúsculas, sin expresiones regulares ni comodines. F8 empieza desde el principio del programa. En el submenú de reemplazo, Enter reemplaza la coincidencia seleccionada y busca la siguiente, F7 la salta, F8 reemplaza todas las coincidencias restantes desde la selección actual y Esc termina.
 - F9 en el editor renumera todas las líneas no vacías según el orden visible: empieza por el número más bajo presente y usa el incremento positivo más frecuente. Si hay líneas sin número válido o números duplicados, no modifica el buffer.
 

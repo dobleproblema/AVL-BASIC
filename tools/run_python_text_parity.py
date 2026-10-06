@@ -66,9 +66,33 @@ GRAPHICS_RE = re.compile(
     re.IGNORECASE,
 )
 
-# These are the Python text parity cases that the current Rust interpreter
-# matches exactly. The AVL-BASIC oracle currently exposes 391 text cases.
+# Supported legacy Python fixtures. Explicit Rust expectations below cover
+# the three fixtures whose old MAT syntax rejection is intentionally extended.
 SUPPORTED_TEXT_CASE_IDS = set(range(1, 392))
+
+# Match complete source, not case numbers, so edits to the Python fixtures
+# cannot silently inherit an expectation for a different program. Python's
+# own suite still checks its legacy errors; the MAT expression corpus checks
+# the new Rust arithmetic and scalar-function results independently.
+RUST_MAT_EXTENSION_OUTPUTS = {
+    "10 DIM B(1,1)\n20 MAT B = (2*B/3)": "",
+    "10 DIM A(0,0), B(0,0)\n20 MAT A = (2)\n30 MAT B = (3)\n40 MAT A = SIN(B)": "",
+    """10 MAT BASE 1 : DEG
+20 DIM a(2,4),b(2,4)
+30 DATA 12, 52, 76, 33, 81, 70, 72, 14
+40 MAT READ a
+50 MAT b=50 : b(1,2)=b(2,1)=0
+60 MAT a=0.7*a : MAT b=(0.3*b*SIN(60)) 'Solo un vector y un escalar
+65 MAT a=a-b
+70 MAT PRINT USING " ##.#";a""": (
+        " -4.6   36.4   40.2   10.1\n 56.7   36.0   37.4   -3.2"
+    ),
+}
+
+
+def rust_mat_extension_output(case: ProgramCase) -> str | None:
+    source = "\n".join(line.strip() for line in case.program.strip().splitlines())
+    return RUST_MAT_EXTENSION_OUTPUTS.get(source)
 
 
 @dataclass(frozen=True)
@@ -205,6 +229,7 @@ def print_summary(cases: list[ProgramCase]) -> None:
     print(f"text_cases={text_count}")
     print(f"graphics_cases={graphics_count}")
     print(f"supported_text_cases={supported_count}")
+    print(f"rust_mat_extension_cases={sum(rust_mat_extension_output(case) is not None for case in cases)}")
 
 
 def run_selected_cases(args: argparse.Namespace, cases: list[ProgramCase]) -> int:
@@ -223,7 +248,8 @@ def run_selected_cases(args: argparse.Namespace, cases: list[ProgramCase]) -> in
                 actual = run_rust_case(rust_bin, case, temp_dir, args.timeout)
             except subprocess.TimeoutExpired:
                 actual = "<timeout>"
-            expected = normalize_expected(case.expected)
+            extension_output = rust_mat_extension_output(case)
+            expected = normalize_expected(case.expected if extension_output is None else extension_output)
             if actual != expected:
                 failures.append((case, expected, actual))
                 if len(failures) >= args.max_failures:
@@ -246,7 +272,9 @@ def run_selected_cases(args: argparse.Namespace, cases: list[ProgramCase]) -> in
             print(actual)
         return 1
 
-    print(f"ok mode={args.mode} selected={len(chosen)}")
+    extensions = sum(rust_mat_extension_output(case) is not None for case in chosen)
+    print(f"ok mode={args.mode} selected={len(chosen)} "
+          f"python_oracle={len(chosen)-extensions} rust_mat_extensions={extensions}")
     return 0
 
 

@@ -1,4 +1,4 @@
-"""Compare Smoke (formerly Ink Reactor) samples with fixed input and executable.
+"""Compare Smoke (formerly Ink Reactor) samples with fixed input.
 
 Standard library only. Each process simulates five untimed frames, then the
 requested number of measured frames, always at DT=1/30. PNG and CSV exports
@@ -15,6 +15,7 @@ Example, run from the repository root:
         --output target/ink-comparison --grids 64,96,128 --window 0
 
 Use a separate output directory and invocation for windowed measurements.
+Use --baseline-executable to compare an interpreter change as well as the sample.
 No source sample or executable is modified.
 Requested widths override each sample's quality preset; heights retain each
 sample's 16:10 or 4:3 formula. Use --allow-differences across aspect ratios.
@@ -77,7 +78,7 @@ def grid_height(lines: dict[int, str], width: int) -> int:
     return width * numerator // denominator
 
 
-def generate(source: bytes, grid: int, frames: int, smooth: int | None, scenario: str) -> str:
+def generate(source: bytes, grid: int, frames: int, smooth: int | None, scenario: str, hud: int = 0) -> str:
     lines = parse_source(source)
     if grid not in GRID_LEVELS:
         raise ValueError(f"Unsupported grid width {grid}")
@@ -104,7 +105,7 @@ def generate(source: bytes, grid: int, frames: int, smooth: int | None, scenario
         if scenario != "auto":
             raise ValueError("This sample is automatic-only and has no manual mouse scenario")
     overrides = {"LEVEL": GRID_LEVELS[grid], "VORT": 1, "SMOOTH": smooth,
-                 "HUD": 0, "FROZEN": 0, "CAP": 0}
+                 "HUD": hud, "FROZEN": 0, "CAP": 0}
     if not automatic_only:
         overrides["AUTO"] = auto
     for name, value in overrides.items():
@@ -268,6 +269,7 @@ def main() -> int:
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--candidate", type=Path, default=ROOT / "samples/g-smoke.bas")
     parser.add_argument("--executable", type=Path, default=ROOT / "target/release/avl-basic.exe")
+    parser.add_argument("--baseline-executable", type=Path, help="Defaults to --executable")
     parser.add_argument("--output", required=True, type=Path, help="New output directory; existing directories are rejected")
     parser.add_argument("--grids", type=grids_arg, default=[64, 96, 128],
                         help="Requested grid widths; each source retains its own height formula")
@@ -276,6 +278,7 @@ def main() -> int:
     parser.add_argument("--warmups", type=int, default=1, help="Discarded AB/BA pairs per grid")
     parser.add_argument("--window", type=int, choices=(0, 1), default=0)
     parser.add_argument("--smooth", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--hud", type=int, choices=(0, 1), default=0, help="Draw the HUD with its FPS timer disabled")
     parser.add_argument("--source-smoothing", action="store_true", help="Keep each source's default SMOOTH setting instead of overriding it with --smooth")
     parser.add_argument("--scenario", choices=("auto", "manual"), default="auto")
     parser.add_argument("--allow-differences", action="store_true", help="Allow different outputs between variants; still require each variant to be deterministic")
@@ -285,7 +288,8 @@ def main() -> int:
         parser.error("warmups must be nonnegative and timeout must be finite and positive")
     sources = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
     executable = args.executable.resolve()
-    for path in [*sources.values(), executable]:
+    executables = {"baseline": (args.baseline_executable or executable).resolve(), "candidate": executable}
+    for path in [*sources.values(), *executables.values()]:
         if not path.is_file():
             parser.error(f"File not found: {path}")
     output = args.output.resolve()
@@ -294,7 +298,7 @@ def main() -> int:
     source_bytes = {name: path.read_bytes() for name, path in sources.items()}
     try:
         programs = {
-            (grid, name): generate(data, grid, args.frames, None if args.source_smoothing else args.smooth, args.scenario)
+            (grid, name): generate(data, grid, args.frames, None if args.source_smoothing else args.smooth, args.scenario, args.hud)
             for grid in args.grids for name, data in source_bytes.items()
         }
     except ValueError as error:
@@ -307,6 +311,7 @@ def main() -> int:
         "platform": platform.platform(), "python": platform.python_version(),
         "processor": platform.processor(), "executable": str(executable),
         "executable_sha256": sha256(executable.read_bytes()),
+        "executables": {name: {"path": str(path), "sha256": sha256(path.read_bytes())} for name, path in executables.items()},
         "sources": {name: {"path": str(sources[name]), "sha256": sha256(data)} for name, data in source_bytes.items()},
         "settings": {"grids": args.grids, "frames": args.frames, "runs": args.runs,
                      "external_warmup_pairs": args.warmups, "internal_warmup_frames": INTERNAL_WARMUP,
@@ -318,7 +323,7 @@ def main() -> int:
                      "fixed_dt": "1/30", "pressure_iterations": {
                          name: int(re.search(r"\bITER\s*=\s*(\d+)", parse_source(data)[200])[1])
                          for name, data in source_bytes.items()
-                     }, "vorticity": 1, "hud": 0,
+                     }, "vorticity": 1, "hud": args.hud,
                      "cap": 0, "timeout_seconds": args.timeout},
         "allow_differences": args.allow_differences,
         "equality_scope": "BASIC WRITE serialized full fields including ghost cells; PNG bytes; stdout excluding timing line",
@@ -337,7 +342,7 @@ def main() -> int:
                     order = ("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")
                     for position, variant in enumerate(order):
                         directory = output / f"{grid}-{phase}-{pair + 1:02d}-{position + 1}-{variant}"
-                        result = run_one(executable, programs[grid, variant], directory,
+                        result = run_one(executables[variant], programs[grid, variant], directory,
                                          grid=grid, frames=args.frames, window=args.window,
                                          timeout=args.timeout, variant=variant, phase=phase, pair=pair + 1)
                         report["runs"].append(result)
@@ -368,8 +373,9 @@ def main() -> int:
             equality = "equal outputs" if equal else "different outputs; each variant deterministic"
             print(f"{grid}: {summary['speedup']:.3f}x speedup; {equality}", flush=True)
             write_json(report_path, report)
-        if sha256(executable.read_bytes()) != report["executable_sha256"]:
-            raise ValueError("Executable changed during the benchmark")
+        for name, path in executables.items():
+            if sha256(path.read_bytes()) != report["executables"][name]["sha256"]:
+                raise ValueError(f"Executable changed during the benchmark: {path}")
         for name, path in sources.items():
             if sha256(path.read_bytes()) != report["sources"][name]["sha256"]:
                 raise ValueError(f"Source changed during the benchmark: {path}")

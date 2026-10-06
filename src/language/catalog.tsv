@@ -194,7 +194,7 @@ statement	both	SWAP		SWAP variable1,variable2	variable1: First variable; variabl
 statement	both	CLEAR		CLEAR	-	Clears runtime data while keeping the stored program.	CLEAR INPUT,NEW	-
 statement	both	CLEAR INPUT		CLEAR INPUT	-	Empties the keyboard and input-event buffers.	CLEAR,INKEY$	-
 statement	immediate	NEW		NEW	-	Clears the program and fully resets the interpreter.	CLEAR,LOAD	-
-statement	both	MAT		MAT destination = expression	destination: Numeric or string array; expression: One supported matrix operation	Assigns a scalar, array, or matrix result to an array.	MAT BASE,MAT PRINT,MAT INPUT,MAT READ	-
+statement	both	MAT		MAT destination = expression | MAT destination[(selectors)] = source[(selectors)]	destination: Numeric or string array; expression: Supported compound matrix/scalar expression with BASIC precedence; selectors: Index, first:last range, or omitted row/column axis	Assigns a scalar, array, or matrix result; copies rows, columns, and rectangular subarrays.	MAT BASE,MAT PRINT,MAT INPUT,MAT READ	-
 statement	both	MAT BASE		MAT BASE base	base: Matrix traversal base 0 or 1	Selects the starting index used by MAT operations.	MAT,MAT PRINT,MAT INPUT,MAT READ	-
 statement	both	MAT PRINT		MAT PRINT [ROW|COL] array[;|, ...]	array: Array to print; ROW: Normal orientation; COL: Transposed display orientation	Prints arrays by rows or columns.	MAT PRINT USING,MAT	-
 statement	both	MAT PRINT USING		MAT PRINT USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask; array: Array to print	Prints arrays using a numeric format mask.	MAT PRINT,PRINT USING	-
@@ -402,8 +402,8 @@ function	expression	SUM		SUM(array)	array: numeric array name	Returns the algebr
 function	expression	ZER		MAT target = ZER	target: previously dimensioned numeric array	Fills a MAT destination with zeroes.	CON,IDN,MAT	mat-only
 function	expression	CON		MAT target = CON	target: previously dimensioned numeric array	Fills a MAT destination with ones.	ZER,IDN,MAT	mat-only
 function	expression	IDN		MAT target = IDN	target: previously dimensioned square numeric array	Fills a MAT destination with the identity matrix.	ZER,CON,MAT BASE	mat-only
-function	expression	TRN		MAT target = TRN(array)	target: destination array; array: two-dimensional numeric array name	Assigns the matrix transpose.	INV,MAT	builtin
-function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix name	Assigns the matrix inverse.	DET,TRN,MAT	builtin
+function	expression	TRN		MAT target = TRN(array)	target: destination array; array: two-dimensional numeric array or matrix expression	Assigns the matrix transpose.	INV,MAT	builtin
+function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix or matrix expression	Assigns the matrix inverse.	DET,TRN,MAT	builtin
 
 # Graphics, screen, and sprite functions
 function	expression	WIDTH		WIDTH	-	Returns the graphics window width in pixels.	HEIGHT	builtin,zero-arg

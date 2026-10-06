@@ -148,7 +148,11 @@ Suggested quotes and the `.bas` extension become editable characters in the inpu
 
 During immediate input and `EDIT number`, capitals introduced by highlighting are visual only: the original spelling is retained until the line is accepted. Extending `val` with `or` therefore produces `valor`, not `VALor`; deleting or joining words works the same way. Pressing Enter normalizes complete keywords.
 
-Although uppercase/lowercase is not significant, variables keep the style used the first time that variable appeared throughout the whole program. If you want to change the style of a variable, you must edit, with `EDIT`, any program line that contains it and retype it using the new style.
+Although uppercase/lowercase is not significant, variables keep the style used the first time that variable appeared throughout the whole program. If you want to change the style of a variable, you must edit, with `EDIT number`, any program line that contains it and retype it using the new style.
+
+When a line is accepted, its variable names are stored with their canonical spelling. `LIST`, `EDIT` and `SAVE` use that same spelling. Deleting a variable's first occurrence does not restore the original spellings of other lines; changing its style with `EDIT number` updates the stored references throughout the program. Strings, comments and `DATA` values retain their text.
+
+The full-screen editor preserves existing canonical forms when adding references or modifying previous ones. Only new variables adopt the spelling of their first reference in the editor text. Use `EDIT number` to change an established form.
 
 2. Essential syntax
 
@@ -228,8 +232,9 @@ Change `V=75` to `V=0` or `V=25` to try the other two branches.
 
 Quick notes (arrays)
 - Each DIM/REDIM dimension indicates the inclusive upper index. Array indices always start at 0, but after `MAT BASE 1` the `MAT` operations that traverse the active matrix block ignore the 0 indices.
+- Bounds in `DIM`, `REDIM` and local array declarations must be finite and nonnegative. Fractions are truncated toward zero; the resulting integer must not exceed 2147483647. Invalid bounds or sizes exceeding the array storage capacity report a BASIC error before replacing that array.
 - `REDIM` only acts on existing arrays and preserves type and number of dimensions. Elements that still lie within the new bounds are kept; the rest are discarded, and newly created positions are initialized to `0` or `""`.
-- If you normally access an undeclared array, it is created implicitly with bounds 0..10 in each dimension. This does not apply to `MAT` statements.
+- If you normally access an undeclared array, it is created implicitly with bounds 0..10 in each dimension. MAT assignments and subarray copies have their own rules for creating the destination (section 4.1).
 
 Notes on `NEW`
 - It clears the program in memory (lines and DATA) and fully resets the state: variables, arrays, `DEF FN` functions (including 0-argument ones), the `DATA` pointer, timers/ISR, and trigonometric mode (radians).
@@ -251,7 +256,7 @@ Quick notes
 4.1 Matrices and MAT
 
 Commands
-+ MAT name = expression           Elementary operations on matrices and vectors
++ MAT name = expression           Assignment and expressions with matrices and vectors
 + MAT BASE 0|1                    Starting index for `MAT PRINT/INPUT/READ` and structural operations (default 0)
 + MAT PRINT [USING f$;] list      Prints arrays by rows or columns (accepts `ROW`/`COL`)
 + MAT INPUT list                  Requests the array elements in the console
@@ -273,23 +278,43 @@ Functions
 
 General notes
 - `MAT` works with 1D or 2D arrays. Names without `$` hold numbers; names ending in `$` hold text.
-- The destination array is created automatically with the dimensions of the result, except in `MAT A = CON/ZER/IDN` and `MAT A$ = "..."` or `MAT A = 5`, which require a previous `DIM`.
+- A matrix result creates or resizes the destination array to the result dimensions; a scalar result keeps its size. In expression assignments, if the destination does not exist, a vector indexed 0 to 10 is created first; a matrix result then replaces that vector. `MAT A = CON/ZER/IDN` requires a previously declared array.
 - The dimensions represent the inclusive upper index; combine them with `REDIM` to enlarge or trim matrices without recreating them from scratch.
 
 Detailed notes (`MAT name = ...`)
-- Only one matrix operation may appear in the expression. For example, if `A`, `B` and `C` are matrices, `MAT C=A*B` is correct, but `MAT C=C+A*B` is not. In that case it must be split into two `MAT` statements: `MAT A=A*B : MAT C=C+A`.
-- As for scalars, the numeric part may be as complex as needed as long as the final result is a single scalar. For example, if `A` is a scalar and `B` is an array, `MAT B=(A-7*SIN(A/2))*B` is valid, but `MAT B=A*B-2` is not, because it would imply two independent operations on `B`.
+- Multiple matrix and scalar operations can be combined in one expression. `MAT C=C+A*B` multiplies before adding; `MAT C=(A+B)*0.5` adds before scaling.
+- Precedence and parentheses follow BASIC expressions. Chained powers associate to the left; `-A^2` negates the square, while `(-A)^2` squares the negative values.
+- Unindexed array names denote whole arrays in MAT, even when a scalar with the same name exists. Scalar function arguments retain ordinary BASIC rules; for example, `MAT C=A+ABS(A)` uses the array on the left and the scalar A inside ABS when both exist.
+- Scalars can contain expressions and functions. Each function is evaluated once per occurrence, from left to right, rather than once per element. Both `MAT C=A+ABS(-1)` and `MAT C=ABS(-1)+A` are valid.
+- Purely scalar calculations retain BASIC's type, domain and overflow checks. An operand error prevents evaluating later operands that ordinary BASIC would not reach.
+- Each array operand is copied when reached during left-to-right evaluation. If a function modifies an array, earlier occurrences keep their copy and later occurrences read the modified values.
+- The complete result is assigned when evaluation finishes; `MAT A=A+B*A` uses the previous values of A. An error does not write a partial result, but preserves implicit destination creation and effects of functions already evaluated.
+- Individual indices, such as `A(2)` or `A(1,2)`, read a scalar element and can appear in the expression. Ranges and omitted axes remain restricted to subarray copies.
 - `MAT A = B` copies another matrix or vector. It also accepts scalars (`MAT A = 5`), which fill every position in the array.
   * The keywords `CON`, `ZER` and `IDN` fill with 1, 0, or the identity matrix (square matrices only); `IDN` uses `MAT BASE` to place the diagonal.
-- `MAT A = TRN(B)` computes the transpose of a 2D numeric array.
-- `MAT A = INV(B)` inverts a square matrix; if it is singular or not square, "Invalid value" is raised.
-- Arithmetic operations: `+` and `-` add/subtract compatible arrays or combine them with scalars; `*` performs matrix multiplication or scalar multiplication element by element; `/` divides by a scalar; `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
-- Vectors, which are column vectors, are equivalent to one-dimensional arrays. That is, anywhere you can use a vector defined as `DIM A(5)`, a matrix defined as `A(5,0)` (or `A(5,1)` with `MAT BASE 1`) is also valid, and vice versa.
+- `MAT A = TRN(B)` computes the transpose of a two-dimensional numeric array; its argument can be a matrix expression such as `TRN(B+C)`.
+- `MAT A = INV(B)` inverts a square matrix and also accepts expressions such as `INV(B+C)`. A singular matrix reports "Invalid value"; an array that is not two-dimensional or a non-square matrix reports "Invalid number of dimensions".
+- Arithmetic operations: `+` and `-` add/subtract compatible arrays or combine them with scalars; `*` performs matrix multiplication or scalar multiplication element by element; `/` supports an array divided by a scalar or a scalar divided by each element of an array; `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
+- Element-wise operations preserve the array dimensions and visit all stored elements, including index 0 with `MAT BASE 1`. Matrix multiplication, `TRN`, and `INV` use the active `MAT BASE` block and produce two-dimensional matrices. With base 1, multiplication and `TRN` leave the border at index 0 zero; `INV` preserves that border from its argument. A full copy `MAT A=B` preserves all source values.
+- A vector `DIM A(5)` is treated as a column in matrix multiplication. It can also be combined with a single-column matrix, `DIM B(5,0)` (or `DIM B(5,1)` with `MAT BASE 1`), in addition/subtraction with compatible active shapes, `DOT`, and statistical functions. This does not change its number of dimensions: `TRN` and `INV` require two-dimensional arrays, and a full copy preserves the source dimensions.
 - Unary `-` changes the sign of the whole matrix (`MAT A = -B`).
 - With text arrays (`$`), only addition is allowed: `MAT A$ = B$ + "suffix"` concatenates element by element; other operations raise "Expression not allowed".
+- Numeric array operations retain IEEE matrix arithmetic: results can contain infinities or NaN. `INV` requires a finite matrix and rejects cases whose result cannot be calculated as a finite inverse.
+- Reduction functions such as `SUM`, `DET`, `FNORM` and `DOT` take array names, not matrix expressions. To calculate `SUM(A+B)`, first use `MAT AUX=A+B` and then `SUM(AUX)`. `TRN` and `INV` do accept matrix expressions directly.
+
+Detailed notes (copying subarrays)
+- `MAT B=A(1:3,2:4)` copies a rectangular block. `MAT B(2:4,1:3)=A(1:3,2:4)` inserts that block into an existing array without changing its bounds or other elements. Copies work with numeric or text arrays of the same type.
+- Use one selector for a vector and two comma-separated selectors for a matrix. Each selector is an index, an inclusive `first:last` range, or an omitted axis: `A(3,)` selects a row, `A(,2)` selects a column, and `A(,)` selects the entire active matrix. Bounds may be variables or expressions; fractional values are truncated toward zero.
+- Omitted axes start at the current `MAT BASE`; explicit indices address stored elements directly, including index 0 with `MAT BASE 1`. Both limits are required when writing a range.
+- A selected destination must already exist. Its shape must match the source: matrices need the same number of rows and columns. A vector can receive a matrix row or column, or supply either one; to copy a matrix row into a matrix column, use a vector between the two copies.
+- With a whole-array destination, a subarray copy creates or redimensions it and places the first copied value at `MAT BASE`. An existing destination keeps its number of dimensions; a vector copied into a matrix becomes a single column. An undeclared destination takes the source's number of dimensions, so declare a vector first when extracting a matrix row or column into one. Positions below the active base are initialized to zero or empty text.
+- Copying uses the original source values even when source and destination overlap. Invalid bounds, incompatible shapes or types leave the destination unchanged.
+- Ranges follow the HP-85 convention: `first:last` includes both limits when `first<=last`; `first=last+1` selects no elements. If `first>last+1`, it selects `first-1` down to `last+1`. For example, `V(4:-1)` selects indices 3,2,1,0 in that order. The selected indices, rather than those outer limits, must exist.
+- An empty copy into an existing selection does nothing. A whole-array destination can acquire an empty active dimension with `MAT BASE 1` (upper bound 0); with `MAT BASE 0`, an empty whole-array result is invalid.
+- Selections are supported in copies only, not as operands within matrix arithmetic. Copy a block to a temporary array before operating on it. Ordinary `MAT A=B` keeps its existing full-array-copy behavior. With a whole-array destination, a right-hand reference with only individual indices keeps the existing scalar-expression rules; it does not request a subarray copy. Use a range such as `MAT A=B(2:2)` to copy a one-element subarray.
 
 Detailed notes (`MAT BASE`)
-- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, matrix multiplication (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV` and `DET`.
+- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, matrix multiplication (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV`, `DET`, and omitted axes/rebased destinations in subarray copies.
 - It does not modify the stored data: it only determines which rows/columns are traversed and where the main diagonal is drawn in `IDN`. With `MAT BASE 1`, matrix multiplication leaves row and column 0 out of the calculation.
 
 Detailed notes (`MAT PRINT`)
@@ -328,6 +353,20 @@ Example
 90 MAT BASE 1 : MAT A = IDN
 100 PRINT : MAT PRINT A
 ```
+
+Compound expression example
+```basic
+10 MAT BASE 0
+20 DIM A(1,1), B(1,1)
+30 DATA 1,2,3,4,2,0,0,3
+40 MAT READ A,B
+50 MAT C = (A+B)*0.5
+60 MAT D = TRN(A+B)+ABS(-1)
+70 MAT E = INV(B+B)*B
+80 MAT PRINT C;D;E
+90 END
+```
+`C` contains the mean of both matrices; `D`, the transpose of their sum with 1 added to each element; `E`, the identity multiplied by 0.5. More examples are available in `samples/matrix-expressions.bas`.
 
 5. Text input/output in the console
 
@@ -1239,6 +1278,7 @@ Queue queries and events
 - `(SQ(1) AND 7)>0` tests whether channel A has queue room. `SQ(1)=4` means all of its notes have finished.
 - `ON SQ(channel) GOSUB line` arms a one-shot event for queue room, including a queue that already has room. Rearm it to receive another event; `ON SQ(channel) GOSUB 0` disables it. The handler must finish with `RETURN` and cannot interrupt itself: rearming inside it takes effect after return.
 - `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress. Handlers stop when the program ends; notes already queued continue playing.
+- Queue events are serviced between BASIC instructions, with an ordinary target cadence of 1 ms. Registering or rearming a handler requests service at the next eligible point; from inside its own handler, it waits for `RETURN`. Explicit queue changes and re-enabling interrupts also request immediate service. Long instructions may delay it. Playback and note durations retain their audio clock.
 
 Example
 ```basic
@@ -1467,9 +1507,9 @@ Range formats
 
 9.2 Program editing and debugging (`EDIT` · `DEBUG` · `RENUM` · `DELETE`)
 
-+ EDIT                            In the Rust runtime, opens a full-screen editor for the program in memory
++ EDIT                            Opens a full-screen editor for the program in memory
 + EDIT n                          Opens a line editor with the contents of line `n` prefilled
-+ DEBUG                           In the Rust runtime, opens the debugger and pauses before the first statement
++ DEBUG                           Opens the debugger and pauses before the first statement
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
 + RENUM [start[, step[, from[, to]]]]  Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`, unlimited `to`.
@@ -1479,7 +1519,7 @@ Notes on `EDIT`
 - In the full-screen editor, the arrow keys, Home/End and PageUp/PageDown navigate the text; Ctrl+Home/Ctrl+End jump to the start/end of the program. Shift+arrows select text; F3 undoes, F4 redoes, F5 copies, F6 pastes, F7/F8 finds/replaces and F9 renumbers the visible buffer.
 - `EDIT n` allows modifying both the code and the line number. Enter applies the changes. If you leave only the number with no code, the line is deleted. Esc cancels and leaves the line unchanged.
 - Full-screen `EDIT` requires interactive terminal support; in environments without this support, it is not available.
-- After applying the changes, the interpreter normalizes the line and updates variable styling throughout the program.
+- Applying `EDIT n` normalizes the line and propagates variable style changes throughout the program. The full-screen editor keeps existing forms and normalizes their references when F12 is applied.
 - F7/F8 in the editor perform literal case-insensitive find/replace, with no regular expressions or wildcards. F8 starts at the beginning of the program. In the replace submenu, Enter replaces the selected match and finds the next one, F7 skips it, F8 replaces all remaining matches from the current selection, and Esc exits.
 - F9 in the editor renumbers all non-empty lines in visible order: it starts at the lowest line number present and uses the most frequent positive increment. If any line has no valid line number or line numbers are duplicated, it leaves the buffer unchanged.
 

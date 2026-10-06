@@ -1,4 +1,13 @@
+mod array_expr;
 mod audio_commands;
+mod color_lut;
+mod mat_compiled;
+#[cfg(test)]
+mod mat_compiled_tests;
+mod mat_stats;
+mod mat_subarrays;
+
+use mat_compiled::CompiledMatAssignment;
 
 use crate::audio::{cpc::Note as SoundNote, AudioSystem};
 use crate::console;
@@ -409,6 +418,7 @@ const ACTIVE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 const STALE_GRAPHICS_WINDOW_PUMP_INTERVAL: Duration = Duration::from_secs(1);
 const FRAME_DRIVEN_PUMP_CHECK_SKIP: u8 = 64;
 const RUNTIME_POLL_COMMAND_SKIP: u8 = 31;
+const SOUND_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -675,6 +685,42 @@ impl ArrayValue {
         }
     }
 
+    // Validate allocation once when creating an array. Existing indexed reads
+    // and writes do not repeat these dimension or capacity checks.
+    fn try_new(name: &str, dims: Vec<usize>) -> BasicResult<Self> {
+        let len = Self::checked_data_len(&dims)?;
+        let data = if name.ends_with('$') {
+            len.checked_mul(std::mem::size_of::<String>())
+                .filter(|bytes| *bytes <= isize::MAX as usize)
+                .ok_or_else(|| BasicError::new(ErrorCode::Overflow))?;
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(len)
+                .map_err(|_| BasicError::new(ErrorCode::Overflow))?;
+            values.resize_with(len, String::new);
+            ArrayData::Str(values)
+        } else {
+            ArrayData::Number(checked_zeroed_numeric_buffer(1, len)?)
+        };
+        Ok(Self {
+            dims,
+            data,
+            last_debug_write: None,
+        })
+    }
+
+    fn checked_data_len(dims: &[usize]) -> BasicResult<usize> {
+        dims.iter().try_fold(1usize, |len, bound| {
+            if *bound > i32::MAX as usize {
+                return Err(BasicError::new(ErrorCode::Overflow));
+            }
+            bound
+                .checked_add(1)
+                .and_then(|span| len.checked_mul(span))
+                .ok_or_else(|| BasicError::new(ErrorCode::Overflow))
+        })
+    }
+
     fn flat_index(&self, indexes: &[i32]) -> BasicResult<usize> {
         if indexes.len() != self.dims.len() {
             return Err(BasicError::new(ErrorCode::InvalidIndex));
@@ -918,8 +964,14 @@ impl ArrayValue {
         base: i32,
         rows: usize,
         cols: usize,
-        data: Vec<f64>,
-    ) -> Self {
+        mut data: Vec<f64>,
+    ) -> BasicResult<Self> {
+        let active_len = rows
+            .checked_mul(cols)
+            .ok_or_else(|| BasicError::new(ErrorCode::Overflow))?;
+        if data.len() != active_len {
+            return Err(BasicError::new(ErrorCode::InvalidDimensions));
+        }
         let upper = |count: usize| {
             if base == 1 {
                 count
@@ -927,25 +979,291 @@ impl ArrayValue {
                 count.saturating_sub(1)
             }
         };
-        let dims = if cols == 1 {
-            vec![upper(rows)]
-        } else {
-            vec![upper(rows), upper(cols)]
-        };
-        let mut array = ArrayValue::new(name, dims);
+        let dims = vec![upper(rows), upper(cols)];
         let lower = base.max(0) as usize;
+        if lower == 0 && !name.ends_with('$') && rows > 0 && cols > 0 {
+            Self::checked_data_len(&dims)?;
+            return Ok(Self {
+                dims,
+                data: ArrayData::Number(data),
+                last_debug_write: None,
+            });
+        }
+        if base == 1 && !name.ends_with('$') {
+            let stored_len = Self::checked_data_len(&dims)?;
+            data.try_reserve_exact(stored_len - active_len)
+                .map_err(|_| BasicError::new(ErrorCode::Overflow))?;
+            data.resize(stored_len, 0.0);
+            let stride = cols + 1;
+            // Move rows backwards so padding cannot overwrite an unread row.
+            // Only borders need clearing; every active f64 keeps its bits.
+            if cols != 0 {
+                for row in (0..rows).rev() {
+                    data.copy_within(row * cols..(row + 1) * cols, (row + 1) * stride + 1);
+                    data[(row + 1) * stride] = 0.0;
+                }
+            }
+            data[..stride].fill(0.0);
+            return Ok(Self {
+                dims,
+                data: ArrayData::Number(data),
+                last_debug_write: None,
+            });
+        }
+        let mut array = ArrayValue::try_new(name, dims)?;
+        let ArrayData::Number(values) = &mut array.data else {
+            return Ok(array);
+        };
+        let stride = array.dims[1] + 1;
         for r in 0..rows {
-            for c in 0..cols {
-                let value = Value::number(data[r * cols + c]);
-                let indexes = if array.dims.len() == 1 {
-                    vec![(lower + r) as i32]
-                } else {
-                    vec![(lower + r) as i32, (lower + c) as i32]
+            let start = (lower + r) * stride + lower;
+            values[start..start + cols].copy_from_slice(&data[r * cols..(r + 1) * cols]);
+        }
+        Ok(array)
+    }
+}
+
+fn checked_zeroed_numeric_buffer(rows: usize, cols: usize) -> BasicResult<Vec<f64>> {
+    let len = rows
+        .checked_mul(cols)
+        .ok_or_else(|| BasicError::new(ErrorCode::Overflow))?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| BasicError::new(ErrorCode::Overflow))?;
+    values.resize(len, 0.0);
+    Ok(values)
+}
+
+fn checked_zeroed_numeric_matrix_buffer(
+    base: i32,
+    rows: usize,
+    cols: usize,
+) -> BasicResult<Vec<f64>> {
+    if base != 1 {
+        return checked_zeroed_numeric_buffer(rows, cols);
+    }
+    // Keep a compact active block for the kernel, but reserve the final BASE1
+    // layout once. The factory can then add borders without another allocation.
+    let capacity = ArrayValue::checked_data_len(&[rows, cols])?;
+    let len = rows
+        .checked_mul(cols)
+        .ok_or_else(|| BasicError::new(ErrorCode::Overflow))?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| BasicError::new(ErrorCode::Overflow))?;
+    values.resize(len, 0.0);
+    Ok(values)
+}
+
+#[cfg(test)]
+mod array_allocation_safety_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_output_buffers_check_product_and_byte_capacity_before_reserving() {
+        assert_eq!(
+            checked_zeroed_numeric_buffer(usize::MAX, 2)
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        let too_many_values = isize::MAX as usize / std::mem::size_of::<f64>() + 1;
+        assert_eq!(
+            checked_zeroed_numeric_buffer(too_many_values, 1)
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert_eq!(checked_zeroed_numeric_buffer(2, 3).unwrap(), vec![0.0; 6]);
+        assert!(checked_zeroed_numeric_buffer(0, usize::MAX)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn internal_array_creation_rejects_bounds_outside_the_index_type() {
+        for name in ["A", "A$"] {
+            assert_eq!(
+                ArrayValue::try_new(name, vec![i32::MAX as usize + 1])
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Overflow
+            );
+            assert_eq!(
+                ArrayValue::try_new(name, vec![usize::MAX])
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Overflow
+            );
+        }
+        assert_eq!(
+            ArrayValue::checked_data_len(&[i32::MAX as usize; 3])
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+    }
+
+    #[test]
+    fn numeric_matrix_factory_reuses_base_zero_storage_and_pads_base_one() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let original_buffer = data.as_ptr();
+        let matrix = ArrayValue::from_numeric_matrix("A", 0, 2, 2, data).unwrap();
+        assert_eq!(matrix.dims, vec![1, 1]);
+        let ArrayData::Number(values) = matrix.data else {
+            unreachable!();
+        };
+        assert_eq!(values.as_ptr(), original_buffer);
+        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0]);
+
+        let matrix =
+            ArrayValue::from_numeric_matrix("A", 1, 2, 2, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert_eq!(matrix.dims, vec![2, 2]);
+        let ArrayData::Number(values) = matrix.data else {
+            unreachable!();
+        };
+        assert_eq!(values, vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn numeric_matrix_factory_checks_rebased_bounds_without_large_allocations() {
+        let count = i32::MAX as usize + 1;
+        assert_eq!(
+            ArrayValue::from_numeric_matrix("A", 1, count, 0, Vec::new())
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert_eq!(
+            ArrayValue::from_numeric_matrix("A", 0, count + 1, 0, Vec::new())
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert_eq!(
+            ArrayValue::from_numeric_matrix("A", 0, usize::MAX, 2, Vec::new())
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert_eq!(
+            ArrayValue::from_numeric_matrix("A", 0, 2, 2, vec![1.0])
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidDimensions
+        );
+    }
+
+    #[test]
+    fn base_one_rebase_preserves_rectangular_ieee_data_and_zero_borders() {
+        let pattern = [
+            (-0.0_f64).to_bits(),
+            0x7ff8000000000042,
+            f64::INFINITY.to_bits(),
+            f64::NEG_INFINITY.to_bits(),
+            1,
+            (-3.25_f64).to_bits(),
+        ];
+        for (rows, cols) in [(2, 3), (3, 2), (1, 5), (5, 1)] {
+            let len = rows * cols;
+            let padded_len = (rows + 1) * (cols + 1);
+            for padded_capacity in [false, true] {
+                let mut data = Vec::with_capacity(if padded_capacity { padded_len } else { len });
+                for index in 0..len {
+                    data.push(f64::from_bits(pattern[index % pattern.len()]));
+                }
+                let original_buffer = data.as_ptr();
+                if !padded_capacity {
+                    assert!(data.capacity() < padded_len);
+                }
+                let matrix = ArrayValue::from_numeric_matrix("A", 1, rows, cols, data).unwrap();
+                assert_eq!(matrix.dims, vec![rows, cols]);
+                let ArrayData::Number(values) = matrix.data else {
+                    unreachable!();
                 };
-                let _ = array.set(&indexes, value);
+                assert_eq!(values.len(), padded_len);
+                if padded_capacity {
+                    assert_eq!(values.as_ptr(), original_buffer);
+                }
+                for row in 0..=rows {
+                    for col in 0..=cols {
+                        let bits = values[row * (cols + 1) + col].to_bits();
+                        if row == 0 || col == 0 {
+                            assert_eq!(bits, 0.0_f64.to_bits());
+                        } else {
+                            assert_eq!(bits, pattern[((row - 1) * cols + col - 1) % pattern.len()]);
+                        }
+                    }
+                }
             }
         }
-        array
+    }
+
+    #[test]
+    fn numeric_matrix_reservation_reuses_padding_and_checks_capacity() {
+        for (rows, cols) in [(2, 3), (0, 3), (3, 0), (0, 0)] {
+            let data = checked_zeroed_numeric_matrix_buffer(1, rows, cols).unwrap();
+            let original_buffer = data.as_ptr();
+            assert_eq!(data.len(), rows * cols);
+            assert!(data.capacity() >= (rows + 1) * (cols + 1));
+            let matrix = ArrayValue::from_numeric_matrix("A", 1, rows, cols, data).unwrap();
+            let ArrayData::Number(values) = matrix.data else {
+                unreachable!();
+            };
+            assert_eq!(values.as_ptr(), original_buffer);
+            assert_eq!(values.len(), (rows + 1) * (cols + 1));
+            assert!(values
+                .iter()
+                .all(|value| value.to_bits() == 0.0_f64.to_bits()));
+        }
+        assert_eq!(
+            checked_zeroed_numeric_matrix_buffer(1, i32::MAX as usize + 1, 0)
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert_eq!(
+            checked_zeroed_numeric_matrix_buffer(1, i32::MAX as usize, i32::MAX as usize)
+                .unwrap_err()
+                .code,
+            ErrorCode::Overflow
+        );
+        assert!(checked_zeroed_numeric_matrix_buffer(0, 0, usize::MAX)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn numeric_matrix_factory_keeps_empty_and_string_layouts() {
+        for base in [0, 1] {
+            for (rows, cols) in [(0_usize, 3_usize), (3, 0), (0, 0)] {
+                let matrix =
+                    ArrayValue::from_numeric_matrix("A", base, rows, cols, Vec::new()).unwrap();
+                let upper = |count: usize| {
+                    if base == 1 {
+                        count
+                    } else {
+                        count.saturating_sub(1)
+                    }
+                };
+                assert_eq!(matrix.dims, vec![upper(rows), upper(cols)]);
+                let ArrayData::Number(values) = matrix.data else {
+                    unreachable!();
+                };
+                assert_eq!(values.len(), (upper(rows) + 1) * (upper(cols) + 1));
+                assert!(values
+                    .iter()
+                    .all(|value| value.to_bits() == 0.0_f64.to_bits()));
+            }
+            let matrix = ArrayValue::from_numeric_matrix("A$", base, 2, 3, vec![9.0; 6]).unwrap();
+            let ArrayData::Str(values) = matrix.data else {
+                unreachable!();
+            };
+            assert_eq!(values.len(), if base == 1 { 12 } else { 6 });
+            assert!(values.iter().all(String::is_empty));
+        }
     }
 }
 
@@ -1169,43 +1487,6 @@ struct MatInputEntry {
 }
 
 #[derive(Debug, Clone)]
-struct MatStats {
-    sum: f64,
-    abs_sum: f64,
-    fnorm: f64,
-    max: f64,
-    max_pos: Option<(i32, i32)>,
-    min: f64,
-    min_pos: Option<(i32, i32)>,
-    max_abs: f64,
-    max_abs_pos: Option<(i32, i32)>,
-    col_norm: f64,
-    col_norm_col: Option<i32>,
-    row_norm: f64,
-    row_norm_row: Option<i32>,
-}
-
-impl Default for MatStats {
-    fn default() -> Self {
-        Self {
-            sum: 0.0,
-            abs_sum: 0.0,
-            fnorm: 0.0,
-            max: 0.0,
-            max_pos: None,
-            min: 0.0,
-            min_pos: None,
-            max_abs: 0.0,
-            max_abs_pos: None,
-            col_norm: 0.0,
-            col_norm_col: None,
-            row_norm: 0.0,
-            row_norm_row: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 struct RuntimeErrorState {
     number: i32,
     line: i32,
@@ -1235,6 +1516,7 @@ enum CompiledNumericAssignment {
         indexes: Vec<CompiledNumberExpr>,
         array_slot: CachedArraySlot,
         rhs: FastNumberExpr,
+        pure_rhs: Option<Box<array_expr::CompiledArrayExpr>>,
         fallback: Rc<CompiledAssignment>,
     },
 }
@@ -1289,6 +1571,7 @@ struct CompiledNumberExpr {
 struct CompiledColorExpr {
     expr: Expr,
     fast_numeric: Option<FastNumberExpr>,
+    lut: Option<Box<color_lut::CompiledColorLutExpr>>,
     is_numeric: bool,
 }
 
@@ -1383,13 +1666,13 @@ enum FastNumberExpr {
     Array1 {
         name: String,
         slot: CachedArraySlot,
-        index: Box<FastNumberExpr>,
+        index: Box<FastIndexExpr>,
     },
     Array2 {
         name: String,
         slot: CachedArraySlot,
-        index0: Box<FastNumberExpr>,
-        index1: Box<FastNumberExpr>,
+        index0: Box<FastIndexExpr>,
+        index1: Box<FastIndexExpr>,
     },
     Function1 {
         function: FastNumberFunction,
@@ -1412,6 +1695,54 @@ enum FastNumberExpr {
         constant: f64,
         constant_left: bool,
     },
+}
+
+// Preserve the array-read node's boxed layout. On other platforms keep the
+// existing evaluator: earlier index specializations regressed Linux workloads.
+#[cfg(not(windows))]
+type FastIndexExpr = FastNumberExpr;
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+enum FastIndexOperation {
+    Add,
+    Sub,
+}
+
+#[cfg(windows)]
+impl FastIndexOperation {
+    #[inline(always)]
+    fn eval(self, left: f64, right: f64) -> BasicResult<f64> {
+        match self {
+            Self::Add => checked_number(left + right),
+            Self::Sub => checked_number(left - right),
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+enum FastIndexExpr {
+    Number(f64),
+    Var {
+        name: String,
+        slot: CachedNumericSlot,
+    },
+    Offset {
+        name: String,
+        slot: CachedNumericSlot,
+        op: FastIndexOperation,
+        constant: f64,
+        constant_left: bool,
+    },
+    Variables {
+        left_name: String,
+        left_slot: CachedNumericSlot,
+        right_name: String,
+        right_slot: CachedNumericSlot,
+        op: FastIndexOperation,
+    },
+    General(FastNumberExpr),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1566,6 +1897,7 @@ enum CompiledLValue {
 enum CachedCommand {
     Noop,
     Raw(Rc<str>),
+    MatAssignment(Rc<CompiledMatAssignment>),
     Assignment(Rc<CompiledAssignment>),
     MidAssignment(Rc<CompiledMidAssignment>),
     StringCharAssignment {
@@ -1719,7 +2051,9 @@ impl CompiledNumberExpr {
 
 impl CompiledColorExpr {
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<i32> {
-        let result = if let Some(fast) = &self.fast_numeric {
+        let result = if let Some(lut) = &self.lut {
+            lut.eval(interpreter).and_then(color_number_from_number)
+        } else if let Some(fast) = &self.fast_numeric {
             fast.eval(interpreter).and_then(color_number_from_number)
         } else if self.is_numeric {
             eval_compiled_number(interpreter, &self.expr).and_then(color_number_from_number)
@@ -1770,7 +2104,7 @@ impl FastNumberExpr {
             }),
             FastNumberExpr::Array1 { name, slot, index } => {
                 let index = eval_fast_index(interpreter, index)?;
-                interpreter.get_array_number_cached(name, slot, &[index])
+                interpreter.get_array_number_cached_1d(name, slot, index)
             }
             FastNumberExpr::Array2 {
                 name,
@@ -1782,7 +2116,7 @@ impl FastNumberExpr {
                     eval_fast_index(interpreter, index0)?,
                     eval_fast_index(interpreter, index1)?,
                 ];
-                interpreter.get_array_number_cached(name, slot, &indexes)
+                interpreter.get_array_number_cached_2d(name, slot, indexes[0], indexes[1])
             }
             FastNumberExpr::Function1 { function, arg } => {
                 let mut arg = arg.eval(interpreter)?;
@@ -1995,21 +2329,53 @@ fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
 }
 
 #[inline(always)]
-fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastNumberExpr) -> BasicResult<i32> {
-    // Windows release measurements favor direct index leaves. Keep the general
-    // evaluator elsewhere: the same specialization regressed a Linux workload.
+fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastIndexExpr) -> BasicResult<i32> {
+    // These plans remove recursive dispatch, not floating-point operations or
+    // conversion checks. Fractional operands may still produce an integer sum.
     #[cfg(windows)]
     let value = match expr {
-        FastNumberExpr::Number(value) => *value,
-        FastNumberExpr::Var { name, slot } => interpreter.get_fast_number_variable(name, slot)?,
-        _ => expr.eval(interpreter)?,
+        FastIndexExpr::Number(value) => *value,
+        FastIndexExpr::Var { name, slot } => interpreter.get_fast_number_variable(name, slot)?,
+        FastIndexExpr::Offset {
+            name,
+            slot,
+            op,
+            constant,
+            constant_left,
+        } => {
+            let variable = interpreter.get_fast_number_variable(name, slot)?;
+            if *constant_left {
+                op.eval(*constant, variable)?
+            } else {
+                op.eval(variable, *constant)?
+            }
+        }
+        FastIndexExpr::Variables {
+            left_name,
+            left_slot,
+            right_name,
+            right_slot,
+            op,
+        } => {
+            let left = interpreter.get_fast_number_variable(left_name, left_slot)?;
+            let right = interpreter.get_fast_number_variable(right_name, right_slot)?;
+            op.eval(left, right)?
+        }
+        FastIndexExpr::General(expr) => expr.eval(interpreter)?,
     };
     #[cfg(not(windows))]
     let value = expr.eval(interpreter)?;
+    // Ordinary array indices fit in i32. Their integer round trip avoids the
+    // fractional-part calculation; retain it for the existing saturation and
+    // rejection rules outside that range, including infinities and NaNs.
+    let index = value as i32;
+    if value == index as f64 {
+        return Ok(index);
+    }
     if value.fract() != 0.0 {
         return Err(BasicError::new(ErrorCode::InvalidIndex));
     }
-    Ok(value as i32)
+    Ok(index)
 }
 
 #[derive(Debug)]
@@ -2019,6 +2385,8 @@ pub struct Interpreter {
     audio: AudioSystem,
     sound_handlers: [Option<i32>; 3],
     has_sound_handlers: bool,
+    next_sound_poll: Instant,
+    sound_poll_forced: bool,
     sound_isr_markers: Vec<(usize, bool)>,
     pending_sounds: Vec<(Cursor, SoundNote)>,
     command_cache: HashMap<i32, Vec<Rc<str>>>,
@@ -2136,6 +2504,8 @@ impl Interpreter {
             audio: AudioSystem::new(),
             sound_handlers: [None; 3],
             has_sound_handlers: false,
+            next_sound_poll: Instant::now(),
+            sound_poll_forced: false,
             sound_isr_markers: Vec::new(),
             pending_sounds: Vec::new(),
             command_cache: HashMap::new(),
@@ -2498,6 +2868,52 @@ impl Interpreter {
 
     fn refresh_identifier_case_from_program(&mut self) {
         self.identifier_case = self.program_identifier_case();
+        self.normalize_program_identifier_case();
+    }
+
+    fn normalize_program_identifier_case(&mut self) {
+        self.program
+            .transform_code(|code| apply_identifier_case(code, &self.identifier_case));
+    }
+
+    fn store_program_line(&mut self, source: &str, overwrite_case: bool) -> BasicResult<()> {
+        let line_number = numbered_line_number(source);
+        let deletes_line = numbered_line_code(source).is_some_and(|code| code.trim().is_empty());
+        self.program.add_source_line(source)?;
+        if deletes_line {
+            if let Some(line_number) = line_number {
+                self.remove_program_breakpoints(line_number, line_number);
+            }
+            self.refresh_identifier_case_from_program();
+        } else {
+            self.record_identifier_case_from_numbered_line(source, overwrite_case);
+            if overwrite_case {
+                // An explicit EDIT changes the chosen spelling in every stored reference.
+                self.normalize_program_identifier_case();
+            } else {
+                let normalized = apply_identifier_case(source, &self.identifier_case);
+                self.program.add_source_line(&normalized)?;
+            }
+        }
+        self.clear_command_caches();
+        self.invalidate_continuation_after_program_change();
+        Ok(())
+    }
+
+    fn normalize_merged_program_text(&self, text: &str) -> BasicResult<String> {
+        let mut program = Program::default();
+        program.load_text(text)?;
+        let mut cases = self.identifier_case.clone();
+        for line in program.line_numbers() {
+            record_identifier_case_forms(program.get(line).unwrap_or(""), &mut cases, false);
+        }
+        let mut normalized = String::with_capacity(text.len());
+        // Keep bare line numbers: in MERGE they delete existing lines.
+        for line in text.lines() {
+            normalized.push_str(&apply_identifier_case(line, &cases));
+            normalized.push('\n');
+        }
+        Ok(normalized)
     }
 
     fn program_identifier_case(&self) -> HashMap<String, String> {
@@ -2630,20 +3046,7 @@ impl Interpreter {
             window.clear_transient_input();
         }
         if starts_with_line_number(trimmed) {
-            let line_number = numbered_line_number(trimmed);
-            let deletes_line =
-                numbered_line_code(trimmed).is_some_and(|code| code.trim().is_empty());
-            self.program.add_source_line(trimmed)?;
-            if deletes_line {
-                if let Some(line_number) = line_number {
-                    self.remove_program_breakpoints(line_number, line_number);
-                }
-                self.refresh_identifier_case_from_program();
-            } else {
-                self.record_identifier_case_from_numbered_line(trimmed, false);
-            }
-            self.clear_command_caches();
-            self.invalidate_continuation_after_program_change();
+            self.store_program_line(trimmed, false)?;
             return Ok(());
         }
         let upper = trimmed.to_ascii_uppercase();
@@ -3187,10 +3590,7 @@ impl Interpreter {
 
         match outcome {
             console::FullscreenEditOutcome::Apply(next_session) => {
-                self.program = Self::program_from_editor_lines(next_session.lines())?;
-                self.clear_command_caches();
-                self.refresh_identifier_case_from_program();
-                self.invalidate_continuation_after_program_change();
+                self.apply_fullscreen_editor_lines(next_session.lines())?;
                 self.replace_editor_breakpoints(next_session.breakpoints().clone());
                 Ok(())
             }
@@ -3207,25 +3607,13 @@ impl Interpreter {
         if !console::interactive_terminal() {
             return Err(self.err(ErrorCode::Unsupported));
         }
+        let code = apply_identifier_case(code, &self.identifier_case);
         let prefill = format!("{line}{code}");
         let edited = console::read_highlighted_line("", &prefill, self.ansi_output, None)
             .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
         let normalized = console::normalize_code(&edited);
         if !normalized.trim().is_empty() {
-            let edited_line = numbered_line_number(&normalized);
-            let deletes_line =
-                numbered_line_code(&normalized).is_some_and(|code| code.trim().is_empty());
-            self.program.add_source_line(&normalized)?;
-            if deletes_line {
-                if let Some(edited_line) = edited_line {
-                    self.remove_program_breakpoints(edited_line, edited_line);
-                }
-                self.refresh_identifier_case_from_program();
-            } else {
-                self.record_identifier_case_from_numbered_line(&normalized, true);
-            }
-            self.clear_command_caches();
-            self.invalidate_continuation_after_program_change();
+            self.store_program_line(&normalized, true)?;
         }
         Ok(())
     }
@@ -3255,6 +3643,23 @@ impl Interpreter {
             })?;
         }
         Ok(program)
+    }
+
+    fn apply_fullscreen_editor_lines(&mut self, lines: &[String]) -> BasicResult<()> {
+        let mut program = Self::program_from_editor_lines(lines)?;
+        let mut cases = self.program_identifier_case();
+        // Existing forms are fixed for this session; new ones follow visible editor order.
+        for line in lines {
+            if let Some(code) = numbered_line_code(line) {
+                record_identifier_case_forms(code, &mut cases, false);
+            }
+        }
+        program.transform_code(|code| apply_identifier_case(code, &cases));
+        self.program = program;
+        self.clear_command_caches();
+        self.refresh_identifier_case_from_program();
+        self.invalidate_continuation_after_program_change();
+        Ok(())
     }
 
     fn execute_debug(&mut self, args: &str) -> BasicResult<()> {
@@ -3335,13 +3740,7 @@ impl Interpreter {
     }
 
     fn save_file(&mut self, path: &Path) -> BasicResult<()> {
-        let mut text = String::new();
-        for line in self.program.line_numbers() {
-            let code = self.program.get(line).unwrap_or("");
-            let code = apply_identifier_case(code, &self.identifier_case);
-            text.push_str(&format!("{line}{code}\n"));
-        }
-        fs::write(path, text)
+        fs::write(path, self.program.list())
             .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))
     }
 
@@ -3547,10 +3946,12 @@ impl Interpreter {
             if matches!(result, Ok(RunOutcome::End)) {
                 self.sound_handlers = [None; 3];
                 self.has_sound_handlers = false;
+                self.sound_poll_forced = false;
                 self.sound_isr_markers.clear();
                 self.audio.poll_after_program();
             } else {
                 self.audio.stop_all();
+                self.sound_poll_forced = self.has_sound_handlers;
             }
             if self.should_refocus_console_after_run(closed_graphics_window) {
                 focus_console_window(self.graphics_window.as_mut());
@@ -3643,7 +4044,7 @@ impl Interpreter {
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
                     || !self.timers.is_empty()
-                    || self.has_sound_handlers
+                    || self.should_poll_sound_events()
                     || console::interrupt_requested();
                 if poll_now {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
@@ -3864,7 +4265,7 @@ impl Interpreter {
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
                     || !self.timers.is_empty()
-                    || self.has_sound_handlers
+                    || self.should_poll_sound_events()
                     || console::interrupt_requested();
                 if poll_now && !relocating {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
@@ -4983,6 +5384,7 @@ impl Interpreter {
             }
             "EI" => {
                 self.interrupts_enabled = true;
+                self.sound_poll_forced = self.has_sound_handlers;
                 self.process_timers(cursor).map(|_| ())
             }
             "RANDOMIZE" => self.execute_randomize(command[9..].trim()),
@@ -5252,6 +5654,9 @@ impl Interpreter {
             CachedCommand::Raw(command) => {
                 self.execute_command(command.as_ref(), cursor, line_commands)
             }
+            CachedCommand::MatAssignment(compiled) => {
+                self.execute_compiled_mat_assignment(compiled.as_ref())
+            }
             CachedCommand::Assignment(compiled) => {
                 self.execute_compiled_assignment(compiled.as_ref())
             }
@@ -5365,9 +5770,15 @@ impl Interpreter {
                     indexes,
                     array_slot,
                     rhs,
+                    pure_rhs,
                     ..
                 } => {
-                    let value = rhs.eval(self).map_err(|e| self.with_current_line(e))?;
+                    let result = pure_rhs.as_deref().and_then(|plan| plan.eval(self));
+                    let value = match result {
+                        Some(result) => result,
+                        None => rhs.eval(self),
+                    }
+                    .map_err(|e| self.with_current_line(e))?;
                     self.assign_compiled_numeric_array_target(target, indexes, array_slot, value)?;
                     self.return_number_value_for_active_function(target, value);
                     Ok(())
@@ -5487,6 +5898,7 @@ impl Interpreter {
         {
             if let Some((_, enabled)) = self.sound_isr_markers.pop() {
                 self.interrupts_enabled = enabled;
+                self.sound_poll_forced = self.has_sound_handlers;
             }
         }
         Ok(())
@@ -5502,6 +5914,7 @@ impl Interpreter {
             if let Some(state) = self.timer_isr_stack.pop() {
                 self.current_interrupt_priority = state.priority;
                 self.interrupts_enabled = state.interrupts_enabled;
+                self.sound_poll_forced = self.has_sound_handlers;
             }
         }
     }
@@ -6520,8 +6933,9 @@ impl Interpreter {
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
-            self.arrays
-                .insert_resolved(resolved, ArrayValue::new(key.as_ref(), dims));
+            let array = ArrayValue::try_new(key.as_ref(), dims)
+                .map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert_resolved(resolved, array);
         }
         let array = self.arrays.get_resolved_mut(resolved).unwrap();
         if array.is_string() {
@@ -7442,8 +7856,9 @@ impl Interpreter {
             let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes)?;
             if !self.arrays.contains_key(key.as_ref()) {
                 let dims = vec![10; indexes.len()];
-                self.arrays
-                    .insert(key.to_string(), ArrayValue::new(key.as_ref(), dims));
+                let array = ArrayValue::try_new(key.as_ref(), dims)
+                    .map_err(|error| self.with_current_line(error))?;
+                self.arrays.insert(key.to_string(), array);
             }
             let array = self.arrays.get_mut(key.as_ref()).unwrap();
             if array.is_string() != matches!(value, Value::Str(_)) {
@@ -7570,8 +7985,9 @@ impl Interpreter {
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
-            self.arrays
-                .insert_resolved(resolved, ArrayValue::new(key.as_ref(), dims));
+            let array = ArrayValue::try_new(key.as_ref(), dims)
+                .map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert_resolved(resolved, array);
         }
         let array = self.arrays.get_resolved_mut(resolved).unwrap();
         if array.is_string() != is_string || is_string != matches!(value, Value::Str(_)) {
@@ -7792,21 +8208,53 @@ impl Interpreter {
         self.arrays.get_mut(key.as_ref())
     }
 
+    #[inline(always)]
+    fn get_array_number_cached_1d(
+        &mut self,
+        name: &str,
+        slot: &CachedArraySlot,
+        index: i32,
+    ) -> BasicResult<f64> {
+        let resolved = self.resolve_cached_array_slot(name, slot);
+        if let Some(array) = self.arrays.get_resolved(resolved) {
+            if array.dims.len() == 1 {
+                return array.get_number_direct_1d(index);
+            }
+        }
+        self.get_array_number_cached(name, slot, &[index])
+    }
+
+    #[inline(always)]
+    fn get_array_number_cached_2d(
+        &mut self,
+        name: &str,
+        slot: &CachedArraySlot,
+        index0: i32,
+        index1: i32,
+    ) -> BasicResult<f64> {
+        let resolved = self.resolve_cached_array_slot(name, slot);
+        if let Some(array) = self.arrays.get_resolved(resolved) {
+            if array.dims.len() == 2 {
+                return array.get_number_direct_2d(index0, index1);
+            }
+        }
+        self.get_array_number_cached(name, slot, &[index0, index1])
+    }
+
     fn get_array_number_cached(
         &mut self,
         name: &str,
         slot: &CachedArraySlot,
         indexes: &[i32],
     ) -> BasicResult<f64> {
-        let resolved = if self.array_aliases.is_empty() {
-            self.arrays.resolve_cached_slot(name, slot)
-        } else {
-            self.resolve_cached_array_slot(name, slot)
-        };
+        let resolved = self.resolve_cached_array_slot(name, slot);
         if let Some(array) = self.arrays.get_resolved(resolved) {
             if array.dims.len() == indexes.len() {
                 if indexes.len() == 1 {
                     return array.get_number_direct_1d(indexes[0]);
+                }
+                if indexes.len() == 2 {
+                    return array.get_number_direct_2d(indexes[0], indexes[1]);
                 }
                 return array.get_number(indexes);
             }
@@ -7814,10 +8262,9 @@ impl Interpreter {
         let key = self.array_lookup_key(name);
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
-            self.arrays.insert_resolved(
-                resolved,
-                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
-            );
+            let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
+                .map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert_resolved(resolved, array);
         }
         self.arrays
             .get_resolved(resolved)
@@ -8681,14 +9128,12 @@ impl Interpreter {
                         return Err(self.err(ErrorCode::UndefinedIndex));
                     }
                     let n = self.eval_number(&arg)?;
-                    if n < 0.0 {
-                        return Err(self.err(ErrorCode::InvalidValue));
-                    }
-                    Ok(n as usize)
+                    array_dimension_bound(n).map_err(|error| self.with_current_line(error))
                 })
                 .collect::<BasicResult<Vec<_>>>()?;
-            self.arrays
-                .insert(name.clone(), ArrayValue::new(&name, dims));
+            let array =
+                ArrayValue::try_new(&name, dims).map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert(name, array);
         }
         Ok(())
     }
@@ -8719,10 +9164,7 @@ impl Interpreter {
                         return Err(self.err(ErrorCode::UndefinedIndex));
                     }
                     let n = self.eval_number(&arg)?;
-                    if n < 0.0 {
-                        return Err(self.err(ErrorCode::InvalidValue));
-                    }
-                    Ok(n as usize)
+                    array_dimension_bound(n).map_err(|error| self.with_current_line(error))
                 })
                 .collect::<BasicResult<Vec<_>>>()?;
             if self
@@ -8732,7 +9174,8 @@ impl Interpreter {
             {
                 return Err(self.err(ErrorCode::InvalidDimensions));
             }
-            let mut next = ArrayValue::new(key.as_ref(), dims);
+            let mut next = ArrayValue::try_new(key.as_ref(), dims)
+                .map_err(|error| self.with_current_line(error))?;
             if let Some(previous) = self.arrays.get(key.as_ref()) {
                 if previous.is_string() == next.is_string()
                     && previous.dims.len() == next.dims.len()
@@ -9163,6 +9606,9 @@ impl Interpreter {
         let Some(pos) = find_assignment_equal(statement) else {
             return Err(self.err(ErrorCode::Syntax));
         };
+        if self.try_mat_subarray_copy(statement[..pos].trim(), statement[pos + 1..].trim())? {
+            return Ok(());
+        }
         let target = statement[..pos].trim().to_ascii_uppercase();
         let rhs = statement[pos + 1..].trim();
         if !is_basic_identifier(&target) {
@@ -9186,34 +9632,8 @@ impl Interpreter {
             );
         }
 
-        match self.eval_mat_expr(rhs)? {
-            MatExprValue::Scalar(value) => {
-                self.mat_fill_array(target_key.as_ref(), value)?;
-                self.return_array_for_active_function(&target);
-                Ok(())
-            }
-            MatExprValue::Matrix(mut matrix) => {
-                let returning_from_active_function = self
-                    .active_function_name()
-                    .is_some_and(|name| name.eq_ignore_ascii_case(&target));
-                if matrix.dims.len() > 2 && !returning_from_active_function {
-                    return Err(self.err(ErrorCode::InvalidDimensions));
-                }
-                if matrix.is_string()
-                    != self
-                        .arrays
-                        .get(target_key.as_ref())
-                        .map(|array| array.is_string())
-                        .unwrap_or_else(|| target.ends_with('$'))
-                {
-                    return Err(self.err(ErrorCode::TypeMismatch));
-                }
-                matrix.clear_debug_write();
-                self.arrays.insert(target_key.into_owned(), matrix);
-                self.return_array_for_active_function(&target);
-                Ok(())
-            }
-        }
+        let value = self.eval_mat_expr(rhs)?;
+        self.finish_mat_assignment(&target, target_key, value)
     }
 
     fn mat_fill_array(&mut self, target: &str, value: Value) -> BasicResult<()> {
@@ -9257,84 +9677,16 @@ impl Interpreter {
     }
 
     fn eval_mat_expr(&mut self, source: &str) -> BasicResult<MatExprValue> {
-        let original = source.trim();
-        let wrapped_inner = if original.starts_with('(') && original.ends_with(')') {
-            Some(strip_wrapping_parens(original))
-        } else {
-            None
-        };
-        if wrapped_inner.is_some_and(|inner| scalar_times_matrix_div_scalar(inner, &self.arrays))
-            || mat_expr_has_array_before_function(original, &self.arrays)
-        {
-            return Err(self.err(ErrorCode::ForbiddenExpression));
-        }
-        let expr = strip_wrapping_parens(source).trim();
-        if expr.is_empty() {
-            return Err(self.err(ErrorCode::Syntax));
-        }
-
-        if let Some((pos, op)) = find_top_level_mat_operator(expr, &['+', '-']) {
-            let left = self.eval_mat_expr(&expr[..pos])?;
-            let right = self.eval_mat_expr(&expr[pos + op.len_utf8()..])?;
-            return self.mat_binary(left, right, op);
-        }
-        if let Some((pos, op)) = find_top_level_mat_operator(expr, &['*', '/']) {
-            let left = self.eval_mat_expr(&expr[..pos])?;
-            let right = self.eval_mat_expr(&expr[pos + op.len_utf8()..])?;
-            return self.mat_binary(left, right, op);
-        }
-        if let Some((pos, op)) = find_top_level_mat_operator(expr, &['^']) {
-            let left = self.eval_mat_expr(&expr[..pos])?;
-            let right = self.eval_mat_expr(&expr[pos + op.len_utf8()..])?;
-            return self.mat_binary(left, right, op);
-        }
-        if let Some(rest) = expr.strip_prefix('-') {
-            let value = self.eval_mat_expr(rest)?;
-            return self.mat_unary_minus(value);
-        }
-
-        let upper = expr.to_ascii_uppercase();
-        if let Some(inner) = whole_function_argument(expr, "TRN") {
-            let value = self.eval_mat_expr(inner)?;
-            let matrix = self.mat_value_to_numeric_matrix(value)?;
-            let mut out = vec![0.0; matrix.rows * matrix.cols];
-            for r in 0..matrix.rows {
-                for c in 0..matrix.cols {
-                    out[c * matrix.rows + r] = matrix.data[r * matrix.cols + c];
+        mat_compiled::CompiledMatExpr::parse(source)
+            .map_err(|error| {
+                if error.code == ErrorCode::Syntax && mat_compiled::has_array_slice(source, self) {
+                    self.err(ErrorCode::ForbiddenExpression)
+                } else {
+                    self.with_current_line(error)
                 }
-            }
-            return Ok(MatExprValue::Matrix(ArrayValue::from_numeric_matrix(
-                "",
-                self.mat_base,
-                matrix.cols,
-                matrix.rows,
-                out,
-            )));
-        }
-        if let Some(inner) = whole_function_argument(expr, "INV") {
-            let value = self.eval_mat_expr(inner)?;
-            let matrix = self.mat_value_to_numeric_matrix(value)?;
-            let (inverse, _) = self.invert_numeric_matrix(matrix)?;
-            return Ok(MatExprValue::Matrix(inverse));
-        }
-        if looks_like_non_fn_function_call(expr) && mat_expr_mentions_array(expr, &self.arrays) {
-            return Err(self.err(ErrorCode::ForbiddenExpression));
-        }
-
-        if is_basic_identifier(&upper) {
-            if let Some(array) = self.array_ref(&upper) {
-                return Ok(MatExprValue::Matrix(array.clone()));
-            }
-        }
-        match self.eval_value(expr)? {
-            Value::ArrayRef(name) => {
-                let Some(array) = self.array_ref(&name).cloned() else {
-                    return Err(self.err(ErrorCode::Undefined));
-                };
-                Ok(MatExprValue::Matrix(array))
-            }
-            value => Ok(MatExprValue::Scalar(value)),
-        }
+            })?
+            .eval(self)
+            .map_err(|error| self.with_current_line(error))
     }
 
     fn mat_unary_minus(&mut self, value: MatExprValue) -> BasicResult<MatExprValue> {
@@ -9342,15 +9694,17 @@ impl Interpreter {
             MatExprValue::Scalar(value) => {
                 Ok(MatExprValue::Scalar(Value::number(-value.as_number()?)))
             }
-            MatExprValue::Matrix(array) => {
-                let matrix = self.array_to_numeric_matrix(&array)?;
-                Ok(MatExprValue::Matrix(ArrayValue::from_numeric_matrix(
-                    "",
-                    self.mat_base,
-                    matrix.rows,
-                    matrix.cols,
-                    matrix.data.into_iter().map(|v| -v).collect(),
-                )))
+            MatExprValue::Matrix(mut array) => {
+                if !matches!(array.dims.len(), 1 | 2) {
+                    return Err(self.err(ErrorCode::InvalidDimensions));
+                }
+                let ArrayData::Number(values) = &mut array.data else {
+                    return Err(self.err(ErrorCode::ForbiddenExpression));
+                };
+                for value in values {
+                    *value = -*value;
+                }
+                Ok(MatExprValue::Matrix(array))
             }
         }
     }
@@ -9366,19 +9720,22 @@ impl Interpreter {
                 let value = match op {
                     '+' => match (l, r) {
                         (Value::Str(a), Value::Str(b)) => Value::string(format!("{a}{b}")),
-                        (Value::Number(a), Value::Number(b)) => Value::number(a + b),
+                        (Value::Number(a), Value::Number(b)) => {
+                            Value::number(checked_number(a + b)?)
+                        }
                         _ => return Err(self.err(ErrorCode::TypeMismatch)),
                     },
-                    '-' => Value::number(l.as_number()? - r.as_number()?),
-                    '*' => Value::number(l.as_number()? * r.as_number()?),
+                    '-' => Value::number(checked_number(l.as_number()? - r.as_number()?)?),
+                    '*' => Value::number(checked_number(l.as_number()? * r.as_number()?)?),
                     '/' => {
+                        let numerator = l.as_number()?;
                         let divisor = r.as_number()?;
                         if divisor == 0.0 {
                             return Err(self.err(ErrorCode::DivisionByZero));
                         }
-                        Value::number(l.as_number()? / divisor)
+                        Value::number(checked_number(numerator / divisor)?)
                     }
-                    '^' => Value::number(l.as_number()?.powf(r.as_number()?)),
+                    '^' => Value::number(checked_number(l.as_number()?.powf(r.as_number()?))?),
                     _ => return Err(self.err(ErrorCode::Syntax)),
                 };
                 Ok(MatExprValue::Scalar(value))
@@ -9402,11 +9759,11 @@ impl Interpreter {
                 self.mat_matrix_scalar(matrix, scalar.as_number()?, op, true)
             }
             (MatExprValue::Matrix(left), MatExprValue::Matrix(right)) => match op {
+                _ if op != '+' && (left.is_string() || right.is_string()) => {
+                    Err(self.err(ErrorCode::ForbiddenExpression))
+                }
                 '+' if left.is_string() || right.is_string() => {
                     self.mat_string_matrix_add(left, right)
-                }
-                '-' if left.is_string() || right.is_string() => {
-                    Err(self.err(ErrorCode::ForbiddenExpression))
                 }
                 '+' | '-' => self.mat_matrix_add_sub(left, right, op),
                 '*' => self.mat_matrix_multiply(left, right),
@@ -9419,23 +9776,29 @@ impl Interpreter {
 
     fn mat_string_matrix_add(
         &mut self,
-        left: ArrayValue,
+        mut left: ArrayValue,
         right: ArrayValue,
     ) -> BasicResult<MatExprValue> {
         if !left.is_string() || !right.is_string() {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
-        if left.dims != right.dims {
-            return Err(self.err(ErrorCode::InvalidDimensions));
+        self.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
+        let (ArrayData::Str(left_values), ArrayData::Str(right_values)) =
+            (&mut left.data, &right.data)
+        else {
+            unreachable!();
+        };
+        if left.dims == right.dims {
+            for (left, right) in left_values.iter_mut().zip(right_values) {
+                left.push_str(right);
+            }
+        } else {
+            for (flat, value) in left_values.iter_mut().enumerate() {
+                let right_flat = self.mat_elementwise_right_index(&left.dims, &right.dims, flat)?;
+                value.push_str(&right_values[right_flat]);
+            }
         }
-        let mut out = ArrayValue::new("$", left.dims.clone());
-        for flat in 0..left.data_len() {
-            let indexes = left.indexes_for_flat(flat);
-            let a = left.get(&indexes)?.into_string()?;
-            let b = right.get(&indexes)?.into_string()?;
-            out.set(&indexes, Value::string(format!("{a}{b}")))?;
-        }
-        Ok(MatExprValue::Matrix(out))
+        Ok(MatExprValue::Matrix(left))
     }
 
     fn mat_string_matrix_scalar_add(
@@ -9444,8 +9807,12 @@ impl Interpreter {
         scalar: Value,
         scalar_left: bool,
     ) -> BasicResult<MatExprValue> {
+        if !matches!(matrix.dims.len(), 1 | 2) {
+            return Err(self.err(ErrorCode::InvalidDimensions));
+        }
         let scalar = scalar.into_string()?;
-        let mut out = ArrayValue::new("$", matrix.dims.clone());
+        let mut out = ArrayValue::try_new("$", matrix.dims.clone())
+            .map_err(|error| self.with_current_line(error))?;
         for flat in 0..matrix.data_len() {
             let indexes = matrix.indexes_for_flat(flat);
             let text = matrix.get(&indexes)?.into_string()?;
@@ -9461,16 +9828,20 @@ impl Interpreter {
 
     fn mat_matrix_scalar(
         &mut self,
-        matrix: ArrayValue,
+        mut matrix: ArrayValue,
         scalar: f64,
         op: char,
         scalar_left: bool,
     ) -> BasicResult<MatExprValue> {
-        let matrix = self.array_to_numeric_matrix(&matrix)?;
-        let data = matrix
-            .data
-            .into_iter()
-            .map(|v| match op {
+        if !matches!(matrix.dims.len(), 1 | 2) {
+            return Err(self.err(ErrorCode::InvalidDimensions));
+        }
+        let ArrayData::Number(values) = &mut matrix.data else {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        };
+        for value in values {
+            let v = *value;
+            *value = match op {
                 '+' => Ok(v + scalar),
                 '-' if scalar_left => Ok(scalar - v),
                 '-' => Ok(v - scalar),
@@ -9492,41 +9863,89 @@ impl Interpreter {
                 '^' if scalar_left => Ok(scalar.powf(v)),
                 '^' => Ok(v.powf(scalar)),
                 _ => Err(self.err(ErrorCode::ForbiddenExpression)),
-            })
-            .collect::<BasicResult<Vec<_>>>()?;
-        Ok(MatExprValue::Matrix(ArrayValue::from_numeric_matrix(
-            "",
-            self.mat_base,
-            matrix.rows,
-            matrix.cols,
-            data,
-        )))
+            }?;
+        }
+        Ok(MatExprValue::Matrix(matrix))
     }
 
     fn mat_matrix_add_sub(
         &mut self,
-        left: ArrayValue,
+        mut left: ArrayValue,
         right: ArrayValue,
         op: char,
     ) -> BasicResult<MatExprValue> {
-        let left = self.array_to_numeric_matrix(&left)?;
-        let right = self.array_to_numeric_matrix(&right)?;
-        if left.rows != right.rows || left.cols != right.cols {
+        self.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
+        let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
+            (&mut left.data, &right.data)
+        else {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        };
+        if left.dims == right.dims {
+            for (a, b) in left_values.iter_mut().zip(right_values) {
+                *a = if op == '+' { *a + b } else { *a - b };
+            }
+        } else {
+            for (flat, value) in left_values.iter_mut().enumerate() {
+                let right_flat = self.mat_elementwise_right_index(&left.dims, &right.dims, flat)?;
+                *value = if op == '+' {
+                    *value + right_values[right_flat]
+                } else {
+                    *value - right_values[right_flat]
+                };
+            }
+        }
+        Ok(MatExprValue::Matrix(left))
+    }
+
+    fn validate_mat_elementwise_shapes(&self, left: &[usize], right: &[usize]) -> BasicResult<()> {
+        if left == right {
+            return if matches!(left.len(), 1 | 2) {
+                Ok(())
+            } else {
+                Err(self.err(ErrorCode::InvalidDimensions))
+            };
+        }
+        let shape = |dims: &[usize]| -> BasicResult<(usize, usize)> {
+            let lower = self.mat_base.max(0) as usize;
+            let count = |bound: usize| (bound + 1).saturating_sub(lower);
+            let (rows, cols) = match dims {
+                [row] => (count(*row), 1),
+                [row, col] => (count(*row), count(*col)),
+                _ => return Err(self.err(ErrorCode::InvalidDimensions)),
+            };
+            Ok(if rows == 0 || cols == 0 {
+                (0, 0)
+            } else {
+                (rows, cols)
+            })
+        };
+        if shape(left)? != shape(right)? {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
-        let data = left
-            .data
-            .into_iter()
-            .zip(right.data)
-            .map(|(a, b)| if op == '+' { a + b } else { a - b })
-            .collect();
-        Ok(MatExprValue::Matrix(ArrayValue::from_numeric_matrix(
-            "",
-            self.mat_base,
-            left.rows,
-            left.cols,
-            data,
-        )))
+        Ok(())
+    }
+
+    // Elementwise results keep the left operand's rank and stored borders.
+    // A vector selects the active column of a matrix; a matrix uses a vector's
+    // row value for each column, matching the Python MAT indexing convention.
+    fn mat_elementwise_right_index(
+        &self,
+        left: &[usize],
+        right: &[usize],
+        flat: usize,
+    ) -> BasicResult<usize> {
+        let (row, col) = if left.len() == 1 {
+            (flat, self.mat_base.max(0) as usize)
+        } else {
+            (flat / (left[1] + 1), flat % (left[1] + 1))
+        };
+        match right {
+            [bound] if row <= *bound => Ok(row),
+            [row_bound, col_bound] if row <= *row_bound && col <= *col_bound => {
+                Ok(row * (col_bound + 1) + col)
+            }
+            _ => Err(self.err(ErrorCode::InvalidDimensions)),
+        }
     }
 
     fn mat_matrix_multiply(
@@ -9534,83 +9953,174 @@ impl Interpreter {
         left: ArrayValue,
         right: ArrayValue,
     ) -> BasicResult<MatExprValue> {
-        let left = self.array_to_numeric_matrix(&left)?;
-        let right = self.array_to_numeric_matrix(&right)?;
+        let vector_result = right.dims.len() == 1;
+        let left = self.owned_array_to_numeric_matrix(left)?;
+        let right = self.owned_array_to_numeric_matrix(right)?;
         if left.cols != right.rows {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
-        let mut data = vec![0.0; left.rows * right.cols];
-        for r in 0..left.rows {
-            for c in 0..right.cols {
-                let mut sum = 0.0;
-                for k in 0..left.cols {
-                    sum += left.data[r * left.cols + k] * right.data[k * right.cols + c];
+        let mut data = checked_zeroed_numeric_matrix_buffer(self.mat_base, left.rows, right.cols)
+            .map_err(|error| self.with_current_line(error))?;
+        if right.cols > 0 && right.cols <= 4 {
+            // Very narrow outputs benefit from the original scalar dot
+            // products, avoiding repeated stores and tiny inner row loops.
+            for r in 0..left.rows {
+                for c in 0..right.cols {
+                    let mut sum = 0.0;
+                    for k in 0..left.cols {
+                        sum += left.data[r * left.cols + k] * right.data[k * right.cols + c];
+                    }
+                    data[r * right.cols + c] = sum;
                 }
-                data[r * right.cols + c] = sum;
+            }
+        } else if right.cols >= 5 {
+            for r in 0..left.rows {
+                let output_row = &mut data[r * right.cols..(r + 1) * right.cols];
+                let left_row = &left.data[r * left.cols..(r + 1) * left.cols];
+                // Traverse contiguous rows while each output keeps the original
+                // ascending-k accumulation order. Do not skip zero coefficients:
+                // zero times infinity or NaN must still propagate NaN.
+                for (k, &coefficient) in left_row.iter().enumerate() {
+                    let right_row = &right.data[k * right.cols..(k + 1) * right.cols];
+                    for (output, &value) in output_row.iter_mut().zip(right_row) {
+                        *output += coefficient * value;
+                    }
+                }
             }
         }
-        Ok(MatExprValue::Matrix(ArrayValue::from_numeric_matrix(
-            "",
-            self.mat_base,
-            left.rows,
-            right.cols,
-            data,
-        )))
+        let result = if vector_result {
+            // Products with a vector on the right retain its historical
+            // representation, including one-index/two-index aliases.
+            // Structural functions still use the matrix factory to keep rank.
+            let upper = if self.mat_base == 1 {
+                left.rows
+            } else {
+                left.rows.saturating_sub(1)
+            };
+            let mut vector = ArrayValue::try_new("", vec![upper])
+                .map_err(|error| self.with_current_line(error))?;
+            let ArrayData::Number(values) = &mut vector.data else {
+                unreachable!();
+            };
+            let lower = self.mat_base as usize;
+            values[lower..lower + left.rows].copy_from_slice(&data);
+            vector
+        } else {
+            ArrayValue::from_numeric_matrix("", self.mat_base, left.rows, right.cols, data)
+                .map_err(|error| self.with_current_line(error))?
+        };
+        Ok(MatExprValue::Matrix(result))
     }
 
     fn mat_value_to_numeric_matrix(&self, value: MatExprValue) -> BasicResult<NumericMatrix> {
         match value {
-            MatExprValue::Matrix(array) => self.array_to_numeric_matrix(&array),
+            MatExprValue::Matrix(array) => {
+                if array.is_string() {
+                    return Err(self.err(ErrorCode::TypeMismatch));
+                }
+                if array.dims.len() != 2 {
+                    return Err(self.err(ErrorCode::InvalidDimensions));
+                }
+                self.owned_array_to_numeric_matrix(array)
+            }
             MatExprValue::Scalar(_) => Err(self.err(ErrorCode::ForbiddenExpression)),
         }
+    }
+
+    // MAT expression operands are already snapshots: reuse their numeric buffers
+    // without mutating live arrays or changing evaluation/aliasing semantics.
+    fn owned_array_to_numeric_matrix(&self, array: ArrayValue) -> BasicResult<NumericMatrix> {
+        if array.is_string() {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        }
+        let lower = self.mat_base.max(0) as usize;
+        let count = |bound: usize| (bound + 1).saturating_sub(lower);
+        let (rows, cols, stride) = match array.dims.as_slice() {
+            [n] => (count(*n), 1, 1),
+            [r, c] => (count(*r), count(*c), c + 1),
+            _ => return Err(self.err(ErrorCode::InvalidDimensions)),
+        };
+        let ArrayData::Number(mut data) = array.data else {
+            unreachable!();
+        };
+        if lower != 0 {
+            if array.dims.len() == 1 {
+                data.copy_within(lower..lower + rows, 0);
+            } else if cols != 0 {
+                for r in 0..rows {
+                    let start = (lower + r) * stride + lower;
+                    data.copy_within(start..start + cols, r * cols);
+                }
+            }
+            data.truncate(rows * cols);
+        }
+        Ok(NumericMatrix { rows, cols, data })
     }
 
     fn array_to_numeric_matrix(&self, array: &ArrayValue) -> BasicResult<NumericMatrix> {
         if array.is_string() {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
-        if array.dims.len() > 2 {
+        if !matches!(array.dims.len(), 1 | 2) {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
-        let lower = self.mat_base.max(0) as usize;
-        let count = |bound: usize| {
-            if bound < lower {
-                0
-            } else {
-                bound - lower + 1
-            }
-        };
-        let (rows, cols) = match array.dims.as_slice() {
-            [n] => (count(*n), 1),
-            [r, c] => (count(*r), count(*c)),
-            _ => return Err(self.err(ErrorCode::InvalidDimensions)),
-        };
-        let mut data = Vec::with_capacity(rows * cols);
-        for r in 0..rows {
-            for c in 0..cols {
-                let indexes = if array.dims.len() == 1 {
-                    vec![(lower + r) as i32]
-                } else {
-                    vec![(lower + r) as i32, (lower + c) as i32]
-                };
-                data.push(array.get(&indexes)?.as_number()?);
-            }
-        }
-        Ok(NumericMatrix { rows, cols, data })
+        self.owned_array_to_numeric_matrix(array.clone())
     }
 
-    fn invert_numeric_matrix(&self, matrix: NumericMatrix) -> BasicResult<(ArrayValue, f64)> {
+    fn invert_numeric_matrix(&self, matrix: NumericMatrix) -> BasicResult<ArrayValue> {
         if matrix.rows != matrix.cols {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
         let n = matrix.rows;
         let mut a = matrix.data;
-        let mut inv = vec![0.0; n * n];
+        // Positive f64 bit patterns have their numeric ordering; NaN and
+        // infinity follow every finite magnitude. Validate the aggregate once
+        // instead of classifying and comparing floats for each input element.
+        let mut largest_bits = 0_u64;
+        for &value in &a {
+            largest_bits = largest_bits.max(value.to_bits() & 0x7fffffffffffffff);
+        }
+        let largest = f64::from_bits(largest_bits);
+        if !largest.is_finite() {
+            return Err(self.err(ErrorCode::InvalidValue));
+        }
+        // Ordinary matrices retain the original Gauss-Jordan arithmetic.
+        // For extreme magnitudes, a power-of-two normalization avoids overflow
+        // without adding rounding to representable input values.
+        let scale = if largest > 3.273390607896142e150
+            || (largest != 0.0 && largest < 3.054936363499605e-151)
+        {
+            let bits = largest.to_bits();
+            let exponent = if bits >> 52 != 0 {
+                (bits >> 52) as i32 - 1023
+            } else {
+                63 - bits.leading_zeros() as i32 - 1074
+            };
+            let exponent = (-exponent).clamp(-1023, 1023);
+            let scale = if exponent >= -1022 {
+                f64::from_bits(((exponent + 1023) as u64) << 52)
+            } else {
+                f64::from_bits(1 << 51)
+            };
+            // Widely separated magnitudes can lose a small coefficient during
+            // global scaling. Keep the original kernel in that case; its phase
+            // and final checks still reject non-representable intermediates.
+            if a.iter().any(|&value| (value * scale) / scale != value) {
+                1.0
+            } else {
+                for value in &mut a {
+                    *value *= scale;
+                }
+                scale
+            }
+        } else {
+            1.0
+        };
+        let mut inv = checked_zeroed_numeric_matrix_buffer(self.mat_base, n, n)
+            .map_err(|error| self.with_current_line(error))?;
         for i in 0..n {
             inv[i * n + i] = 1.0;
         }
-        let mut det = 1.0;
-        let mut sign = 1.0;
         for col in 0..n {
             let mut pivot = col;
             let mut pivot_abs = a[col * n + col].abs();
@@ -9621,19 +10131,20 @@ impl Interpreter {
                     pivot_abs = value;
                 }
             }
-            if pivot_abs == 0.0 {
-                return Err(self.err(ErrorCode::DivisionByZero));
+            if pivot_abs == 0.0 || !pivot_abs.is_finite() {
+                return Err(self.err(ErrorCode::InvalidValue));
             }
             if pivot != col {
                 for c in 0..n {
                     a.swap(col * n + c, pivot * n + c);
                     inv.swap(col * n + c, pivot * n + c);
                 }
-                sign = -sign;
             }
             let pivot_value = a[col * n + col];
             let pivot_inv = 1.0 / pivot_value;
-            det *= pivot_value;
+            if !pivot_inv.is_finite() {
+                return Err(self.err(ErrorCode::InvalidValue));
+            }
             for c in 0..n {
                 a[col * n + c] *= pivot_inv;
                 inv[col * n + c] *= pivot_inv;
@@ -9652,10 +10163,56 @@ impl Interpreter {
                 }
             }
         }
-        Ok((
-            ArrayValue::from_numeric_matrix("", self.mat_base, n, n, inv),
-            det * sign,
-        ))
+        if a.iter().chain(&inv).any(|value| !value.is_finite()) {
+            return Err(self.err(ErrorCode::InvalidValue));
+        }
+        if scale != 1.0 {
+            for value in &mut inv {
+                let restored = *value * scale;
+                if !restored.is_finite() || (restored == 0.0 && *value != 0.0) {
+                    return Err(self.err(ErrorCode::InvalidValue));
+                }
+                *value = restored;
+            }
+        }
+        ArrayValue::from_numeric_matrix("", self.mat_base, n, n, inv)
+            .map_err(|error| self.with_current_line(error))
+    }
+
+    // This representation is used only after a product leaves the normal f64
+    // range. The mantissa remains in [1,2) in magnitude, with a separate binary
+    // exponent, so later factors can recover an otherwise representable result.
+    fn multiply_scaled_numeric_product(product: &mut (f64, i64), value: f64) {
+        let mut bits = value.to_bits();
+        let mut correction = 0;
+        if bits & 0x7ff0000000000000 == 0 {
+            bits = (value * 4503599627370496.0).to_bits(); // 2^52, exact
+            correction = -52;
+        }
+        let exponent = ((bits >> 52) & 0x7ff) as i64 - 1023 + correction;
+        let mantissa = f64::from_bits((bits & 0x800fffffffffffff) | 0x3ff0000000000000);
+        product.0 *= mantissa;
+        product.1 += exponent;
+        if product.0.abs() >= 2.0 {
+            product.0 *= 0.5;
+            product.1 += 1;
+        }
+    }
+
+    fn scaled_numeric_product_value(product: (f64, i64)) -> f64 {
+        if product.1 > 1023 {
+            return product.0 * f64::INFINITY;
+        }
+        if product.1 < -1075 {
+            return product.0 * 0.0;
+        }
+        if product.1 < -1022 {
+            // First multiplication is exact and normal; only the second rounds
+            // into the subnormal range, including ties at half the minimum.
+            let factor = f64::from_bits(((product.1 + 1022 + 1023) as u64) << 52);
+            return (product.0 * f64::MIN_POSITIVE) * factor;
+        }
+        product.0 * f64::from_bits(((product.1 + 1023) as u64) << 52)
     }
 
     fn determinant_numeric_matrix(&self, matrix: NumericMatrix) -> BasicResult<f64> {
@@ -9665,6 +10222,8 @@ impl Interpreter {
         let n = matrix.rows;
         let mut a = matrix.data;
         let mut det = 1.0;
+        let mut sign = 1.0;
+        let mut needs_scaled_product = false;
         for col in 0..n {
             let mut pivot = col;
             let mut pivot_abs = a[col * n + col].abs();
@@ -9675,17 +10234,18 @@ impl Interpreter {
                     pivot_abs = value;
                 }
             }
-            if pivot_abs <= 1e-12 {
+            if pivot_abs == 0.0 {
                 return Ok(0.0);
             }
             if pivot != col {
                 for c in 0..n {
                     a.swap(col * n + c, pivot * n + c);
                 }
-                det = -det;
+                sign = -sign;
             }
             let pivot_value = a[col * n + col];
             det *= pivot_value;
+            needs_scaled_product |= !det.is_normal();
             for row in col + 1..n {
                 let factor = a[row * n + col] / pivot_value;
                 for c in col + 1..n {
@@ -9694,7 +10254,20 @@ impl Interpreter {
                 a[row * n + col] = 0.0;
             }
         }
-        Ok(det)
+        if needs_scaled_product {
+            let mut product = (1.0, 0);
+            for index in 0..n {
+                let pivot = a[index * n + index];
+                // Preserve existing DET NaN/Inf behavior if elimination itself
+                // cannot represent a pivot; this fallback fixes the product.
+                if !pivot.is_finite() {
+                    return Ok(det * sign);
+                }
+                Self::multiply_scaled_numeric_product(&mut product, pivot);
+            }
+            return Ok(Self::scaled_numeric_product_value(product) * sign);
+        }
+        Ok(det * sign)
     }
 
     fn execute_read(&mut self, args: &str) -> BasicResult<()> {
@@ -10925,6 +11498,11 @@ impl Interpreter {
     }
 
     fn close_graphics_window(&mut self) {
+        // Return to the terminal while the graphics window still owns the
+        // foreground, and dispatch key-up events before destroying it.
+        if let Some(window) = self.graphics_window.as_mut() {
+            focus_console_window(Some(window));
+        }
         self.graphics_window = None;
         self.graphics_window_suppressed = false;
         self.graphics_window_dirty = false;
@@ -11774,6 +12352,7 @@ impl Interpreter {
         }
         let path = self.resolve_bas_path_expr(&parts[0])?;
         let text = read_validated_program_text(&path)?;
+        let text = self.normalize_merged_program_text(&text)?;
         let old_lines = self.line_numbers_cache.clone();
         if self.run_depth != 0 && self.active_line_plan.is_none() {
             self.active_line_plan = self.retain_current_line();
@@ -11935,6 +12514,7 @@ impl Interpreter {
             .map(|part| self.eval_number(part).map(|n| n as i32))
             .transpose()?;
         let text = read_validated_program_text(&path)?;
+        let text = self.normalize_merged_program_text(&text)?;
         for part in parts.iter().skip(2) {
             let trimmed = part.trim();
             if starts_keyword(&trimmed.to_ascii_uppercase(), "DELETE") {
@@ -12636,6 +13216,9 @@ impl Interpreter {
         let first = upper.split_whitespace().next().unwrap_or("");
         match first {
             "REM" | "DATA" => CachedCommand::Noop,
+            "MAT" => CompiledMatAssignment::compile(trimmed[3..].trim())
+                .map(|compiled| CachedCommand::MatAssignment(Rc::new(compiled)))
+                .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "RETURN" if upper == "RETURN" => CachedCommand::Return,
             "FNEND" if upper == "FNEND" => CachedCommand::FnEnd,
             "FNEXIT" if upper == "FNEXIT" => CachedCommand::FnExit,
@@ -13271,10 +13854,9 @@ impl EvalContext for Interpreter {
             }
             let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
             if !self.arrays.contains_key(name) {
-                self.arrays.insert(
-                    name.to_string(),
-                    ArrayValue::new(name, vec![10; indexes.len()]),
-                );
+                let array = ArrayValue::try_new(name, vec![10; indexes.len()])
+                    .map_err(|error| self.with_current_line(error))?;
+                self.arrays.insert(name.to_string(), array);
             }
             let array = self.arrays.get(name).unwrap();
             return array.get(&indexes);
@@ -13291,10 +13873,9 @@ impl EvalContext for Interpreter {
         }
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
         if !self.arrays.contains_key(key.as_ref()) {
-            self.arrays.insert(
-                key.to_string(),
-                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
-            );
+            let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
+                .map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert(key.to_string(), array);
         }
         let array = self.arrays.get(key.as_ref()).unwrap();
         array.get(&indexes)
@@ -13312,10 +13893,9 @@ impl EvalContext for Interpreter {
             }
             let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
             if !self.arrays.contains_key(name) {
-                self.arrays.insert(
-                    name.to_string(),
-                    ArrayValue::new(name, vec![10; indexes.len()]),
-                );
+                let array = ArrayValue::try_new(name, vec![10; indexes.len()])
+                    .map_err(|error| self.with_current_line(error))?;
+                self.arrays.insert(name.to_string(), array);
             }
             let array = self.arrays.get(name).unwrap();
             return array.get_number(&indexes);
@@ -13332,10 +13912,9 @@ impl EvalContext for Interpreter {
         }
         let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
         if !self.arrays.contains_key(key.as_ref()) {
-            self.arrays.insert(
-                key.to_string(),
-                ArrayValue::new(key.as_ref(), vec![10; indexes.len()]),
-            );
+            let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
+                .map_err(|error| self.with_current_line(error))?;
+            self.arrays.insert(key.to_string(), array);
         }
         let array = self.arrays.get(key.as_ref()).unwrap();
         array.get_number(&indexes)
@@ -13683,144 +14262,6 @@ impl Interpreter {
         Ok(Value::number(self.determinant_numeric_matrix(matrix)?))
     }
 
-    fn call_mat_stat_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value> {
-        let upper = name.to_ascii_uppercase();
-        if upper == "DOT" {
-            if args.len() != 2 {
-                return Err(self.err(ErrorCode::ArgumentMismatch));
-            }
-            let left_name = args[0].clone().into_string()?.to_ascii_uppercase();
-            let right_name = args[1].clone().into_string()?.to_ascii_uppercase();
-            let left = self
-                .array_ref(&left_name)
-                .ok_or_else(|| self.err(ErrorCode::Undefined))?;
-            let right = self
-                .array_ref(&right_name)
-                .ok_or_else(|| self.err(ErrorCode::Undefined))?;
-            let left_values = self.numeric_vector_values(left)?;
-            let right_values = self.numeric_vector_values(right)?;
-            if left_values.len() != right_values.len() {
-                return Err(self.err(ErrorCode::InvalidDimensions));
-            }
-            let total = left_values
-                .into_iter()
-                .zip(right_values)
-                .map(|(a, b)| a * b)
-                .sum::<f64>();
-            return Ok(Value::number(total));
-        }
-
-        if args.len() != 1 {
-            return Err(self.err(ErrorCode::ArgumentMismatch));
-        }
-        let array_name = args[0].clone().into_string()?.to_ascii_uppercase();
-        let Some(array) = self.array_ref(&array_name) else {
-            return Err(self.err(ErrorCode::Undefined));
-        };
-        let stats = self.analyze_numeric_array(array)?;
-        let value = match upper.as_str() {
-            "ABSUM" => stats.abs_sum,
-            "AMAX" => {
-                self.set_mat_stat_context("AMAX", stats.max_pos);
-                stats.max
-            }
-            "AMIN" => {
-                self.set_mat_stat_context("AMIN", stats.min_pos);
-                stats.min
-            }
-            "CNORM" => {
-                self.numeric_variables.insert(
-                    "CNORMCOL".to_string(),
-                    stats.col_norm_col.unwrap_or(0) as f64,
-                );
-                stats.col_norm
-            }
-            "FNORM" => stats.fnorm,
-            "MAXAB" => {
-                self.set_mat_stat_context("MAXAB", stats.max_abs_pos);
-                stats.max_abs
-            }
-            "RNORM" => {
-                self.numeric_variables.insert(
-                    "RNORMROW".to_string(),
-                    stats.row_norm_row.unwrap_or(0) as f64,
-                );
-                stats.row_norm
-            }
-            "SUM" => stats.sum,
-            _ => return Err(self.err(ErrorCode::Undefined)),
-        };
-        Ok(Value::number(value))
-    }
-
-    fn set_mat_stat_context(&mut self, prefix: &str, position: Option<(i32, i32)>) {
-        let (row, col) = position.unwrap_or((0, 0));
-        self.numeric_variables
-            .insert(format!("{prefix}ROW"), row as f64);
-        self.numeric_variables
-            .insert(format!("{prefix}COL"), col as f64);
-    }
-
-    fn numeric_vector_values(&self, array: &ArrayValue) -> BasicResult<Vec<f64>> {
-        let matrix = self.array_to_numeric_matrix(array)?;
-        if matrix.cols != 1 {
-            return Err(self.err(ErrorCode::InvalidDimensions));
-        }
-        Ok(matrix.data)
-    }
-
-    fn analyze_numeric_array(&self, array: &ArrayValue) -> BasicResult<MatStats> {
-        let matrix = self.array_to_numeric_matrix(array)?;
-        let lower = self.mat_base.max(0) as i32;
-        let mut stats = MatStats::default();
-        if matrix.rows == 0 || matrix.cols == 0 {
-            return Ok(stats);
-        }
-        stats.max = f64::NEG_INFINITY;
-        stats.min = f64::INFINITY;
-        let mut row_sums = vec![0.0; matrix.rows];
-        let mut col_sums = vec![0.0; matrix.cols];
-        for r in 0..matrix.rows {
-            for c in 0..matrix.cols {
-                let value = matrix.data[r * matrix.cols + c];
-                let abs = value.abs();
-                let row_index = lower + r as i32;
-                let col_index = lower + c as i32;
-                stats.sum += value;
-                stats.abs_sum += abs;
-                stats.fnorm += value * value;
-                row_sums[r] += abs;
-                col_sums[c] += abs;
-                if stats.max_pos.is_none() || value > stats.max {
-                    stats.max = value;
-                    stats.max_pos = Some((row_index, col_index));
-                }
-                if stats.min_pos.is_none() || value < stats.min {
-                    stats.min = value;
-                    stats.min_pos = Some((row_index, col_index));
-                }
-                if stats.max_abs_pos.is_none() || abs > stats.max_abs {
-                    stats.max_abs = abs;
-                    stats.max_abs_pos = Some((row_index, col_index));
-                }
-            }
-        }
-        stats.fnorm = stats.fnorm.sqrt();
-        for (idx, value) in col_sums.into_iter().enumerate() {
-            if stats.col_norm_col.is_none() || value > stats.col_norm {
-                stats.col_norm = value;
-                stats.col_norm_col = Some(lower + idx as i32);
-            }
-        }
-        for (idx, value) in row_sums.into_iter().enumerate() {
-            if stats.row_norm_row.is_none() || value > stats.row_norm {
-                stats.row_norm = value;
-                stats.row_norm_row = Some(lower + idx as i32);
-            }
-        }
-        Ok(stats)
-    }
-
     fn call_user_function(&mut self, name: &str, args: Vec<Value>) -> BasicResult<Value> {
         let Some(fun) = self.functions.get(name) else {
             return Err(self.err(ErrorCode::Undefined));
@@ -14017,15 +14458,17 @@ impl Interpreter {
                     let mut evaluated = Vec::with_capacity(dims.len());
                     for dim in dims {
                         let value = self.eval_number(dim)?;
-                        if value < 0.0 {
-                            return Err(self.err(ErrorCode::InvalidValue));
-                        }
-                        evaluated.push(value as usize);
+                        evaluated.push(
+                            array_dimension_bound(value)
+                                .map_err(|error| self.with_current_line(error))?,
+                        );
                     }
+                    let array = ArrayValue::try_new(name, evaluated)
+                        .map_err(|error| self.with_current_line(error))?;
                     save_array_alias_binding_ref(&self.array_aliases, saved_aliases, name);
                     self.remove_array_alias_binding(name);
                     save_array_binding_ref(&self.arrays, saved_arrays, name);
-                    set_array_binding_ref(&mut self.arrays, name, ArrayValue::new(name, evaluated));
+                    set_array_binding_ref(&mut self.arrays, name, array);
                 }
             }
         }
@@ -15040,6 +15483,118 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn line_edit_propagates_the_changed_spelling_to_stored_references() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 A=5").unwrap();
+        interp.process_immediate("20 PRINT a").unwrap();
+        interp.store_program_line("20 PRINT a", true).unwrap();
+        assert_eq!(interp.program.list(), "10 a=5\n20 PRINT a\n");
+        interp.process_immediate("DELETE 20").unwrap();
+        assert_eq!(interp.program.list(), "10 a=5\n");
+
+        interp.store_program_line("10 A=a+1", true).unwrap();
+        assert_eq!(interp.program.get(10), Some(" A=A+1"));
+    }
+
+    #[test]
+    fn fullscreen_new_lines_preserve_the_existing_identifier_style() {
+        for new_line in ["5 x=2", "30 x=2"] {
+            let mut interp = Interpreter::new();
+            interp.process_immediate("10 X=10").unwrap();
+            interp.process_immediate("20 PRINT x").unwrap();
+            interp
+                .apply_fullscreen_editor_lines(&[
+                    "10 X=10".to_string(),
+                    "20 PRINT X".to_string(),
+                    new_line.to_string(),
+                ])
+                .unwrap();
+            assert_eq!(interp.program.get(10), Some(" X=10"), "{new_line}");
+            assert_eq!(interp.program.get(20), Some(" PRINT X"), "{new_line}");
+            let added_line = numbered_line_number(new_line).unwrap();
+            assert_eq!(interp.program.get(added_line), Some(" X=2"), "{new_line}");
+            interp.process_immediate("LIST").unwrap();
+            assert_eq!(interp.take_output(), interp.program.list());
+        }
+    }
+
+    #[test]
+    fn fullscreen_new_references_in_an_existing_line_preserve_identifier_style() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 X=10").unwrap();
+        interp.process_immediate("20 PRINT 1").unwrap();
+        interp
+            .apply_fullscreen_editor_lines(&["10 X=10".to_string(), "20 PRINT x".to_string()])
+            .unwrap();
+        assert_eq!(interp.program.list(), "10 X=10\n20 PRINT X\n");
+    }
+
+    #[test]
+    fn fullscreen_edit_preserves_known_spelling_in_changed_references() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 A=5").unwrap();
+        interp.process_immediate("20 PRINT a").unwrap();
+        interp
+            .apply_fullscreen_editor_lines(&[
+                "10 A=5".to_string(),
+                "20 PRINT a".to_string(),
+                "30 A=2".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(interp.program.list(), "10 A=5\n20 PRINT A\n30 A=2\n");
+        interp.process_immediate("DELETE 20").unwrap();
+        assert_eq!(interp.program.list(), "10 A=5\n30 A=2\n");
+    }
+
+    #[test]
+    fn fullscreen_edit_preserves_known_spelling_when_multiple_lines_change() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 A=5").unwrap();
+        interp.process_immediate("20 PRINT a").unwrap();
+        interp
+            .apply_fullscreen_editor_lines(&[
+                "10 a=A+1".to_string(),
+                "20 PRINT A ' new comment".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(
+            interp.program.list(),
+            "10 A=A+1\n20 PRINT A ' new comment\n"
+        );
+    }
+
+    #[test]
+    fn fullscreen_new_variables_take_the_first_visible_reference_spelling() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 X=10").unwrap();
+        interp
+            .apply_fullscreen_editor_lines(&[
+                "10 x=10".to_string(),
+                "20 DATA mivar".to_string(),
+                "40 MiVar=2".to_string(),
+                "30 PRINT mivar".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(
+            interp.program.list(),
+            "10 X=10\n20 DATA mivar\n30 PRINT MiVar\n40 MiVar=2\n"
+        );
+    }
+
+    #[test]
+    fn invalid_editor_input_preserves_stored_source_and_identifier_style() {
+        let mut interp = Interpreter::new();
+        interp.process_immediate("10 A=5").unwrap();
+        let original = interp.program.list();
+        assert!(interp.store_program_line("0 a=1", true).is_err());
+        assert!(interp
+            .apply_fullscreen_editor_lines(&["10 a=1".to_string(), "invalid".to_string()])
+            .is_err());
+        assert_eq!(interp.program.list(), original);
+        assert_eq!(interp.identifier_case.get("A"), Some(&"A".to_string()));
+    }
+
+    #[test]
     fn texture_cache_tracks_string_variable_lifetime() {
         let mut interp = Interpreter::new();
         interp
@@ -15742,9 +16297,57 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn fast_index_integer_round_trip_matches_fraction_check_at_float_boundaries() {
+        let mut interp = Interpreter::new();
+        let mut values = vec![
+            0.0,
+            -0.0,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            0.5,
+            -0.5,
+            1.0,
+            -1.0,
+            i32::MIN as f64,
+            i32::MAX as f64,
+            i32::MIN as f64 - 1.0,
+            i32::MAX as f64 + 1.0,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -f64::NAN,
+        ];
+        // The immediately adjacent representable values distinguish fractional
+        // values from exact integers on both sides of the signed-i32 limits.
+        for boundary in [1.0_f64, -1.0, i32::MIN as f64, i32::MAX as f64] {
+            values.push(f64::from_bits(boundary.to_bits() - 1));
+            values.push(f64::from_bits(boundary.to_bits() + 1));
+        }
+        let mut bits = 0x9e37_79b9_7f4a_7c15_u64;
+        for _ in 0..2048 {
+            bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1);
+            values.push(f64::from_bits(bits));
+        }
+        for value in values {
+            let expected = if value.fract() != 0.0 {
+                Err(ErrorCode::InvalidIndex)
+            } else {
+                Ok(value as i32)
+            };
+            let actual = eval_fast_index(&mut interp, &FastIndexExpr::Number(value))
+                .map_err(|error| error.code);
+            assert_eq!(actual, expected, "index bits {:016x}", value.to_bits());
+        }
+    }
+
+    #[test]
     fn fast_index_leaves_preserve_conversion_and_array_read_errors() {
-        let variable = compile_fast_number_expr(&compile_expression("I").unwrap(), false).unwrap();
-        assert!(matches!(&variable, FastNumberExpr::Var { .. }));
+        let variable = compile_fast_index_expr(&compile_expression("I").unwrap(), false).unwrap();
+        assert!(matches!(&variable, FastIndexExpr::Var { .. }));
         let mut interp = Interpreter::new();
         assert_eq!(eval_fast_index(&mut interp, &variable).unwrap(), 0);
         for (value, expected) in [
@@ -15767,7 +16370,7 @@ mod interpreter_tests {
         ] {
             interp.numeric_variables.insert("I".to_string(), value);
             assert_eq!(
-                eval_fast_index(&mut interp, &FastNumberExpr::Number(value)).map_err(|e| e.code),
+                eval_fast_index(&mut interp, &FastIndexExpr::Number(value)).map_err(|e| e.code),
                 expected,
                 "literal index {value:?}"
             );
@@ -15806,6 +16409,86 @@ mod interpreter_tests {
                 eval_compiled_number(&mut generic, &expression),
             );
         }
+    }
+
+    #[test]
+    fn fast_index_offsets_and_variable_pairs_preserve_ieee_and_bounds() {
+        for source in ["A(I+1)", "A(1+I)", "A(I-1)", "A(1-I)", "A(I+S)", "A(I-S)"] {
+            let expression = compile_expression(source).unwrap();
+            let fast = compile_fast_number_expr(&expression, true).unwrap();
+            for (index, shift) in [
+                (2.0, 1.0),
+                (0.5, 0.5),
+                (0.5, -0.5),
+                (-0.0, 0.0),
+                (i32::MAX as f64 + 1.0, 1.0),
+                (i32::MIN as f64 - 1.0, -1.0),
+                (1.0e100, -1.0e100),
+                (f64::MAX, f64::MAX),
+                (f64::INFINITY, f64::NEG_INFINITY),
+                (f64::NEG_INFINITY, f64::NEG_INFINITY),
+                (f64::NAN, 1.0),
+            ] {
+                let mut candidate = Interpreter::new();
+                let mut generic = Interpreter::new();
+                for ctx in [&mut candidate, &mut generic] {
+                    ctx.numeric_variables.insert("I".to_string(), index);
+                    ctx.numeric_variables.insert("S".to_string(), shift);
+                    let mut array = ArrayValue::new("A", vec![4]);
+                    for position in 0..=4 {
+                        array
+                            .set_number_direct_1d(position, 10.0 + position as f64)
+                            .unwrap();
+                    }
+                    ctx.arrays.insert("A".to_string(), array);
+                }
+                assert_number_results_match(
+                    source,
+                    fast.eval(&mut candidate),
+                    eval_compiled_number(&mut generic, &expression),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fast_index_composite_caches_rebind_and_respect_function_scope() {
+        let expression = compile_expression("A(I+S)+A(I-1)").unwrap();
+        let fast = compile_fast_number_expr(&expression, true).unwrap();
+        let make_array = || {
+            let mut array = ArrayValue::new("A", vec![4]);
+            for position in 0..=4 {
+                array
+                    .set_number_direct_1d(position, 10.0 + position as f64)
+                    .unwrap();
+            }
+            array
+        };
+        let mut first = Interpreter::new();
+        first.arrays.insert("A".to_string(), make_array());
+        first.numeric_variables.insert("I".to_string(), 1.0);
+        first.numeric_variables.insert("S".to_string(), 1.0);
+        assert_eq!(fast.eval(&mut first).unwrap(), 22.0);
+
+        let mut second = Interpreter::new();
+        second.arrays.insert("A".to_string(), make_array());
+        second.numeric_variables.insert("S".to_string(), 1.0);
+        second.numeric_variables.insert("OTHER".to_string(), 99.0);
+        second.numeric_variables.insert("I".to_string(), 2.0);
+        assert_eq!(fast.eval(&mut second).unwrap(), 24.0);
+        assert_eq!(fast.eval(&mut first).unwrap(), 22.0);
+
+        first.numeric_variables.clear();
+        first.numeric_variables.insert("S".to_string(), 0.0);
+        first.numeric_variables.insert("I".to_string(), 3.0);
+        assert_eq!(fast.eval(&mut first).unwrap(), 25.0);
+        first.numeric_variables.remove("I");
+        first.set_array_alias_binding("I", "A".to_string());
+        first.function_call_stack.push(Rc::from("FNREAD"));
+        assert_eq!(
+            fast.eval(&mut first).unwrap_err().code,
+            ErrorCode::TypeMismatch
+        );
     }
 
     #[test]
@@ -15857,6 +16540,11 @@ mod interpreter_tests {
             ("M(RND*0+I,RND*0+1)", 1.0, Ok(37.0), 2),
             ("M(I,RND*0+1)", -1.0, Err(ErrorCode::IndexOutOfRange), 1),
             ("M(RND+1/0,RND)", 1.0, Err(ErrorCode::DivisionByZero), 1),
+            ("M(I+S,RND+1/0)", 0.0, Err(ErrorCode::InvalidIndex), 0),
+            ("M(I+S,RND+1/0)", 0.5, Err(ErrorCode::DivisionByZero), 1),
+            ("M(I-S,RND*0+1)", 1.5, Ok(37.0), 1),
+            ("M(I+S,RND)", f64::INFINITY, Err(ErrorCode::Overflow), 0),
+            ("M(I-S,RND)", f64::NAN, Err(ErrorCode::InvalidValue), 0),
         ] {
             let expression = compile_expression(source).unwrap();
             let fast = compile_fast_number_expr(&expression, true).unwrap();
@@ -15865,6 +16553,7 @@ mod interpreter_tests {
             for ctx in [&mut candidate, &mut generic] {
                 ctx.rng = SimpleRng::new(1234);
                 ctx.numeric_variables.insert("I".to_string(), index);
+                ctx.numeric_variables.insert("S".to_string(), 0.5);
                 let mut matrix = ArrayValue::new("M", vec![1, 1]);
                 matrix.set_number_direct_2d(1, 1, 37.0).unwrap();
                 ctx.arrays.insert("M".to_string(), matrix);
@@ -18615,11 +19304,12 @@ fn numbered_line_number(source: &str) -> Option<i32> {
     text[..digit_end].parse().ok()
 }
 
-fn record_identifier_case_forms(
+pub(crate) fn record_identifier_case_forms(
     source: &str,
     cases: &mut HashMap<String, String>,
     overwrite: bool,
 ) {
+    let original_cases = overwrite.then(|| cases.clone());
     for command in split_commands(source) {
         let trimmed = command.trim_start();
         let first = trimmed
@@ -18684,7 +19374,12 @@ fn record_identifier_case_forms(
                 }
                 if is_basic_identifier(&ident) {
                     if overwrite {
-                        cases.insert(upper, ident);
+                        // Unchanged references must not undo a spelling edited earlier in the line.
+                        if original_cases.as_ref().and_then(|forms| forms.get(&upper))
+                            != Some(&ident)
+                        {
+                            cases.insert(upper, ident);
+                        }
                     } else {
                         cases.entry(upper).or_insert(ident);
                     }
@@ -18774,6 +19469,7 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
     let mut out = String::with_capacity(source.len());
     let mut chars = source.char_indices().peekable();
     let mut in_string = false;
+    let mut in_data = false;
     while let Some((idx, ch)) = chars.next() {
         if ch == '"' {
             in_string = !in_string;
@@ -18784,7 +19480,10 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
             out.push_str(&source[idx..]);
             break;
         }
-        if !in_string && (ch.is_ascii_alphabetic() || ch == '_') {
+        if !in_string && ch == ':' {
+            in_data = false;
+        }
+        if !in_string && !in_data && (ch.is_ascii_alphabetic() || ch == '_') {
             let start = idx;
             let mut end = idx + ch.len_utf8();
             while let Some((next_idx, next_ch)) = chars.peek().copied() {
@@ -18800,6 +19499,10 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
                 out.push_str(ident);
                 out.push_str(&source[end..]);
                 break;
+            } else if ident.eq_ignore_ascii_case("DATA") && identifier_boundary(source, start, end)
+            {
+                out.push_str(ident);
+                in_data = true;
             } else if let Some(display) = cases.get(&ident.to_ascii_uppercase()) {
                 out.push_str(display);
             } else {
@@ -19203,6 +19906,19 @@ fn parse_rgb_string_components(text: &str) -> BasicResult<Option<(i32, i32, i32)
     Ok(Some((rgb[0], rgb[1], rgb[2])))
 }
 
+fn array_dimension_bound(value: f64) -> BasicResult<usize> {
+    if value.is_nan() || value < 0.0 {
+        return Err(BasicError::new(ErrorCode::InvalidValue));
+    }
+    // Array indexes are i32 throughout the evaluator. Larger declared bounds
+    // would create cells that no BASIC index can address. Keep the established
+    // truncation of nonnegative fractional bounds before checking that limit.
+    if !value.is_finite() || value.trunc() > i32::MAX as f64 {
+        return Err(BasicError::new(ErrorCode::Overflow));
+    }
+    Ok(value as usize)
+}
+
 fn nonnegative_usize_arg(value: f64) -> BasicResult<usize> {
     if value.is_nan() {
         return Err(BasicError::new(ErrorCode::InvalidValue));
@@ -19394,133 +20110,6 @@ fn whole_function_argument<'a>(source: &'a str, function: &str) -> Option<&'a st
         return None;
     }
     Some(&trimmed[prefix_len + 1..trimmed.len() - 1])
-}
-
-fn looks_like_non_fn_function_call(source: &str) -> bool {
-    let trimmed = source.trim();
-    let Some(open) = trimmed.find('(') else {
-        return false;
-    };
-    if !trimmed.ends_with(')') {
-        return false;
-    }
-    let name = trimmed[..open].trim();
-    is_basic_identifier_shape(name)
-        && !name.eq_ignore_ascii_case("TRN")
-        && !name.eq_ignore_ascii_case("INV")
-        && !name.to_ascii_uppercase().starts_with("FN")
-}
-
-fn mat_expr_mentions_array(source: &str, arrays: &ArrayVariables) -> bool {
-    let mut token = String::new();
-    let mut in_string = false;
-    for ch in source.chars().chain(std::iter::once(' ')) {
-        if ch == '"' {
-            in_string = !in_string;
-            token.clear();
-            continue;
-        }
-        if in_string {
-            continue;
-        }
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
-            token.push(ch.to_ascii_uppercase());
-        } else {
-            if arrays.contains_key(&token) {
-                return true;
-            }
-            token.clear();
-        }
-    }
-    false
-}
-
-fn mat_expr_has_array_before_function(source: &str, arrays: &ArrayVariables) -> bool {
-    let mut seen_array = false;
-    let mut token = String::new();
-    let mut in_string = false;
-    let chars: Vec<char> = source.chars().collect();
-    let mut i = 0usize;
-    while i <= chars.len() {
-        let ch = chars.get(i).copied().unwrap_or(' ');
-        if ch == '"' {
-            in_string = !in_string;
-            token.clear();
-            i += 1;
-            continue;
-        }
-        if !in_string && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '$') {
-            token.push(ch.to_ascii_uppercase());
-        } else if !token.is_empty() {
-            let name = token.clone();
-            if arrays.contains_key(&name) {
-                seen_array = true;
-            }
-            if seen_array
-                && chars.get(i..).is_some_and(|rest| {
-                    rest.iter().skip_while(|c| c.is_whitespace()).next() == Some(&'(')
-                })
-                && !name.starts_with("FN")
-                && name != "TRN"
-                && name != "INV"
-                && !arrays.contains_key(&name)
-            {
-                return true;
-            }
-            token.clear();
-        }
-        i += 1;
-    }
-    false
-}
-
-fn scalar_times_matrix_div_scalar(source: &str, arrays: &ArrayVariables) -> bool {
-    let Some((mul_pos, '*')) = find_top_level_mat_operator(source, &['*']) else {
-        return false;
-    };
-    let Some((_, '/')) = find_top_level_mat_operator(&source[mul_pos + 1..], &['/']) else {
-        return false;
-    };
-    !mat_expr_mentions_array(&source[..mul_pos], arrays)
-        && mat_expr_mentions_array(&source[mul_pos + 1..], arrays)
-}
-
-fn find_top_level_mat_operator(source: &str, ops: &[char]) -> Option<(usize, char)> {
-    let mut depth = 0i32;
-    let mut in_string = false;
-    let mut candidate = None;
-    for (idx, ch) in source.char_indices() {
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if in_string {
-            continue;
-        }
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            _ if depth == 0 && ops.contains(&ch) => {
-                if (ch == '+' || ch == '-') && is_unary_operator_at(source, idx) {
-                    continue;
-                }
-                if ch == '-' && source[..idx].ends_with(['E', 'e']) {
-                    continue;
-                }
-                candidate = Some((idx, ch));
-            }
-            _ => {}
-        }
-    }
-    candidate
-}
-
-fn is_unary_operator_at(source: &str, idx: usize) -> bool {
-    let prev = source[..idx].chars().rev().find(|ch| !ch.is_whitespace());
-    matches!(
-        prev,
-        None | Some('(' | '+' | '-' | '*' | '/' | '^' | ',' | '=')
-    )
 }
 
 fn parse_mat_print_item(item: &str) -> BasicResult<(MatOrientation, String)> {
@@ -19927,12 +20516,16 @@ fn compile_call_statement(source: &str) -> BasicResult<CompiledCall> {
 fn compile_color_expression(source: &str) -> BasicResult<CompiledColorExpr> {
     let expr = compile_expression(source)?;
     let is_numeric = expr.is_statically_numeric();
-    let fast_numeric = is_numeric
+    let lut = is_numeric
+        .then(|| color_lut::CompiledColorLutExpr::compile(&expr))
+        .flatten();
+    let fast_numeric = (is_numeric && lut.is_none())
         .then(|| compile_fast_number_expr(&expr, true))
         .flatten();
     Ok(CompiledColorExpr {
         expr,
         fast_numeric,
+        lut,
         is_numeric,
     })
 }
@@ -20065,13 +20658,13 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
                 [index] => Some(FastNumberExpr::Array1 {
                     name: name.clone(),
                     slot: CachedArraySlot::default(),
-                    index: Box::new(compile_fast_number_expr(index, allow_arrays)?),
+                    index: Box::new(compile_fast_index_expr(index, allow_arrays)?),
                 }),
                 [index0, index1] => Some(FastNumberExpr::Array2 {
                     name: name.clone(),
                     slot: CachedArraySlot::default(),
-                    index0: Box::new(compile_fast_number_expr(index0, allow_arrays)?),
-                    index1: Box::new(compile_fast_number_expr(index1, allow_arrays)?),
+                    index0: Box::new(compile_fast_index_expr(index0, allow_arrays)?),
+                    index1: Box::new(compile_fast_index_expr(index1, allow_arrays)?),
                 }),
                 _ => None,
             }
@@ -20145,6 +20738,71 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
             })
         }
         _ => None,
+    }
+}
+
+fn compile_fast_index_expr(expr: &Expr, allow_arrays: bool) -> Option<FastIndexExpr> {
+    let fast = compile_fast_number_expr(expr, allow_arrays)?;
+    #[cfg(not(windows))]
+    return Some(fast);
+
+    #[cfg(windows)]
+    {
+        let operation = |op: BinaryOp| match op {
+            BinaryOp::Add => Some(FastIndexOperation::Add),
+            BinaryOp::Sub => Some(FastIndexOperation::Sub),
+            _ => None,
+        };
+        let index = match fast {
+            FastNumberExpr::Number(value) => FastIndexExpr::Number(value),
+            FastNumberExpr::Var { name, slot } => FastIndexExpr::Var { name, slot },
+            FastNumberExpr::BinaryConst {
+                op,
+                expr,
+                constant,
+                constant_left,
+            } => match (operation(op), *expr) {
+                (Some(op), FastNumberExpr::Var { name, slot }) => FastIndexExpr::Offset {
+                    name,
+                    slot,
+                    op,
+                    constant,
+                    constant_left,
+                },
+                (_, expr) => FastIndexExpr::General(FastNumberExpr::BinaryConst {
+                    op,
+                    expr: Box::new(expr),
+                    constant,
+                    constant_left,
+                }),
+            },
+            FastNumberExpr::Binary { op, left, right } => match (operation(op), *left, *right) {
+                (
+                    Some(op),
+                    FastNumberExpr::Var {
+                        name: left_name,
+                        slot: left_slot,
+                    },
+                    FastNumberExpr::Var {
+                        name: right_name,
+                        slot: right_slot,
+                    },
+                ) => FastIndexExpr::Variables {
+                    left_name,
+                    left_slot,
+                    right_name,
+                    right_slot,
+                    op,
+                },
+                (_, left, right) => FastIndexExpr::General(FastNumberExpr::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+            },
+            expr => FastIndexExpr::General(expr),
+        };
+        Some(index)
     }
 }
 
@@ -20446,11 +21104,13 @@ fn compile_cached_numeric_assignment(
             let target = target_name.clone();
             let indexes = indexes.clone();
             let array_slot = array_slot.clone();
+            let pure_rhs = array_expr::CompiledArrayExpr::compile(&fallback.rhs);
             Some(CompiledNumericAssignment::Array {
                 target,
                 indexes,
                 array_slot,
                 rhs: fast_rhs,
+                pure_rhs,
                 fallback,
             })
         }

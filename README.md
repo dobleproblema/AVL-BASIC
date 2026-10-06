@@ -104,7 +104,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 127-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 131-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -162,7 +162,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-127 sample programs and their visual gallery are optional companion material.
+131 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -255,8 +255,7 @@ editable source is [`assets/fonts/avl-basic-fonts.txt`](assets/fonts/avl-basic-f
 build. It similarly validates [`src/language/catalog.tsv`](src/language/catalog.tsv)
 and turns its language topics, contexts, highlighting classes, and error codes
 into static Rust tables. Both catalogs are therefore part of the executable,
-not runtime files. Maintainers can run `python tools/check_python_error_catalog.py`
-to verify every error name, number, and English message against the Python oracle.
+not runtime files.
 
 ## Documentation
 
@@ -297,7 +296,7 @@ with a directory outside the HTML output.
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
 - [`tools/`](tools/): maintainer validation and benchmark tools
-- [`samples/`](samples/): 127 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 132 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

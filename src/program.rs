@@ -57,7 +57,17 @@ impl Program {
         Ok(())
     }
 
+    pub(crate) fn transform_code(&mut self, mut transform: impl FnMut(&str) -> String) {
+        for code in self.lines.values_mut() {
+            *code = transform(code);
+        }
+    }
+
     pub fn delete_range(&mut self, start: i32, end: i32) {
+        // An open range can lie entirely before or after the stored lines.
+        if start > end {
+            return;
+        }
         let keys: Vec<i32> = self
             .lines
             .range(start..=end)

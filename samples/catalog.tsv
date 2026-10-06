@@ -20,6 +20,7 @@ g-zoomer.bas	Showcase animations and retro effects	5	BASIC Zoomer	Block-sampled 
 g-arkanoid.bas	Games, applications, and algorithmic scenes	3	AVL Arkanoid	A playable brick-breaker with stereo sound effects and sprite/color collisions.	sprite collisions;color collisions;mouse input;AUDIO;WAV
 g-chess960.bas	Games, applications, and algorithmic scenes	11	Chess960 Generator	Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls.	DEF SUB;constrained randomization;sprites
 g-dungeon.bas	Games, applications, and algorithmic scenes	6	AVL Dungeon	Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects.	DDA raycasting;TRECTANGLE;TQUAD;depth testing;AUDIO;WAV
+g-dungeon-cpc.bas	Games, applications, and algorithmic scenes		AVL Dungeon CPC	Play AVL Dungeon with the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required.	SOUND;ENV;ENT;DATA;ON SQ;channel rendezvous;DDA raycasting
 g-loan.bas	Games, applications, and algorithmic scenes	18	Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
 g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
 g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
@@ -120,9 +121,12 @@ g-subsample.bas	Console algorithms and language features		Local Scope Example	De
 iif.bas	Console algorithms and language features		Conditional Expressions	Select numeric or string results with nested IIF expressions while safely skipping unused divisions by zero.	IIF;conditional evaluation;strings;nested expressions
 loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
 matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
+matrix-expressions.bas	Console algorithms and language features		Compound Matrix Expressions	Combine matrix products, scalar operations, transposes, inverses, and statistics using BASIC expression precedence.	MAT;compound expressions;TRN;INV;SUM
+matrix-subarrays.bas	Console algorithms and language features		Matrix Subarray Copies	Copy matrix blocks, rows, and columns, then demonstrate overlapping and reversed vector ranges.	MAT;subarrays;MAT BASE;overlapping copies
 nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output
 nr-factorial.bas	Console algorithms and language features		Block Factorial	Computes 100 factorial using nine-digit integer blocks.	arbitrary precision;arrays;PRINT USING
 palette.bas	Console algorithms and language features		Named Color Table	Lists named colors and their packed RGB values.	RGB;HEX$;DATA
 pimachin.bas	Console algorithms and language features		Machin Pi	GOSUB-based Machin algorithm computes 1,000 pi digits.	arbitrary precision;GOSUB;Machin formula
+pimachin-mat.bas	Console algorithms and language features		Machin Pi with MAT	Compute 1,000 pi digits with vector addition and subtraction, retaining BASIC loops for carries and borrows.	MAT;vector arithmetic;arbitrary precision;Machin formula
 pimachin-modern.bas	Console algorithms and language features	20	Modern Machin Pi	Compute 1,000 digits of π with block arithmetic and structured, modern BASIC.	DEF SUB;LOCAL;arbitrary precision
 powermul.bas	Console algorithms and language features		Arbitrary-Precision Powers	Computes arbitrary-precision integer powers by block multiplication.	DEF SUB;block multiplication;PRINT USING

@@ -2976,56 +2976,17 @@ fn editor_identifier_cases(
     lines: &[Vec<char>],
     fallback: Option<&HashMap<String, String>>,
 ) -> HashMap<String, String> {
-    let mut cases = HashMap::new();
+    let mut cases = fallback.cloned().unwrap_or_default();
     for line in lines {
         let text: String = line.iter().collect();
         let code = split_line_number(&text).map_or(text.as_str(), |(_, after)| after);
         record_editor_identifier_cases(code, &mut cases);
     }
-    if let Some(fallback) = fallback {
-        for (canonical, display) in fallback {
-            cases
-                .entry(canonical.clone())
-                .or_insert_with(|| display.clone());
-        }
-    }
     cases
 }
 
 fn record_editor_identifier_cases(source: &str, cases: &mut HashMap<String, String>) {
-    let (main, _) = split_single_quote_comment(source);
-    let chars: Vec<char> = main.chars().collect();
-    let mut i = 0usize;
-    let mut in_string = false;
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == '"' {
-            in_string = !in_string;
-            i += 1;
-            continue;
-        }
-        if in_string {
-            i += 1;
-            continue;
-        }
-        if is_ident_start(ch) {
-            let start = i;
-            i += 1;
-            while i < chars.len() && is_ident_char(chars[i]) {
-                i += 1;
-            }
-            let ident: String = chars[start..i].iter().collect();
-            let upper = ident.to_ascii_uppercase();
-            if upper == "REM" && token_boundary(&chars, start, i) {
-                break;
-            }
-            if !upper.starts_with("FN") && !is_known_word(&upper) {
-                cases.entry(upper).or_insert(ident);
-            }
-            continue;
-        }
-        i += 1;
-    }
+    crate::interpreter::record_identifier_case_forms(source, cases, false);
 }
 
 struct EditorNumberedLine {
@@ -4663,13 +4624,8 @@ fn cursor_after_unfinished_colon_separator(text: &str, cursor: usize) -> bool {
         return false;
     }
 
-    let mut in_string = false;
-    for ch in chars.iter().take(cursor - 1) {
-        if *ch == '"' {
-            in_string = !in_string;
-        }
-    }
-    !in_string
+    let prefix: String = chars[..cursor].iter().collect();
+    split_listing_statements(&prefix).trailing_separator
 }
 
 fn is_ctrl_c_key(ch: char, modifiers: KeyModifiers) -> bool {
@@ -5256,6 +5212,8 @@ fn split_listing_statements(code: &str) -> ListingStatements {
     let mut buffer = String::new();
     let mut i = 0usize;
     let mut in_string = false;
+    let mut in_data = false;
+    let mut paren_depth = 0usize;
     let mut trailing_separator = false;
     let mut changed = false;
 
@@ -5269,10 +5227,21 @@ fn split_listing_statements(code: &str) -> ListingStatements {
             continue;
         }
 
-        if !in_string && starts_with_chars(&chars, i, "REM ") {
-            push_statement(&mut statements, &buffer);
-            buffer.clear();
-            let rem: String = chars[i..].iter().collect();
+        if !in_string
+            && !in_data
+            && paren_depth == 0
+            && formatter_keyword_end(&chars, i, "REM").is_some()
+        {
+            let mut rem = String::new();
+            if buffer
+                .chars()
+                .all(|ch| ch.is_whitespace() || ch == CURSOR_MARKER)
+            {
+                rem.push_str(&buffer);
+            } else {
+                push_statement(&mut statements, &buffer);
+            }
+            rem.extend(chars[i..].iter());
             push_statement(&mut statements, &rem);
             return ListingStatements {
                 items: statements,
@@ -5281,28 +5250,56 @@ fn split_listing_statements(code: &str) -> ListingStatements {
             };
         }
 
-        if !in_string && starts_with_chars(&chars, i, "IF ") {
-            let mut prev = i;
-            while prev > 0 && chars[prev - 1] == ' ' {
+        if !in_string && !in_data && paren_depth == 0 {
+            if let Some(end) = formatter_keyword_end(&chars, i, "DATA") {
+                buffer.extend(chars[i..end].iter());
+                in_data = true;
+                trailing_separator = false;
+                i = end;
+                continue;
+            }
+        }
+
+        if !in_string
+            && !in_data
+            && paren_depth == 0
+            && formatter_keyword_end(&chars, i, "IF")
+                .is_some_and(|end| chars.get(end) == Some(&' '))
+        {
+            let previous: Vec<char> = chars[..i]
+                .iter()
+                .copied()
+                .filter(|ch| *ch != CURSOR_MARKER)
+                .collect();
+            let mut prev = previous.len();
+            while prev > 0 && previous[prev - 1] == ' ' {
                 prev -= 1;
             }
-            if prev > 0 && chars[prev - 1] == ':' {
+            if prev > 0 && previous[prev - 1] == ':' {
                 prev -= 1;
-                while prev > 0 && chars[prev - 1] == ' ' {
+                while prev > 0 && previous[prev - 1] == ' ' {
                     prev -= 1;
                 }
             }
             let after_else = prev >= 4
-                && chars[prev - 4..prev]
+                && previous[prev - 4..prev]
                     .iter()
                     .collect::<String>()
                     .eq_ignore_ascii_case("ELSE")
-                && (prev < 5 || !chars[prev - 5].is_ascii_alphanumeric());
-            if !after_else && (i == 0 || !chars[i - 1].is_ascii_alphanumeric()) {
-                push_statement(&mut statements, &buffer);
-                let if_block: String = chars[i..].iter().collect();
-                let if_block = compact_inline_colon_separators(&if_block);
-                changed |= if_block != chars[i..].iter().collect::<String>();
+                && (prev < 5 || !previous[prev - 5].is_ascii_alphanumeric());
+            if !after_else {
+                let mut if_source = String::new();
+                if buffer
+                    .chars()
+                    .all(|ch| ch.is_whitespace() || ch == CURSOR_MARKER)
+                {
+                    if_source.push_str(&buffer);
+                } else {
+                    push_statement(&mut statements, &buffer);
+                }
+                if_source.extend(chars[i..].iter());
+                let if_block = compact_inline_colon_separators(&if_source);
+                changed |= if_block != if_source;
                 push_statement(&mut statements, &if_block);
                 return ListingStatements {
                     items: statements,
@@ -5312,15 +5309,25 @@ fn split_listing_statements(code: &str) -> ListingStatements {
             }
         }
 
-        if ch == ':' && !in_string {
+        // A colon inside an array reference is a range, whose spacing is left
+        // alone just like commas and equals signs within the statement.
+        if ch == ':' && !in_string && (in_data || paren_depth == 0) {
             push_statement(&mut statements, &buffer);
             buffer.clear();
+            in_data = false;
             trailing_separator = true;
             changed = true;
             i += 1;
             continue;
         }
 
+        if !in_string && !in_data {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                _ => {}
+            }
+        }
         buffer.push(ch);
         if !ch.is_whitespace() {
             trailing_separator = false;
@@ -5343,16 +5350,32 @@ fn push_statement(statements: &mut Vec<String>, statement: &str) {
     }
 }
 
-fn starts_with_chars(chars: &[char], start: usize, needle: &str) -> bool {
-    let needle_chars: Vec<char> = needle.chars().collect();
-    chars
-        .get(start..start + needle_chars.len())
-        .is_some_and(|slice| {
-            slice
-                .iter()
-                .zip(needle_chars.iter())
-                .all(|(left, right)| left.eq_ignore_ascii_case(right))
-        })
+// A caret may occur anywhere in a keyword, but it must not split an identifier
+// such as IFoo or FNIF into a formatter keyword. Return the real source end so
+// callers retain every marker when copying the matched spelling.
+fn formatter_keyword_end(chars: &[char], start: usize, keyword: &str) -> Option<usize> {
+    if chars[..start]
+        .iter()
+        .rev()
+        .find(|ch| **ch != CURSOR_MARKER)
+        .is_some_and(|ch| is_ident_char(*ch))
+    {
+        return None;
+    }
+    let mut end = start;
+    for expected in keyword.chars() {
+        while chars.get(end) == Some(&CURSOR_MARKER) {
+            end += 1;
+        }
+        if !chars.get(end)?.eq_ignore_ascii_case(&expected) {
+            return None;
+        }
+        end += 1;
+    }
+    while chars.get(end) == Some(&CURSOR_MARKER) {
+        end += 1;
+    }
+    (!chars.get(end).is_some_and(|ch| is_ident_char(*ch))).then_some(end)
 }
 
 fn compact_inline_colon_separators(source: &str) -> String {
@@ -5360,6 +5383,8 @@ fn compact_inline_colon_separators(source: &str) -> String {
     let mut out = String::new();
     let mut i = 0usize;
     let mut in_string = false;
+    let mut in_data = false;
+    let mut paren_depth = 0usize;
 
     while i < chars.len() {
         let ch = chars[i];
@@ -5369,22 +5394,62 @@ fn compact_inline_colon_separators(source: &str) -> String {
             i += 1;
             continue;
         }
-        if ch == ':' && !in_string {
-            while out.ends_with(char::is_whitespace) {
-                out.pop();
+        if !in_string && !in_data && paren_depth == 0 {
+            if ch == '\'' || formatter_keyword_end(&chars, i, "REM").is_some() {
+                out.extend(chars[i..].iter());
+                break;
             }
-            out.push(':');
-            i += 1;
-            while i < chars.len() && chars[i].is_whitespace() {
-                i += 1;
+            if let Some(end) = formatter_keyword_end(&chars, i, "DATA") {
+                out.extend(chars[i..end].iter());
+                i = end;
+                in_data = true;
+                continue;
             }
+        }
+        // Retain the existing compact THEN/ELSE separators, while leaving
+        // the spacing of subarray ranges untouched inside either branch.
+        if ch == ':' && !in_string && (in_data || paren_depth == 0) {
+            compact_colon(&chars, &mut i, &mut out);
+            in_data = false;
             continue;
+        }
+        if !in_string && !in_data {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                _ => {}
+            }
         }
         out.push(ch);
         i += 1;
     }
 
     out
+}
+
+fn compact_colon(chars: &[char], index: &mut usize, out: &mut String) {
+    let mut marker = false;
+    while let Some(ch) = out.chars().next_back() {
+        if ch == CURSOR_MARKER {
+            marker = true;
+        } else if !ch.is_whitespace() {
+            break;
+        }
+        out.pop();
+    }
+    if marker {
+        out.push(CURSOR_MARKER);
+    }
+    out.push(':');
+    *index += 1;
+    while let Some(&ch) = chars.get(*index) {
+        if ch == CURSOR_MARKER {
+            out.push(ch);
+        } else if !ch.is_whitespace() {
+            break;
+        }
+        *index += 1;
+    }
 }
 
 fn canonicalize_number(raw: &str) -> String {
@@ -6754,6 +6819,222 @@ mod tests {
     }
 
     #[test]
+    fn matrix_range_spacing_is_preserved_and_top_level_separators_are_formatted() {
+        for (source, expected) in [
+            ("10 MAT A=B(2:5,1:3)", "10 MAT A=B(2:5,1:3)"),
+            ("10 MAT A=B(2 : 5,1 : 3)", "10 MAT A=B(2 : 5,1 : 3)"),
+            (
+                "20 MAT A(2 : 5,1 : 3)=B(1 : 4,2 : 4):PRINT A(2,1)",
+                "20 MAT A(2 : 5,1 : 3)=B(1 : 4,2 : 4) : PRINT A(2,1)",
+            ),
+            ("MAT A=B(8 : -1,)", "MAT A=B(8 : -1,)"),
+            ("MAT A=B(,2 : 4)", "MAT A=B(,2 : 4)"),
+            ("MAT A(2 : 5 , 1 : 3) = 5", "MAT A(2 : 5 , 1 : 3) = 5"),
+            (
+                "MAT A=B((1+ABS(-2)) : LBOUND(B,1)+3,1 : 4)",
+                "MAT A=B((1+ABS(-2)) : LBOUND(B,1)+3,1 : 4)",
+            ),
+            (
+                "IF OK THEN MAT A=B(2 : 5,1 : 3) : PRINT 1 ELSE MAT A=B(8 : -1,)",
+                "IF OK THEN MAT A=B(2 : 5,1 : 3):PRINT 1 ELSE MAT A=B(8 : -1,)",
+            ),
+        ] {
+            assert_eq!(normalize_code(source), expected, "{source}");
+            assert_eq!(syntax_highlight(source, false), expected, "{source}");
+            assert_eq!(normalize_code(expected), expected, "idempotence: {source}");
+        }
+    }
+
+    #[test]
+    fn range_formatting_preserves_strings_comments_and_data_parentheses() {
+        for (source, expected) in [
+            (
+                "MAT A=B(VAL(\"2 : 5\") : 5,1 : 3):PRINT \"(2 : 5)\"",
+                "MAT A=B(VAL(\"2 : 5\") : 5,1 : 3) : PRINT \"(2 : 5)\"",
+            ),
+            (
+                "DATA foo(, IF x, REM x:MAT A=B(2 : 5,1 : 3)",
+                "DATA foo(, IF x, REM x : MAT A=B(2 : 5,1 : 3)",
+            ),
+            (
+                "DATA \"(2 : 5)\",foo):MAT A=B(2 : 5,1 : 3)",
+                "DATA \"(2 : 5)\",foo) : MAT A=B(2 : 5,1 : 3)",
+            ),
+            ("REM A(2 : 5):PRINT 1", "REM A(2 : 5):PRINT 1"),
+            ("REM:A(2 : 5)", "REM:A(2 : 5)"),
+            (
+                "MAT A=B(2 : 5) ' A(2 : 5):PRINT 1",
+                "MAT A=B(2 : 5) ' A(2 : 5):PRINT 1",
+            ),
+            (
+                "IF OK THEN MAT A=B(2 : 5) : REM A(2 : 5):PRINT 1",
+                "IF OK THEN MAT A=B(2 : 5):REM A(2 : 5):PRINT 1",
+            ),
+            (
+                "IF OK THEN DATA REM literal( : MAT A=B(2 : 5)",
+                "IF OK THEN DATA REM literal(:MAT A=B(2 : 5)",
+            ),
+        ] {
+            assert_eq!(normalize_code(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn live_range_formatting_keeps_the_caret_on_its_side_of_the_colon() {
+        for (source, expected) in [
+            ("MAT A=B(2  | :  5)", "MAT A=B(2  | :  5)"),
+            ("MAT A=B(2 :| 5)", "MAT A=B(2 :| 5)"),
+            ("MAT A=B(2:  | 5)", "MAT A=B(2:  | 5)"),
+            ("MAT A=B(2 : 5|,1 : 3)", "MAT A=B(2 : 5|,1 : 3)"),
+            ("MAT A=B(2 : 5,|1 : 3)", "MAT A=B(2 : 5,|1 : 3)"),
+            ("MAT A=B(2 :|", "MAT A=B(2 :|"),
+            (
+                "MAT A=B(2 : 5,1 : 3):PRINT 1|",
+                "MAT A=B(2 : 5,1 : 3) : PRINT 1|",
+            ),
+        ] {
+            let mut cursor = source.chars().position(|ch| ch == '|').unwrap();
+            let mut buffer: Vec<char> = source.chars().filter(|ch| *ch != '|').collect();
+            format_editing_separators_with_cursor(&mut buffer, &mut cursor);
+            assert_eq!(buffer.iter().collect::<String>(), expected.replace('|', ""));
+            assert_eq!(cursor, expected.chars().position(|ch| ch == '|').unwrap());
+        }
+        let partial = "MAT A=B(2:";
+        assert!(!cursor_after_unfinished_colon_separator(
+            partial,
+            partial.len()
+        ));
+        assert_eq!(normalize_code_for_editing(partial, partial.len()), partial);
+        assert_eq!(
+            normalized_cursor_position(partial, partial.len()),
+            partial.len()
+        );
+    }
+
+    #[test]
+    fn typing_ranges_does_not_insert_statement_separator_spaces() {
+        let mut buffer = Vec::new();
+        let mut cursor = 0;
+        for (source, expected) in [
+            (
+                "mat A=B(2:5,1:3):print A(2,1)",
+                "mat A=B(2:5,1:3) : print A(2,1)",
+            ),
+            (
+                "mat A=B(2 : 5 , 1 : 3):print A(2,1)",
+                "mat A=B(2 : 5 , 1 : 3) : print A(2,1)",
+            ),
+            (
+                "if OK then print 1 : print 2 else print 3:print 4",
+                "if OK then print 1:print 2 else print 3:print 4",
+            ),
+        ] {
+            buffer.clear();
+            cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            assert_eq!(buffer.iter().collect::<String>(), expected);
+            assert_eq!(cursor, buffer.len());
+        }
+        let source = "MAT A=B(2 : 5,1 : 3)";
+        assert_eq!(syntax_highlight_raw_with_cases(source, false, None), source);
+    }
+
+    #[test]
+    fn caret_in_inline_if_preserves_ranges_and_compacts_statement_separators() {
+        let source = "10 if OK then MAT A=B(2 : 5,1 : 3) : print 1 else MAT A=B(8 : -1,) : print 2";
+        let expected = "10 if OK then MAT A=B(2 : 5,1 : 3):print 1 else MAT A=B(8 : -1,):print 2";
+        // Include every position inside IF, after the word, and in both branch
+        // ranges. The caret must never change the formatter's statement grammar.
+        for cursor in 3..=source.chars().count() {
+            let marked = mark_cursor(source, cursor);
+            for formatted in [
+                format_editing_separators(&marked),
+                normalize_editing_assistance(&marked, false),
+            ] {
+                assert_eq!(
+                    formatted.matches(CURSOR_MARKER).count(),
+                    1,
+                    "cursor={cursor}"
+                );
+                assert_eq!(
+                    formatted.replace(CURSOR_MARKER, ""),
+                    expected,
+                    "cursor={cursor}"
+                );
+                assert_eq!(format_editing_separators(&formatted), formatted);
+            }
+        }
+        for (source, expected) in [
+            (
+                "10 |  if OK then MAT A=B(2 : 5) : print 1 else MAT A=B(8 : -1,) : print 2",
+                "10 |  if OK then MAT A=B(2 : 5):print 1 else MAT A=B(8 : -1,):print 2",
+            ),
+            (
+                "10 PRINT 0: |  if OK then MAT A=B(2 : 5) : print 1 else MAT A=B(8 : -1,) : print 2",
+                "10 PRINT 0 : |  if OK then MAT A=B(2 : 5):print 1 else MAT A=B(8 : -1,):print 2",
+            ),
+        ] {
+            let mut cursor = source.chars().position(|ch| ch == '|').unwrap();
+            let mut buffer = source.chars().filter(|ch| *ch != '|').collect();
+            format_editing_separators_with_cursor(&mut buffer, &mut cursor);
+            assert_eq!(buffer.iter().collect::<String>(), expected.replace('|', ""));
+            assert_eq!(cursor, expected.chars().position(|ch| ch == '|').unwrap());
+        }
+    }
+
+    #[test]
+    fn caret_in_literal_keywords_preserves_data_and_rem_text() {
+        for (source, expected, word) in [
+            (
+                "10 DATA foo(, IF x, REM x:MAT A=B(2 : 5)",
+                "10 DATA foo(, IF x, REM x : MAT A=B(2 : 5)",
+                "DATA",
+            ),
+            ("10 REM A(2 : 5):PRINT 1", "10 REM A(2 : 5):PRINT 1", "REM"),
+            (
+                "10 PRINT 0:  REM A(2 : 5):PRINT 1",
+                "10 PRINT 0 : REM A(2 : 5):PRINT 1",
+                "REM",
+            ),
+            (
+                "10 IF OK THEN DATA foo(, REM x:MAT A=B(2 : 5)",
+                "10 IF OK THEN DATA foo(, REM x:MAT A=B(2 : 5)",
+                "DATA",
+            ),
+            (
+                "10 IF OK THEN MAT A=B(2 : 5) : REM A(2 : 5):PRINT 1",
+                "10 IF OK THEN MAT A=B(2 : 5):REM A(2 : 5):PRINT 1",
+                "REM",
+            ),
+        ] {
+            let start = source.find(word).unwrap();
+            for cursor in start..=start + word.len() {
+                let marked = mark_cursor(source, cursor);
+                let formatted = format_editing_separators(&marked);
+                assert_eq!(formatted.matches(CURSOR_MARKER).count(), 1);
+                assert_eq!(formatted.replace(CURSOR_MARKER, ""), expected, "{marked}");
+            }
+        }
+    }
+
+    #[test]
+    fn caret_does_not_split_formatter_keywords_out_of_identifiers() {
+        for name in [
+            "IFoo", "FNIF", "IF_name", "REMinder", "FNREM", "DATAset", "FNDATA",
+        ] {
+            let source = format!("10 {name} = A(2 : 5):PRINT 1");
+            let expected = format!("10 {name} = A(2 : 5) : PRINT 1");
+            for cursor in 3..=3 + name.len() {
+                let mut buffer: Vec<char> = source.chars().collect();
+                let mut actual_cursor = cursor;
+                format_editing_separators_with_cursor(&mut buffer, &mut actual_cursor);
+                assert_eq!(buffer.iter().collect::<String>(), expected);
+                assert_eq!(actual_cursor, cursor, "{name}, cursor={cursor}");
+            }
+        }
+    }
+
+    #[test]
     fn fullscreen_editor_splits_and_joins_lines() {
         let lines = vec!["10 PRINT 1".to_string()];
         let mut editor = BasicEditor::new(&lines);
@@ -6873,14 +7154,29 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_editor_identifier_cases_come_from_current_buffer_first() {
+    fn fullscreen_editor_identifier_cases_preserve_existing_forms() {
         let lines = vec!["10 NewVar=1".to_string(), "20 newvar=2".to_string()];
         let editor = BasicEditor::new(&lines);
         let fallback = HashMap::from([("NEWVAR".to_string(), "newvar".to_string())]);
 
         let cases = editor_identifier_cases(&editor.lines, Some(&fallback));
 
-        assert_eq!(cases.get("NEWVAR"), Some(&"NewVar".to_string()));
+        assert_eq!(cases.get("NEWVAR"), Some(&"newvar".to_string()));
+    }
+
+    #[test]
+    fn fullscreen_editor_new_forms_follow_visible_references_and_skip_literals() {
+        let lines = vec![
+            "10 x=10".to_string(),
+            "20 DATA mivar".to_string(),
+            "40 MiVar=2".to_string(),
+            "30 PRINT mivar".to_string(),
+        ];
+        let editor = BasicEditor::new(&lines);
+        let existing = HashMap::from([("X".to_string(), "X".to_string())]);
+        let cases = editor_identifier_cases(&editor.lines, Some(&existing));
+        assert_eq!(cases.get("X"), Some(&"X".to_string()));
+        assert_eq!(cases.get("MIVAR"), Some(&"MiVar".to_string()));
     }
 
     #[test]

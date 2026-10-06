@@ -20,6 +20,7 @@ const KEYEVENTF_SCANCODE: u32 = 0x0008;
 const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 const SCAN_A: u16 = 0x1E;
 const SCAN_ENTER: u16 = 0x1C;
+const SCAN_ESC: u16 = 0x01;
 const SCAN_N: u16 = 0x31;
 
 #[repr(C)]
@@ -52,6 +53,7 @@ extern "system" {
     fn BringWindowToTop(hwnd: Hwnd) -> Bool;
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
     fn GetForegroundWindow() -> Hwnd;
+    fn GetClassNameW(hwnd: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
     fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
     fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
@@ -67,6 +69,80 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentThreadId() -> Dword;
+}
+
+#[test]
+#[ignore = "opens a real console and graphics window and verifies focus after SCREEN CLOSE"]
+fn screen_close_waits_for_escape_release_and_restores_console_focus() {
+    let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn avl-basic");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    let console = foreground_console();
+
+    stdin
+        .write_all(
+            b"10 SCREEN\n\
+20 FRAME\n\
+30 PRINT \"WAITING-ESC\"\n\
+40 IF KEYDOWN(27) THEN PRINT \"CLOSING-ESC\":SCREEN CLOSE:END\n\
+50 GOTO 40\n\
+RUN\n",
+        )
+        .unwrap();
+    let hwnd = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    wait_for_line(&rx, "WAITING-ESC", Duration::from_secs(5));
+    let mut held_escape = focus_and_hold_key(hwnd, SCAN_ESC);
+    wait_for_line(&rx, "CLOSING-ESC", Duration::from_secs(5));
+    assert_no_line_containing(&rx, "Ready", Duration::from_millis(200));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        hwnd,
+        "focus changed before Esc was released"
+    );
+    held_escape.release();
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        console,
+        "SCREEN CLOSE did not restore console focus"
+    );
+    assert_no_graphics_window(child.child.id(), Duration::from_millis(200), hwnd);
+
+    // Reopening must not inherit the Esc state that closed the previous window.
+    stdin
+        .write_all(b"NEW\n10 SCREEN\n20 FRAME\n30 PRINT \"ESC-STATE=\";KEYDOWN(27)\n40 SCREEN CLOSE:END\nRUN\n")
+        .unwrap();
+    wait_for_line(&rx, "ESC-STATE= 0", Duration::from_secs(5));
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        console,
+        "second SCREEN CLOSE did not restore console focus"
+    );
+
+    let _ = stdin.write_all(b"QUIT\n");
+    let _ = child.child.wait();
+    child.finished = true;
 }
 
 #[test]
@@ -203,6 +279,7 @@ RUN\n",
 fn repeated_graphics_ctrl_c_does_not_poison_next_run() {
     let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
         .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
         .current_dir(project_root())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -223,6 +300,7 @@ fn repeated_graphics_ctrl_c_does_not_poison_next_run() {
     let mut stdin = child.child.stdin.take().expect("stdin");
 
     wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    let console = foreground_console();
     stdin
         .write_all(b"10 SCREEN\n20 FRAME\n30 GOTO 20\nRUN\n")
         .unwrap();
@@ -240,6 +318,11 @@ fn repeated_graphics_ctrl_c_does_not_poison_next_run() {
         Duration::from_secs(5),
     );
     wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        console,
+        "Ctrl+C did not restore console focus"
+    );
 
     stdin.write_all(b"RUN\n").unwrap();
     assert_no_line_containing(
@@ -254,6 +337,11 @@ fn repeated_graphics_ctrl_c_does_not_poison_next_run() {
         Duration::from_secs(5),
     );
     wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        console,
+        "second Ctrl+C did not restore console focus"
+    );
 
     let _ = stdin.write_all(b"SCREEN CLOSE\nQUIT\n");
     let _ = child.child.wait();
@@ -463,6 +551,22 @@ impl Drop for ChildGuard {
 
 fn project_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+fn foreground_console() -> Hwnd {
+    let console = unsafe { GetForegroundWindow() };
+    let mut class_name = [0u16; 64];
+    let class_len =
+        unsafe { GetClassNameW(console, class_name.as_mut_ptr(), class_name.len() as i32) };
+    let class_name = String::from_utf16_lossy(&class_name[..class_len.max(0) as usize]);
+    assert!(
+        matches!(
+            class_name.as_str(),
+            "ConsoleWindowClass" | "CASCADIA_HOSTING_WINDOW_CLASS"
+        ),
+        "new console did not become foreground: class={class_name:?}"
+    );
+    console
 }
 
 fn wait_for_line(rx: &Receiver<String>, needle: &str, timeout: Duration) {

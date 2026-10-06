@@ -237,7 +237,7 @@ CAPTURES = (
             "654 SCREEN CLOSE : END",
         ),
         {
-            310: "NOW=SHOWFRAME/60 : DT=1/60 : LAST=NOW",
+            310: "NOW=SHOWFRAME/60 : ELAPSED=1/60 : LAST=NOW",
             320: 'K$=""',
             5520: 'LOCATE 2,1 : GPRINT "AVL-SMOKE   FLUID SIMULATION   SMOOTH ";IIF(SMOOTH,"ON","OFF")',
         },
