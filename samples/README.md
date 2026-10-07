@@ -168,30 +168,30 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-loan"></a>
-  <a href="g-loan.bas"><img src="showcase/g-loan.png" alt="Graphical Loan Calculator running in AVL BASIC" width="100%"></a><br>
-  <strong>18. Graphical Loan Calculator</strong><br>
-  Graphical loan calculator with optional amortization table.<br>
-  <sub><strong>Shows:</strong> GINPUT · DEF FN · formatted output</sub><br>
-  <code>RUN "/samples/g-loan.bas"</code>
+  <a id="highlight-g-knot-light"></a>
+  <a href="g-knot-light.bas"><img src="showcase/g-knot-light.png" alt="Procedural Knot Light running in AVL BASIC" width="100%"></a><br>
+  <strong>18. Procedural Knot Light</strong><br>
+  A nearby mouse-controlled diffuse light shades a smooth tubular knot; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD.<br>
+  <sub><strong>Shows:</strong> parametric mesh · smooth normals · MOUSE · GTRIANGLE · depth buffer</sub><br>
+  <code>RUN "/samples/g-knot-light.bas"</code>
 </td>
 <td width="50%" valign="top">
-  <a id="highlight-g-tunnel-tquad"></a>
-  <a href="g-tunnel-tquad.bas"><img src="showcase/g-tunnel-tquad.png" alt="Textured Tunnel running in AVL BASIC" width="100%"></a><br>
-  <strong>19. Textured Tunnel</strong><br>
-  A seamless textured tunnel turns a ring mesh into a fluid animated ride.<br>
-  <sub><strong>Shows:</strong> TQUAD · mesh generation · texture animation</sub><br>
-  <code>RUN "/samples/g-tunnel-tquad.bas"</code>
+  <a id="highlight-g-shadow-adaptive"></a>
+  <a href="g-shadow-adaptive.bas"><img src="showcase/g-shadow-adaptive.png" alt="Adaptive Arch Shadows running in AVL BASIC" width="100%"></a><br>
+  <strong>19. Adaptive Arch Shadows</strong><br>
+  An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed.<br>
+  <sub><strong>Shows:</strong> GTRIANGLE · cast shadows · shared calculations · conservative bounds · adaptive floor mesh</sub><br>
+  <code>RUN "/samples/g-shadow-adaptive.bas"</code>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-pimachin-modern"></a>
-  <a href="pimachin-modern.bas"><img src="showcase/pimachin-modern.png" alt="Modern Machin Pi running in AVL BASIC" width="100%"></a><br>
-  <strong>20. Modern Machin Pi</strong><br>
-  Compute 1,000 digits of π with block arithmetic and structured, modern BASIC.<br>
-  <sub><strong>Shows:</strong> DEF SUB · LOCAL · arbitrary precision</sub><br>
-  <code>RUN "/samples/pimachin-modern.bas"</code>
+  <a id="highlight-g-animation3"></a>
+  <a href="g-animation3.bas"><img src="showcase/g-animation3.png" alt="Offline Cloth Animation running in AVL BASIC" width="100%"></a><br>
+  <strong>20. Offline Cloth Animation</strong><br>
+  Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed.<br>
+  <sub><strong>Shows:</strong> BLOAD · SCREEN · playback clock · FRAME</sub><br>
+  <code>RUN "/samples/g-animation3.bas"</code>
 </td>
 <td width="50%"></td>
 </tr>
@@ -214,7 +214,7 @@ python tools/generate_showcase.py
 - **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.
 - **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.
 - **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.
-- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas` ([rendering guide](g-cloth-render.md)).
+- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas`.
 - **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →
   `g-zoomer-tquad.bas`.
 - **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.
@@ -250,7 +250,7 @@ demo.
 | <a id="sample-g-smoke"></a>[`g-smoke.bas`](g-smoke.bas) [★](#highlight-g-smoke) | Interactive two-dimensional fluid simulation with pressure projection, vorticity and smoothly shaded dye. | fluid simulation, MAT, bilinear interpolation, FRAME |
 | <a id="sample-g-starfield"></a>[`g-starfield.bas`](g-starfield.bas) | Two thousand depth-recycled stars flow through 3D. | 3D projection, depth recycling, FRAME |
 | <a id="sample-g-sunflower"></a>[`g-sunflower.bas`](g-sunflower.bas) | Animated phyllotaxis spiral with hue cycling. | phyllotaxis, custom RGB, FRAME |
-| <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) [★](#highlight-g-tunnel-tquad) | A seamless textured tunnel turns a ring mesh into a fluid animated ride. | TQUAD, mesh generation, texture animation |
+| <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) | A seamless textured tunnel turns a ring mesh into a fluid animated ride. | TQUAD, mesh generation, texture animation |
 | <a id="sample-g-tunnel"></a>[`g-tunnel.bas`](g-tunnel.bas) | BASIC texture lookup creates a block-rendered tunnel. | BLOAD, TEST, texture mapping |
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
@@ -263,7 +263,7 @@ demo.
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
 | <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects. | DDA raycasting, TRECTANGLE, TQUAD, depth testing, AUDIO, WAV |
 | <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play AVL Dungeon with the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting |
-| <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) [★](#highlight-g-loan) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
+| <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
 
@@ -273,13 +273,13 @@ demo.
 |---|---|---|
 | <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
 | <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
-| <a id="sample-g-cloth-render"></a>[`g-cloth-render.bas`](g-cloth-render.bas) | Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints. [Rendering guide](g-cloth-render.md). | XPBD, fixed substeps, GTRIANGLE, filtered shadows, FRAME, BSAVE, checkpoints |
+| <a id="sample-g-cloth-render"></a>[`g-cloth-render.bas`](g-cloth-render.bas) | Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints. | XPBD, fixed substeps, GTRIANGLE, filtered shadows, FRAME, BSAVE, checkpoints |
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
-| <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; toggle depth with Z. | GTRIANGLE, RGB interpolation, array depth buffer |
-| <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; pause rotation while the light keeps moving. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
-| <a id="sample-g-knot-light"></a>[`g-knot-light.bas`](g-knot-light.bas) | A nearby mouse-controlled diffuse light shades a smooth tubular knot; move the light while rotation is paused. | parametric mesh, smooth normals, MOUSE, GTRIANGLE, depth buffer |
+| <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; Z toggles depth, SPACE pauses rotation, and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, RGB interpolation, array depth buffer |
+| <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
+| <a id="sample-g-knot-light"></a>[`g-knot-light.bas`](g-knot-light.bas) [★](#highlight-g-knot-light) | A nearby mouse-controlled diffuse light shades a smooth tubular knot; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | parametric mesh, smooth normals, MOUSE, GTRIANGLE, depth buffer |
 | <a id="sample-g-shadow"></a>[`g-shadow.bas`](g-shadow.bas) | An introductory cast-shadow example with a mouse-controlled point light, an arch, and a uniform 96 x 96 floor grid; S toggles shadows and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, cast shadows, uniform floor mesh, MOUSE, depth buffers, FRAME |
-| <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) | An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
+| <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) [★](#highlight-g-shadow-adaptive) | An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
 | <a id="sample-g-cube2"></a>[`g-cube2.bas`](g-cube2.bas) | Two depth-sorted cubes orbit in opposite phases. | 3D projection, depth sorting, FTRIANGLE |
 | <a id="sample-g-cube3"></a>[`g-cube3.bas`](g-cube3.bas) | Rotating cube fills outlined faces using flood fill. | 3D projection, DRAW, FILL |
 | <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
@@ -374,7 +374,7 @@ demo.
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
-| <a id="sample-g-animation3"></a>[`g-animation3.bas`](g-animation3.bas) | Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed. | BLOAD, SCREEN, playback clock, FRAME |
+| <a id="sample-g-animation3"></a>[`g-animation3.bas`](g-animation3.bas) [★](#highlight-g-animation3) | Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed. | BLOAD, SCREEN, playback clock, FRAME |
 | <a id="sample-g-balls"></a>[`g-balls.bas`](g-balls.bas) [★](#highlight-g-balls) | Fifty numbered sprites bounce and collide without full clears. | sprite collisions, dirty redraw, COLMODE |
 | <a id="sample-g-sprite"></a>[`g-sprite.bas`](g-sprite.bas) | Captures and redraws one sprite with transparency variants. | SPRITE$, SPRITE, transparency |
 | <a id="sample-g-sprite2"></a>[`g-sprite2.bas`](g-sprite2.bas) | Repeats sprite transparency inside a scaled viewport. | SPRITE$, ORIGIN, transparency |
@@ -429,7 +429,7 @@ program, then reads it back.
 | <a id="sample-palette"></a>[`palette.bas`](palette.bas) | Lists named colors and their packed RGB values. | RGB, HEX$, DATA |
 | <a id="sample-pimachin"></a>[`pimachin.bas`](pimachin.bas) | GOSUB-based Machin algorithm computes 1,000 pi digits. | arbitrary precision, GOSUB, Machin formula |
 | <a id="sample-pimachin-mat"></a>[`pimachin-mat.bas`](pimachin-mat.bas) | Compute 1,000 pi digits with vector addition and subtraction, retaining BASIC loops for carries and borrows. | MAT, vector arithmetic, arbitrary precision, Machin formula |
-| <a id="sample-pimachin-modern"></a>[`pimachin-modern.bas`](pimachin-modern.bas) [★](#highlight-pimachin-modern) | Compute 1,000 digits of π with block arithmetic and structured, modern BASIC. | DEF SUB, LOCAL, arbitrary precision |
+| <a id="sample-pimachin-modern"></a>[`pimachin-modern.bas`](pimachin-modern.bas) | Compute 1,000 digits of π with block arithmetic and structured, modern BASIC. | DEF SUB, LOCAL, arbitrary precision |
 | <a id="sample-powermul"></a>[`powermul.bas`](powermul.bas) | Computes arbitrary-precision integer powers by block multiplication. | DEF SUB, block multiplication, PRINT USING |
 
 ★ Featured in the 20-example gallery.

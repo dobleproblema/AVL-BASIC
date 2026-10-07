@@ -34,10 +34,19 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def copy_tree(src: Path, dst: Path) -> None:
-    ignore = shutil.ignore_patterns(
+    ignore_patterns = shutil.ignore_patterns(
         "__pycache__", "*.pyc", ".pytest_cache",
+        "catalog.tsv",
         "f-scores.csv", "f-records.csv", "f-text.txt",
     )
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        excluded = set(ignore_patterns(directory, names))
+        # Generation provenance is useful in source control, not for playback.
+        if Path(directory).resolve() == (ROOT / "samples/assets/cloth").resolve():
+            excluded.add("manifest.json")
+        return excluded
+
     shutil.copytree(src, dst, ignore=ignore)
 
 

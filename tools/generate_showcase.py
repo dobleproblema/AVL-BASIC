@@ -104,8 +104,13 @@ CAPTURES = (
     ),
     Capture(
         "g-cube-gouraud.bas",
-        ('545 BSAVE "showcase/g-cube-gouraud.png" : END',),
+        (
+            "543 SHOWFRAME=SHOWFRAME+1",
+            "544 IF SHOWFRAME<80 THEN GOTO 550",
+            '545 BSAVE "showcase/g-cube-gouraud.png" : SCREEN CLOSE : END',
+        ),
         {310: "REM Capture the initial angle"},
+        windowed=True,
     ),
     Capture(
         "g-animation.bas",
@@ -139,13 +144,23 @@ CAPTURES = (
     ),
     Capture(
         "g-cube-light.bas",
-        ('665 BSAVE "showcase/g-cube-light.png" : END',),
+        (
+            "663 SHOWFRAME=SHOWFRAME+1",
+            "664 IF SHOWFRAME<80 THEN GOTO 670",
+            '665 BSAVE "showcase/g-cube-light.png" : SCREEN CLOSE : END',
+        ),
         {230: "REM Fixed light for capture", 310: "REM Capture the initial angle"},
+        windowed=True,
     ),
     Capture(
         "g-knot-light.bas",
-        ('745 BSAVE "showcase/g-knot-light.png" : END',),
+        (
+            "743 SHOWFRAME=SHOWFRAME+1",
+            "744 IF SHOWFRAME<80 THEN GOTO 750",
+            '745 BSAVE "showcase/g-knot-light.png" : SCREEN CLOSE : END',
+        ),
         {370: "REM Fixed light for capture", 430: "REM Capture the initial angle"},
+        windowed=True,
     ),
     Capture(
         "g-shadow.bas",

@@ -201,7 +201,7 @@ def render_markdown(samples: list[Sample]) -> str:
             "- **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.",
             "- **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.",
             "- **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.",
-            "- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas` ([rendering guide](g-cloth-render.md)).",
+            "- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas`.",
             "- **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →",
             "  `g-zoomer-tquad.bas`.",
             "- **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.",

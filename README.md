@@ -7,8 +7,9 @@
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
 line-numbered programs, immediate mode, an integrated full-screen editor and
 debugger, structured control flow, matrix operations, sequential data files,
-sprites, mouse and keyboard input, a complete built-in graphics environment,
-CPC-style sound synthesis, and modern audio playback.
+sprites, mouse and keyboard input, a complete built-in graphics environment
+with Gouraud shading and depth testing, CPC-style sound synthesis, and modern
+audio playback.
 
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
@@ -72,7 +73,7 @@ not mockups or engine screenshots:
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-animation2"><img src="samples/showcase/g-animation2.png" alt="Mathematical surface shaded by a rotating light in real time" width="100%"></a><br>
   <strong>Real-Time Moving Light</strong><br>
-  A rotating light shades a procedural surface in real time with GTRIANGLE.
+  A rotating light shades a procedural surface in real time.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-fmandelbrot"><img src="samples/showcase/g-fmandelbrot.png" alt="Mandelbrot fractal" width="100%"></a><br>
@@ -87,9 +88,9 @@ not mockups or engine screenshots:
 </tr>
 <tr>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-chess960"><img src="samples/showcase/g-chess960.png" alt="Chess960 starting position" width="100%"></a><br>
-  <strong>Chess960 Generator</strong><br>
-  Legal randomized positions, constraints, and sprite rendering.
+  <a href="samples/README.md#highlight-g-shadow-adaptive"><img src="samples/showcase/g-shadow-adaptive.png" alt="An arch casts a shadow onto an adaptive floor mesh" width="100%"></a><br>
+  <strong>Adaptive Arch Shadows</strong><br>
+  Finer cast shadows with an adaptive floor mesh and fewer shadow queries.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-maze"><img src="samples/showcase/g-maze.png" alt="Generated maze and solution" width="100%"></a><br>
