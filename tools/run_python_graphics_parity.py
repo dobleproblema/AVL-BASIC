@@ -44,7 +44,7 @@ GRAPHICS_RE = re.compile(
     r"\b("
     r"SCREEN|CLG|PLOT|PLOTR|DRAW|DRAWR|MOVE|MOVER|MODE|INK|PAPER|"
     r"SPRITE|BLOAD|BSAVE|CIRCLE|FCIRCLE|CIRCLER|FCIRCLER|RECTANGLE|"
-    r"FRECTANGLE|TRIANGLE|FTRIANGLE|FILL|FRAME|LABEL|LDIR|PENWIDTH|"
+    r"FRECTANGLE|TRIANGLE|FTRIANGLE|GTRIANGLE|FILL|FRAME|LABEL|LDIR|PENWIDTH|"
     r"MASK|GRAPH|GRAPHRANGE|XAXIS|YAXIS|CROSSAT|SCALE|ORIGIN|"
     r"MOUSE|KEYDOWN|COLMODE|COLCOLOR|COLRESET|HIT|HITCOLOR|"
     r"HITSPRITE|HITID"
@@ -74,6 +74,57 @@ class CapturedRun:
 
 GRAPHICS_SMOKE_CASES = [
     GraphicsCase(
+        name="gouraud_perspective_depth_and_ink",
+        description="perspective RGB, physical inverse depth, cursor and preserved INK",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG : INK RGB$(2,3,7)
+20 DIM D(WIDTH-1,HEIGHT-1) : MAT D=0
+30 GTRIANGLE D,10,10,.5,255,0,0,110,10,1,0,255,0,10,110,.25,0,0,255
+40 PRINT "__AVL_GRAPHICS_VALUE__=cursor=";XPOS;YPOS
+50 PRINT "__AVL_GRAPHICS_VALUE__=depth=";INT(D(30,30)*100000000+.5)
+60 PRINT "__AVL_GRAPHICS_SPRITE__=triangle="+SPRITE$(0,0,120,120)
+70 PLOT 200,200
+80 PRINT "__AVL_GRAPHICS_SPRITE__=ink="+SPRITE$(200,200,200,200)
+90 END
+""",
+    ),
+    GraphicsCase(
+        name="gouraud_scale_viewport_and_alias",
+        description="continuous SCALE/ORIGIN, physical depth, mask-independent fill and CALL alias",
+        program=r"""
+10 DEF SUB SHADE(BUFFER)
+20 GTRIANGLE BUFFER,-2,-2,1,300,-20,7,10,-2,1,300,-20,7,-2,10,1,300,-20,7
+30 SUBEND
+40 SCREEN : MODE 640 : PAPER 0 : CLG
+50 DIM D(WIDTH-1,HEIGHT-1) : MAT BASE 1 : MAT D=0
+60 ORIGIN 100,50,10,20,20,10 : SCALE -1,1,-1,1 : MASK 0 : PENWIDTH 4
+70 CALL SHADE(D)
+80 PRINT "__AVL_GRAPHICS_VALUE__=cursor=";XPOS;YPOS
+90 PRINT "__AVL_GRAPHICS_VALUE__=depth=";INT(D(15,15)*100000000+.5);D(9,15)
+100 SCALE : ORIGIN
+110 PRINT "__AVL_GRAPHICS_SPRITE__=viewport="+SPRITE$(0,0,30,30)
+120 END
+""",
+    ),
+    GraphicsCase(
+        name="gouraud_occlusion_and_depth_clear",
+        description="occlusion, epsilon ties, CLG preserving depth and explicit MAT depth reset",
+        program=r"""
+10 SCREEN : MODE 640 : PAPER 0 : CLG
+20 DIM D(WIDTH-1,HEIGHT-1) : MAT D=0
+30 GTRIANGLE D,10,10,1,255,0,0,60,10,1,255,0,0,10,60,1,255,0,0
+40 GTRIANGLE D,10,10,1.0000000005,0,0,255,60,10,1.0000000005,0,0,255,10,60,1.0000000005,0,0,255
+50 PRINT "__AVL_GRAPHICS_SPRITE__=tie="+SPRITE$(0,0,70,70)
+60 CLG
+70 GTRIANGLE D,10,10,.5,0,255,0,60,10,.5,0,255,0,10,60,.5,0,255,0
+80 PRINT "__AVL_GRAPHICS_SPRITE__=occluded="+SPRITE$(0,0,70,70)
+90 MAT D=0
+100 GTRIANGLE D,10,10,.5,0,255,0,60,10,.5,0,255,0,10,60,.5,0,255,0
+110 PRINT "__AVL_GRAPHICS_SPRITE__=cleared="+SPRITE$(0,0,70,70)
+120 END
+""",
+    ),
+    GraphicsCase(
         name="screen_plot_test",
         description="full-screen capture after a single palette plot",
         program=r"""
@@ -88,7 +139,7 @@ GRAPHICS_SMOKE_CASES = [
     ),
     GraphicsCase(
         name="screen_preserves_framebuffer",
-        description="bare SCREEN presents existing graphics without clearing the framebuffer",
+        description="bare SCREEN preserves existing graphics without clearing the framebuffer",
         program=r"""
 10 MODE 640 : PAPER 0 : CLG
 20 PLOT 3,4,2

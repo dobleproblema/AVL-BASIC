@@ -901,6 +901,245 @@ impl Graphics {
         Ok(())
     }
 
+    /// Draw a two-sided Gouraud triangle with perspective-correct display RGB.
+    ///
+    /// Each vertex is `[x, y, q, red, green, blue]`, where `q` is positive
+    /// inverse camera depth and RGB is already tone-mapped, normally 0..255.
+    /// The caller clips the near plane; any nonpositive vertex q is a no-op.
+    /// Pixel centres are sampled at `(x + .5, y + .5)`. Larger q wins, with a
+    /// relative 1e-9 tolerance. RGB is clamped and rounded after interpolation.
+    ///
+    /// Coordinates use ORIGIN/SCALE with continuous subpixel positions.
+    /// MASK and PENWIDTH do not affect this filled raster operation.
+    /// The current viewport clips both colour and depth writes. `depth` must
+    /// have the screen's dimensions, in x-major order: `x * height + y`.
+    /// Colours are full 24-bit RGB, without palette-index interpretation or an
+    /// alpha byte. Like PLOT, this does not change sprite ownership/collisions.
+    /// INK is preserved; after success the cursor is the third input vertex,
+    /// including degenerate, clipped or completely occluded triangles.
+    /// Invalid dimensions/nonfinite inputs are rejected before any mutation.
+    pub fn gouraud_triangle(
+        &mut self,
+        vertices: [[f64; 6]; 3],
+        depth: &mut [f64],
+        depth_width: usize,
+        depth_height: usize,
+    ) -> BasicResult<()> {
+        let expected_len = depth_width
+            .checked_mul(depth_height)
+            .ok_or_else(|| BasicError::new(ErrorCode::InvalidValue))?;
+        if depth_width == 0
+            || depth_height == 0
+            || depth_width != self.width
+            || depth_height != self.height
+            || depth.len() != expected_len
+            || self.buffer.len() != expected_len
+        {
+            return Err(BasicError::new(ErrorCode::InvalidValue));
+        }
+        if vertices.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        let endpoint = (vertices[2][0], vertices[2][1]);
+        let vertices = vertices.map(|mut vertex| {
+            if let Some(scale) = self.scale {
+                let (left, bottom, sx, sy) = self.scale_canvas_geometry(scale);
+                vertex[0] = left + (vertex[0] - scale.xmin) * sx;
+                vertex[1] = self.height as f64 - 1.0 - bottom + (vertex[1] - scale.ymin) * sy;
+            } else {
+                vertex[0] += self.origin_x as f64;
+                vertex[1] += self.origin_y as f64;
+            }
+            vertex
+        });
+        if vertices.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        self.gouraud_triangle_raster(vertices, depth, depth_height)?;
+        let (cx, cy) = if self.scale.is_some() {
+            self.user_to_canvas(endpoint.0, endpoint.1)
+        } else {
+            let cx = (endpoint.0.round() as i32).saturating_add(self.origin_x);
+            let logical_y = (endpoint.1.round() as i32).saturating_add(self.origin_y);
+            (cx, (self.height as i32 - 1).saturating_sub(logical_y))
+        };
+        self.cursor_x = cx;
+        self.cursor_y = (self.height as i32 - 1).saturating_sub(cy);
+        self.cursor_user_x = endpoint.0;
+        self.cursor_user_y = endpoint.1;
+        Ok(())
+    }
+
+    fn gouraud_triangle_raster(
+        &mut self,
+        vertices: [[f64; 6]; 3],
+        depth: &mut [f64],
+        depth_height: usize,
+    ) -> BasicResult<()> {
+        let [a, b, c] = vertices;
+        let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        let attributes = vertices.map(|vertex| {
+            [
+                vertex[2],
+                vertex[3] * vertex[2],
+                vertex[4] * vertex[2],
+                vertex[5] * vertex[2],
+            ]
+        });
+        if !area.is_finite() || attributes.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        if vertices.iter().any(|vertex| vertex[2] <= 0.0) || area.abs() < 1e-8 {
+            return Ok(());
+        }
+
+        let left = a[0]
+            .min(b[0])
+            .min(c[0])
+            .floor()
+            .max(0.0)
+            .max(self.w_left as f64);
+        let right = a[0]
+            .max(b[0])
+            .max(c[0])
+            .floor()
+            .min((self.width - 1) as f64)
+            .min(self.w_right as f64);
+        let bottom = a[1]
+            .min(b[1])
+            .min(c[1])
+            .floor()
+            .max(0.0)
+            .max((self.height as i32 - 1 - self.w_bottom) as f64);
+        let top = a[1]
+            .max(b[1])
+            .max(c[1])
+            .floor()
+            .min((self.height - 1) as f64)
+            .min((self.height as i32 - 1 - self.w_top) as f64);
+        if left > right || bottom > top {
+            return Ok(());
+        }
+        let left = left as usize;
+        let right = right as usize;
+        let bottom = bottom as usize;
+        let top = top as usize;
+
+        let inverse_area = 1.0 / area;
+        let dx0 = (b[1] - c[1]) * inverse_area;
+        let dy0 = (c[0] - b[0]) * inverse_area;
+        let dx1 = (c[1] - a[1]) * inverse_area;
+        let dy1 = (a[0] - c[0]) * inverse_area;
+        let weight_dx = [dx0, dx1, -dx0 - dx1];
+        let weight_dy = [dy0, dy1, -dy0 - dy1];
+        let w0 = ((c[0] - b[0]) * (bottom as f64 + 0.5 - b[1])
+            - (c[1] - b[1]) * (left as f64 + 0.5 - b[0]))
+            * inverse_area;
+        let w1 = ((a[0] - c[0]) * (bottom as f64 + 0.5 - c[1])
+            - (a[1] - c[1]) * (left as f64 + 0.5 - c[0]))
+            * inverse_area;
+        let mut row_weights = [w0, w1, 1.0 - w0 - w1];
+        let weighted = |weights: [f64; 3], component: usize| {
+            attributes[0][component] * weights[0]
+                + attributes[1][component] * weights[1]
+                + attributes[2][component] * weights[2]
+        };
+        let attribute_dx: [f64; 4] =
+            std::array::from_fn(|component| weighted(weight_dx, component));
+        let attribute_dy: [f64; 4] =
+            std::array::from_fn(|component| weighted(weight_dy, component));
+        let mut row_attributes: [f64; 4] =
+            std::array::from_fn(|component| weighted(row_weights, component));
+        if weight_dx
+            .iter()
+            .chain(weight_dy.iter())
+            .chain(row_weights.iter())
+            .chain(attribute_dx.iter())
+            .chain(attribute_dy.iter())
+            .chain(row_attributes.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+
+        let mut wrote_pixel = false;
+        for y in bottom..=top {
+            let mut span_left = left as f64;
+            let mut span_right = right as f64;
+            for edge in 0..3 {
+                let slope = weight_dx[edge];
+                if slope.abs() < 1e-12 {
+                    if row_weights[edge] < -1e-9 {
+                        span_left = 1.0;
+                        span_right = 0.0;
+                        break;
+                    }
+                } else {
+                    let boundary = left as f64 + (-1e-9 - row_weights[edge]) / slope;
+                    if slope > 0.0 {
+                        span_left = span_left.max(boundary);
+                    } else {
+                        span_right = span_right.min(boundary);
+                    }
+                }
+            }
+            let span_left = span_left.ceil();
+            let span_right = span_right.floor();
+            if span_left <= span_right
+                && span_left.is_finite()
+                && span_right.is_finite()
+                && row_weights.iter().all(|value| value.is_finite())
+            {
+                let start_x = span_left as usize;
+                let end_x = span_right as usize;
+                let skipped = (start_x - left) as f64;
+                let mut values: [f64; 4] = std::array::from_fn(|component| {
+                    row_attributes[component] + skipped * attribute_dx[component]
+                });
+                let canvas_row = (self.height - 1 - y) * self.width;
+                for x in start_x..=end_x {
+                    let depth_index = x * depth_height + y;
+                    let old_q = depth[depth_index];
+                    let tolerance = 1e-9 * values[0].abs().max(old_q.abs()).max(1e-12);
+                    // Negated <= preserves the BASIC comparison for caller
+                    // buffers initialized with negative infinity or NaN too.
+                    if values.iter().all(|value| value.is_finite())
+                        && values[0] > 0.0
+                        && !(values[0] <= old_q + tolerance)
+                    {
+                        let inverse_q = 1.0 / values[0];
+                        let channels = [
+                            values[1] * inverse_q,
+                            values[2] * inverse_q,
+                            values[3] * inverse_q,
+                        ];
+                        if channels.iter().all(|channel| channel.is_finite()) {
+                            let [red, green, blue] = channels
+                                .map(|channel| (channel + 0.5).floor().clamp(0.0, 255.0) as u32);
+                            let rgb = (red << 16) | (green << 8) | blue;
+                            depth[depth_index] = values[0];
+                            self.buffer[canvas_row + x] = rgb;
+                            wrote_pixel = true;
+                        }
+                    }
+                    for component in 0..4 {
+                        values[component] += attribute_dx[component];
+                    }
+                }
+            }
+            for edge in 0..3 {
+                row_weights[edge] += weight_dy[edge];
+            }
+            for component in 0..4 {
+                row_attributes[component] += attribute_dy[component];
+            }
+        }
+        if wrote_pixel {
+            self.buffer_dirty = true;
+        }
+        Ok(())
+    }
+
     pub fn circle(
         &mut self,
         x: f64,

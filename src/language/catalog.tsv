@@ -129,6 +129,7 @@ FCIRCLE
 FCIRCLER
 FRECTANGLE
 FTRIANGLE
+GTRIANGLE
 TRECTANGLE
 TQUAD
 BSAVE
@@ -236,7 +237,7 @@ statement	both	SMALLFONT		SMALLFONT [TRANSPARENT|OPAQUE]	mode: Optional transpar
 
 # Graphics window, coordinates, and drawing
 statement	both	MODE		MODE width	width: Screen width 640, 800, or 1024	Selects a supported graphics resolution.	SCREEN,SCALE,ORIGIN	-
-statement	both	SCREEN		SCREEN || SCREEN graphics$	graphics$: Encoded full-screen graphics string	Resets graphics state or restores a captured screen.	SCREEN CLOSE,SCREEN$,BLOAD	-
+statement	both	SCREEN		SCREEN || SCREEN graphics$	graphics$: Encoded opaque full-screen graphics string matching the active MODE	Resets graphics state or restores the screen buffer; use FRAME to present restored images during programs.	SCREEN CLOSE,SCREEN$,BLOAD,FRAME	-
 statement	both	SCREEN CLOSE		SCREEN CLOSE	-	Closes the graphics window and resets its state.	SCREEN	-
 statement	both	CLG		CLG	-	Clears and immediately presents the active viewport.	CLG OFFSCREEN,FRAME,PAPER	-
 statement	both	CLG OFFSCREEN		CLG OFFSCREEN	-	Clears the active viewport without presenting it.	CLG,FRAME	-
@@ -260,9 +261,10 @@ statement	both	FCIRCLER		FCIRCLER dx,dy,radius[,color[,aspect]] || FCIRCLER dx,d
 statement	both	RECTANGLE		RECTANGLE x0,y0,x1,y1[,color]	x0,y0: First corner; x1,y1: Opposite corner; color: Optional color	Draws a rectangle outline.	FRECTANGLE,TRECTANGLE	-
 statement	both	FRECTANGLE		FRECTANGLE x0,y0,x1,y1[,color]	x0,y0: First corner; x1,y1: Opposite corner; color: Optional color	Draws a filled rectangle.	RECTANGLE	-
 statement	both	TRIANGLE		TRIANGLE x0,y0,x1,y1,x2,y2[,color]	x0,y0 ... x2,y2: Three vertices; color: Optional color	Draws a triangle outline.	FTRIANGLE,TTRIANGLE	-
-statement	both	FTRIANGLE		FTRIANGLE x0,y0,x1,y1,x2,y2[,color]	x0,y0 ... x2,y2: Three vertices; color: Optional color	Draws a filled triangle.	TRIANGLE	-
+statement	both	FTRIANGLE		FTRIANGLE x0,y0,x1,y1,x2,y2[,color]	x0,y0 ... x2,y2: Three vertices; color: Optional color	Draws a filled triangle.	TRIANGLE,GTRIANGLE	-
+statement	both	GTRIANGLE		GTRIANGLE D,x0,y0,q0,r0,g0,b0,x1,y1,q1,r1,g1,b1,x2,y2,q2,r2,g2,b2	D: Numeric depth array DIM D(WIDTH-1,HEIGHT-1), indexed in physical pixels; x,y: User coordinates honoring ORIGIN/SCALE; q: Positive inverse depth, larger wins; r,g,b: RGB channels 0..255	Perspective-correct Gouraud fill; clear D with MAT D=0 each frame. Any q<=0 skips drawing. Ignores MASK/PENWIDTH; preserves INK; cursor ends at (x2,y2).	FTRIANGLE,TTRIANGLE,MAT	-
 statement	both	TRECTANGLE		TRECTANGLE graphics$,x0,y0,x1,y1[,u0,v0,u1,v1]	graphics$: Texture source; x0,y0 and x1,y1: Destination corners; u0,v0 and u1,v1: Optional texture corners	Draws a texture-mapped rectangle.	TTRIANGLE,TQUAD,SPRITE	-
-statement	both	TTRIANGLE		TTRIANGLE graphics$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2	graphics$: Texture source; x0,y0 ... x2,y2: Destination vertices; u0,v0 ... u2,v2: Texture coordinates	Draws a texture-mapped triangle.	TRECTANGLE,TQUAD	-
+statement	both	TTRIANGLE		TTRIANGLE graphics$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2	graphics$: Texture source; x0,y0 ... x2,y2: Destination vertices; u0,v0 ... u2,v2: Texture coordinates	Draws a texture-mapped triangle.	TRECTANGLE,TQUAD,GTRIANGLE	-
 statement	both	TQUAD		TQUAD graphics$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3	graphics$: Texture source; x0,y0 ... x3,y3: Destination vertices; u0,v0 ... u3,v3: Texture coordinates	Draws a texture-mapped quadrilateral.	TRECTANGLE,TTRIANGLE	-
 statement	both	FILL		FILL || FILL color || FILL x,y || FILL x,y,color	x: Fill start X; y: Fill start Y; color: Optional fill color	Flood-fills a bounded area.	INK,PAPER	-
 statement	both	INK		INK color || INK red,green,blue	color: Palette index, RGB number, RGB text, or named color; red: Red component; green: Green component; blue: Blue component	Sets the foreground drawing color.	PAPER,RGB,RGB$	-

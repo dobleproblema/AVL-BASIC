@@ -24,12 +24,20 @@ g-dungeon-cpc.bas	Games, applications, and algorithmic scenes		AVL Dungeon CPC	P
 g-loan.bas	Games, applications, and algorithmic scenes	18	Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
 g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
 g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
+g-animation.bas	3D, lighting, and texture mapping		Real-Time Surface Animation	A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap.	GTRIANGLE;procedural mesh;camera rotation;vertex lighting;FRAME
+g-animation2.bas	3D, lighting, and texture mapping	7	Real-Time Moving Light	A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap.	GTRIANGLE;procedural mesh;moving light;vertex lighting;FRAME
+g-cloth-render.bas	3D, lighting, and texture mapping		Offline Cloth Renderer	Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints. [Rendering guide](g-cloth-render.md).	XPBD;fixed substeps;GTRIANGLE;filtered shadows;FRAME;BSAVE;checkpoints
 g-cube.bas	3D, lighting, and texture mapping		Rotating Cube	Filled rotating cube with hidden-face removal.	3D projection;back-face culling;FTRIANGLE
+g-cube-gouraud.bas	3D, lighting, and texture mapping		Interpolated Cube	One rotating cube combines interpolated corner colors and hidden-face removal; toggle depth with Z.	GTRIANGLE;RGB interpolation;array depth buffer
+g-cube-light.bas	3D, lighting, and texture mapping		Mouse-Controlled Cube Light	A mouse-controlled diffuse light shades a rotating cube; pause rotation while the light keeps moving.	MOUSE;Lambert lighting;GTRIANGLE;depth buffer
+g-knot-light.bas	3D, lighting, and texture mapping		Procedural Knot Light	A nearby mouse-controlled diffuse light shades a smooth tubular knot; move the light while rotation is paused.	parametric mesh;smooth normals;MOUSE;GTRIANGLE;depth buffer
+g-shadow.bas	3D, lighting, and texture mapping		Arch Shadows	An introductory cast-shadow example with a mouse-controlled point light, an arch, and a uniform 96 x 96 floor grid; S toggles shadows and C toggles the 60 FPS cap, with measured FPS in the HUD.	GTRIANGLE;cast shadows;uniform floor mesh;MOUSE;depth buffers;FRAME
+g-shadow-adaptive.bas	3D, lighting, and texture mapping		Adaptive Arch Shadows	An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed.	GTRIANGLE;cast shadows;shared calculations;conservative bounds;adaptive floor mesh
 g-cube2.bas	3D, lighting, and texture mapping		Orbiting Cubes	Two depth-sorted cubes orbit in opposite phases.	3D projection;depth sorting;FTRIANGLE
 g-cube3.bas	3D, lighting, and texture mapping		Flood-Filled Cube	Rotating cube fills outlined faces using flood fill.	3D projection;DRAW;FILL
 g-cube-tquad.bas	3D, lighting, and texture mapping		Textured Cube	A spinning textured cube built from projection math and affine quads.	3D projection;back-face culling;TQUAD
 g-demo.bas	3D, lighting, and texture mapping		Cube and Scroll Demo	Filled rotating cube behind a diagonal text scroll.	3D projection;FTRIANGLE;LDIR
-g-gouraud.bas	3D, lighting, and texture mapping	7	Gouraud Surface	A mathematical surface rendered with a software Z-buffer and per-vertex lighting.	Z-buffer;barycentric rasterization;vertex lighting
+g-gouraud.bas	3D, lighting, and texture mapping		Gouraud Surface	A mathematical surface rendered with a software Z-buffer and per-vertex lighting.	Z-buffer;barycentric rasterization;vertex lighting
 g-lambert.bas	3D, lighting, and texture mapping		Lambert Surface	Painter-sorted surface uses flat Lambert lighting.	painter's algorithm;Lambert shading;quicksort
 g-origin.bas	3D, lighting, and texture mapping		Bouncing Viewport Cube	Rotating cube moves inside a bouncing viewport.	ORIGIN;3D projection;viewport animation
 g-raytracer.bas	3D, lighting, and texture mapping	2	Ray Tracer	A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC.	ray tracing;Fresnel;reflection and refraction
@@ -94,9 +102,7 @@ g-locate.bas	Text and typography		Cursor and Font Test	Mixes font sizes, cursor 
 g-strings.bas	Text and typography		Colored Text Modes	Compares colored opaque and transparent text output.	INK and PAPER;font modes;LABEL
 g-text.bas	Text and typography		Substring Text Scroll	Scrolls numeric text by changing its substring offset.	GPRINT;MID$;font modes
 g-usflag.bas	Text and typography		Text-Cell Flag	Draws a text-cell United States flag.	LOCATE;GPRINT;PAPER
-g-animation.bas	Sprites, images, and frame animation		3D Plot Animation	Plays pre-rendered 3D plot frames from PNG files.	BLOAD;SCREEN;FRAME
-g-animation2.bas	Sprites, images, and frame animation		Tree Growth Animation	Ping-pongs pre-rendered tree-growth PNG frames.	BLOAD;ping-pong playback;FRAME
-g-animation3.bas	Sprites, images, and frame animation		Moving Light Animation	Loops pre-rendered moving-light PNG frames.	BLOAD;SCREEN;FRAME
+g-animation3.bas	Sprites, images, and frame animation		Offline Cloth Animation	Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed.	BLOAD;SCREEN;playback clock;FRAME
 g-balls.bas	Sprites, images, and frame animation	14	Colliding Balls	Fifty numbered sprites bounce and collide without full clears.	sprite collisions;dirty redraw;COLMODE
 g-sprite.bas	Sprites, images, and frame animation		Sprite Transparency	Captures and redraws one sprite with transparency variants.	SPRITE$;SPRITE;transparency
 g-sprite2.bas	Sprites, images, and frame animation		Scaled Sprite Transparency	Repeats sprite transparency inside a scaled viewport.	SPRITE$;ORIGIN;transparency

@@ -70,9 +70,9 @@ not mockups or engine screenshots:
 </tr>
 <tr>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-gouraud"><img src="samples/showcase/g-gouraud.png" alt="Gouraud-shaded mathematical surface" width="100%"></a><br>
-  <strong>Gouraud Surface</strong><br>
-  A software Z-buffer and per-vertex lighting, all in BASIC.
+  <a href="samples/README.md#highlight-g-animation2"><img src="samples/showcase/g-animation2.png" alt="Mathematical surface shaded by a rotating light in real time" width="100%"></a><br>
+  <strong>Real-Time Moving Light</strong><br>
+  A rotating light shades a procedural surface in real time with GTRIANGLE.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-fmandelbrot"><img src="samples/showcase/g-fmandelbrot.png" alt="Mandelbrot fractal" width="100%"></a><br>
@@ -104,7 +104,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 131-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 137-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -162,7 +162,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-131 sample programs and their visual gallery are optional companion material.
+137 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -242,6 +242,7 @@ adding a practical modern feature set:
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
 - `ON ERROR`, `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
+- triangles with interpolated RGB and a depth buffer stored in a BASIC array,
 - CPC-style sound queues and envelopes, plus modern audio playback controls,
 - embedded bitmap fonts for reproducible graphics text,
 - deterministic examples and regression tests for the native runtime,
@@ -300,7 +301,7 @@ with a directory outside the HTML output.
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
 - [`tools/`](tools/): maintainer validation and benchmark tools
-- [`samples/`](samples/): 132 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 137 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **131 runnable programs**. They are not filler or API
+AVL BASIC ships with **137 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-131-program catalog. On GitHub, select any image or program name
+137-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -68,12 +68,12 @@ to inspect its BASIC source.
   <code>RUN "/samples/g-dungeon.bas"</code>
 </td>
 <td width="50%" valign="top">
-  <a id="highlight-g-gouraud"></a>
-  <a href="g-gouraud.bas"><img src="showcase/g-gouraud.png" alt="Gouraud Surface running in AVL BASIC" width="100%"></a><br>
-  <strong>7. Gouraud Surface</strong><br>
-  A mathematical surface rendered with a software Z-buffer and per-vertex lighting.<br>
-  <sub><strong>Shows:</strong> Z-buffer · barycentric rasterization · vertex lighting</sub><br>
-  <code>RUN "/samples/g-gouraud.bas"</code>
+  <a id="highlight-g-animation2"></a>
+  <a href="g-animation2.bas"><img src="showcase/g-animation2.png" alt="Real-Time Moving Light running in AVL BASIC" width="100%"></a><br>
+  <strong>7. Real-Time Moving Light</strong><br>
+  A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap.<br>
+  <sub><strong>Shows:</strong> GTRIANGLE · procedural mesh · moving light · vertex lighting · FRAME</sub><br>
+  <code>RUN "/samples/g-animation2.bas"</code>
 </td>
 </tr>
 <tr>
@@ -208,6 +208,13 @@ python tools/generate_showcase.py
 ## Suggested learning routes
 
 - **From wireframes to texture mapping:** `g-cube2.bas` → `g-cube-tquad.bas`.
+- **Interpolate colors and hide faces with depth:** `g-cube.bas` → `g-cube-gouraud.bas`.
+- **Move a diffuse light with the mouse:** `g-cube-gouraud.bas` → `g-cube-light.bas`.
+- **Explore light on curves and overlapping surfaces:** `g-cube-light.bas` → `g-knot-light.bas`.
+- **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.
+- **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.
+- **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.
+- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas` ([rendering guide](g-cloth-render.md)).
 - **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →
   `g-zoomer-tquad.bas`.
 - **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.
@@ -219,7 +226,7 @@ python tools/generate_showcase.py
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 131 programs
+## Full catalog — 137 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -260,16 +267,24 @@ demo.
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
 
-### 3D, lighting, and texture mapping (11)
+### 3D, lighting, and texture mapping (19)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
+| <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
+| <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
+| <a id="sample-g-cloth-render"></a>[`g-cloth-render.bas`](g-cloth-render.bas) | Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints. [Rendering guide](g-cloth-render.md). | XPBD, fixed substeps, GTRIANGLE, filtered shadows, FRAME, BSAVE, checkpoints |
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
+| <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; toggle depth with Z. | GTRIANGLE, RGB interpolation, array depth buffer |
+| <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; pause rotation while the light keeps moving. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
+| <a id="sample-g-knot-light"></a>[`g-knot-light.bas`](g-knot-light.bas) | A nearby mouse-controlled diffuse light shades a smooth tubular knot; move the light while rotation is paused. | parametric mesh, smooth normals, MOUSE, GTRIANGLE, depth buffer |
+| <a id="sample-g-shadow"></a>[`g-shadow.bas`](g-shadow.bas) | An introductory cast-shadow example with a mouse-controlled point light, an arch, and a uniform 96 x 96 floor grid; S toggles shadows and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, cast shadows, uniform floor mesh, MOUSE, depth buffers, FRAME |
+| <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) | An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
 | <a id="sample-g-cube2"></a>[`g-cube2.bas`](g-cube2.bas) | Two depth-sorted cubes orbit in opposite phases. | 3D projection, depth sorting, FTRIANGLE |
 | <a id="sample-g-cube3"></a>[`g-cube3.bas`](g-cube3.bas) | Rotating cube fills outlined faces using flood fill. | 3D projection, DRAW, FILL |
 | <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
 | <a id="sample-g-demo"></a>[`g-demo.bas`](g-demo.bas) | Filled rotating cube behind a diagonal text scroll. | 3D projection, FTRIANGLE, LDIR |
-| <a id="sample-g-gouraud"></a>[`g-gouraud.bas`](g-gouraud.bas) [★](#highlight-g-gouraud) | A mathematical surface rendered with a software Z-buffer and per-vertex lighting. | Z-buffer, barycentric rasterization, vertex lighting |
+| <a id="sample-g-gouraud"></a>[`g-gouraud.bas`](g-gouraud.bas) | A mathematical surface rendered with a software Z-buffer and per-vertex lighting. | Z-buffer, barycentric rasterization, vertex lighting |
 | <a id="sample-g-lambert"></a>[`g-lambert.bas`](g-lambert.bas) | Painter-sorted surface uses flat Lambert lighting. | painter's algorithm, Lambert shading, quicksort |
 | <a id="sample-g-origin"></a>[`g-origin.bas`](g-origin.bas) | Rotating cube moves inside a bouncing viewport. | ORIGIN, 3D projection, viewport animation |
 | <a id="sample-g-raytracer"></a>[`g-raytracer.bas`](g-raytracer.bas) [★](#highlight-g-raytracer) | A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC. | ray tracing, Fresnel, reflection and refraction |
@@ -355,13 +370,11 @@ demo.
 | <a id="sample-g-text"></a>[`g-text.bas`](g-text.bas) | Scrolls numeric text by changing its substring offset. | GPRINT, MID$, font modes |
 | <a id="sample-g-usflag"></a>[`g-usflag.bas`](g-usflag.bas) | Draws a text-cell United States flag. | LOCATE, GPRINT, PAPER |
 
-### Sprites, images, and frame animation (10)
+### Sprites, images, and frame animation (8)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
-| <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | Plays pre-rendered 3D plot frames from PNG files. | BLOAD, SCREEN, FRAME |
-| <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) | Ping-pongs pre-rendered tree-growth PNG frames. | BLOAD, ping-pong playback, FRAME |
-| <a id="sample-g-animation3"></a>[`g-animation3.bas`](g-animation3.bas) | Loops pre-rendered moving-light PNG frames. | BLOAD, SCREEN, FRAME |
+| <a id="sample-g-animation3"></a>[`g-animation3.bas`](g-animation3.bas) | Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed. | BLOAD, SCREEN, playback clock, FRAME |
 | <a id="sample-g-balls"></a>[`g-balls.bas`](g-balls.bas) [★](#highlight-g-balls) | Fifty numbered sprites bounce and collide without full clears. | sprite collisions, dirty redraw, COLMODE |
 | <a id="sample-g-sprite"></a>[`g-sprite.bas`](g-sprite.bas) | Captures and redraws one sprite with transparency variants. | SPRITE$, SPRITE, transparency |
 | <a id="sample-g-sprite2"></a>[`g-sprite2.bas`](g-sprite2.bas) | Repeats sprite transparency inside a scaled viewport. | SPRITE$, ORIGIN, transparency |

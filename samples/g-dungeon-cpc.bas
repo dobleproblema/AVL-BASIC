@@ -4,7 +4,7 @@
 130 REM SOUND/ENV/ENT: original score in DATA, ON SQ music, prioritized CPC effects.
 140 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
 150 N=19 : COLS=640 : CAP=1 : MAPON=0 : HUD=1 : RADIUS=0.18
-160 PLANE=0.66 : PROJ=320/PLANE : FAR=14 : NT=12 : NO=14
+160 PLANE=0.66 : PROJ=320/PLANE : FAR=18 : NT=12 : NO=14
 170 DIM W(N-1,N-1),SEEN(N-1,N-1),LIGHT(N-1,N-1),ROWS$(N-1)
 180 DIM OX(NO-1),OY(NO-1),WNX(NT-1),WNY(NT-1),KIND(NO-1),ORDER(NO-1),OD(NO-1),ZBUF(639)
 190 DIM ART(2,31,15),PAL(10),BR(3071),BG(3071),BB(3071)
@@ -87,11 +87,12 @@
 2050     A$=MID$(ROWS$(Y),X+1,1) : W(Y,X)=0
 2060     IF A$="#" THEN W(Y,X)=1:IF (X*7+Y*3) MOD 11<3 THEN W(Y,X)=2
 2070     IF A$="D" THEN W(Y,X)=3
+2075     IF A$="K" THEN OX(12)=X+0.5:OY(12)=Y+0.5
 2080   NEXT X
 2090 NEXT Y
 2100 RESTORE 2700
 2110 FOR I=0 TO NT-1 : READ OX(I),OY(I),WNX(I),WNY(I) : KIND(I)=0 : NEXT I
-2120 OX(12)=16.5 : OY(12)=9.5 : KIND(12)=1 : OX(13)=17.5 : OY(13)=16.5 : KIND(13)=2
+2120 KIND(12)=1 : OX(13)=17.5 : OY(13)=16.5 : KIND(13)=2
 2130 REM Static warm light is tied to the map, rather than the render grid
 2140 FOR Y=0 TO N-1
 2150   FOR X=0 TO N-1
@@ -103,10 +104,11 @@
 2210   NEXT X
 2220 NEXT Y
 2230 RETURN
+2490 REM Move the single K in this map to reposition the gold key.
 2500 DATA "###################","#.....##.....##...#","#.................#"
 2510 DATA "#.....##.....##...#","#.....###.#####...#","##.######.######.##"
 2520 DATA "##.###.....#####.##","#...##..#..##.....#","#..............#..#"
-2530 DATA "#...##.....##..#K.#","#...#####.###..#..#","#...#####.###.....#"
+2530 DATA "#...##.....##..#.K#","#...#####.###..#..#","#...#####.###.....#"
 2540 DATA "##.######.#...#####","##.#####....#######","#.....##....###...#"
 2550 DATA "#.............D...#","#.....##....###..E#","#.....##....###...#"
 2560 DATA "###################"
@@ -329,7 +331,7 @@
 7060 IF W(Y,X)=3 THEN MC=RGB(155,101,42)
 7070 FRECTANGLE 515+X*6,431-Y*6,519+X*6,427-Y*6,MC
 7080 NEXT X : NEXT Y
-7090 IF HAVE=0 AND SEEN(9,16) THEN FCIRCLE 518+16*6,429-9*6,2,PAL(7)
+7090 IF HAVE=0 AND SEEN(INT(OY(12)),INT(OX(12))) THEN FCIRCLE 515+OX(12)*6,432-OY(12)*6,2,PAL(7)
 7100 IF SEEN(16,17) THEN FCIRCLE 518+17*6,429-16*6,2,PAL(9)
 7110 AX=515+PX*6 : AY=432-PY*6 : FCIRCLE AX,AY,2,RGB(244,225,155)
 7120 DRAW AX,AY,AX+DX*6,AY-DY*6,RGB(244,225,155)
@@ -378,7 +380,7 @@
 9008 RESTORE 10200 : FOR CPCI=0 TO CPCBN-1 : READ CPCBP(CPCI),CPCBD(CPCI) : NEXT CPCI
 9009 RESTORE 10300 : FOR CPCI=0 TO 15 : READ CPCDRUM(CPCI) : NEXT CPCI
 9010 RESTORE 10320 : FOR CPCI=0 TO 7 : READ CPCFP(CPCI),CPCFD(CPCI) : NEXT CPCI
-9011 REM Soft lead articulation for one to four ticks; zero at each note's tail.
+9011 REM Soft lead articulation for one to four ticks; zero at each note 's tail.
 9012 ENV 1,1,8,1,6,-1,2,1,-2,1
 9013 ENV 2,1,8,1,6,-1,4,1,-2,1
 9014 ENV 3,1,8,1,6,-1,7,1,-2,1
@@ -460,7 +462,7 @@
 9504 SOUND CPCBSTATE,CPCBP(CPCBIDX),CPCBD(CPCBIDX),0,CPCBENV
 9505 CPCBIDX=(CPCBIDX+1) MOD CPCBN : ON SQ(4) GOSUB 9500
 9506 RETURN
-9600 REM Percussion follows real TIME, not the game's clamped motion clock T.
+9600 REM Percussion follows real TIME, not the game 's clamped motion clock T.
 9601 IF CPCPLAY=0 OR MUTED OR WON THEN RETURN
 9602 CPCDTICK=INT((TIME-CPCSTART)/0.15)
 9603 IF CPCDTICK<0 OR CPCDTICK=CPCDRUMIDX THEN RETURN

@@ -21,7 +21,7 @@ Contents
 6.  - Graphics environment
 6.1 - Window and coordinates
 6.2 - Basic plotting
-6.3 - Figures
+6.3 - Figures and GTRIANGLE
 6.4 - Colors
 6.5 - Automatic axes
 6.6 - Screenshots and graphics files
@@ -630,6 +630,7 @@ Each creates or replaces its own named demonstration file beside the program.
 + SCALE                      Disables the user scale and returns to physical coordinates
 + SCREEN                     Restores state (see below)
 + SCREEN CLOSE               Closes the graphics window and restores state
++ SCREEN gscr$               Restores an opaque image to the graphics buffer; FRAME presents it in programs
 + CLG                        Clears the active viewport with the current PAPER color
 + CLG OFFSCREEN              Clears the active viewport in the graphics buffer; shown on the next FRAME
 + FRAME [fps]                Immediate refresh; optional FPS limiter
@@ -660,7 +661,7 @@ Quick notes
   * `SCREEN : CLG` first restores the complete graphics state, including `PAPER 0`.
   * `ORIGIN : CLG` preserves the other graphics settings and any active `SCALE`, and resets only the origin and viewport before clearing. Use `SCALE : ORIGIN : CLG` if you also want to return to physical coordinates.
   * `SCREEN : ORIGIN : CLG` is also valid; after `SCREEN`, bare `ORIGIN` is idempotent.
-- In a running program, ordinary drawing changes the graphics buffer; `FRAME` presents the completed image immediately. The buffer is also presented when the program ends, and by commands with an explicit visible update such as `CLG` and `SCREEN`. Drawing in immediate mode is shown immediately.
+- In a running program, ordinary drawing and `SCREEN graphics$` change the graphics buffer; `FRAME` presents the completed image immediately. The buffer is also presented when the program ends, and by commands with an explicit visible update such as `CLG`. Drawing in immediate mode is shown immediately.
   * Use `FRAME` after completing the drawing for an animation frame.
   * During `DEBUG`, the graphics buffer is also presented at each debugger pause (see "Notes on DEBUG"). This inspection update does not execute `FRAME` or apply its FPS limiter.
 - `CLG` clears and presents the active viewport immediately. In animation loops
@@ -737,6 +738,8 @@ Quick notes (plotting)
 + FRECTANGLE x0,y0,x1,y1[,c]        Filled rectangle
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triangle (outline)
 + FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Filled triangle
++ GTRIANGLE D,x0,y0,q0,r0,g0,b0,x1,y1,q1,r1,g1,b1,x2,y2,q2,r2,g2,b2
+                                      Gouraud triangle with a depth buffer
 + TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
                                       Textured filled rectangle
 + TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
@@ -759,6 +762,34 @@ Quick notes (figures)
 - Texture coordinates wrap automatically. `u=0,v=0` is the lower-left texel; `u=width,v=height` reaches one complete tile.
 - If `TRECTANGLE` omits UV coordinates, it maps exactly one full texture tile over the rectangle.
 - `TTRIANGLE/TQUAD` use affine texture mapping and nearest-texel sampling (`floor(u),floor(v)`). They are ideal for fast 2D effects and mesh-based approximations; they do not do bilinear filtering or perspective correction.
+
+GTRIANGLE: Gouraud shading and depth
+
+`GTRIANGLE` takes 19 arguments: an unindexed array name `D`, followed by three vertices with six numeric values each (`x,y,q,r,g,b`). Supply the positions and vertex colors; the command fills the triangle, interpolates RGB with perspective correction, and tests each fragment against `D`.
+
+- Declare a numeric two-dimensional buffer with `DIM D(WIDTH-1,HEIGHT-1)` after selecting the screen mode. Its dimensions must match the full graphics screen exactly, even when a smaller viewport is active.
+- Initialize or clear it with `MAT D=0` before drawing each frame. `MODE`, `CLG`, and `SCREEN` do not clear this BASIC array. If the screen dimensions change, use `REDIM D(WIDTH-1,HEIGHT-1)` and clear it again.
+- Vertex `x,y` are user coordinates and respect `ORIGIN` and `SCALE`, retaining subpixel positions. Buffer indices always address physical pixels from the lower-left corner: `D(x,y)`, with `x=0..WIDTH-1` and `y=0..HEIGHT-1`, independently of `ORIGIN`, `SCALE`, and `MAT BASE`.
+- `q` must be positive to draw, with larger values nearer the viewer. Use `q=1/z` for perspective projection. If any vertex has `q<=0`, the whole triangle draws no pixels; perform any required near-plane clipping yourself before calling the command.
+- The interpolated `q` replaces `D(x,y)` only when it is nearer. Ties within `1e-9*max(abs(q),abs(D(x,y)),1e-12)` preserve the fragment already stored.
+- `r,g,b` are separate numeric RGB channels, normally 0..255, rather than palette indices or packed RGB values. Perspective-correct interpolated channels are rounded and clamped to 0..255.
+- Both vertex orders draw. The fill ignores `MASK` and `PENWIDTH`, and the active viewport clips both color and depth writes.
+- `INK` is preserved. A valid execution sets the graphics cursor to the supplied last vertex `(x2,y2)` in user coordinates, even when the triangle is occluded, degenerate, offscreen, or skipped because of `q<=0`.
+- Arguments and array shape are validated before triangle writes or cursor updates. A wrong array type or shape, or a non-finite numeric argument, raises an error without partially drawing the triangle.
+
+The runnable examples in `samples/` build on each other: `g-cube-gouraud.bas` shows interpolated colors and depth, `g-cube-light.bas` adds mouse-controlled vertex lighting, and `g-knot-light.bas` lights a procedural curved mesh. `g-shadow.bas` introduces cast shadows on a uniform floor grid, using a second depth array and filtered visibility. `g-shadow-adaptive.bas` develops the same scene into an optimization example: it shares calculations between grid rows and columns, skips shadow queries outside the projected arch bounds, and groups floor cells where a shadow cannot fall.
+
+Example (the second triangle has greater `q` and covers the first where they overlap)
+```basic
+10 SCREEN : MODE 640
+20 DIM D(WIDTH-1,HEIGHT-1)
+30 PAPER 0 : CLG : MAT D=0
+40 GTRIANGLE D,120,70,.5,255,30,30,520,70,.5,30,255,30,320,350,.5,30,30,255
+50 GTRIANGLE D,180,110,1,255,220,40,460,110,1,40,220,255,320,300,1,255,40,220
+60 FRAME
+70 PAUSE 1
+80 SCREEN CLOSE : END
+```
 
 6.4 Colors
 
@@ -785,7 +816,7 @@ Equivalent valid forms with `INK` and `PAPER`
 
 Quick notes
 - `INK` and `PAPER` are special: they accept either a single color value or the `r,g,b` form with three separate arguments.
-- In the rest of the graphics commands that accept color (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.), the color must arrive as a single value or expression.
+- Graphics commands with a single optional color argument (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.) require that color as one value or expression. `GTRIANGLE` instead takes three numeric RGB channels for each vertex (6.3).
 - That is why `FILL 320,240,"red"`, `FILL 320,240,RGB("128","128","128")`, `FILL 320,240,RGB$("128,128,128")`, and `FILL 320,240,121344` are valid, but `FILL 320,240,1,2,1` is not and yields `Incorrect number of arguments`.
 - For readability, prefer `RGB(...)`, `RGB$(...)`, or `&HRRGGBB` over a raw 24-bit decimal integer.
 - Sample `g-colors.bas` shows several of these combinations visually.
@@ -923,30 +954,32 @@ Example
 
 6.6 Screenshots and graphics files
 
-+ SCREEN gscr$                  Variable -> current graphics window
++ SCREEN gscr$                  Variable -> graphics buffer; FRAME presents it in programs
 + gscr$ = SCREEN$               Function. Current graphics window -> variable
 + BSAVE "img.png"[,gscr$]       Screen or variable -> PNG
 + BLOAD "img.png"[,gscr$]       PNG -> screen or variable
 
 Quick notes
-- `SCREEN$` captures the screen into a string; `SCREEN var$` restores a variable to the screen.
+- `SCREEN$` captures the graphics buffer into a string; `SCREEN gscr$` restores the complete opaque image to that buffer.
+- During a program, `SCREEN gscr$` does not present the image immediately. Add text or other drawing, then use `FRAME` to present the completed image. In immediate mode it is presented automatically, like other drawing commands. `SCREEN` with no arguments still restores the default graphics state.
+- Example: `SCREEN gscr$ : LOCATE 2,2 : GPRINT "STATUS" : FRAME 30` presents the restored image and its overlay together.
 - `BSAVE "img.png",gscr$` uses the dimensions encoded in the graphics string; `BLOAD "img.png",gscr$` loads the PNG into the string with the PNG's own dimensions. These forms do not modify the main screen.
-- `BLOAD "img.png"` and `SCREEN gscr$` require the image/string dimensions to match the active `MODE`; otherwise they report `Invalid value` without changing the screen.
+- `BLOAD "img.png"` and `SCREEN gscr$` require the image/string dimensions to match the active `MODE` exactly; otherwise they report `Invalid value` without changing the screen.
 - PNG filenames are string expressions, such as `"img.png"`, `P$` or `P$+".png"`. Quotes delimit string literals; the resulting filename must have the `.png` extension.
 - BLOAD/BSAVE use the same logical virtual filesystem as program files, including allowed directory aliases (see section 9.3). Host absolute paths and UNC paths are rejected; `..` is clamped at the virtual root.
 - In immediate mode, relative paths in `BLOAD/BSAVE` are resolved from the current virtual directory.
 - Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.
 
 Example (rapid screen-restoration benchmark)
-This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets` and have the required 640x480 size. Use the package-root setup from section 1. `SCREEN a$` presents each image directly; no additional `FRAME` is needed. The distributed `samples/g-swap.bas` demonstrates the same technique.
+This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets` and have the required 640x480 size. Use the package-root setup from section 1. `SCREEN a$` restores each image to the buffer; `FRAME` presents it. The distributed `samples/g-swap.bas` demonstrates the same technique.
 
 ```basic
 10 SCREEN : MODE 640
-20 BLOAD "samples/assets/z-tree12.png",a$
-30 BLOAD "samples/assets/z-3dplot0.png",b$
+20 BLOAD "samples/assets/cloth-poster.png",a$
+30 BLOAD "samples/assets/anime.png",b$
 40 t=TIME
 50 FOR c=1 TO 1000
-60   SCREEN a$
+60   SCREEN a$ : FRAME
 70   SWAP a$,b$
 80 NEXT c
 90 PRINT 1000/(TIME-t);" fps"

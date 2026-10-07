@@ -1,12 +1,14 @@
 mod array_expr;
 mod audio_commands;
 mod color_lut;
+mod gouraud_ops;
 mod mat_compiled;
 #[cfg(test)]
 mod mat_compiled_tests;
 mod mat_stats;
 mod mat_subarrays;
 
+use gouraud_ops::CompiledGouraud;
 use mat_compiled::CompiledMatAssignment;
 
 use crate::audio::{cpc::Note as SoundNote, AudioSystem};
@@ -1911,6 +1913,7 @@ enum CachedCommand {
     Draw(Rc<CompiledDraw>),
     Rect(Rc<CompiledRect>),
     Triangle(Rc<CompiledTriangle>),
+    Gouraud(Rc<CompiledGouraud>),
     Circle(Rc<CompiledCircle>),
     Fill(Rc<CompiledFill>),
     TexturedRect(Rc<CompiledTexturedRect>),
@@ -5531,6 +5534,11 @@ impl Interpreter {
             "TRECTANGLE" => self.execute_textured_rect(command[10..].trim()),
             "TRIANGLE" => self.execute_triangle(command[8..].trim(), false),
             "FTRIANGLE" => self.execute_triangle(command[9..].trim(), true),
+            "GTRIANGLE" => {
+                let compiled = CompiledGouraud::compile(command[9..].trim())
+                    .map_err(|e| self.with_current_line(e))?;
+                self.execute_compiled_gouraud(&compiled)
+            }
             "TTRIANGLE" => self.execute_textured_triangle(command[9..].trim()),
             "TQUAD" => self.execute_textured_quad(command[5..].trim()),
             "CIRCLE" => self.execute_circle(command[6..].trim(), false),
@@ -5674,6 +5682,7 @@ impl Interpreter {
             CachedCommand::Draw(compiled) => self.execute_compiled_draw(compiled.as_ref()),
             CachedCommand::Rect(compiled) => self.execute_compiled_rect(compiled.as_ref()),
             CachedCommand::Triangle(compiled) => self.execute_compiled_triangle(compiled.as_ref()),
+            CachedCommand::Gouraud(compiled) => self.execute_compiled_gouraud(compiled.as_ref()),
             CachedCommand::Circle(compiled) => self.execute_compiled_circle(compiled.as_ref()),
             CachedCommand::Fill(compiled) => self.execute_compiled_fill(compiled.as_ref()),
             CachedCommand::TexturedRect(compiled) => {
@@ -11559,7 +11568,7 @@ impl Interpreter {
             self.ensure_graphics_window()?;
             self.graphics.reset_window_state_preserving_buffer();
             self.graphics_window_suppressed = false;
-            return self.present_graphics_window();
+            return self.refresh_graphics_window();
         }
         if arg.eq_ignore_ascii_case("CLOSE") {
             self.graphics.reset_state();
@@ -11567,9 +11576,10 @@ impl Interpreter {
             return Ok(());
         }
         let value = self.eval_value(arg)?;
+        self.ensure_graphics_window()?;
         self.graphics.restore_screen(&value.into_string()?)?;
         self.graphics_window_suppressed = false;
-        self.present_graphics_window()
+        self.refresh_graphics_window()
     }
 
     fn execute_plot(&mut self, args: &str, relative: bool) -> BasicResult<()> {
@@ -13306,6 +13316,9 @@ impl Interpreter {
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "FTRIANGLE" => compile_triangle_statement(trimmed[9..].trim(), true)
                 .map(|compiled| CachedCommand::Triangle(Rc::new(compiled)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
+            "GTRIANGLE" => CompiledGouraud::compile(trimmed[9..].trim())
+                .map(|compiled| CachedCommand::Gouraud(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "CIRCLE" => compile_circle_statement(trimmed[6..].trim(), false, false)
                 .map(|compiled| CachedCommand::Circle(Rc::new(compiled)))
@@ -16185,6 +16198,34 @@ mod interpreter_tests {
         assert_eq!(rectangle.graphics.test(0.0, 1.0), 0);
         assert_eq!(rectangle.graphics.xpos(), 12.0);
         assert_eq!(rectangle.graphics.ypos(), 34.0);
+    }
+
+    #[test]
+    fn screen_restores_pixels_for_hud_composition_and_validates_before_mutation() {
+        let mut interp = Interpreter::new();
+        interp.graphics_window_enabled = false;
+        interp
+            .process_immediate("INK 7:MOVE 12,34:PLOT 2,3,4")
+            .unwrap();
+        let image = interp.graphics.capture_screen();
+        interp
+            .string_variables
+            .insert("IMAGE$".into(), image.clone().into());
+        interp.process_immediate("CLG OFFSCREEN").unwrap();
+        interp.process_immediate("SCREEN IMAGE$").unwrap();
+        assert_eq!(interp.graphics.capture_screen(), image);
+        assert!(interp.graphics.buffer_dirty());
+        interp
+            .process_immediate("LOCATE 1,1:GPRINT \"HUD\"")
+            .unwrap();
+        assert_ne!(interp.graphics.capture_screen(), image);
+
+        let composed = interp.graphics.capture_screen();
+        let error = interp
+            .process_immediate("SCREEN \"1x1:ff0000\"")
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidValue);
+        assert_eq!(interp.graphics.capture_screen(), composed);
     }
 
     #[test]

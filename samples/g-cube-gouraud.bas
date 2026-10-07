@@ -1,0 +1,52 @@
+100 REM One cube: interpolated RGB colors and automatic hidden-face removal.
+110 REM Z toggles depth; SPACE pauses; ESC exits.
+120 SCREEN : MODE 640 : RAD : PAPER RGB(7,10,18) : CLG
+130 W=WIDTH : H=HEIGHT : FOC=450 : DIST=4.8
+140 DIM D(W-1,H-1) 'One inverse-depth value for each screen pixel
+150 DIM P1(8),P2(8),P3(8),PX(8),PY(8),Q(8),F(6,4),R(8),G(8),B(8)
+160 FOR I=1 TO 8 : READ P1(I) : NEXT I
+170 FOR I=1 TO 8 : READ P2(I) : NEXT I
+180 FOR I=1 TO 8 : READ P3(I) : NEXT I
+190 FOR I=1 TO 6 : FOR J=1 TO 4 : READ F(I,J) : NEXT J : NEXT I
+200 FOR I=1 TO 8 'Each corner gets its own RGB color
+201 R(I)=145+100*P1(I)
+202 G(I)=145+100*P2(I)
+203 B(I)=145+100*P3(I)
+204 NEXT I
+210 A1=.45 : A2=.65 : DEPTH=1 : PAUSED=0 : SMALLFONT TRANSPARENT
+300 REM Rotate and project the same eight vertices as g-cube.bas.
+310 IF PAUSED=0 THEN A1=A1+.012 : A2=A2+.016
+320 S1=SIN(A1) : C1=COS(A1) : S2=SIN(A2) : C2=COS(A2)
+330 CLG OFFSCREEN : MAT D=0 'Clear both color and depth for the new frame
+340 FOR I=1 TO 8
+350 Y=P2(I)*C1-P3(I)*S1 : Z=P3(I)*C1+P2(I)*S1
+360 X=P1(I)*C2-Z*S2 : Z=Z*C2+P1(I)*S2-DIST
+370 PX(I)=X*FOC/Z+W/2 : PY(I)=Y*FOC/Z+H/2
+380 Q(I)=-1/Z 'Z is negative here; a larger positive Q means nearer
+390 NEXT I
+400 REM Draw ALL six faces in their DATA order: no sorting or face culling.
+410 FOR FACE=1 TO 6
+420 IA=F(FACE,1) : IB=F(FACE,2) : IC=F(FACE,3) : ID=F(FACE,4)
+440 IF DEPTH=0 THEN MAT D=0 'OFF forgets earlier faces so later ones paint over them
+450 GTRIANGLE D,PX(IA),PY(IA),Q(IA),R(IA),G(IA),B(IA),PX(IB),PY(IB),Q(IB),R(IB),G(IB),B(IB),PX(IC),PY(IC),Q(IC),R(IC),G(IC),B(IC)
+460 GTRIANGLE D,PX(IC),PY(IC),Q(IC),R(IC),G(IC),B(IC),PX(ID),PY(ID),Q(ID),R(ID),G(ID),B(ID),PX(IA),PY(IA),Q(IA),R(IA),G(IA),B(IA)
+470 NEXT FACE
+500 DS$="OFF" : IF DEPTH THEN DS$="ON"
+510 PS$="" : IF PAUSED THEN PS$="  [PAUSED]"
+520 INK RGB(235,240,255) : LOCATE 3,2 : GPRINT "GTRIANGLE - INTERPOLATED COLORS AND HIDDEN FACES"
+530 LOCATE 3,28 : GPRINT "Z: DEPTH ";DS$;"   SPACE: PAUSE   ESC: EXIT";PS$
+540 FRAME 60
+550 K$=UPPER$(INKEY$)
+560 IF K$=CHR$(27) THEN SCREEN CLOSE : END
+570 IF K$="Z" THEN DEPTH=1-DEPTH
+580 IF K$=" " THEN PAUSED=1-PAUSED
+590 GOTO 310
+700 DATA -1,1,1,-1,-1,1,1,-1
+710 DATA 1,1,-1,-1,1,1,-1,-1
+720 DATA 1,1,1,1,-1,-1,-1,-1
+730 DATA 1,2,3,4
+740 DATA 5,6,2,1
+750 DATA 8,7,6,5
+760 DATA 4,3,7,8
+770 DATA 2,6,7,3
+780 DATA 5,1,4,8

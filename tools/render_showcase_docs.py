@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 CATALOG = SAMPLES / "catalog.tsv"
 MARKDOWN_OUTPUT = SAMPLES / "README.md"
-EXPECTED_SAMPLES = 131
+EXPECTED_SAMPLES = 137
 EXPECTED_FEATURED = 20
 
 
@@ -195,6 +195,13 @@ def render_markdown(samples: list[Sample]) -> str:
             "## Suggested learning routes",
             "",
             "- **From wireframes to texture mapping:** `g-cube2.bas` → `g-cube-tquad.bas`.",
+            "- **Interpolate colors and hide faces with depth:** `g-cube.bas` → `g-cube-gouraud.bas`.",
+            "- **Move a diffuse light with the mouse:** `g-cube-gouraud.bas` → `g-cube-light.bas`.",
+            "- **Explore light on curves and overlapping surfaces:** `g-cube-light.bas` → `g-knot-light.bas`.",
+            "- **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.",
+            "- **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.",
+            "- **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.",
+            "- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas` ([rendering guide](g-cloth-render.md)).",
             "- **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →",
             "  `g-zoomer-tquad.bas`.",
             "- **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.",

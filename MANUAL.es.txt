@@ -21,7 +21,7 @@ Licencia: MIT. Ver `COPYING`.
 6.  - Entorno gráfico
 6.1 - Ventana y coordenadas
 6.2 - Trazado básico
-6.3 - Figuras
+6.3 - Figuras y GTRIANGLE
 6.4 - Colores
 6.5 - Ejes automáticos
 6.6 - Capturas de pantalla y archivos gráficos
@@ -641,6 +641,7 @@ Cada uno crea o reemplaza su propio fichero de demostración junto al programa.
 + SCALE                     Desactiva la escala de usuario y vuelve a coordenadas físicas
 + SCREEN                     Restaura estado (ver abajo)
 + SCREEN CLOSE               Cierra la ventana gráfica y restaura estado
++ SCREEN gscr$               Restaura una imagen opaca en el búfer gráfico; FRAME la muestra en programas
 + CLG                        Borra el viewport activo con el PAPER actual
 + CLG OFFSCREEN              Borra el viewport activo en el buffer gráfico; se muestra en el próximo FRAME
 + FRAME [fps]                Refresco inmediato; limitador FPS opcional
@@ -671,7 +672,7 @@ Notas rápidas
   • `SCREEN : CLG` restablece primero todo el estado gráfico, incluido `PAPER 0`.
   • `ORIGIN : CLG` conserva los demás ajustes gráficos y cualquier `SCALE` activo, y restablece únicamente el origen y el viewport antes de borrar. Usa `SCALE : ORIGIN : CLG` si además quieres volver a coordenadas físicas.
   • `SCREEN : ORIGIN : CLG` también es válido; tras `SCREEN`, el `ORIGIN` sin argumentos es idempotente.
-- En un programa en ejecución, las órdenes de dibujo habituales modifican el búfer gráfico; `FRAME` presenta inmediatamente la imagen terminada. El búfer también se presenta al acabar el programa y con órdenes de actualización visible explícita, como `CLG` y `SCREEN`. En modo inmediato, el dibujo se muestra directamente.
+- En un programa en ejecución, las órdenes de dibujo habituales y `SCREEN graphics$` modifican el búfer gráfico; `FRAME` presenta inmediatamente la imagen terminada. El búfer también se presenta al acabar el programa y con órdenes de actualización visible explícita, como `CLG`. En modo inmediato, el dibujo se muestra directamente.
   • Usa `FRAME` después de completar el dibujo de cada fotograma de una animación.
   • Durante `DEBUG`, el búfer gráfico también se presenta en cada pausa del depurador (véanse las «Notas sobre DEBUG»). Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS.
 - `CLG` borra y presenta inmediatamente el viewport activo. En bucles de
@@ -750,6 +751,8 @@ Notas rápidas (trazado)
 + FRECTANGLE x0,y0,x1,y1[,c]        Rectángulo relleno.
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triángulo (contorno).
 + FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Triángulo relleno.
++ GTRIANGLE D,x0,y0,q0,r0,g0,b0,x1,y1,q1,r1,g1,b1,x2,y2,q2,r2,g2,b2
+                                      Triángulo Gouraud con buffer de profundidad.
 + TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
                                       Rectángulo relleno texturado.
 + TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
@@ -772,6 +775,34 @@ Notas rápidas (figuras)
 - Las coordenadas de textura hacen wrap automático. `u=0,v=0` es el texel inferior-izquierdo; `u=ancho,v=alto` cubre un tile completo.
 - Si `TRECTANGLE` omite coordenadas UV, mapea un tile completo de la textura sobre el rectángulo.
 - `TTRIANGLE/TQUAD` usan mapeado afín y muestreo por texel más cercano (`floor(u),floor(v)`). Son ideales para efectos 2D rápidos y aproximaciones por malla; no hacen filtrado bilineal ni corrección de perspectiva.
+
+GTRIANGLE: sombreado Gouraud y profundidad
+
+`GTRIANGLE` recibe 19 argumentos: un nombre de array sin índices `D`, seguido de tres vértices con seis valores numéricos cada uno (`x,y,q,r,g,b`). El programa proporciona las posiciones y los colores de los vértices; la orden rellena el triángulo, interpola RGB con corrección de perspectiva y compara cada fragmento con `D`.
+
+- Declara un buffer numérico bidimensional con `DIM D(WIDTH-1,HEIGHT-1)` después de seleccionar el modo de pantalla. Sus dimensiones deben coincidir exactamente con toda la pantalla gráfica, aunque haya un viewport más pequeño activo.
+- Inicialízalo o bórralo con `MAT D=0` antes de dibujar cada frame. `MODE`, `CLG` y `SCREEN` no borran este array BASIC. Si cambian las dimensiones de la pantalla, usa `REDIM D(WIDTH-1,HEIGHT-1)` y bórralo de nuevo.
+- Las coordenadas `x,y` de los vértices son de usuario y respetan `ORIGIN` y `SCALE`, conservando posiciones subpíxel. Los índices del buffer siempre corresponden a píxeles físicos desde la esquina inferior izquierda: `D(x,y)`, con `x=0..WIDTH-1` e `y=0..HEIGHT-1`, independientemente de `ORIGIN`, `SCALE` y `MAT BASE`.
+- Para dibujar, `q` debe ser positivo; los valores mayores están más cerca del observador. Usa `q=1/z` para una proyección en perspectiva. Si algún vértice tiene `q<=0`, el triángulo completo no dibuja ningún píxel; realiza antes de la llamada cualquier recorte necesario contra el plano cercano.
+- El `q` interpolado sustituye a `D(x,y)` solo cuando está más cerca. Los empates dentro de `1e-9*max(abs(q),abs(D(x,y)),1e-12)` conservan el fragmento ya almacenado.
+- `r,g,b` son canales RGB numéricos separados, normalmente de 0 a 255, no índices de paleta ni valores RGB empaquetados. Tras la interpolación con corrección de perspectiva, los canales se redondean y se limitan a 0..255.
+- Se dibujan ambos órdenes de vértices. El relleno ignora `MASK` y `PENWIDTH`, y el viewport activo recorta tanto las escrituras de color como las de profundidad.
+- Se conserva `INK`. Una ejecución válida deja el cursor gráfico en el último vértice proporcionado `(x2,y2)`, en coordenadas de usuario, incluso si el triángulo queda oculto, es degenerado, está fuera de pantalla o se omite por `q<=0`.
+- Los argumentos y las dimensiones del array se validan antes de escribir el triángulo o actualizar el cursor. Un tipo o unas dimensiones de array incorrectos, o un argumento numérico no finito, producen un error sin dibujar parcialmente el triángulo.
+
+Los ejemplos ejecutables de `samples/` avanzan progresivamente: `g-cube-gouraud.bas` muestra colores interpolados y profundidad, `g-cube-light.bas` añade iluminación por vértices controlada con el ratón y `g-knot-light.bas` ilumina una malla curva generada matemáticamente. `g-shadow.bas` introduce las sombras proyectadas sobre una malla uniforme del suelo, mediante un segundo array de profundidad y visibilidad filtrada. `g-shadow-adaptive.bas` desarrolla la misma escena como ejemplo de optimización: comparte cálculos entre filas y columnas, evita consultas de sombra fuera de los límites del arco proyectado y agrupa celdas del suelo donde no puede aparecer una sombra.
+
+Ejemplo (el segundo triángulo tiene mayor `q` y cubre al primero donde se solapan)
+```basic
+10 SCREEN : MODE 640
+20 DIM D(WIDTH-1,HEIGHT-1)
+30 PAPER 0 : CLG : MAT D=0
+40 GTRIANGLE D,120,70,.5,255,30,30,520,70,.5,30,255,30,320,350,.5,30,30,255
+50 GTRIANGLE D,180,110,1,255,220,40,460,110,1,40,220,255,320,300,1,255,40,220
+60 FRAME
+70 PAUSE 1
+80 SCREEN CLOSE : END
+```
 
 6.4 Colores
 
@@ -798,7 +829,7 @@ Formas equivalentes válidas con `INK` y `PAPER`
 
 Notas rápidas
 - `INK` y `PAPER` son especiales: aceptan tanto un único valor de color como la forma `r,g,b` con tres argumentos separados.
-- En el resto de órdenes gráficas que aceptan color (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.) el color debe llegar como un único valor o expresión.
+- Las órdenes gráficas con un único argumento opcional de color (`PLOT`, `DRAW`, `FILL`, `CIRCLE`, `FCIRCLE`, `RECTANGLE`, `FRECTANGLE`, `TRIANGLE`, `FTRIANGLE`, `SPRITE`, etc.) requieren ese color como un solo valor o expresión. `GTRIANGLE` recibe en cambio tres canales RGB numéricos por vértice (6.3).
 - Por eso son válidos `FILL 320,240,"red"`, `FILL 320,240,RGB("128","128","128")`, `FILL 320,240,RGB$("128,128,128")` o `FILL 320,240,121344`, pero no `FILL 320,240,1,2,1`, que produce `Incorrect number of arguments`.
 - Si prefieres legibilidad, usa `RGB(...)`, `RGB$(...)` o `&HRRGGBB` en lugar de un entero decimal de 24 bits.
 - El sample `g-colors.bas` muestra visualmente varias de estas combinaciones.
@@ -936,30 +967,32 @@ Ejemplo
 
 6.6 Capturas de pantalla y archivos gráficos
 
-+ SCREEN gscr$                  Variable → Ventana gráfica actual
++ SCREEN gscr$                  Variable → Búfer gráfico; FRAME lo muestra en programas
 + gscr$ = SCREEN$               Función. Ventana gráfica actual → variable
 + BSAVE "img.png"[,gscr$]       Pantalla o variable → PNG
 + BLOAD "img.png"[,gscr$]       PNG → pantalla o variable
 
 Notas rápidas
-- `SCREEN$` captura la pantalla en una cadena; `SCREEN var$` vuelca una variable a pantalla.
+- `SCREEN$` captura el búfer gráfico en una cadena; `SCREEN gscr$` restaura la imagen opaca completa en ese búfer.
+- Durante un programa, `SCREEN gscr$` no muestra la imagen inmediatamente. Añade texto u otros dibujos y usa después `FRAME` para presentar la imagen terminada. En modo inmediato se muestra automáticamente, como las demás órdenes de dibujo. `SCREEN` sin argumentos sigue restaurando el estado gráfico por defecto.
+- Ejemplo: `SCREEN gscr$ : LOCATE 2,2 : GPRINT "ESTADO" : FRAME 30` muestra juntos la imagen restaurada y el texto superpuesto.
 - `BSAVE "img.png",gscr$` usa las dimensiones codificadas en la cadena gráfica; `BLOAD "img.png",gscr$` carga el PNG en la cadena conservando sus propias dimensiones. Estas formas no modifican la pantalla principal.
-- `BLOAD "img.png"` y `SCREEN gscr$` exigen que las dimensiones de la imagen/cadena coincidan con el `MODE` activo; en caso contrario dan `Invalid value` sin modificar la pantalla.
+- `BLOAD "img.png"` y `SCREEN gscr$` exigen que las dimensiones de la imagen/cadena coincidan exactamente con el `MODE` activo; en caso contrario dan `Invalid value` sin modificar la pantalla.
 - Los nombres de fichero PNG son expresiones de cadena, como `"img.png"`, `P$` o `P$+".png"`. Las comillas delimitan los literales de cadena; el nombre resultante debe tener la extensión `.png`.
 - BLOAD/BSAVE usan el mismo sistema virtual lógico que los ficheros de programa, incluidos los alias de directorio permitidos (ver 9.3). Se rechazan las rutas absolutas del sistema y las UNC; `..` se limita en la raíz virtual.
 - En modo inmediato, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio virtual actual.
 - Dentro de un programa cargado desde disco, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio del propio programa. Esto no cambia el `CD` actual del usuario.
 
 Ejemplo (medición de restauración rápida de pantallas)
-Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. Ambos PNG están incluidos en `samples/assets` y tienen el tamaño necesario de 640x480. Usa la preparación en la carpeta raíz del paquete indicada en la sección 1. `SCREEN a$` presenta cada imagen directamente; no hace falta añadir `FRAME`. El ejemplo distribuido `samples/g-swap.bas` utiliza la misma técnica.
+Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. Ambos PNG están incluidos en `samples/assets` y tienen el tamaño necesario de 640x480. Usa la preparación en la carpeta raíz del paquete indicada en la sección 1. `SCREEN a$` restaura cada imagen en el búfer; `FRAME` la muestra. El ejemplo distribuido `samples/g-swap.bas` utiliza la misma técnica.
 
 ```basic
 10 SCREEN : MODE 640
-20 BLOAD "samples/assets/z-tree12.png",a$
-30 BLOAD "samples/assets/z-3dplot0.png",b$
+20 BLOAD "samples/assets/cloth-poster.png",a$
+30 BLOAD "samples/assets/anime.png",b$
 40 t=TIME
 50 FOR c=1 TO 1000
-60   SCREEN a$
+60   SCREEN a$ : FRAME
 70   SWAP a$,b$
 80 NEXT c
 90 PRINT 1000/(TIME-t);" fps"

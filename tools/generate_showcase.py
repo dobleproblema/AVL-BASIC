@@ -2,7 +2,8 @@
 
 The source samples are never edited.  For graphical captures, this tool writes
 a short-lived instrumented copy next to the original so relative assets keep
-working, runs it with the graphics window disabled, and removes the copy.
+working, normally runs it with the graphics window disabled, and removes the
+copy. FPS captures can use a real window so FRAME includes its rate limit.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ class Capture:
     inject: tuple[str, ...]
     replace: dict[int, str] = field(default_factory=dict)
     timeout: int = 180
+    windowed: bool = False
 
     @property
     def slug(self) -> str:
@@ -99,6 +101,71 @@ CAPTURES = (
             "334 END",
         ),
         {325: 'GPRINT "AVL-BASIC JELLY  ESC=EXIT" : INK &H44ccff'},
+    ),
+    Capture(
+        "g-cube-gouraud.bas",
+        ('545 BSAVE "showcase/g-cube-gouraud.png" : END',),
+        {310: "REM Capture the initial angle"},
+    ),
+    Capture(
+        "g-animation.bas",
+        (
+            "665 SHOWFRAME=SHOWFRAME+1",
+            "666 IF SHOWFRAME<80 THEN GOTO 670",
+            '667 BSAVE "showcase/g-animation.png" : SCREEN CLOSE : END',
+        ),
+        {410: "REM Capture the initial camera angle"},
+        windowed=True,
+    ),
+    Capture(
+        "g-animation2.bas",
+        (
+            "665 SHOWFRAME=SHOWFRAME+1",
+            "666 IF SHOWFRAME<80 THEN GOTO 670",
+            '667 BSAVE "showcase/g-animation2.png" : SCREEN CLOSE : END',
+        ),
+        {410: "REM Capture the initial light angle"},
+        windowed=True,
+    ),
+    Capture(
+        "g-animation3.bas",
+        (
+            "311 SHOWFRAME=SHOWFRAME+1",
+            "312 IF SHOWFRAME<40 THEN GOTO 320",
+            '313 BSAVE "showcase/g-animation3.png" : SCREEN CLOSE : END',
+        ),
+        {210: "PT=2", 220: "REM Capture the middle of the clip"},
+        windowed=True,
+    ),
+    Capture(
+        "g-cube-light.bas",
+        ('665 BSAVE "showcase/g-cube-light.png" : END',),
+        {230: "REM Fixed light for capture", 310: "REM Capture the initial angle"},
+    ),
+    Capture(
+        "g-knot-light.bas",
+        ('745 BSAVE "showcase/g-knot-light.png" : END',),
+        {370: "REM Fixed light for capture", 430: "REM Capture the initial angle"},
+    ),
+    Capture(
+        "g-shadow.bas",
+        (
+            "1843 SHOWFRAME=SHOWFRAME+1",
+            "1844 IF SHOWFRAME<80 THEN 1850",
+            '1845 BSAVE "showcase/g-shadow.png" : SCREEN CLOSE : END',
+        ),
+        {830: "REM Fixed light for capture"},
+        windowed=True,
+    ),
+    Capture(
+        "g-shadow-adaptive.bas",
+        (
+            "1843 SHOWFRAME=SHOWFRAME+1",
+            "1844 IF SHOWFRAME<80 THEN 1850",
+            '1845 BSAVE "showcase/g-shadow-adaptive.png" : SCREEN CLOSE : END',
+        ),
+        {830: "REM Fixed light for capture"},
+        windowed=True,
     ),
     Capture(
         "g-cube-tquad.bas",
@@ -540,7 +607,8 @@ def main() -> int:
     env["AVL_BASIC_WINDOW"] = "0"
     for capture in CAPTURES:
         if not selected or capture.slug in selected:
-            capture_graphics(executable, capture, env)
+            capture_env = dict(env, AVL_BASIC_WINDOW="1") if capture.windowed else env
+            capture_graphics(executable, capture, capture_env)
     if not selected or "pimachin-modern" in selected:
         capture_console(executable, env)
     if not selected:
