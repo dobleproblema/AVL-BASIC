@@ -88,9 +88,9 @@ not mockups or engine screenshots:
 </tr>
 <tr>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-shadow-adaptive"><img src="samples/showcase/g-shadow-adaptive.png" alt="An arch casts a shadow onto an adaptive floor mesh" width="100%"></a><br>
-  <strong>Adaptive Arch Shadows</strong><br>
-  Finer cast shadows with an adaptive floor mesh and fewer shadow queries.
+  <a href="samples/README.md#highlight-g-shadow-adaptive"><img src="samples/showcase/g-shadow-adaptive.png" alt="An arch casts shadows across the floor under a movable light" width="100%"></a><br>
+  <strong>Arch Shadows</strong><br>
+  Move the light with the mouse and watch the arch cast shadows across the floor.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-maze"><img src="samples/showcase/g-maze.png" alt="Generated maze and solution" width="100%"></a><br>

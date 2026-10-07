@@ -177,9 +177,9 @@ to inspect its BASIC source.
 </td>
 <td width="50%" valign="top">
   <a id="highlight-g-shadow-adaptive"></a>
-  <a href="g-shadow-adaptive.bas"><img src="showcase/g-shadow-adaptive.png" alt="Adaptive Arch Shadows running in AVL BASIC" width="100%"></a><br>
-  <strong>19. Adaptive Arch Shadows</strong><br>
-  An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed.<br>
+  <a href="g-shadow-adaptive.bas"><img src="showcase/g-shadow-adaptive.png" alt="Arch Shadows running in AVL BASIC" width="100%"></a><br>
+  <strong>19. Arch Shadows</strong><br>
+  Move the light with the mouse and watch the arch cast shadows across the floor.<br>
   <sub><strong>Shows:</strong> GTRIANGLE · cast shadows · shared calculations · conservative bounds · adaptive floor mesh</sub><br>
   <code>RUN "/samples/g-shadow-adaptive.bas"</code>
 </td>
@@ -279,7 +279,7 @@ demo.
 | <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
 | <a id="sample-g-knot-light"></a>[`g-knot-light.bas`](g-knot-light.bas) [★](#highlight-g-knot-light) | A nearby mouse-controlled diffuse light shades a smooth tubular knot; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | parametric mesh, smooth normals, MOUSE, GTRIANGLE, depth buffer |
 | <a id="sample-g-shadow"></a>[`g-shadow.bas`](g-shadow.bas) | An introductory cast-shadow example with a mouse-controlled point light, an arch, and a uniform 96 x 96 floor grid; S toggles shadows and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, cast shadows, uniform floor mesh, MOUSE, depth buffers, FRAME |
-| <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) [★](#highlight-g-shadow-adaptive) | An advanced version of the same scene shares calculations along grid rows and columns, skips unreachable shadow queries, and keeps fine floor cells where shadow detail is needed. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
+| <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) [★](#highlight-g-shadow-adaptive) | Move the light with the mouse and watch the arch cast shadows across the floor. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
 | <a id="sample-g-cube2"></a>[`g-cube2.bas`](g-cube2.bas) | Two depth-sorted cubes orbit in opposite phases. | 3D projection, depth sorting, FTRIANGLE |
 | <a id="sample-g-cube3"></a>[`g-cube3.bas`](g-cube3.bas) | Rotating cube fills outlined faces using flood fill. | 3D projection, DRAW, FILL |
 | <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
