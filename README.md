@@ -301,7 +301,7 @@ with a directory outside the HTML output.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`tools/`](tools/): maintainer validation and benchmark tools
+- [`tools/`](tools/): documentation generation and maintainer validation
 - [`samples/`](samples/): 137 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): reproducible runtime captures
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples

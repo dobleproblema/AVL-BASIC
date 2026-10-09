@@ -1432,7 +1432,7 @@ struct SavedSubBindings<'a> {
     name_value: SavedSubName,
     numeric: Vec<(&'a str, Option<f64>)>,
     string: Vec<(&'a str, Option<String>)>,
-    arrays: Vec<(&'a str, Option<ArrayValue>)>,
+    arrays: Vec<(&'a str, SavedArrayBinding)>,
     aliases: Vec<(&'a str, Option<String>)>,
 }
 
@@ -1456,8 +1456,8 @@ impl<'a> SavedSubBindings<'a> {
     fn restore(self, interpreter: &mut Interpreter) {
         restore_numeric_bindings_ref(&mut interpreter.numeric_variables, self.numeric);
         restore_string_bindings_ref(&mut interpreter.string_variables, self.string);
-        restore_array_bindings_ref(&mut interpreter.arrays, self.arrays);
         interpreter.restore_array_alias_bindings(self.aliases);
+        interpreter.restore_array_bindings(self.arrays);
         match self.name_value {
             SavedSubName::Numeric(Some(value)) => {
                 set_numeric_binding_ref(&mut interpreter.numeric_variables, self.name, value);
@@ -1473,6 +1473,12 @@ impl<'a> SavedSubBindings<'a> {
             }
         }
     }
+}
+
+#[derive(Debug)]
+enum SavedArrayBinding {
+    Value(Option<ArrayValue>),
+    Referenced(String),
 }
 
 #[derive(Debug, Clone)]
@@ -3975,7 +3981,6 @@ impl Interpreter {
     #[inline(never)]
     // Give the hot loop its own page-aligned entry, independently of cold code.
     // SAFETY: this function-only PE section is read/execute, never writable.
-    // See tools/benchmarks/CODE-PLACEMENT-2026-09-25.md for measured scope.
     #[cfg_attr(
         all(windows, target_arch = "x86_64", target_env = "msvc"),
         unsafe(link_section = ".avlrun")
@@ -4848,9 +4853,38 @@ impl Interpreter {
         let mut array_elements = self
             .arrays
             .iter()
-            .filter(|(name, _)| !self.array_aliases.contains_key(*name))
+            .filter(|(name, _)| !name.contains('\0') && !self.array_aliases.contains_key(*name))
             .filter_map(|(name, array)| self.debug_array_element(name, array))
             .collect::<Vec<_>>();
+        let mut hidden_sources = Vec::new();
+        for source in self
+            .array_aliases
+            .values()
+            .filter(|name| name.contains('\0'))
+        {
+            if hidden_sources.contains(&source.as_str()) {
+                continue;
+            }
+            hidden_sources.push(source.as_str());
+            if let Some(array) = self.arrays.get(source) {
+                let written_as = array.last_debug_write.as_ref().and_then(|write| {
+                    (self.array_aliases.get(&write.written_as) == Some(source))
+                        .then_some(write.written_as.as_str())
+                });
+                let visible_name = written_as.or_else(|| {
+                    self.array_aliases
+                        .iter()
+                        .filter(|(_, target)| *target == source)
+                        .map(|(alias, _)| alias.as_str())
+                        .min()
+                });
+                if let Some(element) =
+                    visible_name.and_then(|name| self.debug_array_element(name, array))
+                {
+                    array_elements.push(element);
+                }
+            }
+        }
         array_elements.sort_by(|left, right| {
             left.name
                 .to_ascii_uppercase()
@@ -4860,12 +4894,13 @@ impl Interpreter {
         let mut arrays = self
             .arrays
             .iter()
-            .filter(|(name, _)| !self.array_aliases.contains_key(*name))
+            .filter(|(name, _)| !name.contains('\0') && !self.array_aliases.contains_key(*name))
             .map(|(name, array)| self.debug_array_summary(name, None, array))
             .collect::<Vec<_>>();
         for (alias, source_name) in &self.array_aliases {
             if let Some(array) = self.arrays.get(source_name) {
-                arrays.push(self.debug_array_summary(alias, Some(source_name), array));
+                let visible_source = (!source_name.contains('\0')).then_some(source_name.as_str());
+                arrays.push(self.debug_array_summary(alias, visible_source, array));
             }
         }
         arrays.sort_by(|left, right| {
@@ -5764,10 +5799,9 @@ impl Interpreter {
                         Ok(())
                     }
                     FastNumericScalarRhs::SelfUpdate(update) => {
-                        if self.array_aliases.is_empty()
-                            && self.active_functions.is_empty()
-                            && self.function_call_stack.is_empty()
-                        {
+                        // SUB array aliases do not change scalar bindings. FN
+                        // expressions still require their array/type checks.
+                        if self.function_call_stack.is_empty() {
                             self.execute_cached_numeric_scalar_update(target, target_slot, update)
                         } else {
                             self.execute_compiled_assignment(compiled.fallback())
@@ -6939,7 +6973,7 @@ impl Interpreter {
             }
         }
         let key = self.array_lookup_key(name);
-        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
+        let indexes = self.normalize_array_indexes_for_key(key.as_ref(), raw_indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
             let array = ArrayValue::try_new(key.as_ref(), dims)
@@ -6973,7 +7007,7 @@ impl Interpreter {
         {
             self.return_value_for_active_function(name, &Value::number(value));
         } else {
-            self.set_numeric_variable(name, value);
+            self.numeric_variables.insert_cached(name, slot, value);
         }
     }
 
@@ -6986,15 +7020,28 @@ impl Interpreter {
         if self.function_call_stack.is_empty() {
             return Ok(self.numeric_variables.get_cached(name, slot).unwrap_or(0.0));
         }
-        self.get_number_variable(name)
+        self.get_cached_fn_number_variable(name, slot)
     }
 
-    fn set_numeric_variable(&mut self, name: &str, value: f64) {
-        if let Some(slot) = self.numeric_variables.get_mut(name) {
-            *slot = value;
-        } else {
-            self.numeric_variables.insert(name.to_string(), value);
+    // Keep FN scope/type handling out of the ordinary expression evaluator.
+    #[inline(never)]
+    fn get_cached_fn_number_variable(
+        &mut self,
+        name: &str,
+        slot: &CachedNumericSlot,
+    ) -> BasicResult<f64> {
+        if let Some(value) = self.active_function_return_value(name) {
+            return value.as_number();
         }
+        // Cached slots track presence across parameter/LOCAL restoration. An
+        // absent scalar can still denote a whole array inside an FN expression.
+        if let Some(value) = self.numeric_variables.get_cached(name, slot) {
+            return Ok(value);
+        }
+        if self.array_exists(name) {
+            return Err(BasicError::new(ErrorCode::TypeMismatch));
+        }
+        Ok(0.0)
     }
 
     fn invalidate_texture_cache_for(&mut self, name: &str) {
@@ -7862,7 +7909,7 @@ impl Interpreter {
                 .map(|arg| self.eval_number(&arg).map(|n| n as i32))
                 .collect::<BasicResult<Vec<_>>>()?;
             let key = self.array_lookup_key(&name);
-            let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes)?;
+            let indexes = self.normalize_array_indexes_for_key(key.as_ref(), indexes)?;
             if !self.arrays.contains_key(key.as_ref()) {
                 let dims = vec![10; indexes.len()];
                 let array = ArrayValue::try_new(key.as_ref(), dims)
@@ -7991,7 +8038,7 @@ impl Interpreter {
             });
         }
         let key = self.array_lookup_key(name);
-        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), raw_indexes.to_vec())?;
+        let indexes = self.normalize_array_indexes_for_key(key.as_ref(), raw_indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
             let dims = vec![10; indexes.len()];
             let array = ArrayValue::try_new(key.as_ref(), dims)
@@ -8122,13 +8169,13 @@ impl Interpreter {
         self.get_variable(&upper)
     }
 
-    fn normalize_array_indexes_for_name(
+    fn normalize_array_indexes_for_key(
         &self,
-        name: &str,
+        key: &str,
         indexes: Vec<i32>,
     ) -> BasicResult<Vec<i32>> {
         if indexes.len() == 2 {
-            if let Some(array) = self.array_ref(name) {
+            if let Some(array) = self.arrays.get(key) {
                 if array.dims.len() == 1 {
                     if indexes[1] == self.mat_base {
                         return Ok(vec![indexes[0]]);
@@ -8186,6 +8233,62 @@ impl Interpreter {
         }
         if changed {
             self.arrays.invalidate_cached_slots();
+        }
+    }
+
+    fn save_local_array_binding<'a>(
+        &mut self,
+        saved: &mut Vec<(&'a str, SavedArrayBinding)>,
+        name: &'a str,
+    ) {
+        if saved.iter().any(|(existing, _)| *existing == name) {
+            return;
+        }
+        // A LOCAL name hides a binding, but existing reference parameters must
+        // keep the original array, including any writes made through them.
+        if self.array_aliases.values().any(|source| source == name) {
+            let suffix = if name.ends_with('$') { "$" } else { "" };
+            let mut storage_key = format!("{name}\0LOCAL{suffix}");
+            let mut depth = 0;
+            while self.arrays.contains_key(&storage_key) {
+                depth += 1;
+                storage_key = format!("{name}\0LOCAL:{depth}{suffix}");
+            }
+            if let Some(array) = self.arrays.remove(name) {
+                self.arrays.insert(storage_key.clone(), array);
+            }
+            for source in self.array_aliases.values_mut() {
+                if source == name {
+                    *source = storage_key.clone();
+                }
+            }
+            self.arrays.invalidate_cached_slots();
+            saved.push((name, SavedArrayBinding::Referenced(storage_key)));
+        } else {
+            saved.push((name, SavedArrayBinding::Value(self.arrays.remove(name))));
+        }
+    }
+
+    fn restore_array_bindings(&mut self, saved: Vec<(&str, SavedArrayBinding)>) {
+        for (name, binding) in saved {
+            let value = match binding {
+                SavedArrayBinding::Value(value) => value,
+                SavedArrayBinding::Referenced(storage_key) => {
+                    let value = self.arrays.remove(&storage_key);
+                    for source in self.array_aliases.values_mut() {
+                        if *source == storage_key {
+                            *source = name.to_string();
+                        }
+                    }
+                    self.arrays.invalidate_cached_slots();
+                    value
+                }
+            };
+            if let Some(value) = value {
+                set_array_binding_ref(&mut self.arrays, name, value);
+            } else {
+                self.arrays.remove(name);
+            }
         }
     }
 
@@ -8269,7 +8372,7 @@ impl Interpreter {
             }
         }
         let key = self.array_lookup_key(name);
-        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        let indexes = self.normalize_array_indexes_for_key(key.as_ref(), indexes.to_vec())?;
         if self.arrays.get_resolved(resolved).is_none() {
             let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
                 .map_err(|error| self.with_current_line(error))?;
@@ -13865,7 +13968,7 @@ impl EvalContext for Interpreter {
                     return array.get(indexes);
                 }
             }
-            let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+            let indexes = self.normalize_array_indexes_for_key(name, indexes.to_vec())?;
             if !self.arrays.contains_key(name) {
                 let array = ArrayValue::try_new(name, vec![10; indexes.len()])
                     .map_err(|error| self.with_current_line(error))?;
@@ -13884,7 +13987,7 @@ impl EvalContext for Interpreter {
                 return array.get(indexes);
             }
         }
-        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        let indexes = self.normalize_array_indexes_for_key(key.as_ref(), indexes.to_vec())?;
         if !self.arrays.contains_key(key.as_ref()) {
             let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
                 .map_err(|error| self.with_current_line(error))?;
@@ -13904,7 +14007,7 @@ impl EvalContext for Interpreter {
                     return array.get_number(indexes);
                 }
             }
-            let indexes = self.normalize_array_indexes_for_name(name, indexes.to_vec())?;
+            let indexes = self.normalize_array_indexes_for_key(name, indexes.to_vec())?;
             if !self.arrays.contains_key(name) {
                 let array = ArrayValue::try_new(name, vec![10; indexes.len()])
                     .map_err(|error| self.with_current_line(error))?;
@@ -13923,7 +14026,7 @@ impl EvalContext for Interpreter {
                 return array.get_number(indexes);
             }
         }
-        let indexes = self.normalize_array_indexes_for_name(key.as_ref(), indexes.to_vec())?;
+        let indexes = self.normalize_array_indexes_for_key(key.as_ref(), indexes.to_vec())?;
         if !self.arrays.contains_key(key.as_ref()) {
             let array = ArrayValue::try_new(key.as_ref(), vec![10; indexes.len()])
                 .map_err(|error| self.with_current_line(error))?;
@@ -13934,6 +14037,15 @@ impl EvalContext for Interpreter {
     }
 
     fn array_reference(&mut self, name: &str) -> Option<Value> {
+        if self.numeric_variables.contains_key(name)
+            || self.string_variables.contains_key(name)
+            || matches!(
+                self.active_function_return_value(name),
+                Some(Value::Number(_) | Value::Str(_))
+            )
+        {
+            return None;
+        }
         self.array_exists(name)
             .then(|| Value::ArrayRef(self.array_lookup_key(name).into_owned()))
     }
@@ -14434,14 +14546,15 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let Some(mut array) = self.array_ref(&source).cloned() else {
+                    let Some(array) = self.arrays.get(&source) else {
                         return Err(self.err(ErrorCode::Undefined));
                     };
                     if param.ends_with('$') != array.is_string() {
                         return Err(self.err(ErrorCode::TypeMismatch));
                     }
-                    array.clear_debug_write();
-                    set_array_binding_ref(&mut self.arrays, param, array);
+                    // Argument evaluation already resolved the caller's alias.
+                    // Re-resolving here would confuse crossed formal names.
+                    self.set_array_alias_binding(param, source);
                 }
             }
         }
@@ -14453,7 +14566,7 @@ impl Interpreter {
         local_specs: &'a [LocalSpec],
         saved_numeric: &mut Vec<(&'a str, Option<f64>)>,
         saved_string: &mut Vec<(&'a str, Option<String>)>,
-        saved_arrays: &mut Vec<(&'a str, Option<ArrayValue>)>,
+        saved_arrays: &mut Vec<(&'a str, SavedArrayBinding)>,
         saved_aliases: &mut Vec<(&'a str, Option<String>)>,
     ) -> BasicResult<()> {
         for spec in local_specs {
@@ -14480,7 +14593,7 @@ impl Interpreter {
                         .map_err(|error| self.with_current_line(error))?;
                     save_array_alias_binding_ref(&self.array_aliases, saved_aliases, name);
                     self.remove_array_alias_binding(name);
-                    save_array_binding_ref(&self.arrays, saved_arrays, name);
+                    self.save_local_array_binding(saved_arrays, name);
                     set_array_binding_ref(&mut self.arrays, name, array);
                 }
             }
@@ -14541,15 +14654,24 @@ impl Interpreter {
 
     fn eval_sub_call_argument(&mut self, expr: &str) -> BasicResult<Value> {
         let trimmed = expr.trim();
-        let upper = trimmed.to_ascii_uppercase();
-        if is_basic_identifier(&upper)
-            && self.array_exists(&upper)
-            && !self.numeric_variables.contains_key(&upper)
-            && !self.string_variables.contains_key(&upper)
-        {
-            return Ok(Value::ArrayRef(self.array_lookup_key(&upper).into_owned()));
+        let compiled = if let Some(compiled) = self.expression_cache.get(trimmed) {
+            compiled.clone()
+        } else {
+            let compiled = Rc::new(
+                compile_expression(trimmed).map_err(|error| self.with_current_line(error))?,
+            );
+            self.expression_cache
+                .insert(trimmed.to_string(), compiled.clone());
+            compiled
+        };
+        // Grouping parentheses disappear in the expression tree. They do not
+        // turn a whole-array SUB argument into a scalar or a private copy.
+        if let Expr::Var(name) = compiled.as_ref() {
+            if let Some(value) = self.array_reference(name) {
+                return Ok(value);
+            }
         }
-        self.eval_value(trimmed)
+        eval_compiled(self, compiled.as_ref()).map_err(|error| self.with_current_line(error))
     }
 
     fn eval_compiled_sub_call_argument(
@@ -14614,8 +14736,7 @@ impl Interpreter {
                     set_string_binding_ref(&mut self.string_variables, param, s);
                 }
                 Value::ArrayRef(source) => {
-                    let source_key = self.array_lookup_key(&source);
-                    let Some(array) = self.arrays.get(source_key.as_ref()) else {
+                    let Some(array) = self.arrays.get(&source) else {
                         saved.restore(self);
                         return Err(self.err(ErrorCode::Undefined));
                     };
@@ -14628,7 +14749,7 @@ impl Interpreter {
                     save_array_alias_binding_ref(&self.array_aliases, &mut saved.aliases, param);
                     self.numeric_variables.remove(param);
                     self.string_variables.remove(param);
-                    self.set_array_alias_binding(param, source_key.into_owned());
+                    self.set_array_alias_binding(param, source);
                 }
             }
         }
@@ -14684,34 +14805,47 @@ impl Interpreter {
         args: Vec<Value>,
         start: Cursor,
     ) -> BasicResult<Value> {
+        let references_previous_return = args
+            .iter()
+            .any(|arg| matches!(arg, Value::ArrayRef(source) if source == name.as_ref()));
         let mut saved_numeric: Vec<(&str, Option<f64>)> = Vec::with_capacity(params.len() + 1);
         let mut saved_string: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len() + 1);
-        let mut saved_arrays: Vec<(&str, Option<ArrayValue>)> =
-            Vec::with_capacity(params.len() + 1);
+        let mut saved_arrays: Vec<(&str, SavedArrayBinding)> = Vec::with_capacity(params.len() + 1);
         let mut saved_aliases: Vec<(&str, Option<String>)> = Vec::with_capacity(params.len() + 1);
-        for param in params {
+        for (param, arg) in params.iter().zip(&args) {
             if param.ends_with('$') {
                 save_string_binding_ref(&self.string_variables, &mut saved_string, param);
             } else {
                 save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, param);
             }
-            save_array_binding_ref(&self.arrays, &mut saved_arrays, param);
+            if matches!(arg, Value::ArrayRef(_)) {
+                save_array_alias_binding_ref(&self.array_aliases, &mut saved_aliases, param);
+            }
         }
         if name.ends_with('$') {
             save_string_binding_ref(&self.string_variables, &mut saved_string, name.as_ref());
         } else {
             save_numeric_binding_ref(&self.numeric_variables, &mut saved_numeric, name.as_ref());
         }
-        save_array_binding_ref(&self.arrays, &mut saved_arrays, name.as_ref());
+        if !references_previous_return {
+            save_array_binding_ref(&self.arrays, &mut saved_arrays, name.as_ref());
+        }
 
         self.function_call_stack.push(name.clone());
         if let Err(err) = self.bind_function_args_vec(&params, args) {
             self.function_call_stack.pop();
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
-            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
             self.restore_array_alias_bindings(saved_aliases);
+            self.restore_array_bindings(saved_arrays);
             return Err(err);
+        }
+        if references_previous_return {
+            // A function can receive its previous array result as an argument.
+            // Its new return value must not share storage with that argument.
+            save_array_alias_binding_ref(&self.array_aliases, &mut saved_aliases, name.as_ref());
+            self.remove_array_alias_binding(name.as_ref());
+            self.save_local_array_binding(&mut saved_arrays, name.as_ref());
         }
         if let Err(err) = self.bind_local_specs_vec(
             &local_specs,
@@ -14723,8 +14857,8 @@ impl Interpreter {
             self.function_call_stack.pop();
             restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
             restore_string_bindings_ref(&mut self.string_variables, saved_string);
-            restore_array_bindings_ref(&mut self.arrays, saved_arrays);
             self.restore_array_alias_bindings(saved_aliases);
+            self.restore_array_bindings(saved_arrays);
             return Err(err);
         }
 
@@ -14765,8 +14899,8 @@ impl Interpreter {
 
         restore_numeric_bindings_ref(&mut self.numeric_variables, saved_numeric);
         restore_string_bindings_ref(&mut self.string_variables, saved_string);
-        restore_array_bindings_ref(&mut self.arrays, saved_arrays);
         self.restore_array_alias_bindings(saved_aliases);
+        self.restore_array_bindings(saved_arrays);
         run_result?;
         if let Some(array) = return_array {
             let array_name = name.to_string();
@@ -14781,6 +14915,38 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn repeated_local_shadowing_reuses_reference_storage() {
+        let mut interp = Interpreter::new();
+        interp
+            .program
+            .load_text(
+                "10 DIM source(0):source(0)=5\n\
+             20 FOR iteration=1 TO 200\n\
+             30 result=FNTouch(source)\n\
+             40 NEXT iteration\n\
+             50 END\n\
+             100 DEF FNTouch(items)\n\
+             110 LOCAL source(0)\n\
+             120 items(0)=items(0)+1:source(0)=999\n\
+             130 FNTouch=items(0)\n\
+             140 FNEND",
+            )
+            .unwrap();
+        interp.run_loaded().unwrap();
+        assert_eq!(
+            interp
+                .array_ref("SOURCE")
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap(),
+            205.0
+        );
+        assert!(interp.array_aliases.is_empty());
+        assert_eq!(interp.arrays.slots.len(), 2);
+        assert_eq!(interp.arrays.iter().count(), 1);
+    }
 
     #[test]
     fn axis_omitted_and_empty_spacing_is_automatic_while_zero_and_negative_stay_explicit() {
@@ -17315,6 +17481,93 @@ mod interpreter_tests {
     }
 
     #[test]
+    fn cached_fn_numeric_reads_preserve_types_and_rebound_scalar_slots() {
+        let mut interp = Interpreter::new();
+        let name = Rc::<str>::from("FNWORK");
+        interp.function_call_stack.push(name.clone());
+        interp.active_functions.push(ActiveFunctionFrame {
+            name,
+            return_value: None,
+        });
+        let slot = CachedNumericSlot::default();
+
+        assert_eq!(
+            interp.get_fast_number_variable("VALUE", &slot).unwrap(),
+            0.0
+        );
+        assert_eq!(interp.numeric_variables.get("VALUE"), None);
+        interp
+            .arrays
+            .insert("SOURCE".to_string(), ArrayValue::new("SOURCE", vec![0]));
+        interp.set_array_alias_binding("VALUE", "SOURCE".to_string());
+        let fast_error = interp.get_fast_number_variable("VALUE", &slot).unwrap_err();
+        let normal_error = interp.get_number_variable("VALUE").unwrap_err();
+        assert_eq!(fast_error.code, ErrorCode::TypeMismatch);
+        assert_eq!(fast_error.code, normal_error.code);
+
+        for value in [7.0, 0.0, 12.0] {
+            interp.assign_numeric_scalar_target("VALUE", &slot, value);
+            assert_eq!(
+                interp.get_fast_number_variable("VALUE", &slot).unwrap(),
+                value
+            );
+            assert_eq!(interp.get_number_variable("VALUE").unwrap(), value);
+        }
+        interp.numeric_variables.remove("VALUE");
+        assert_eq!(
+            interp
+                .get_fast_number_variable("VALUE", &slot)
+                .unwrap_err()
+                .code,
+            ErrorCode::TypeMismatch
+        );
+
+        let return_slot = CachedNumericSlot::default();
+        interp.active_functions[0].return_value = Some(Value::number(23.0));
+        assert_eq!(
+            interp
+                .get_fast_number_variable("FNWORK", &return_slot)
+                .unwrap(),
+            23.0
+        );
+        interp.active_functions[0].return_value = Some(Value::ArrayRef("SOURCE".to_string()));
+        assert_eq!(
+            interp
+                .get_fast_number_variable("FNWORK", &return_slot)
+                .unwrap_err()
+                .code,
+            ErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn cached_sub_scalar_updates_preserve_same_named_array_aliases() {
+        let (optimized, reference) = compile_numeric_update_pair("ITEMS=ITEMS+3");
+        let run = |fast_update: bool| {
+            let mut interp = Interpreter::new();
+            let mut source = ArrayValue::new("SOURCE", vec![0]);
+            source.set_number_direct_1d(0, 5.0).unwrap();
+            interp.arrays.insert("SOURCE".to_string(), source);
+            interp.set_array_alias_binding("ITEMS", "SOURCE".to_string());
+            if fast_update {
+                execute_numeric_assignment_candidate(&mut interp, &optimized).unwrap();
+            } else {
+                interp
+                    .execute_compiled_assignment(reference.as_ref())
+                    .unwrap();
+            }
+            (
+                interp.numeric_variables.get("ITEMS").copied(),
+                interp.array_ref("ITEMS").unwrap().get_number(&[0]).unwrap(),
+                interp.array_aliases.get("ITEMS").cloned(),
+            )
+        };
+        let fast = run(true);
+        assert_eq!(fast, (Some(3.0), 5.0, Some("SOURCE".to_string())));
+        assert_eq!(fast, run(false));
+    }
+
+    #[test]
     fn fast_numeric_scalar_expr_matches_normal_for_active_function_return() {
         let (optimized, reference) = compile_numeric_assignment_pair("FNACC=V+3");
         assert!(matches!(
@@ -17667,8 +17920,8 @@ mod interpreter_tests {
                 .unwrap();
 
             interp.active_subs.pop();
-            restore_array_bindings_ref(&mut interp.arrays, saved_arrays);
             interp.restore_array_alias_bindings(saved_aliases);
+            interp.restore_array_bindings(saved_arrays);
             let restored = interp
                 .array_ref("A")
                 .unwrap()
@@ -19641,13 +19894,13 @@ fn save_string_binding_ref<'a>(
 
 fn save_array_binding_ref<'a>(
     arrays: &ArrayVariables,
-    saved: &mut Vec<(&'a str, Option<ArrayValue>)>,
+    saved: &mut Vec<(&'a str, SavedArrayBinding)>,
     name: &'a str,
 ) {
     if saved.iter().any(|(existing, _)| *existing == name) {
         return;
     }
-    saved.push((name, arrays.get(name).cloned()));
+    saved.push((name, SavedArrayBinding::Value(arrays.get(name).cloned())));
 }
 
 fn save_array_alias_binding_ref<'a>(
@@ -19680,16 +19933,6 @@ fn restore_string_bindings_ref(
             set_string_binding_ref(variables, name, value);
         } else {
             variables.remove(name);
-        }
-    }
-}
-
-fn restore_array_bindings_ref(arrays: &mut ArrayVariables, saved: Vec<(&str, Option<ArrayValue>)>) {
-    for (name, value) in saved {
-        if let Some(value) = value {
-            set_array_binding_ref(arrays, name, value);
-        } else {
-            arrays.remove(name);
         }
     }
 }
@@ -20536,12 +20779,14 @@ fn compile_call_statement(source: &str) -> BasicResult<CompiledCall> {
         .into_iter()
         .map(|source| {
             let trimmed = source.trim();
-            let upper = trimmed.to_ascii_uppercase();
             let expr = compile_expression(trimmed)?;
             let fast_numeric = compile_fast_number_expr(&expr, true);
+            let array_candidate = match &expr {
+                Expr::Var(name) => Some(Rc::<str>::from(name.as_str())),
+                _ => None,
+            };
             Ok(CompiledSubCallArgument {
-                array_candidate: is_basic_identifier(&upper)
-                    .then(|| Rc::<str>::from(upper.as_str())),
+                array_candidate,
                 expr,
                 fast_numeric,
             })

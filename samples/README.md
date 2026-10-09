@@ -186,12 +186,12 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-animation3"></a>
-  <a href="g-animation3.bas"><img src="showcase/g-animation3.png" alt="Offline Cloth Animation running in AVL BASIC" width="100%"></a><br>
-  <strong>20. Offline Cloth Animation</strong><br>
-  Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed.<br>
-  <sub><strong>Shows:</strong> BLOAD · SCREEN · playback clock · FRAME</sub><br>
-  <code>RUN "/samples/g-animation3.bas"</code>
+  <a id="highlight-g-cloth-realtime"></a>
+  <a href="g-cloth-realtime.bas"><img src="showcase/g-cloth-realtime.png" alt="Real-Time Cloth running in AVL BASIC" width="100%"></a><br>
+  <strong>20. Real-Time Cloth</strong><br>
+  Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs.<br>
+  <sub><strong>Shows:</strong> XPBD · GTRIANGLE · fixed-step physics · state interpolation · MOUSE · FRAME</sub><br>
+  <code>RUN "/samples/g-cloth-realtime.bas"</code>
 </td>
 <td width="50%"></td>
 </tr>
@@ -214,7 +214,7 @@ python tools/generate_showcase.py
 - **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.
 - **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.
 - **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.
-- **Simulate cloth offline, then play its PNG frames:** `g-cloth-render.bas` → `g-animation3.bas`.
+- **Watch and interact with falling cloth:** `g-cloth-realtime.bas`; pause the simulation, restart the fall, or pull the fabric with the mouse.
 - **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →
   `g-zoomer-tquad.bas`.
 - **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.
@@ -273,7 +273,7 @@ demo.
 |---|---|---|
 | <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
 | <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
-| <a id="sample-g-cloth-render"></a>[`g-cloth-render.bas`](g-cloth-render.bas) | Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints. | XPBD, fixed substeps, GTRIANGLE, filtered shadows, FRAME, BSAVE, checkpoints |
+| <a id="sample-g-cloth-realtime"></a>[`g-cloth-realtime.bas`](g-cloth-realtime.bas) [★](#highlight-g-cloth-realtime) | Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs. | XPBD, GTRIANGLE, fixed-step physics, state interpolation, MOUSE, FRAME |
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
 | <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; Z toggles depth, SPACE pauses rotation, and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, RGB interpolation, array depth buffer |
 | <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
@@ -374,8 +374,8 @@ demo.
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
-| <a id="sample-g-animation3"></a>[`g-animation3.bas`](g-animation3.bas) [★](#highlight-g-animation3) | Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed. | BLOAD, SCREEN, playback clock, FRAME |
 | <a id="sample-g-balls"></a>[`g-balls.bas`](g-balls.bas) [★](#highlight-g-balls) | Fifty numbered sprites bounce and collide without full clears. | sprite collisions, dirty redraw, COLMODE |
+| <a id="sample-g-png-animation"></a>[`g-png-animation.bas`](g-png-animation.bas) | A short anime dance loops from preloaded PNG frames. | BLOAD, string arrays, SCREEN, FRAME |
 | <a id="sample-g-sprite"></a>[`g-sprite.bas`](g-sprite.bas) | Captures and redraws one sprite with transparency variants. | SPRITE$, SPRITE, transparency |
 | <a id="sample-g-sprite2"></a>[`g-sprite2.bas`](g-sprite2.bas) | Repeats sprite transparency inside a scaled viewport. | SPRITE$, ORIGIN, transparency |
 | <a id="sample-g-sprite3"></a>[`g-sprite3.bas`](g-sprite3.bas) | Benchmarks many randomly placed transparent sprites. | SPRITE$, RND, FRAME |

@@ -26,7 +26,7 @@ g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh
 g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
 g-animation.bas	3D, lighting, and texture mapping		Real-Time Surface Animation	A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap.	GTRIANGLE;procedural mesh;camera rotation;vertex lighting;FRAME
 g-animation2.bas	3D, lighting, and texture mapping	7	Real-Time Moving Light	A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap.	GTRIANGLE;procedural mesh;moving light;vertex lighting;FRAME
-g-cloth-render.bas	3D, lighting, and texture mapping		Offline Cloth Renderer	Preview satin cloth over a sphere with progressive triangle rendering, optional PNG export, configurable ranges, and reusable physical checkpoints.	XPBD;fixed substeps;GTRIANGLE;filtered shadows;FRAME;BSAVE;checkpoints
+g-cloth-realtime.bas	3D, lighting, and texture mapping	20	Real-Time Cloth	Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs.	XPBD;GTRIANGLE;fixed-step physics;state interpolation;MOUSE;FRAME
 g-cube.bas	3D, lighting, and texture mapping		Rotating Cube	Filled rotating cube with hidden-face removal.	3D projection;back-face culling;FTRIANGLE
 g-cube-gouraud.bas	3D, lighting, and texture mapping		Interpolated Cube	One rotating cube combines interpolated corner colors and hidden-face removal; Z toggles depth, SPACE pauses rotation, and C toggles the 60 FPS cap, with measured FPS in the HUD.	GTRIANGLE;RGB interpolation;array depth buffer
 g-cube-light.bas	3D, lighting, and texture mapping		Mouse-Controlled Cube Light	A mouse-controlled diffuse light shades a rotating cube; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD.	MOUSE;Lambert lighting;GTRIANGLE;depth buffer
@@ -102,8 +102,8 @@ g-locate.bas	Text and typography		Cursor and Font Test	Mixes font sizes, cursor 
 g-strings.bas	Text and typography		Colored Text Modes	Compares colored opaque and transparent text output.	INK and PAPER;font modes;LABEL
 g-text.bas	Text and typography		Substring Text Scroll	Scrolls numeric text by changing its substring offset.	GPRINT;MID$;font modes
 g-usflag.bas	Text and typography		Text-Cell Flag	Draws a text-cell United States flag.	LOCATE;GPRINT;PAPER
-g-animation3.bas	Sprites, images, and frame animation	20	Offline Cloth Animation	Play 120 precalculated cloth frames at 30 FPS; SPACE pauses, R replays, and C toggles the cap while the playback clock preserves motion speed.	BLOAD;SCREEN;playback clock;FRAME
 g-balls.bas	Sprites, images, and frame animation	14	Colliding Balls	Fifty numbered sprites bounce and collide without full clears.	sprite collisions;dirty redraw;COLMODE
+g-png-animation.bas	Sprites, images, and frame animation		PNG Dance Animation	A short anime dance loops from preloaded PNG frames.	BLOAD;string arrays;SCREEN;FRAME
 g-sprite.bas	Sprites, images, and frame animation		Sprite Transparency	Captures and redraws one sprite with transparency variants.	SPRITE$;SPRITE;transparency
 g-sprite2.bas	Sprites, images, and frame animation		Scaled Sprite Transparency	Repeats sprite transparency inside a scaled viewport.	SPRITE$;ORIGIN;transparency
 g-sprite3.bas	Sprites, images, and frame animation		Sprite Benchmark	Benchmarks many randomly placed transparent sprites.	SPRITE$;RND;FRAME

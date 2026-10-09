@@ -971,11 +971,12 @@ Quick notes
 - Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.
 
 Example (rapid screen-restoration benchmark)
-This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets` and have the required 640x480 size. Use the package-root setup from section 1. `SCREEN a$` restores each image to the buffer; `FRAME` presents it. The distributed `samples/g-swap.bas` demonstrates the same technique.
+This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets`. The texture is drawn into the 640x480 buffer and captured with `SCREEN$`, so both graphics strings match the active mode. Use the package-root setup from section 1. `SCREEN a$` restores each image to the buffer; `FRAME` presents it. The distributed `samples/g-swap.bas` demonstrates the same technique.
 
 ```basic
-10 SCREEN : MODE 640
-20 BLOAD "samples/assets/cloth-poster.png",a$
+10 SCREEN : MODE 640 : PAPER 0 : CLG OFFSCREEN
+20 BLOAD "samples/assets/texture.png",a$
+25 SPRITE a$,0,0 : SPRITE a$,480,0 : a$=SCREEN$
 30 BLOAD "samples/assets/anime.png",b$
 40 t=TIME
 50 FOR c=1 TO 1000
@@ -1831,20 +1832,22 @@ executing its body.
 
 + DEF FNname(arg,...)=expr  Single-line function
 + DEF FNname(arg,...)  Multiline function
-  - All `DEF FN` parameters are local and passed by value; in multiline functions arrays are copied locally, and in single-line functions arrays are not accepted as arguments.
+  - Scalar and text parameters, including array elements and expression results, are local and passed by value. Multiline functions receive whole arrays by reference; single-line functions do not accept arrays.
   - The identifier that follows `FN` may reuse the name of a built-in function. For example, `DEF FNSIN=125` and `DEF FNSUM(X)=X+1` are valid.
   - After the `DEF FN` line, the body statements are written as normal BASIC lines.
   - The block must be closed with `FNEND`. If it is missing, the interpreter warns with "Function badly defined".
-  - The arguments act as local variables: they are restored on exit and may be text if they end in `$`.
+  - Parameter names are local: their previous bindings are restored on exit. Text parameters end in `$`.
   - Single-line functions only accept scalar arguments and may only return scalars.
-  - In a multiline function, an argument may receive a whole array. In that case a local copy of the array is created for that parameter.
-  - Changes to that local array parameter, including `REDIM` or `MAT A=...`, only affect the local copy and never the caller's original array.
+  - In a multiline function, an argument may receive a whole array. The parameter acts as a local alias passed by reference to the caller's original array, just as in a SUB.
+  - Grouping parentheses preserve that whole-array reference: `FNREAD(A)`, `FNREAD((A))`, and `FNREAD(((A)))` pass the same caller array when no scalar `A` exists. Parentheses do not select a passing mode.
+  - Changes to that array parameter, including `REDIM` or `MAT A=...`, modify the caller's original array.
+  - For private calculations on a vector or matrix, declare a local array and copy the input with `MAT Temp=A` before modifying it.
   - A multiline function may start with one or more `LOCAL` statements. `LOCAL` is only allowed as part of the initial body block.
   - `LOCAL A,B$,D(10)` declares local scalar or string variables, initialized to `0` or `""`, and local arrays with their own storage. All those locals are restored or disappear when the function exits.
-  - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. Parentheses are only used to access array elements (`A` is the scalar, `A(3)` or `A(I)` are array elements). There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
+  - If a scalar and an array share the same base name, both `A` and a grouped identifier such as `(A)` refer to the scalar. Indexed forms such as `A(3)` or `A(I)` access array elements; grouping parentheses do not change how an argument is passed. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - To return a numeric or text value, assign to `FNNAME` or use `LET FNNAME = ...`; otherwise, 0 or an empty string is returned.
   - `EXIT FN` leaves the function before reaching `FNEND`. `FNEXIT` is an alias. `EXIT FN` does not accept an expression: the function returns whatever value has already been assigned to its name at that point.
-  - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`.
+  - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`. Modifying the returned array does not modify an input array.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
   - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
@@ -1878,7 +1881,7 @@ Using the function name as a local variable
 70 PRINT FNF(5)
 ```
 
-Array parameters as a local copy
+Array parameters by reference
 ```basic
 10 DIM T(15)
 20 T(12)=3
@@ -1887,7 +1890,21 @@ Array parameters as a local copy
 50 FNSET=A(I)
 60 FNEND
 70 PRINT FNSET(T,12,8) : REM -> 8
-80 PRINT T(12)         : REM -> 3
+80 PRINT T(12)         : REM -> 8
+```
+
+Using a local copy for private calculations
+```basic
+10 DIM T(15)
+20 T(12)=3
+30 DEF FNSETCOPY(A,I,V)
+40 LOCAL Temp(0)
+50 MAT Temp=A
+60 Temp(I)=V
+70 FNSETCOPY=Temp(I)
+80 FNEND
+90 PRINT FNSETCOPY(T,12,8) : REM -> 8
+100 PRINT T(12)           : REM -> 3
 ```
 
 Array return with MAT
@@ -1909,12 +1926,13 @@ Multiline subroutines
   - The block must be closed with `SUBEND`. If it is missing, the interpreter warns with "Subroutine badly defined".
   - `EXIT SUB` leaves the subroutine before reaching `SUBEND`. `SUBEXIT` is an alias.
   - Subroutines do not return a value.
-  - Scalar and text arguments are local and passed by value.
+  - Scalar and text arguments, including array elements and expression results, are local and passed by value.
   - In a multiline subroutine, an argument may receive a whole array. In that case the parameter acts as a local alias passed by reference to the caller's original array.
+  - Grouping parentheses preserve that whole-array reference: `CALL S(A)`, `CALL S((A))`, and `CALL S(((A)))` pass the same caller array when no scalar `A` exists. Parentheses do not change scalar or text arguments into references.
   - Changes to that array parameter, including `REDIM` or `MAT A=...`, modify the caller's original array.
   - A multiline subroutine may start with one or more `LOCAL` statements. `LOCAL` is only allowed as part of the initial body block.
   - `LOCAL A,B$,D(10)` declares local scalar or string variables, initialized to `0` or `""`, and local arrays with their own storage. All those locals are restored or disappear when the subroutine exits.
-  - If a scalar and an array share the same base name, the identifier without parentheses refers to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
+  - If a scalar and an array share the same base name, both `A` and a grouped identifier such as `(A)` refer to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - Inside the block, the subroutine name may be used as a local variable. Its previous value is restored on exit.
   - Indirect calls between subroutines are allowed, but a subroutine may not re-enter itself.
   - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.

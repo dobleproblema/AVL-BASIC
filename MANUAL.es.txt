@@ -984,11 +984,12 @@ Notas rápidas
 - Dentro de un programa cargado desde disco, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio del propio programa. Esto no cambia el `CD` actual del usuario.
 
 Ejemplo (medición de restauración rápida de pantallas)
-Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. Ambos PNG están incluidos en `samples/assets` y tienen el tamaño necesario de 640x480. Usa la preparación en la carpeta raíz del paquete indicada en la sección 1. `SCREEN a$` restaura cada imagen en el búfer; `FRAME` la muestra. El ejemplo distribuido `samples/g-swap.bas` utiliza la misma técnica.
+Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. Ambos PNG están incluidos en `samples/assets`. La textura se dibuja en el búfer de 640x480 y se captura con `SCREEN$`, de modo que ambas cadenas gráficas coinciden con el modo activo. Usa la preparación en la carpeta raíz del paquete indicada en la sección 1. `SCREEN a$` restaura cada imagen en el búfer; `FRAME` la muestra. El ejemplo distribuido `samples/g-swap.bas` utiliza la misma técnica.
 
 ```basic
-10 SCREEN : MODE 640
-20 BLOAD "samples/assets/cloth-poster.png",a$
+10 SCREEN : MODE 640 : PAPER 0 : CLG OFFSCREEN
+20 BLOAD "samples/assets/texture.png",a$
+25 SPRITE a$,0,0 : SPRITE a$,480,0 : a$=SCREEN$
 30 BLOAD "samples/assets/anime.png",b$
 40 t=TIME
 50 FOR c=1 TO 1000
@@ -1848,20 +1849,22 @@ durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
 
 + DEF FNname(arg,...)=expr  Función de una sola línea
 + DEF FNname(arg,...)  Función multilínea
-  - Todos los parámetros de `DEF FN` son locales y se pasan por valor; en las funciones multilínea los arrays se copian localmente, y en las funciones de una sola línea no se admiten arrays como argumentos.
+  - Los parámetros escalares y de texto, incluidos los elementos de arrays y los resultados de expresiones, son locales y se pasan por valor. Las funciones multilínea reciben los arrays completos por referencia; las funciones de una sola línea no admiten arrays.
   - El identificador que sigue a `FN` puede reutilizar el nombre de una función integrada. Por ejemplo, `DEF FNSIN=125` y `DEF FNSUM(X)=X+1` son válidas.
   - Tras la linea DEF FN se escriben las instrucciones del cuerpo como lineas BASIC normales.
   - El bloque debe cerrarse con FNEND. Si falta, el interprete avisara con "Funcion mal definida".
-  - Los argumentos actuan como variables locales: se restauran al salir y pueden ser de texto si terminan en $.
+  - Los nombres de los parámetros son locales: sus vinculaciones anteriores se restauran al salir. Los parámetros de texto terminan en `$`.
   - Las funciones de una sola línea solo admiten argumentos escalares y solo pueden devolver escalares.
-  - En una función multilínea, un argumento puede recibir un array completo. En ese caso se crea una copia local del array para ese parámetro.
-  - Los cambios sobre ese parámetro-array local, incluidos `REDIM` o `MAT A=...`, solo afectan a la copia local y no al array original del llamador.
+  - En una función multilínea, un argumento puede recibir un array completo. El parámetro actúa como alias local por referencia al array original del llamador, igual que en una SUB.
+  - Los paréntesis de agrupación conservan esa referencia al array completo: `FNREAD(A)`, `FNREAD((A))` y `FNREAD(((A)))` pasan el mismo array del llamador si no existe un escalar `A`. Los paréntesis no eligen una forma de paso de parámetros.
+  - Los cambios sobre ese parámetro-array, incluidos `REDIM` o `MAT A=...`, modifican el array original del llamador.
+  - Para hacer cálculos privados sobre un vector o una matriz, declara un array local y copia la entrada con `MAT Temp=A` antes de modificarla.
   - Una función multilínea puede empezar con una o varias instrucciones `LOCAL`. `LOCAL` solo se permite como parte del bloque inicial del cuerpo.
   - `LOCAL A,B$,D(10)` declara variables escalares o de texto locales, inicializadas a `0` o `""`, y arrays locales con almacenamiento propio. Todos esos locales se restauran o desaparecen al salir de la función.
-  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. Los paréntesis solo sirven para acceder a elementos del array (`A` es el escalar, `A(3)` o `A(I)` son elementos del array). No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
+  - Si existen a la vez un escalar y un array con el mismo nombre base, tanto `A` como un identificador agrupado como `(A)` se refieren al escalar. Las formas con índices, como `A(3)` o `A(I)`, acceden a elementos del array; los paréntesis de agrupación no cambian cómo se pasa un argumento. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Para devolver un valor numérico o de texto asigna a FNNAME o usa LET FNNAME = ..., de lo contrario se devuelve 0 o cadena vacía.
   - `EXIT FN` permite salir antes de llegar a `FNEND`. `FNEXIT` es un alias. `EXIT FN` no acepta expresión: la función devuelve el valor que tenga ya asignado su nombre en ese momento.
-  - En una función multilínea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`.
+  - En una función multilínea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`. Modificar el array devuelto no modifica un array de entrada.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una función no puede reentrar en sí misma.
   - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
@@ -1895,7 +1898,7 @@ Uso del nombre de la función como variable local
 70 PRINT FNF(5)
 ```
 
-Parámetros de array como copia local
+Parámetros de array por referencia
 ```basic
 10 DIM T(15)
 20 T(12)=3
@@ -1904,7 +1907,21 @@ Parámetros de array como copia local
 50 FNSET=A(I)
 60 FNEND
 70 PRINT FNSET(T,12,8) : REM -> 8
-80 PRINT T(12)         : REM -> 3
+80 PRINT T(12)         : REM -> 8
+```
+
+Uso de una copia local para cálculos privados
+```basic
+10 DIM T(15)
+20 T(12)=3
+30 DEF FNSETCOPY(A,I,V)
+40 LOCAL Temp(0)
+50 MAT Temp=A
+60 Temp(I)=V
+70 FNSETCOPY=Temp(I)
+80 FNEND
+90 PRINT FNSETCOPY(T,12,8) : REM -> 8
+100 PRINT T(12)           : REM -> 3
 ```
 
 Retorno de array con MAT
@@ -1926,12 +1943,13 @@ Subrutinas multilínea
   - El bloque debe cerrarse con `SUBEND`. Si falta, el interprete avisara con "Subrutina mal definida".
   - `EXIT SUB` permite salir antes de llegar a `SUBEND`. `SUBEXIT` es un alias.
   - Las subrutinas no devuelven valor.
-  - Los argumentos escalares y de texto son locales y se pasan por valor.
+  - Los argumentos escalares y de texto, incluidos los elementos de arrays y los resultados de expresiones, son locales y se pasan por valor.
   - En una subrutina multilínea, un argumento puede recibir un array completo. En ese caso el parámetro actúa como alias local por referencia al array original del llamador.
+  - Los paréntesis de agrupación conservan esa referencia al array completo: `CALL S(A)`, `CALL S((A))` y `CALL S(((A)))` pasan el mismo array del llamador si no existe un escalar `A`. Los paréntesis no convierten los argumentos escalares o de texto en referencias.
   - Los cambios sobre ese parámetro-array, incluidos `REDIM` o `MAT A=...`, modifican el array original del llamador.
   - Una subrutina multilínea puede empezar con una o varias instrucciones `LOCAL`. `LOCAL` solo se permite como parte del bloque inicial del cuerpo.
   - `LOCAL A,B$,D(10)` declara variables escalares o de texto locales, inicializadas a `0` o `""`, y arrays locales con almacenamiento propio. Todos esos locales se restauran o desaparecen al salir de la subrutina.
-  - Si existen a la vez un escalar y un array con el mismo nombre base, el identificador sin paréntesis se refiere al escalar. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
+  - Si existen a la vez un escalar y un array con el mismo nombre base, tanto `A` como un identificador agrupado como `(A)` se refieren al escalar. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
   - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en sí misma.
   - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.

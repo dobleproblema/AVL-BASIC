@@ -40,14 +40,7 @@ def copy_tree(src: Path, dst: Path) -> None:
         "f-scores.csv", "f-records.csv", "f-text.txt",
     )
 
-    def ignore(directory: str, names: list[str]) -> set[str]:
-        excluded = set(ignore_patterns(directory, names))
-        # Generation provenance is useful in source control, not for playback.
-        if Path(directory).resolve() == (ROOT / "samples/assets/cloth").resolve():
-            excluded.add("manifest.json")
-        return excluded
-
-    shutil.copytree(src, dst, ignore=ignore)
+    shutil.copytree(src, dst, ignore=ignore_patterns)
 
 
 def build_html_manuals(destination: Path) -> None:

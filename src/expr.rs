@@ -1262,6 +1262,8 @@ fn eval_call_args(
         .map(|arg| {
             if function.starts_with("FN") {
                 if let Expr::Var(name) = arg {
+                    // Whole-array arguments are available only when this bare
+                    // name does not already denote a visible scalar.
                     if let Some(value) = ctx.array_reference(name) {
                         return Ok(value);
                     }

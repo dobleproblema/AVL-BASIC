@@ -209,9 +209,10 @@ def scenarios(example: Example) -> list[Scenario]:
         "s11-e1": " 31.415926535898\n",
         "s11-e2": "Hello AVL\n",
         "s11-e3": " 120\n",
-        "s11-e4": " 8\n 3\n",
-        "s11-e5": " 3   3\n 3   3\n",
-        "s11-e6": " 5\n 4\n 9\n",
+        "s11-e4": " 8\n 8\n",
+        "s11-e5": " 8\n 3\n",
+        "s11-e6": " 3   3\n 3   3\n",
+        "s11-e7": " 5\n 4\n 9\n",
     }.get(key)
     result = [Scenario("published", source, expected_stdout=expected)]
     if key == "s3-e1":

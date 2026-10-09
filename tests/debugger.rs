@@ -663,6 +663,60 @@ fn array_element_snapshot_uses_an_active_alias_then_returns_to_the_outer_name() 
 }
 
 #[test]
+fn fn_reference_remains_visible_when_a_local_hides_its_original_name() {
+    let source = "10 DIM source(0):source(0)=5\n\
+                  20 result=FNTouch(source)\n\
+                  30 END\n\
+                  100 DEF FNTouch(items)\n\
+                  110 LOCAL source(1)\n\
+                  120 items(0)=9:source(1)=100\n\
+                  130 FNTouch=items(0)\n\
+                  140 FNEND";
+    let (interpreter, outcome) = run_scripted(
+        source,
+        debugger_with_breakpoints([130, 30], [DebugAction::Continue, DebugAction::Continue]),
+    );
+    assert_eq!(outcome, RunOutcome::End);
+    let snapshots = snapshots(&interpreter);
+    assert_eq!(
+        array_element(&snapshots[0], "items(0)"),
+        Some(&DebugValue::Number(9.0))
+    );
+    assert_eq!(
+        array_element(&snapshots[0], "source(1)"),
+        Some(&DebugValue::Number(100.0))
+    );
+    assert!(snapshots[0].arrays.iter().any(|array| {
+        array.name.eq_ignore_ascii_case("items")
+            && array.alias_of.is_none()
+            && array.dimensions == [0]
+    }));
+    assert!(snapshots[0].arrays.iter().any(|array| {
+        array.name.eq_ignore_ascii_case("source")
+            && array.alias_of.is_none()
+            && array.dimensions == [1]
+    }));
+    assert_eq!(
+        array_element(&snapshots[1], "source(0)"),
+        Some(&DebugValue::Number(9.0))
+    );
+    for snapshot in &snapshots {
+        assert!(snapshot
+            .array_elements
+            .iter()
+            .all(|element| !element.name.contains('\0')));
+        assert!(snapshot
+            .arrays
+            .iter()
+            .all(|array| !array.name.contains('\0')
+                && array
+                    .alias_of
+                    .as_ref()
+                    .is_none_or(|name| !name.contains('\0'))));
+    }
+}
+
+#[test]
 fn read_swap_and_mat_read_update_the_last_array_elements() {
     let source = r#"10 DATA 5,6,7
 20 DIM A(2),M(1)

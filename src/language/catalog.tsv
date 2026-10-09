@@ -201,7 +201,7 @@ statement	both	MAT PRINT		MAT PRINT [ROW|COL] array[;|, ...]	array: Array to pri
 statement	both	MAT PRINT USING		MAT PRINT USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask; array: Array to print	Prints arrays using a numeric format mask.	MAT PRINT,PRINT USING	-
 statement	both	MAT INPUT		MAT INPUT array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Reads console input into array elements.	MAT READ,INPUT	-
 statement	both	MAT READ		MAT READ array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Fills arrays sequentially from DATA.	MAT INPUT,DATA,READ	-
-statement	both	DEF FN		DEF FNname[(parameter,...)] = expression || DEF FNname[(parameter,...)]	name: Function name; parameter: Local value parameter; expression: Single-line return expression	Defines a single-line or multiline user function.	FNEND,EXIT FN,LOCAL	-
+statement	both	DEF FN		DEF FNname[(parameter,...)] = expression || DEF FNname[(parameter,...)]	name: Function name; parameter: Scalar/text value or whole-array reference in a multiline function; expression: Single-line return expression	Defines a single-line or multiline user function.	FNEND,EXIT FN,LOCAL	-
 statement	both	FNEND		FNEND	-	Ends a multiline DEF FN definition.	DEF FN,EXIT FN	-
 statement	both	EXIT FN	FNEXIT	EXIT FN || FNEXIT	-	Leaves a multiline function and returns its current value.	DEF FN,FNEND	-
 statement	both	DEF SUB		DEF SUB name[(parameter,...)]	name: Subroutine name; parameter: Local scalar or array parameter	Begins a named multiline subroutine definition.	CALL,SUBEND,EXIT SUB,LOCAL	-

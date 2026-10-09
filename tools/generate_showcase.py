@@ -133,14 +133,13 @@ CAPTURES = (
         windowed=True,
     ),
     Capture(
-        "g-animation3.bas",
-        (
-            "311 SHOWFRAME=SHOWFRAME+1",
-            "312 IF SHOWFRAME<40 THEN GOTO 320",
-            '313 BSAVE "showcase/g-animation3.png" : SCREEN CLOSE : END',
-        ),
-        {210: "PT=2", 220: "REM Capture the middle of the clip"},
-        windowed=True,
+        "g-cloth-realtime.bas",
+        (),
+        {
+            195: "SHOWHUD=0 : SETTLESTEPS=INT(2/H)",
+            205: "BENCHMODE=1 : BENCHPHASE=0 : BENCHFRAMES=0 : BENCHWARMUP=0",
+            210: 'STATEIN$="" : STATEOUT$="" : FINALPNG$="showcase/g-cloth-realtime.png"',
+        },
     ),
     Capture(
         "g-cube-light.bas",
