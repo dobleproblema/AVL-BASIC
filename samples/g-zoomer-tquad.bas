@@ -1,6 +1,6 @@
 100 REM ============================================================
 110 REM  TEXTURED ZOOMER-ROTATOR - AVL BASIC
-120 REM  one TQUAD per frame
+120 REM Press ESC to exit.
 130 REM ============================================================
 140 TEXFILE$="assets/texture.png"
 150 SCREEN : MODE 640

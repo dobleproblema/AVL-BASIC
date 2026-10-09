@@ -1,5 +1,5 @@
-1000 REM MACHIN ALGORITHM TO CALCULATE PI (MODERN VERSION, NO GOTO, NO GOSUB)
-1010 REM Uses multiline DEF FN/DEF SUB blocks, LOCAL variables, and block IFs.
+1000 REM Calculate pi with Machin's formula.
+1010 REM Set P in the main program to choose the number of decimal digits.
 1020 REM **Helper functions**
 1030 DEF FNBLOCKCOUNT(DIGITS,BLOCKSIZE)
 1040   FNBLOCKCOUNT=(DIGITS+1)\BLOCKSIZE

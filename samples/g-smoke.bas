@@ -1,5 +1,5 @@
-100 REM AVL-SMOKE - 2D fluid simulation in pure AVL-BASIC
-110 REM SIMHZ sets physical steps/second, CAP limits drawing, ITER pressure sweeps.
+100 REM Colorful smoke curls from three moving sources.
+110 REM SPACE pauses; Q changes quality; B toggles smoothing; R resets; H toggles HUD; ESC exits.
 120 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
 200 LEVEL=4 : ITER=8 : VORT=1 : SMOOTH=1 : HUD=1 : FROZEN=0 : CAP=60
 210 DYE=24 : FADE=0.38 : VDRAG=0.06 : EPS=8
@@ -177,7 +177,7 @@
 3820 FOR Y=1 TO NY
 3830 FOR I=Y*S+1 TO Y*S+NX : AX=MAX(0.5,MIN(NXH,MT(I))) : AY=MAX(0.5,MIN(NYH,MS(I))) : X0=INT(AX) : Y0=INT(AY) : FX=AX-X0 : FY=AY-Y0 : I0=Y0*S+X0 : I2=I0+S : W0=(1-FX)*(1-FY) : W1=FX*(1-FY) : W2=(1-FX)*FY : W3=FX*FY : U(I)=(U0(I0)*W0+U0(I0+1)*W1+U0(I2)*W2+U0(I2+1)*W3) : V(I)=(V0(I0)*W0+V0(I0+1)*W1+V0(I2)*W2+V0(I2+1)*W3) : NEXT I
 3910 NEXT Y
-3912 REM Apply uniform drag in native MAT loops, then restore the wall values.
+3912 REM Apply uniform drag, then restore the wall values.
 3915 MAT U=U*DRAG : MAT V=V*DRAG
 3920 GOSUB 4600
 3930 RETURN

@@ -10,9 +10,7 @@ game-over.wav  Descending minor ending (950 ms).
 win.wav        Ascending major ending (1180 ms).
 
 All files are mono, 16-bit PCM WAV at 44100 Hz. They are original procedural
-effects, with no third-party recordings or borrowed melodies. Regenerate them
-with: python tools/generate_arkanoid_audio.py
-Python is only a development tool; it is not needed to run the game.
+effects, with no third-party recordings or borrowed melodies.
 
 The game loads these files once, uses eight overlapping impact voices, pans
 impacts with the ball, and raises the brick pitch for higher rows. Channel 9

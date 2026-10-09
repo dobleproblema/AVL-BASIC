@@ -276,21 +276,9 @@ audio examples use the included `samples/assets` directory. If you save a copied
 example, save it in that same package folder so its relative asset paths still
 resolve.
 
-To generate the HTML manuals from a source checkout, use Python 3.10 or later
-and Cargo, and run from the repository root:
-
-```text
-python tools/render_manuals.py
-```
-
-Then open `dist/MANUAL.html` for English or `dist/MANUAL.es.html`
-for Spanish. To choose another output directory, use
-`python tools/render_manuals.py --output path/to/output`. The generated manuals
-work without a web server or an internet connection.
-
 The TXT sources remain in the repository; end-user packages include only the
-two HTML manuals. For separate developer audit files, add `--audit-dir PATH`
-with a directory outside the HTML output.
+two HTML manuals. The HTML manuals work without a web server or an internet
+connection.
 
 - English manual source: [`MANUAL.txt`](https://github.com/dobleproblema/AVL-BASIC/blob/main/MANUAL.txt)
 - Fuente del manual en español: [`MANUAL.es.txt`](https://github.com/dobleproblema/AVL-BASIC/blob/main/MANUAL.es.txt)
@@ -301,9 +289,8 @@ with a directory outside the HTML output.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`tools/`](tools/): documentation generation and maintainer validation
 - [`samples/`](samples/): 137 BASIC programs and their browsable catalog
-- [`samples/showcase/`](samples/showcase/): reproducible runtime captures
+- [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source
 - [`src/language/catalog.tsv`](src/language/catalog.tsv): declarative language and error catalog

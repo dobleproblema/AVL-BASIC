@@ -14,7 +14,8 @@ import tarfile
 from pathlib import Path
 
 from package_windows_release import (
-    ROOT, RELEASE_DIR, build_html_manuals, build_html_readme, copy_tree, language_version,
+    ROOT, RELEASE_DIR, build_html_manuals, build_html_readme, copy_tree,
+    documentation_tools, language_version,
 )
 
 
@@ -32,6 +33,7 @@ def glibc_requirement(binary: Path) -> str:
 
 
 def build_package(skip_build: bool) -> Path:
+    documentation_tools()
     version = language_version()
     package_name = f"avl-basic-{version}-linux-x64"
     stage = RELEASE_DIR / package_name

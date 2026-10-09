@@ -1,6 +1,6 @@
 100 REM ============================================================
 110 REM  TEXTURED 3D CUBE - AVL BASIC
-120 REM  3D projection + 2D affine textured quads
+120 REM Press ESC to exit.
 130 REM ============================================================
 140 TEXFILE$="assets/texture.png" 'Try also assets/tunnel.png
 150 W=640 : H=480

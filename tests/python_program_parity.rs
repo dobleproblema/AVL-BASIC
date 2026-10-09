@@ -5,6 +5,20 @@ fn python_command() -> String {
     std::env::var("PYTHON").unwrap_or_else(|_| "python".to_string())
 }
 
+fn parity_script(name: &str) -> PathBuf {
+    let tools = PathBuf::from(
+        std::env::var_os("AVL_BASIC_TOOLS_DIR")
+            .expect("set AVL_BASIC_TOOLS_DIR to the local parity tools directory"),
+    );
+    let script = tools.join(name);
+    assert!(
+        script.is_file(),
+        "Missing parity checker: {}",
+        script.display()
+    );
+    script
+}
+
 fn rust_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_avl-basic") {
         return PathBuf::from(path);
@@ -34,11 +48,12 @@ fn python_text_program_cases_can_be_extracted() {
         return;
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir.join("tools").join("run_python_text_parity.py");
+    let script = parity_script("run_python_text_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--mode")
         .arg("summary")
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run Python text parity summary");
@@ -57,13 +72,14 @@ fn supported_python_text_program_cases_match() {
         return;
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir.join("tools").join("run_python_text_parity.py");
+    let script = parity_script("run_python_text_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--mode")
         .arg("supported")
         .arg("--rust-bin")
         .arg(rust_binary())
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run supported Python text parity cases");
@@ -82,13 +98,14 @@ fn all_python_text_program_cases_match() {
         return;
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir.join("tools").join("run_python_text_parity.py");
+    let script = parity_script("run_python_text_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--mode")
         .arg("all-text")
         .arg("--rust-bin")
         .arg(rust_binary())
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run all Python text parity cases");
@@ -107,13 +124,12 @@ fn print_using_formats_match_python_reference() {
         return;
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir
-        .join("tools")
-        .join("run_python_print_using_parity.py");
+    let script = parity_script("run_python_print_using_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--rust-bin")
         .arg(rust_binary())
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run PRINT USING Python parity cases");

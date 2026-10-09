@@ -1,5 +1,5 @@
-100 REM A mathematical surface lit by a rotating light, rendered with GTRIANGLE.
-110 REM Generate geometry, normals, height colors and fixed camera projection once.
+100 REM A red and blue mathematical surface illuminated by a rotating light.
+110 REM SPACE pauses the light; C toggles the 60 FPS limit; ESC exits.
 120 SCREEN : MODE 640 : DEG : PAPER 0 : CLG
 130 W=WIDTH : H=HEIGHT : N=50 : NV=(N+1)*(N+1)
 140 DEF FNZ(X,Y)=(X^2+3*Y^2)*EXP(1-X^2-Y^2)

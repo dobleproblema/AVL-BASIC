@@ -1,4 +1,4 @@
-100 REM Sine scroller: one SPRITE column per source pixel
+100 REM Scrolling text follows a sine wave. Press ESC to exit.
 110 SCREEN : MODE 640 : DEG : PAPER 0 : CLG : BIGFONT
 120 GS=4 : CW=16*GS+10 : GH=16*GS+8
 130 OX=16 : OY=94 : BAS=HEIGHT\2-GH\2 : AMP=70
@@ -25,7 +25,7 @@
 410 FRAME 60
 420 IF KEYDOWN(27) THEN SCREEN CLOSE:END
 430 GOTO 300
-500 REM Copper-ish background, kept cheap so the columns remain the star
+500 REM Animated horizontal color bars.
 510 FOR B=0 TO 9
 520   BY=BAS-74+B*20+7*SIN(WPH+B*23)
 530   C=28+B*15

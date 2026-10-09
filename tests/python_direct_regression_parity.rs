@@ -5,6 +5,20 @@ fn python_command() -> String {
     std::env::var("PYTHON").unwrap_or_else(|_| "python".to_string())
 }
 
+fn parity_script(name: &str) -> PathBuf {
+    let tools = PathBuf::from(
+        std::env::var_os("AVL_BASIC_TOOLS_DIR")
+            .expect("set AVL_BASIC_TOOLS_DIR to the local parity tools directory"),
+    );
+    let script = tools.join(name);
+    assert!(
+        script.is_file(),
+        "Missing parity checker: {}",
+        script.display()
+    );
+    script
+}
+
 fn rust_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_avl-basic") {
         return PathBuf::from(path);
@@ -34,15 +48,14 @@ fn python_direct_non_graphics_regressions_match() {
         return;
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir
-        .join("tools")
-        .join("run_python_direct_regression_parity.py");
+    let script = parity_script("run_python_direct_regression_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--mode")
         .arg("all-text")
         .arg("--rust-bin")
         .arg(rust_binary())
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run direct Python regression parity cases");
@@ -62,15 +75,14 @@ fn python_and_rust_if_call_state_prompt_fixtures_match_expected_results() {
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let python_repo = PathBuf::from(std::env::var_os("AVL_BASIC_PY_REPO").unwrap());
-    let script = manifest_dir
-        .join("tools")
-        .join("check_if_call_state_parity.py");
+    let script = parity_script("check_if_call_state_parity.py");
     let output = Command::new(python_command())
         .arg(&script)
         .arg("--rust")
         .arg(rust_binary())
         .arg("--python-basic")
         .arg(python_repo.join("basic.py"))
+        .env("AVL_BASIC_REPO", &manifest_dir)
         .current_dir(&manifest_dir)
         .output()
         .expect("failed to run shared IF/call-state prompt fixtures");

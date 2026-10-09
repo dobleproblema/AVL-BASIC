@@ -1,4 +1,4 @@
-10 REM HP-85 style copies: blocks, rows, columns and overlapping ranges
+10 REM Copy matrix blocks, rows, columns and overlapping ranges.
 20 MAT BASE 1 : DIM A(4,4),B(4,4),V(4)
 30 FOR R=1 TO 4 : FOR C=1 TO 4 : A(R,C)=10*R+C : NEXT C : NEXT R
 40 PRINT "Original matrix" : MAT PRINT A

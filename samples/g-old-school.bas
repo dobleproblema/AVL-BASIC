@@ -1,4 +1,4 @@
-100 REM Old-school demo: starfield, copper bars, sine scroller and original looped music
+100 REM Starfield, copper bars, scrolling text and music. Press ESC to exit.
 110 SCREEN : MODE 640 : DEG : PAPER 0 : CLG : BIGFONT
 120 GS=4 : CW=16*GS+10 : GH=16*GS+8
 130 OX=16 : OY=94 : BAS=HEIGHT\2-GH\2 : AMP=70

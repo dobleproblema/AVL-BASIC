@@ -1,4 +1,4 @@
-100 REM Classic Amiga-style bobs: six huge circles in a true 3D orbit
+100 REM Six colored circles orbit in 3D. Press ESC to exit.
 110 MODE 800 : SCREEN : PAPER 27 : SMALLFONT TRANSPARENT : RAD
 120 W=WIDTH : H=HEIGHT : Xc=W/2 : Yc=H/2+25
 130 N=6 : DistCam=4.6 : Rorb=2.45 : Vorb=2.8E-2 : Vcam=7E-3 : RB=0.86 : OrbA=0 : CamA=0

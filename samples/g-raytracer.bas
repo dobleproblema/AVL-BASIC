@@ -1,5 +1,4 @@
-1000 REM Ray-Tracer
-1005 REM Refraction + reflectivity (Fresnel)
+1000 REM Reflective and refractive spheres over a checkerboard floor.
 1010 REM General parameters
 1020 EPS=0.0001
 1025 MXD=4 'Maximum depth (lets you see the refracted checkerboard in 2nd-order reflections)
@@ -14,7 +13,7 @@
 1070 FX=(2*ASP*SC)/WID
 1075 FY=(2*SC)/HEI
 1080 PX0=-ASP*SC : PY0=-SC
-1085 REM Light, ambient and background (contrast + reflections, without darkening the scene)
+1085 REM Light, ambient and background
 1090 LX=6.5 : LY=7.5 : LZ=4.5
 1095 LCR=1.15 : LCG=1.12 : LCB=1.08
 1100 AMB=0.1

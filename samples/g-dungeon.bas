@@ -1,7 +1,7 @@
-100 REM AVL DUNGEON - a first-person textured maze with Raycasting geometry
-110 REM DDA walls, perspective floor/ceiling, depth-tested pixel-art objects
-120 REM All textures, lighting palettes and sprites are generated in BASIC.
-130 REM AUDIO sample channels mix original looped music and effects.
+100 REM A first-person maze with textured walls, music and sound effects.
+110 REM Find the key, open the gate and reach the escape portal.
+120 REM W/S or UP/DOWN walks; LEFT/RIGHT turns; A/D strafes; SPACE runs; E opens the gate.
+130 REM M map; Q quality; F FPS limit; R restart; H HUD; B music; N mute; ESC exit.
 140 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
 150 N=19 : COLS=640 : CAP=1 : MAPON=0 : HUD=1 : RADIUS=0.18
 160 PLANE=0.66 : PROJ=320/PLANE : FAR=18 : NT=12 : NO=14
@@ -79,7 +79,7 @@
 1830 MSG$="FIND THE GOLD KEY, UNLOCK THE GATE, REACH THE PORTAL" : MSGT=T+4
 1835 AUDIO STOP : FOOTDIST=0 : FOOT=0 : LOCKUNTIL=0 : GOSUB 9250
 1840 RETURN
-2000 REM Fixed, audited maze: nine rooms, loops, pillars and a sealed exit room
+2000 REM Maze layout: nine rooms, loops, pillars and a sealed exit room
 2010 RESTORE 2500
 2020 FOR Y=0 TO N-1
 2030   READ ROWS$(Y)

@@ -7,6 +7,7 @@ contains the native Rust executable plus the manuals and samples.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -43,22 +44,43 @@ def copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=ignore_patterns)
 
 
-def build_html_manuals(destination: Path) -> None:
+def documentation_tools() -> Path:
+    configured = os.environ.get("AVL_BASIC_TOOLS_DIR")
+    if not configured:
+        raise SystemExit(
+            "Release packaging requires local documentation tools. "
+            "Set AVL_BASIC_TOOLS_DIR to the directory containing "
+            "render_manuals.py and render_readme.py."
+        )
+    tools = Path(configured).expanduser().resolve()
+    missing = [name for name in ("render_manuals.py", "render_readme.py")
+               if not (tools / name).is_file()]
+    if missing:
+        raise SystemExit(
+            f"Missing documentation tools in AVL_BASIC_TOOLS_DIR: {', '.join(missing)}"
+        )
+    return tools
+
+
+def render_documentation(script: str, destination: Path) -> None:
+    tools = documentation_tools()
+    environment = os.environ.copy()
+    environment["AVL_BASIC_REPO"] = str(ROOT)
     subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "render_manuals.py"),
+        [sys.executable, str(tools / script),
          "--output", str(destination)],
         cwd=ROOT,
+        env=environment,
         check=True,
     )
+
+
+def build_html_manuals(destination: Path) -> None:
+    render_documentation("render_manuals.py", destination)
 
 
 def build_html_readme(destination: Path) -> None:
-    subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "render_readme.py"),
-         "--output", str(destination)],
-        cwd=ROOT,
-        check=True,
-    )
+    render_documentation("render_readme.py", destination)
 
 
 def write_first_readme(dst: Path, version: str) -> None:
@@ -113,6 +135,7 @@ Included files
 
 
 def build_package(skip_build: bool) -> Path:
+    documentation_tools()
     version = language_version()
     package_name = f"avl-basic-{version}-windows-x64"
     stage = RELEASE_DIR / package_name

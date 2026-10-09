@@ -1,6 +1,6 @@
-100 REM A smooth torus knot with a mouse-controlled diffuse point light.
-110 REM SPACE pauses rotation only; lighting and mouse input remain active.
-115 REM C toggles the 60 FPS cap; measured FPS include any frame waiting.
+100 REM A rotating knot with smooth shading and a mouse-controlled light.
+110 REM SPACE pauses rotation; the mouse-controlled light remains active.
+115 REM C toggles the 60 FPS limit; ESC exits.
 120 SCREEN : MODE 640 : RAD : PAPER RGB(7,10,18) : CLG : MOUSE ON
 130 W=WIDTH : H=HEIGHT : FOC=500 : DIST=7.2
 140 NR=64 : NS=16 : NV=NR*NS : TAU=8*ATN(1)
@@ -24,7 +24,7 @@
 330 NEXT J : NEXT I
 350 A1=.7 : A2=.35 : PAUSED=0 : SMALLFONT TRANSPARENT
 351 CAP=1 : FPS=0 : COUNT=0 : TLAST=TIME : TSIM=TIME
-355 REM A closer light and less ambient light increase local contrast.
+355 REM Light depth and ambient brightness control local contrast.
 360 MX=210 : MY=340 : LZ=-4.0 : AMBIENT=.055
 370 ON MOUSE MOVE GOSUB 1000 : ON MOUSE LEFTDRAG GOSUB 1000 : ON MOUSE RIGHTDRAG GOSUB 1000
 400 REM Sample the light independently of the rotation pause.

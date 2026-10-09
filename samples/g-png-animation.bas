@@ -9,6 +9,6 @@
 170 FrameIndex=0
 180 SCREEN Picture$(FrameIndex)
 190 FRAME PlaybackFps
-200 IF INKEY$=CHR$(27) THEN SCREEN CLOSE : END
+200 IF INKEY$=CHR$(27) THEN SCREEN CLOSE:END
 210 FrameIndex=(FrameIndex+1) MOD FrameCount
 220 GOTO 180

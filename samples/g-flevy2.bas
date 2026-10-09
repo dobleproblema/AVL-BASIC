@@ -1,4 +1,4 @@
-100 REM Iterative Levy C curve (NO recursion)
+100 REM Levy C curve.
 110 DEG
 120 SCREEN : CLG : MODE 640
 130 P=12          'Depth

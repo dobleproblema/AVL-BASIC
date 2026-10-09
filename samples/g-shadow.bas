@@ -1,7 +1,7 @@
-100 REM A fixed arch casts a shadow onto a uniform 96 x 96 floor grid.
-105 REM Introductory shadow example; g-shadow-adaptive.bas shows spatial optimizations.
-110 REM GTRIANGLE renders the light and camera views using two depth arrays.
-115 REM C toggles the 60 FPS limit; measured FPS include any frame waiting.
+100 REM An arch casts a moving shadow across the floor.
+105 REM Move the mouse to position the light.
+110 REM S toggles shadows; ESC exits.
+115 REM C toggles the 60 FPS limit.
 120 SCREEN : MODE 640 : RAD : PAPER RGB(9,13,21) : CLG : MOUSE ON
 130 W=WIDTH : H=HEIGHT : FOC=520 : CY=230
 140 GN=96 : LIMIT=3.2 : NC=32 : RI=1 : RO=1.35 : PIERH=1 : THICK=.35

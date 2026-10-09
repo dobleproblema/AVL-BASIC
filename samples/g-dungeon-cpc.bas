@@ -1,7 +1,7 @@
-100 REM AVL DUNGEON CPC - a first-person textured maze with Raycasting geometry
-110 REM DDA walls, perspective floor/ceiling, depth-tested pixel-art objects
-120 REM All textures, lighting palettes and sprites are generated in BASIC.
-130 REM SOUND/ENV/ENT: original score in DATA, ON SQ music, prioritized CPC effects.
+100 REM A first-person maze with textured walls and chiptune music.
+110 REM Find the key, open the gate and reach the escape portal.
+120 REM W/S or UP/DOWN walks; LEFT/RIGHT turns; A/D strafes; SPACE runs; E opens the gate.
+130 REM M map; Q quality; F FPS limit; R restart; H HUD; B music; N mute; ESC exit.
 140 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
 150 N=19 : COLS=640 : CAP=1 : MAPON=0 : HUD=1 : RADIUS=0.18
 160 PLANE=0.66 : PROJ=320/PLANE : FAR=18 : NT=12 : NO=14
@@ -79,7 +79,7 @@
 1830 MSG$="FIND THE GOLD KEY, UNLOCK THE GATE, REACH THE PORTAL" : MSGT=T+4
 1835 GOSUB 9280 : FOOTDIST=0 : FOOT=0 : LOCKUNTIL=0 : GOSUB 9250
 1840 RETURN
-2000 REM Fixed, audited maze: nine rooms, loops, pillars and a sealed exit room
+2000 REM Maze layout: nine rooms, loops, pillars and a sealed exit room
 2010 RESTORE 2500
 2020 FOR Y=0 TO N-1
 2030   READ ROWS$(Y)
@@ -370,7 +370,7 @@
 8150 SMALLFONT TRANSPARENT : INK RGB(232,208,147) : LOCATE 27,17 : GPRINT "R - RETURN TO THE DUNGEON"
 8160 RETURN
 9000 REM CPC arrangement of The Lantern Path: 100 BPM, D dorian, 64 x 15cs.
-9001 REM Original MIDI score from dungeon-theme-patterns.json; no WAV assets needed.
+9001 REM Melody and rhythm patterns are stored in the DATA below.
 9002 REM A=lead, C=bass, B=percussion/FX. ON SQ feeds one note per callback.
 9003 REM Music meets every four ticks; only initial/beat notes carry rendezvous bits.
 9004 AUDIO ON : MUSIC=1 : MUTED=0 : CPCPLAY=0 : CPCCELEBRATE=0

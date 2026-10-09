@@ -1,4 +1,4 @@
-100 REM MAZE + SOLUTION (Random DFS/Prim Hybrid)
+100 REM Generate a random maze and draw its solution.
 110 RANDOMIZE TIME
 120 DFS=0.9 'DFS-style growth percentage vs Prim
 130 Sol=-1   '-1 -> Draw the solution

@@ -1,5 +1,5 @@
-100 REM A mathematical surface viewed by a rotating camera, rendered with GTRIANGLE.
-110 REM Generate geometry and fixed lighting once; project the vertices each frame.
+100 REM A rotating mathematical surface with smooth red and blue shading.
+110 REM SPACE pauses rotation; C toggles the 60 FPS limit; ESC exits.
 120 SCREEN : MODE 640 : DEG : PAPER 0 : CLG
 130 W=WIDTH : H=HEIGHT : N=50 : NV=(N+1)*(N+1)
 140 DEF FNZ(X,Y)=(X^2+3*Y^2)*EXP(1-X^2-Y^2)

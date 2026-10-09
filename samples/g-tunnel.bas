@@ -1,6 +1,6 @@
 1000 REM ============================================================
 1005 REM  TUNNEL EFFECT - AVL BASIC
-1010 REM  Texture mapping done in BASIC
+1010 REM Press ESC to exit.
 1015 REM ============================================================
 1020 TEXFILE$="assets/tunnel.png"
 1025 W=640 : H=480

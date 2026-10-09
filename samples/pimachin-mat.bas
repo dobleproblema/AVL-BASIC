@@ -1,6 +1,5 @@
-100 REM MACHIN ALGORITHM TO CALCULATE PI WITH MAT
-102 REM MAT adds/subtracts blocks; BASIC propagates carries/borrows.
-104 REM J and H mark the first nonzero blocks of B4 and B2.
+100 REM Calculate pi with Machin's formula and matrix operations.
+102 REM Set P to choose the number of decimal digits.
 105 P=1000 'INPUT "DIGITS: ",P
 110 L=9 'Safe 9-digit blocks: keeps R*F+B4(A) exact (no rounding) up to 1,000,000 decimal digits
 115 F=10^L : G=(P+1)\L : F$="0"+STRING$(L-1,"#")+" "

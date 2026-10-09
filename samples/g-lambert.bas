@@ -1,4 +1,4 @@
-100 REM 3D surface. Painter 's algorithm with Lambert shading
+100 REM 3D surface with Lambert shading.
 105 DEG : T1=TIME
 110 REM Resolution and graphics origin
 115 SCRW=WIDTH : SCRH=HEIGHT

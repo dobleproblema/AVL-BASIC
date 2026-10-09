@@ -1,38 +1,35 @@
-100 REM AVL CLOTH - interactive XPBD cloth and Gouraud satin, on a black background.
-105 REM No visible floor, pedestal or floor shadow. GOSUB/RETURN keeps the simulation fast.
-110 REM SPACE pauses; N steps; drag with the mouse while running; arrows orbit; +/- zoom.
-115 REM S toggles shadows; B sphere motion; W wind; M material; R restarts the fall.
-120 REM Physics uses fixed H-second steps from wall time; drawing interpolates the last two states.
-121 REM Interpolation adds one physical step of visual delay. Drawing never changes physical positions.
-125 REM Grid, sheet size, physics rate and solver sweeps tune the visual and physical compromise.
+100 REM Watch satin cloth fall and drape over a sphere.
+105 REM SPACE pauses; N advances one simulation step while paused.
+110 REM Drag with the mouse while running; arrow keys orbit; +/- zoom.
+115 REM S: shadows; B: sphere motion; W: wind; M: material.
+120 REM R restarts the fall; ESC exits.
 130 SCREEN : MODE 800 : RAD : PAPER 0 : CLG : MAT BASE 0
 140 WID=WIDTH : HEI=HEIGHT : XC=WID*.5 : YC=HEI*.49 : FOC=WID*1.04
-145 REM NX/NY count cloth cells: (NX+1)*(NY+1) nodes. Drawing is uncapped; physics runs at PhysicsHz.
-147 REM Another useful trial: NX=24, NY=20, PhysicsHz=15. Compare the fall in motion.
-148 REM Optional smaller-sheet preset; line 154 is disabled by default.
+145 REM NX and NY count cloth cells; PhysicsHz sets simulation steps per second.
+148 REM Uncomment line 154 for a smaller sheet.
 149 ClothWidth=4.6 : ClothDepth=3.7
 150 NX=24 : NY=16 : PhysicsHz=10
 151 IF PhysicsHz<=0 THEN PRINT "PhysicsHz must be positive." : SCREEN CLOSE : END
 152 H=1/PhysicsHz : STEPS=3
-153 REM STEPS is the fixed benchmark batch only; interactive physics uses the wall-time accumulator.
+153 REM STEPS sets the number of physical substeps in each timing batch.
 154 REM NX=16 : NY=12 : ClothWidth=3.68 : ClothDepth=2.775
 155 XPBDITERS=8 : RELAXITERS=12 : SELFCONTACT=1 : FLOORCONTACT=0
-156 REM Self contact uses conservative particle proxies, not complete triangle collision detection.
+156 REM Self-contact separates nearby cloth particles.
 157 SelfSeparation=.95 : SelfNeighborSkip=1 : SelfFinalPasses=2
 158 COLLISIONTHICKNESS=.025
-159 REM SelfSeparation is a fraction of cell spacing; final passes keep stretch sweeps from reopening folds.
+159 REM SelfSeparation is a fraction of cell spacing; SelfFinalPasses adds contact sweeps.
 160 SPNL=20 : SPNT=14 : SHADOWS=1 : SHPCF=5
-162 REM Smooth sphere outline with 520 triangles; collision uses the analytic radius below.
-165 REM FLOORCONTACT=1 restores only the legacy invisible plane at Y=.035 for comparison.
+162 REM SPNL and SPNT set the number of sphere segments and rings.
+165 REM FLOORCONTACT=1 enables an invisible horizontal collider at Y=.035.
 170 BX0=0 : BY0=1.45 : BZ0=-.25 : BRAD=.9
 180 AZ=.48 : EL=.45 : DIST=7.2 : TARGETY=1.6
 190 SCENE=1 : PINMODE=0 : WIND=1 : MATERIAL=0 : BALLMOVE=0
 195 SHOWHUD=1 : SETTLESTEPS=0
 197 MAXCATCHUP=4 : INTERPOLATE=1 : DEMOSECONDS=0
-200 REM Benchmark hooks: 0=full, 1=physics only, 2=render only. Export paths are files.
+200 REM BENCHMODE=1 enables timing; BENCHPHASE: 0=both, 1=physics, 2=drawing.
 205 BENCHMODE=0 : BENCHPHASE=0 : BENCHFRAMES=5 : BENCHWARMUP=1
 210 STATEIN$="" : STATEOUT$="" : FINALPNG$=""
-215 REM A cold checkpoint uses SETTLESTEPS=INT(2/H), BENCHFRAMES=0. DEMOSECONDS stops live mode.
+215 REM SETTLESTEPS advances the initial simulation; DEMOSECONDS sets an optional time limit.
 220 IF NX<2 OR NY<2 OR NX<>INT(NX) OR NY<>INT(NY) THEN PRINT "Invalid cloth grid." : SCREEN CLOSE : END
 221 IF ClothWidth<=0 OR ClothDepth<=0 THEN PRINT "Cloth dimensions must be positive." : SCREEN CLOSE : END
 222 IF H<=0 OR STEPS<1 OR STEPS<>INT(STEPS) THEN PRINT "Invalid fixed physical step." : SCREEN CLOSE : END
@@ -79,7 +76,7 @@
 470 IF BENCHI>0 THEN PRINT "CLOTH_RENDER_DONE ";BENCHI;" ";T
 480 IF BENCHI>0 THEN PRINT "CLOTH_FRAME_DONE ";BENCHI;" ";T
 490 NEXT BENCHI
-900 REM Final exports are deliberately outside the measured frame intervals.
+900 REM Save the final image and physical checkpoint, if requested.
 902 IF BENCHMODE=0 THEN LIVESECONDS=TIME-LIVESTART:PRINT "CLOTH_LIVE_DONE ";LIVEFRAMES;" ";PHYSTEPS;" ";T;" ";LIVESECONDS;" ";DROPPEDTIME
 903 IF BENCHMODE=0 THEN PRINT "CLOTH_DRAW_TIME ";DRAWTIME
 905 IF BENCHMODE AND BENCHPHASE=1 THEN GOSUB 6100 : FRAME
@@ -232,7 +229,7 @@
 2758 X(PHK)=X(PHK)+PHWA*PHCOR*PHEX:Y(PHK)=Y(PHK)+PHWA*PHCOR*PHEY:Z(PHK)=Z(PHK)+PHWA*PHCOR*PHEZ
 2760 X(PHTANCH)=X(PHTANCH)-PHWB*PHCOR*PHEX:Y(PHTANCH)=Y(PHTANCH)-PHWB*PHCOR*PHEY:Z(PHTANCH)=Z(PHTANCH)-PHWB*PHCOR*PHEZ
 2762 RETURN
-2800 REM Analytic sphere and optional invisible-floor contacts; original Coulomb friction.
+2800 REM Sphere and optional floor contacts with Coulomb friction.
 2802 FOR PHK=0 TO N-1
 2804 IF IM(PHK)=0 THEN GOTO 2830
 2806 PHEX=X(PHK)-BX0:PHEY=Y(PHK)-BY0:PHEZ=Z(PHK)-BZ0
@@ -258,7 +255,7 @@
 2966 PHCOR=MIN(1,PHMU*PHCN(PHK)/PHLL)
 2968 X(PHK)=X(PHK)-PHCOR*PHEX:Y(PHK)=Y(PHK)-PHCOR*PHEY:Z(PHK)=Z(PHK)-PHCOR*PHEZ
 2984 NEXT PHK : RETURN
-3000 REM Area-weighted vertex normals; no blanket smoothing of simulated positions.
+3000 REM Compute area-weighted vertex normals.
 3002 MAT NORX=0 : MAT NORY=0 : MAT NORZ=0
 3004 FOR PHQ=0 TO PHNTRI-1
 3006 PHIA=PHTA(PHQ):PHIB=PHTB(PHQ):PHIC=PHTC(PHQ):GOSUB 3900
@@ -289,7 +286,7 @@
 3128 PHFX(PHIB)=PHFX(PHIB)+PHFAX:PHFY(PHIB)=PHFY(PHIB)+PHFAY:PHFZ(PHIB)=PHFZ(PHIB)+PHFAZ
 3129 PHFX(PHIC)=PHFX(PHIC)+PHFAX:PHFY(PHIC)=PHFY(PHIC)+PHFAY:PHFZ(PHIC)=PHFZ(PHIC)+PHFAZ
 3130 NEXT PHQ : RETURN
-3300 REM Spatially hashed particle repulsion, not robust vertex-face self contact.
+3300 REM Repel nearby cloth particles using a spatial hash.
 3302 MAT PHHEAD=-1
 3304 FOR PHK=0 TO N-1
 3306 PHHX(PHK)=INT(X(PHK)/PHSELFD):PHHY(PHK)=INT(Y(PHK)/PHSELFD):PHHZ(PHK)=INT(Z(PHK)/PHSELFD)
@@ -356,7 +353,7 @@
 4500 REM Smooth analytic collider motion evaluated at the same fixed step as the cloth.
 4510 IF BALLMOVE=0 THEN RETURN
 4520 BT=T-BALLT : BX0=BALLBX+.65*SIN(BT*.8) : BY0=BALLBY+.2*SIN(BT*.55) : BZ0=BALLBZ+.5*SIN(BT*.7) : RETURN
-4600 REM Legacy fixed-size batch for deterministic benchmarks; live mode uses 4700 instead.
+4600 REM Advance STEPS physical substeps for a timing batch.
 4610 FOR SUBSTEP=1 TO STEPS : T=T+H : GOSUB 4500 : GOSUB 2000 : NEXT SUBSTEP
 4620 FRAMEI=FRAMEI+1 : RETURN
 4700 REM Cache one physical state, then advance exactly one H-second substep.
@@ -444,7 +441,7 @@
 6270 VA=IA(RT) : VBB=IB(RT) : VC=IC(RT) : GOSUB 7100
 6275 NEXT RT
 6280 RETURN
-6300 REM Area-weighted normals from the actual interpolated surface, never from physical X/Y/Z.
+6300 REM Compute area-weighted normals from the interpolated drawing positions.
 6310 FOR RNI=0 TO N-1 : VNX(RNI)=0 : VNY(RNI)=0 : VNZ(RNI)=0 : NEXT RNI
 6320 FOR RNQ=0 TO PHNTRI-1 : RNA=PHTA(RNQ) : RNB=PHTB(RNQ) : RNC=PHTC(RNQ)
 6330 RNAX=VX(RNB)-VX(RNA) : RNAY=VY(RNB)-VY(RNA) : RNAZ=VZ(RNB)-VZ(RNA)
@@ -563,7 +560,7 @@
 8520 SNH=MAX(.001,SNX*SHX+SNY*SHY+SNZ*SHZ) : STH=SHX*STX+SHY*STY+SHZ*STZ : SBH=SHX*SBX+SHY*SBY+SHZ*SBZ : SNLL=MAX(0,SNX*LLX+SNY*LLY+SNZ*LLZ)
 8530 SDIST=1/(PI*SAX*SAY*((STH/SAX)^2+(SBH/SAY)^2+SNH^2)^2) : SVH=MAX(.0001,SHX*SVX+SHY*SVY+SHZ*SVZ) : SF=.045+.955*(1-SVH)^5
 8540 SGEO=MIN(1,2*SNH*MIN(SNDV,SNLL)/SVH) : SSPEC=MIN(2,SDIST*SF*SGEO/(4*MAX(.06,SNDV))) : RETURN
-9000 REM A single top HUD line; the scene itself contains only cloth, sphere and black.
+9000 REM Display controls, mesh size, simulation rate and measured FPS.
 9010 SH$="OFF" : IF SHADOWS THEN SH$="ON"
 9015 PS$="" : IF FROZEN THEN PS$=" [PAUSED]"
 9020 INK RGB(215,220,232) : LOCATE 3,2
@@ -588,7 +585,7 @@
 9596 IF GL<BRAD+PHTHICK THEN GS=(BRAD+PHTHICK)/MAX(.0001,GL):X(GRAB)=BX0+GEX*GS:Y(GRAB)=BY0+GEY*GS:Z(GRAB)=BZ0+GEZ*GS
 9598 IF FLOORCONTACT THEN Y(GRAB)=MAX(.035+PHTHICK,Y(GRAB))
 9600 OX(GRAB)=X(GRAB) : OY(GRAB)=Y(GRAB) : OZ(GRAB)=Z(GRAB) : RETURN
-9700 REM Controls never change fixed timestep or default solver quality.
+9700 REM Read keyboard controls and handle mouse dragging.
 9710 K$=UPPER$(INKEY$) : IF K$=CHR$(27) THEN DONE=1:RETURN
 9715 IF K$=" " THEN FROZEN=1-FROZEN:ACCUM=0:WALLDT=0:LASTWALL=TIME:RENDERALPHA=1:GOSUB 4800
 9720 IF K$="N" AND FROZEN THEN ONESTEP=1
@@ -605,7 +602,7 @@
 9780 IF KEYDOWN(31) THEN EL=MAX(-.15,EL-.6*DT)
 9785 IF FROZEN THEN GRAB=-1:LASTLEFT=0:RETURN
 9790 GOSUB 9500 : RETURN
-9800 REM Restart from the flat sheet, resume animation and discard the old interpolation state.
+9800 REM Restart the fall from a flat sheet.
 9810 T=0 : FRAMEI=0 : FROZEN=0 : ONESTEP=0
 9820 BX0=0 : BY0=1.45 : BZ0=-.25 : BALLT=0 : BALLBX=BX0 : BALLBY=BY0 : BALLBZ=BZ0
 9830 GRAB=-1 : LASTLEFT=0 : ACCUM=0 : WALLDT=0

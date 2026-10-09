@@ -197,13 +197,7 @@ to inspect its BASIC source.
 </tr>
 </table>
 
-Every image above was captured from the real Rust runtime. The capture tool
-uses temporary instrumented copies, so the original BASIC programs remain
-untouched:
-
-```console
-python tools/generate_showcase.py
-```
+Every image above was captured from the real Rust runtime.
 
 ## Suggested learning routes
 

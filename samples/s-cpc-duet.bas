@@ -1,6 +1,6 @@
 1 REM Adapted from CPC6128 User Instructions (AMSOFT), chapter 9, pp. 46-47.
-10 REM line 180 gives treble clef tune
-20 REM line 190 gives bass clef tune
+10 REM Play a two-voice duet.
+20 REM Set Spd to change the tempo.
 30 DIM notes(12):FOR x=1 TO 12:READ notes(x):NEXT
 40 ch1=1:READ ch1$:ch2=1:READ ch2$
 50 CLS

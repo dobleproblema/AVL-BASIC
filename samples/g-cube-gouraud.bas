@@ -1,6 +1,6 @@
-100 REM One cube: interpolated RGB colors and automatic hidden-face removal.
-110 REM Z toggles depth; SPACE pauses; ESC exits.
-115 REM C toggles the 60 FPS cap; measured FPS include any frame waiting.
+100 REM A rotating cube with smoothly blended colors and hidden surfaces.
+110 REM Z toggles hidden-surface removal; SPACE pauses; ESC exits.
+115 REM C toggles the 60 FPS limit.
 120 SCREEN : MODE 640 : RAD : PAPER RGB(7,10,18) : CLG
 130 W=WIDTH : H=HEIGHT : FOC=450 : DIST=4.8
 140 DIM D(W-1,H-1) 'One inverse-depth value for each screen pixel
@@ -16,7 +16,7 @@
 204 NEXT I
 210 A1=.45 : A2=.65 : DEPTH=1 : PAUSED=0 : SMALLFONT TRANSPARENT
 215 CAP=1 : FPS=0 : COUNT=0 : TLAST=TIME : TSIM=TIME
-300 REM Rotate and project the same eight vertices as g-cube.bas.
+300 REM Rotate and project the cube's eight vertices.
 305 TNOW=TIME : DT=MIN(TNOW-TSIM,.15) : TSIM=TNOW
 310 IF PAUSED=0 THEN A1=A1+.72*DT : A2=A2+.96*DT
 320 S1=SIN(A1) : C1=COS(A1) : S2=SIN(A2) : C2=COS(A2)
@@ -27,7 +27,7 @@
 370 PX(I)=X*FOC/Z+W/2 : PY(I)=Y*FOC/Z+H/2
 380 Q(I)=-1/Z 'Z is negative here; a larger positive Q means nearer
 390 NEXT I
-400 REM Draw ALL six faces in their DATA order: no sorting or face culling.
+400 REM Draw all six faces; the depth buffer selects the visible surfaces.
 410 FOR FACE=1 TO 6
 420 IA=F(FACE,1) : IB=F(FACE,2) : IC=F(FACE,3) : ID=F(FACE,4)
 440 IF DEPTH=0 THEN MAT D=0 'OFF forgets earlier faces so later ones paint over them

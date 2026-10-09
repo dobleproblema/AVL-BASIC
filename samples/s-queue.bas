@@ -1,4 +1,4 @@
-10 REM A one-shot queue event feeds music while the main loop works
+10 REM Play a melody while the main loop prints dots.
 20 PRINT "The dots continue while ON SQ supplies the melody."
 30 IF AUDIOAVAILABLE=0 THEN PRINT "Silent timing: ";AUDIOERROR$
 40 ENV 1,10,-1,2

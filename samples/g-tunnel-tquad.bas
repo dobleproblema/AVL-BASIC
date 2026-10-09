@@ -1,6 +1,6 @@
 1000 REM ============================================================
-1010 REM  TEXTURED TUNNEL MESH - AVL BASIC
-1020 REM  uses TQUAD instead of per-pixel BASIC texture mapping
+1010 REM TEXTURED TUNNEL - AVL BASIC
+1020 REM Press ESC to exit.
 1030 REM ============================================================
 1040 TEXFILE$="assets/tunnel.png"
 1050 SCREEN : MODE 640

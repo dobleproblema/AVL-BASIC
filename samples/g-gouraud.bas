@@ -1,4 +1,4 @@
-100 REM 3D surface. Rasterization with Z-buffer + Gouraud shading
+100 REM 3D surface with Gouraud shading.
 105 DEG : T1=TIME
 110 SCRW=WIDTH : SCRH=HEIGHT
 115 REM Mesh and domain parameters

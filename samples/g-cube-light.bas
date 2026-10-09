@@ -1,6 +1,6 @@
-100 REM One cube with a mouse-controlled diffuse point light.
-110 REM SPACE pauses only rotation: the mouse and lighting remain active.
-115 REM C toggles the 60 FPS cap; measured FPS include any frame waiting.
+100 REM A rotating cube illuminated by a mouse-controlled light.
+110 REM SPACE pauses rotation; the mouse-controlled light remains active.
+115 REM C toggles the 60 FPS limit; ESC exits.
 120 SCREEN : MODE 640 : RAD : PAPER RGB(7,10,18) : CLG : MOUSE ON
 130 W=WIDTH : H=HEIGHT : FOC=450 : DIST=4.8
 140 DIM D(W-1,H-1)

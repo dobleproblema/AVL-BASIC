@@ -5,9 +5,9 @@ basic.spec
 __pycache__/
 *.pyc
 .vscode/
-# Local research and experiments are kept outside the repository.
+# Local maintainer tools, research and experiments live outside the repository.
 /work/
-/tools/benchmarks/
+/tools/
 target/
 target_release_check/
 oracle-out/

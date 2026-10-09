@@ -1,6 +1,6 @@
 100 REM Big Bang particle morph between two PNG images
 110 MODE 640 : SCREEN : PAPER 0 : CLG : RAD : SMALLFONT TRANSPARENT
-115 REM PART controls quality/speed: 1=Rust detail, 2=Python-friendly
+115 REM PART sets particle spacing: 1=full detail; larger values use fewer particles.
 120 IW=100 : IH=100 : ZM=2.2 : PART=1
 125 PST=INT(PART) : IF PST<1 THEN PST=1
 130 DS=INT(PST*ZM+1) : D1=DS-1

@@ -1,7 +1,6 @@
-110 REM VOXEL WORLD - procedural landscape flight in AVL-BASIC
-120 REM Fast nearest terrain + filtered lighting + cached color/fog palette
-130 REM No assets, plugins or native rendering extensions required.
-160 REM Change SEED, COLS or SPEED below. F cycles FAR=300/600/1200.
+110 REM A flight over a procedural landscape at sunset.
+120 REM LEFT/RIGHT turns; W/S changes altitude; SPACE toggles autopilot.
+130 REM F changes view distance; R creates a new world; H toggles HUD; ESC exits.
 170 SCREEN : MODE 640 : RAD : PAPER 0 : CLG
 180 N=256 : NN=N*N : SEA=28 : SEED=42 : COLS=160
 190 FAR=600 : FOC=300 : AUTO=1 : HUD=1 : SPEED=65

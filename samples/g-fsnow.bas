@@ -1,4 +1,4 @@
-100 REM Koch snowflake. L-system technique
+100 REM Koch snowflake.
 110 DEG : SCREEN : MODE 640
 120 P=4 : L=5   '(1, 117), (2, 41), (3, 13), (4, 5)
 130 S$="F++F++F"  'Initial sequence

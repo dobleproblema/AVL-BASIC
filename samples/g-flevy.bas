@@ -1,4 +1,4 @@
-100 REM Levy curve. Recursion simulation
+100 REM Levy C curve.
 110 DEG : CLG
 120 P=10 : L=7
 130 DIM C(20), A(20)

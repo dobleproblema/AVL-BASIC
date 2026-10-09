@@ -1,4 +1,4 @@
-10 REM Classic envelopes, a held chord, and a short melody
+10 REM Play a held chord followed by a short melody with vibrato.
 20 PRINT "Three voices, then a melody with vibrato."
 30 IF AUDIOAVAILABLE=0 THEN PRINT "Silent timing: ";AUDIOERROR$
 40 ENV 1,12,-1,2

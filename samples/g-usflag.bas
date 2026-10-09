@@ -1,4 +1,4 @@
-100 REM Drawing the U.S. flag with LOCATE + GPRINT
+100 REM Draw the U.S. flag.
 110 x=13 : y=8 : m=2 : s$=" *   *   *   *   *   *   * "
 120 MODE 640 : SMALLFONT OPAQUE
 130 FOR i=y TO y+12

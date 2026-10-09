@@ -1,6 +1,5 @@
-100 REM Minimal example of the sprite collision engine
-110 REM 1) COLMODE 1 + HITTEST to bounce against the background
-120 REM 2) COLMODE 2 + HITSPRITE/HITID to detect sprite-sprite collisions
+100 REM Numbered sprites bounce against walls, a triangle and each other.
+110 REM Colliding sprite numbers appear on screen.
 130 MODE 640 : SCREEN : PAPER 0 : CLG : SMALLFONT
 140 R=9 : S=2*R+1 : B=16
 150 DIM S$(3),X(3),Y(3),DX(3),DY(3)
