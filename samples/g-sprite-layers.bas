@@ -1,4 +1,4 @@
-100 REM Two aligned sprites: opaque fairy body over half-transparent wings.
+100 REM Two aligned sprites: opaque fairy body over translucent wings.
 110 REM Both layers share one 320x320 frame; magenta marks their exterior.
 120 REM SPACE: pause; C: FPS cap; ESC: exit.
 130 SCREEN : MODE 640 : RAD : PAPER 0 : CLG OFFSCREEN : SMALLFONT TRANSPARENT

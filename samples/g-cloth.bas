@@ -19,7 +19,7 @@
 190 CollisionThickness=.025
 200 ' SelfSeparation is a fraction of cell spacing; SelfFinalPasses adds contact sweeps.
 210 SphereSegments=20 : SphereRings=14 : Shadows=1 : ShadowSize=128 : ShadowPcf=3
-211 ' Original shadow quality: ShadowSize=256 : ShadowPcf=5.
+211 ' Higher shadow quality: ShadowSize=256 : ShadowPcf=5.
 220 ' SphereSegments and SphereRings set the sphere tessellation.
 230 ' FloorContact=1 enables an invisible horizontal collider at Y=.035.
 240 BallX=0 : BallY=1.45 : BallZ=-.25 : BallRadius=.9
