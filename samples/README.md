@@ -10,15 +10,15 @@ to inspect its BASIC source.
 
 ## Start here
 
-<a id="highlight-g-old-school"></a>
+<a id="highlight-g-dustline"></a>
 <p align="center">
-  <a href="g-old-school.bas"><img src="showcase/g-old-school.png" alt="Old-School Demo running in AVL BASIC" width="820"></a>
+  <a href="g-dustline.bas"><img src="showcase/g-dustline.png" alt="Dustline running in AVL BASIC" width="820"></a>
 </p>
 <p align="center">
-  <strong>1. Old-School Demo</strong><br>
-  A demoscene postcard with a starfield, copper bars, sine scroller and original looping music.<br>
-  <sub><strong>Shows:</strong> 3D starfield · SPRITE$ · sine scroller · AUDIO · WAV</sub><br>
-  <code>RUN "/samples/g-old-school.bas"</code>
+  <strong>1. Dustline</strong><br>
+  Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times.<br>
+  <sub><strong>Shows:</strong> DEF SUB · multiline DEF FN · LOCAL · array references · block IF · procedure error handling · BLOAD · TRECTANGLE · ALPHA · fixed-step physics · KEYDOWN · AUDIO · sequential files · spatial indexing</sub><br>
+  <code>RUN "/samples/g-dustline.bas"</code>
 </p>
 
 <table>
@@ -150,12 +150,12 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-dustline"></a>
-  <a href="g-dustline.bas"><img src="showcase/g-dustline.png" alt="Dustline running in AVL BASIC" width="100%"></a><br>
-  <strong>16. Dustline</strong><br>
-  Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times.<br>
-  <sub><strong>Shows:</strong> DEF SUB · multiline DEF FN · LOCAL · array references · block IF · procedure error handling · BLOAD · TRECTANGLE · ALPHA · fixed-step physics · KEYDOWN · AUDIO · sequential files · spatial indexing</sub><br>
-  <code>RUN "/samples/g-dustline.bas"</code>
+  <a id="highlight-g-old-school"></a>
+  <a href="g-old-school.bas"><img src="showcase/g-old-school.png" alt="Old-School Demo running in AVL BASIC" width="100%"></a><br>
+  <strong>16. Old-School Demo</strong><br>
+  A demoscene postcard with a starfield, copper bars, sine scroller and original looping music.<br>
+  <sub><strong>Shows:</strong> 3D starfield · SPRITE$ · sine scroller · AUDIO · WAV</sub><br>
+  <code>RUN "/samples/g-old-school.bas"</code>
 </td>
 <td width="50%" valign="top">
   <a id="highlight-g-bifurcation"></a>

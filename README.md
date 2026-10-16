@@ -1,7 +1,7 @@
 # AVL BASIC
 
 <p align="center">
-  <img src="README.png" alt="AVL BASIC showcase: old-school demo, ray tracer, and Arkanoid" width="900">
+  <img src="README.png" alt="AVL BASIC showcase: Dustline, ray tracer, and Arkanoid" width="900">
 </p>
 
 AVL BASIC is a native Rust implementation of a classic-style BASIC system with
@@ -73,7 +73,7 @@ inspector preferences. The BASIC source remains read-only while debugging.
 
 ## See What AVL BASIC Can Do
 
-The hero above already shows the old-school demo, ray tracer, and Arkanoid.
+The hero above already shows Dustline, ray tracer, and Arkanoid.
 Here are nine more complete BASIC programs running in the native interpreter,
 not mockups or engine screenshots:
 
@@ -124,9 +124,9 @@ not mockups or engine screenshots:
   Procedural generation with its solution drawn through the maze.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-dustline"><img src="samples/showcase/g-dustline.png" alt="Dustline dirt-track racing with drifts, persistent mud, and a session-best ghost" width="100%"></a><br>
-  <strong>Dustline</strong><br>
-  Race a banked dirt circuit with drifts, jumps, a ghost, and sector times.
+  <a href="samples/README.md#highlight-g-old-school"><img src="samples/showcase/g-old-school.png" alt="Old-School Demo with a starfield, copper bars, and a sine scroller" width="100%"></a><br>
+  <strong>Old-School Demo</strong><br>
+  A demoscene postcard with stars, copper bars, a sine scroller, and original music.
 </td>
 </tr>
 </table>
