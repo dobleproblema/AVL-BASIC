@@ -16,7 +16,7 @@
 170 PRINT USING F$;B1(A);
 175 IF A>0 AND A MOD 8 = 7 THEN PRINT
 180 NEXT A
-185 PRINT : PRINT USING "#.###";T2-T1;" SEG."
+185 PRINT : PRINT USING "#.###";T2-T1;" SEC."
 190 END
 200 REM B1+B2->B1; normalize the active suffix, then any carry in its prefix
 205 MAT B1=B1+B2

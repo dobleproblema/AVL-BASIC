@@ -1,409 +1,534 @@
-100 REM A first-person maze with textured walls, music and sound effects.
-110 REM Find the key, open the gate and reach the escape portal.
-120 REM W/S or UP/DOWN walks; LEFT/RIGHT turns; A/D strafes; SPACE runs; E opens the gate.
-130 REM M map; Q quality; F FPS limit; R restart; H HUD; B music; N mute; ESC exit.
-140 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
-150 N=19 : COLS=640 : CAP=1 : MAPON=0 : HUD=1 : RADIUS=0.18
-160 PLANE=0.66 : PROJ=320/PLANE : FAR=18 : NT=12 : NO=14
-170 DIM W(N-1,N-1),SEEN(N-1,N-1),LIGHT(N-1,N-1),ROWS$(N-1)
-180 DIM OX(NO-1),OY(NO-1),WNX(NT-1),WNY(NT-1),KIND(NO-1),ORDER(NO-1),OD(NO-1),ZBUF(639)
-190 DIM ART(2,31,15),PAL(10),BR(3071),BG(3071),BB(3071)
-200 SMALLFONT TRANSPARENT : INK RGB(224,201,144)
-210 LOCATE 3,2 : GPRINT "AVL DUNGEON - CARVING STONE AND LIGHT..." : FRAME
-220 T=0 : GOSUB 2000 : GOSUB 3000 : GOSUB 3400 : GOSUB 9000 : GOSUB 1800
-230 LAST=TIME : TLAST=TIME : FPS=0 : COUNT=0 : FRAMES=0 : T=0
-240 REM Main loop; elapsed-time motion and bounded collision substeps
-300 NOW=TIME : DT=MAX(0.001,MIN(0.05,NOW-LAST)) : LAST=NOW : T=T+DT
-310 K$=UPPER$(INKEY$)
-320 IF K$=CHR$(27) OR KEYDOWN(27) THEN AUDIO STOP:SCREEN CLOSE:END
-330 IF K$="M" THEN MAPON=1-MAPON
-340 IF K$="H" THEN HUD=1-HUD
-350 IF K$="F" THEN CAP=1-CAP
-360 IF K$="Q" THEN COLS=COLS*2:IF COLS>640 THEN COLS=160
-370 IF K$="R" THEN GOSUB 1800:LAST=TIME:GOTO 300
-375 GOSUB 9200
-380 CW=640/COLS : FSTEP=4 : IF COLS=160 THEN FSTEP=8
-390 IF COLS=640 THEN FSTEP=2
-400 TURN=ABS(KEYDOWN(29))-ABS(KEYDOWN(28))
-410 WALK=MAX(ABS(KEYDOWN(87)),ABS(KEYDOWN(30)))-MAX(ABS(KEYDOWN(83)),ABS(KEYDOWN(31)))
-420 STRAFE=ABS(KEYDOWN(68))-ABS(KEYDOWN(65)) : RUNNING=ABS(KEYDOWN(32))
-430 IF WON THEN TURN=0:WALK=0:STRAFE=0
-440 ANG=ANG+TURN*DT*1.9 : ANG=ANG-2*PI*INT(ANG/(2*PI))
-450 DX=COS(ANG) : DY=SIN(ANG) : PLX=-DY*PLANE : PLY=DX*PLANE
-460 GOSUB 1000 : GOSUB 1500
-470 HOR=240+SIN(PACE)*2 : TR=TIME : CLG OFFSCREEN
-480 GOSUB 4000 : GOSUB 5000 : GOSUB 6000 : GOSUB 7500
-490 IF MAPON THEN GOSUB 7000
-500 RENDERMS=0.85*RENDERMS+150*(TIME-TR)
-510 GOSUB 8000
-520 IF CAP THEN FRAME 60 ELSE FRAME
-530 COUNT=COUNT+1 : FRAMES=FRAMES+1
-540 IF TIME-TLAST>=0.5 THEN FPS=COUNT/(TIME-TLAST):COUNT=0:TLAST=TIME
-550 GOTO 300
-1000 REM Circle movement, normalized diagonals, separate-axis sliding
-1010 SPEED=2.2+RUNNING*1.3 : MX=(DX*WALK-DY*STRAFE)*SPEED*DT : MY=(DY*WALK+DX*STRAFE)*SPEED*DT
-1020 IF WALK<>0 AND STRAFE<>0 THEN MX=MX*0.70710678118655:MY=MY*0.70710678118655
-1030 STEPS=MAX(1,INT(MAX(ABS(MX),ABS(MY))/0.08)+1) : MX=MX/STEPS : MY=MY/STEPS
-1040 OLDX=PX : OLDY=PY
-1050 FOR MSTEP=1 TO STEPS
-1060   NX=PX+MX : NY=PY : GOSUB 1200 : IF FREE THEN PX=NX
-1070   NX=PX : NY=PY+MY : GOSUB 1200 : IF FREE THEN PY=NY
-1080 NEXT MSTEP
-1090 MOVED=SQR((PX-OLDX)^2+(PY-OLDY)^2) : PACE=PACE+MOVED*7
-1095 GOSUB 9100
-1100 SEEN(INT(PY),INT(PX))=1
-1110 IF HAVE=0 AND (PX-OX(12))^2+(PY-OY(12))^2<0.3 THEN HAVE=1:MSG$="GOLD KEY FOUND - FIND THE LOCKED GATE":MSGT=T+4:GOSUB 9300
-1120 IF WON=0 AND OPENED AND (PX-OX(13))^2+(PY-OY(13))^2<0.28 THEN WON=1:MSG$="YOU ESCAPED AVL DUNGEON!  PRESS R TO EXPLORE AGAIN":MSGT=T+99999:GOSUB 9320
-1130 RETURN
-1200 REM Exact circle-to-solid-tile test, including rounded corner clearance
-1210 FREE=1
-1220 IF NX<RADIUS OR NY<RADIUS OR NX>N-RADIUS OR NY>N-RADIUS THEN FREE=0:RETURN
-1230 FOR CY=INT(NY-RADIUS) TO INT(NY+RADIUS)
-1240   FOR CX=INT(NX-RADIUS) TO INT(NX+RADIUS)
-1250     IF W(CY,CX)=0 THEN GOTO 1280
-1260     QX=MAX(CX,MIN(CX+1,NX)) : QY=MAX(CY,MIN(CY+1,NY))
-1270     IF (NX-QX)^2+(NY-QY)^2<RADIUS*RADIUS THEN FREE=0:RETURN
-1280   NEXT CX
-1290 NEXT CY
-1300 RETURN
-1500 REM The key is collected by proximity; E opens only the nearby gate
-1510 IF K$<>"E" OR OPENED OR WON THEN RETURN
-1520 DD=(PX-14.5)^2+(PY-15.5)^2 : FACING=(14.5-PX)*DX+(15.5-PY)*DY
-1530 IF DD>2.25 OR FACING<0.15 THEN MSG$="MOVE CLOSER AND FACE THE LOCKED GATE":MSGT=T+2:RETURN
-1540 IF HAVE=0 THEN MSG$="THE GATE NEEDS THE GOLD KEY":MSGT=T+3:GOSUB 9330:RETURN
-1550 W(15,14)=0 : OPENED=1 : MSG$="GATE UNLOCKED - REACH THE BLUE PORTAL" : MSGT=T+4 : GOSUB 9310
-1560 RETURN
-1800 REM Reset play state; generated textures and display settings are retained
-1810 PX=2.5 : PY=2.5 : ANG=0 : PACE=0 : HAVE=0 : OPENED=0 : WON=0
-1820 MAT SEEN=0 : W(15,14)=3 : RENDERMS=0
-1830 MSG$="FIND THE GOLD KEY, UNLOCK THE GATE, REACH THE PORTAL" : MSGT=T+4
-1835 AUDIO STOP : FOOTDIST=0 : FOOT=0 : LOCKUNTIL=0 : GOSUB 9250
-1840 RETURN
-2000 REM Maze layout: nine rooms, loops, pillars and a sealed exit room
-2010 RESTORE 2500
-2020 FOR Y=0 TO N-1
-2030   READ ROWS$(Y)
-2040   FOR X=0 TO N-1
-2050     A$=MID$(ROWS$(Y),X+1,1) : W(Y,X)=0
-2060     IF A$="#" THEN W(Y,X)=1:IF (X*7+Y*3) MOD 11<3 THEN W(Y,X)=2
-2070     IF A$="D" THEN W(Y,X)=3
-2075     IF A$="K" THEN OX(12)=X+0.5:OY(12)=Y+0.5
-2080   NEXT X
-2090 NEXT Y
-2100 RESTORE 2700
-2110 FOR I=0 TO NT-1 : READ OX(I),OY(I),WNX(I),WNY(I) : KIND(I)=0 : NEXT I
-2120 KIND(12)=1 : OX(13)=17.5 : OY(13)=16.5 : KIND(13)=2
-2130 REM Static warm light is tied to the map, rather than the render grid
-2140 FOR Y=0 TO N-1
-2150   FOR X=0 TO N-1
-2160     L=0
-2170     FOR I=0 TO NT-1
-2180       D2=(X+0.5-OX(I))^2+(Y+0.5-OY(I))^2 : L=MAX(L,1/(1+D2*1.6))
-2190     NEXT I
-2200     LIGHT(Y,X)=L
-2210   NEXT X
-2220 NEXT Y
-2230 RETURN
-2490 REM Move the single K in this map to reposition the gold key.
-2500 DATA "###################","#.....##.....##...#","#.................#"
-2510 DATA "#.....##.....##...#","#.....###.#####...#","##.######.######.##"
-2520 DATA "##.###.....#####.##","#...##..#..##.....#","#..............#..#"
-2530 DATA "#...##.....##..#.K#","#...#####.###..#..#","#...#####.###.....#"
-2540 DATA "##.######.#...#####","##.#####....#######","#.....##....###...#"
-2550 DATA "#.............D...#","#.....##....###..E#","#.....##....###...#"
-2560 DATA "###################"
-2690 REM Wall torch centres and outward normals; 0.04 in front of solid stone
-2700 DATA 3.5,1.04,0,1,5.96,3.5,-1,0,10.5,1.04,0,1,11.5,3.96,0,-1
-2710 DATA 17.96,2.5,-1,0,1.04,9.5,1,0,7.5,6.04,0,1,17.96,8.5,-1,0
-2720 DATA 16.5,11.96,0,-1,3.5,17.96,0,-1,9.5,17.96,0,-1,16.5,14.04,0,1
-3000 REM Stone/moss/iron-bound oak base texels; gentle detail limits shimmer
-3010 FOR M=0 TO 2
-3020   FOR Y=0 TO 31
-3030     FOR X=0 TO 31
-3040       I=M*1024+Y*32+X : BY=Y\8 : BX=(X+(BY MOD 2)*8) MOD 16
-3050       GRAIN=3*SIN(X*0.8+Y*0.6)+2*COS(Y*0.9-X*0.4)
-3060       VAR=((X+(BY MOD 2)*8)\16*7+BY*11) MOD 13-6
-3070       R=105+VAR+GRAIN : G=116+VAR+GRAIN : B=124+VAR+GRAIN
-3080       IF BX<1 OR Y MOD 8<1 THEN R=39:G=44:B=51
-3090       IF BX=1 OR Y MOD 8=1 THEN R=R+15:G=G+15:B=B+15
-3100       IF M=1 THEN R=R*0.83:G=G*0.94:B=B*0.82
-3110       IF M<>2 THEN GOTO 3160
-3120       R=97+10*SIN(X*0.8)+GRAIN : G=60+5*SIN(X*0.8)+GRAIN : B=32+GRAIN
-3130       IF X MOD 8=0 THEN R=44:G=29:B=20
-3140       IF Y=6 OR Y=7 OR Y=24 OR Y=25 THEN R=65:G=73:B=79
-3150       IF (X=3 OR X=27) AND (Y=7 OR Y=24) THEN R=190:G=156:B=88
-3160       BR(I)=MAX(0,R) : BG(I)=MAX(0,G) : BB(I)=MAX(0,B)
-3170     NEXT X
-3180   NEXT Y
-3190 NEXT M
-3200 REM One immutable variable holds a 256 x 384 prelit texture atlas.
-3210 REM Simple ATLAS$ enables the interpreter 's decoded texture cache.
-3220 FOR M=0 TO 2
-3230   FOR L=0 TO 31
-3240     TILE=M*32+L : AX=(TILE MOD 8)*32 : AY=(TILE\8)*32 : SHADE=0.11+L*0.89/31
-3250     FOR Y=0 TO 31
-3260       FOR X=0 TO 31
-3270         I=M*1024+Y*32+X : C=RGB(INT(BR(I)*SHADE),INT(BG(I)*SHADE),INT(BB(I)*SHADE))
-3280         PLOT AX+X,AY+Y,C
-3290       NEXT X
-3300     NEXT Y
-3310   NEXT L
-3320 NEXT M
-3330 ATLAS$=SPRITE$(0,0,255,383)
-3340 GOSUB 3600
-3350 RETURN
-3400 REM Tiny pixel masks: wall-mounted torch, gold key, cyan escape portal
-3410 MAT ART=-1
-3420 PAL(0)=RGB(42,44,48) : PAL(1)=RGB(108,94,65) : PAL(2)=RGB(188,118,44)
-3430 PAL(3)=RGB(248,87,19) : PAL(4)=RGB(255,161,27) : PAL(5)=RGB(255,234,127)
-3440 PAL(6)=RGB(236,179,57) : PAL(7)=RGB(255,231,123) : PAL(8)=RGB(20,99,141)
-3450 PAL(9)=RGB(49,205,226) : PAL(10)=RGB(191,250,236)
-3455 FOR Y=1 TO 10 : FOR X=5 TO 10 : ART(0,Y,X)=0 : IF X=5 OR Y=10 THEN ART(0,Y,X)=1
-3457 NEXT X : NEXT Y
-3460 FOR Y=7 TO 16 : FOR X=7 TO 8 : ART(0,Y,X)=1
-3470 NEXT X : NEXT Y
-3480 FOR Y=14 TO 17 : FOR X=3 TO 12 : ART(0,Y,X)=2 : NEXT X : NEXT Y
-3490 FOR Y=17 TO 30
-3500   FOR X=1 TO 14
-3510     D2=((X-7.5)/6)^2+((Y-23)/8)^2 : IF D2>1 THEN GOTO 3530
-3520     ART(0,Y,X)=3 : IF D2<0.55 THEN ART(0,Y,X)=4:IF D2<0.2 THEN ART(0,Y,X)=5
-3530   NEXT X
-3540 NEXT Y
-3550 FOR Y=10 TO 25 : FOR X=0 TO 15
-3560 D2=(X-4.5)^2+(Y-20)^2 : IF D2>=8 AND D2<21 THEN ART(1,Y,X)=7
-3570 IF Y=19 OR Y=20 THEN IF X>=8 THEN ART(1,Y,X)=6
-3580 IF (X=11 OR X=14) AND Y>=15 AND Y<=19 THEN ART(1,Y,X)=7
-3590 NEXT X : NEXT Y : GOSUB 3900 : RETURN
-3600 REM Eight floor and ceiling shades, each kept in a cached simple variable
-3610 FOR L=0 TO 7
-3620   SHADE=0.1+L*0.065
-3630   FOR Y=0 TO 31 : FOR X=0 TO 31
-3640     GRAIN=3*SIN(X*0.6+Y*0.9) : LUMA=93+GRAIN+((X\16+Y\16) MOD 2)*8
-3650     IF X MOD 16=0 OR Y MOD 16=0 THEN LUMA=56
-3660     PLOT X,Y,RGB(INT(LUMA*SHADE),INT(LUMA*SHADE*1.02),INT(LUMA*SHADE*1.03))
-3670     LUMA=65+GRAIN : IF (X+(Y\8 MOD 2)*8) MOD 16=0 OR Y MOD 8=0 THEN LUMA=39
-3680     PLOT X+40,Y,RGB(INT(LUMA*SHADE*0.75),INT(LUMA*SHADE*0.84),INT(LUMA*SHADE))
-3690   NEXT X : NEXT Y
-3700   ON L+1 GOSUB 3720,3730,3740,3750,3760,3770,3780,3790
-3710 NEXT L : RETURN
-3720 F0$=SPRITE$(0,0,31,31) : C0$=SPRITE$(40,0,71,31) : RETURN
-3730 F1$=SPRITE$(0,0,31,31) : C1$=SPRITE$(40,0,71,31) : RETURN
-3740 F2$=SPRITE$(0,0,31,31) : C2$=SPRITE$(40,0,71,31) : RETURN
-3750 F3$=SPRITE$(0,0,31,31) : C3$=SPRITE$(40,0,71,31) : RETURN
-3760 F4$=SPRITE$(0,0,31,31) : C4$=SPRITE$(40,0,71,31) : RETURN
-3770 F5$=SPRITE$(0,0,31,31) : C5$=SPRITE$(40,0,71,31) : RETURN
-3780 F6$=SPRITE$(0,0,31,31) : C6$=SPRITE$(40,0,71,31) : RETURN
-3790 F7$=SPRITE$(0,0,31,31) : C7$=SPRITE$(40,0,71,31) : RETURN
-3900 FOR Y=1 TO 30 : FOR X=0 TO 15
-3910 D2=((X-7.5)/7)^2+((Y-16)/14)^2
-3920 IF D2>0.75 AND D2<=1 THEN ART(2,Y,X)=9
-3930 IF D2>0.86 AND D2<0.95 THEN ART(2,Y,X)=10
-3940 IF D2<=0.75 THEN ART(2,Y,X)=8
-3950 IF Y<12 AND D2<0.75 AND Y MOD 3=0 THEN ART(2,Y,X)=10
-3960 NEXT X : NEXT Y : RETURN
-4000 REM Perspective floor casting: affine interpolation is exact along each row
-4010 FRECTANGLE 0,40,639,439,RGB(9,13,19)
-4020 FOR FY=40 TO INT(HOR-18)-FSTEP STEP FSTEP
-4030   Y0=FY : Y1=MIN(HOR-18,FY+FSTEP) : D0=0.5*PROJ/(HOR-Y0) : D1=0.5*PROJ/(HOR-Y1)
-4040   U0=(PX+(DX-PLX)*D0)*32 : V0=(PY+(DY-PLY)*D0)*32
-4050   U1=(PX+(DX+PLX)*D0)*32 : V1=(PY+(DY+PLY)*D0)*32
-4060   U2=(PX+(DX-PLX)*D1)*32 : V2=(PY+(DY-PLY)*D1)*32
-4070   U3=(PX+(DX+PLX)*D1)*32 : V3=(PY+(DY+PLY)*D1)*32
-4080   CYA=2*HOR-Y0 : CYB=2*HOR-Y1 : L=MAX(0,MIN(7,INT((0.15+0.85/(1+D0*0.3))*7)))
-4090   ON L+1 GOSUB 4200,4220,4240,4260,4280,4300,4320,4340
-4100 NEXT FY : RETURN
-4200 TQUAD F0$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4210 TQUAD C0$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4220 TQUAD F1$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4230 TQUAD C1$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4240 TQUAD F2$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4250 TQUAD C2$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4260 TQUAD F3$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4270 TQUAD C3$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4280 TQUAD F4$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4290 TQUAD C4$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4300 TQUAD F5$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4310 TQUAD C5$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4320 TQUAD F6$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4330 TQUAD C6$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-4340 TQUAD F7$,0,Y0,U0,V0,640,Y0,U1,V1,640,Y1,U3,V3,0,Y1,U2,V2
-4350 TQUAD C7$,0,CYA,U0,V0,640,CYA,U1,V1,640,CYB,U3,V3,0,CYB,U2,V2 : RETURN
-5000 REM DDA rays use camera-plane distance: walls and sprites share one depth
-5010 FOR C=0 TO COLS-1
-5020   CAMERA=2*(C+0.5)/COLS-1 : RX=DX+PLX*CAMERA : RY=DY+PLY*CAMERA
-5030   GX=INT(PX) : GY=INT(PY) : DELX=1E+30 : DELY=1E+30
-5040   IF ABS(RX)>1E-12 THEN DELX=ABS(1/RX)
-5050   IF ABS(RY)>1E-12 THEN DELY=ABS(1/RY)
-5060   SX=1 : SY=1 : SDX=(GX+1-PX)*DELX : SDY=(GY+1-PY)*DELY
-5070   IF RX<0 THEN SX=-1:SDX=(PX-GX)*DELX
-5080   IF RY<0 THEN SY=-1:SDY=(PY-GY)*DELY
-5090   FOUND=0
-5100   FOR DSTEP=1 TO N*2
-5110     IF SDX<SDY THEN SDX=SDX+DELX:GX=GX+SX:SIDE=0 ELSE SDY=SDY+DELY:GY=GY+SY:SIDE=1
-5120     IF GX<0 OR GY<0 OR GX>=N OR GY>=N THEN DIST=FAR:FOUND=1:MATL=1:GOTO 5160
-5130     SEEN(GY,GX)=1
-5140     MATL=W(GY,GX) : IF MATL>0 THEN FOUND=1:GOTO 5160
-5150   NEXT DSTEP
-5160   IF FOUND=0 THEN DIST=FAR:MATL=1:GOTO 5190
-5170   DIST=SDX-DELX : IF SIDE=1 THEN DIST=SDY-DELY
-5180   DIST=MAX(0.001,DIST)
-5190   ZBUF(C)=DIST : WALLX=PY+DIST*RY : IF SIDE=1 THEN WALLX=PX+DIST*RX
-5200   WALLX=WALLX-INT(WALLX) : TEXX=INT(WALLX*32)
-5210   IF (SIDE=0 AND RX>0) OR (SIDE=1 AND RY<0) THEN TEXX=31-TEXX
-5220   GL=0 : IF GX>=0 AND GY>=0 AND GX<N AND GY<N THEN GL=LIGHT(GY,GX)
-5230   SHADE=(0.1+0.82/(1+DIST*0.2)+GL*0.13) : IF SIDE=1 THEN SHADE=SHADE*0.82
-5240   SH=MAX(0,MIN(31,INT(SHADE*31))) : TILE=(MATL-1)*32+SH
-5250   U=(TILE MOD 8)*32+TEXX+0.5 : V=(TILE\8)*32 : LH=PROJ/DIST
-5260   WLOW=HOR-LH*0.5 : WHIGH=HOR+LH*0.5 : YB=MAX(40,WLOW) : YT=MIN(440,WHIGH)
-5270   VB=V+(YB-WLOW)*32/LH : VT=V+(YT-WLOW)*32/LH
-5280   TRECTANGLE ATLAS$,C*CW,YB,(C+1)*CW,YT,U,VB,U,VT
-5290 NEXT C : RETURN
-6000 REM Depth-sort objects; torches use wall planes, key and portal billboards
-6010 FOR I=0 TO NO-1 : ORDER(I)=I : OD(I)=(OX(I)-PX)^2+(OY(I)-PY)^2 : NEXT I
-6020 FOR I=0 TO NO-2 : FOR J=I+1 TO NO-1
-6030 IF OD(ORDER(I))<OD(ORDER(J)) THEN TMP=ORDER(I):ORDER(I)=ORDER(J):ORDER(J)=TMP
-6040 NEXT J : NEXT I
-6050 FOR OBJ=0 TO NO-1
-6060   I=ORDER(OBJ) : SK=KIND(I) : IF SK=1 AND HAVE THEN GOTO 6390
-6070   DDY=OY(I)-PY : DDX=OX(I)-PX : DEPTH=DDX*DX+DDY*DY : ACROSS=-DDX*DY+DDY*DX
-6075   IF SK=0 THEN GOSUB 6500:GOTO 6390
-6080   IF DEPTH<0.12 OR DEPTH>FAR THEN GOTO 6390
-6090   CENTER=320+PROJ*ACROSS/DEPTH : SW=PROJ*0.28/DEPTH : SH=PROJ*0.83/DEPTH : Z0=0.06
-6100   IF SK=1 THEN SW=PROJ*0.46/DEPTH:SH=PROJ*0.46/DEPTH:Z0=0.25+0.035*SIN(T*3)
-6110   IF SK=2 THEN SW=PROJ*0.75/DEPTH:SH=PROJ*0.91/DEPTH:Z0=0.02
-6120   SLEFT=CENTER-SW*0.5 : BOTTOM=HOR+(Z0-0.5)*PROJ/DEPTH
-6130   IF SLEFT>639 OR SLEFT+SW<0 THEN GOTO 6390
-6140   XLO=MAX(0,INT(SLEFT/CW)) : XHI=MIN(COLS-1,INT((SLEFT+SW)/CW))
-6150   FLICKER=1+0.025*SIN(T*10+I*2.7)+0.018*SIN(T*17+I)
-6160   FOR SC=XLO TO XHI
-6170     IF DEPTH>=ZBUF(SC) THEN GOTO 6380
-6180     TX=INT(((SC+0.5)*CW-SLEFT)*16/SW) : IF TX<0 OR TX>15 THEN GOTO 6380
-6190     LASTCOL=-1 : STARTY=0
-6200     FOR TY=0 TO 32
-6210       SCOLOR=-1 : IF TY<32 THEN SCOLOR=ART(SK,TY,TX)
-6220       IF SCOLOR=LASTCOL THEN GOTO 6370
-6230       IF LASTCOL<0 THEN GOTO 6360
-6240       YB=BOTTOM+STARTY*SH/32 : YT=BOTTOM+TY*SH/32
-6250       IF SK=0 AND STARTY>=17 THEN YB=BOTTOM+(YB-BOTTOM)*FLICKER:YT=BOTTOM+(YT-BOTTOM)*FLICKER
-6260       YB=MAX(40,INT(YB)) : YT=MIN(439,INT(YT))
-6270       IF YT<YB THEN GOTO 6360
-6280       PC=PAL(LASTCOL)
-6290       FRECTANGLE SC*CW,YB,(SC+1)*CW-1,YT,PC
-6360       STARTY=TY : LASTCOL=SCOLOR
-6370     NEXT TY
-6380   NEXT SC
-6390 NEXT OBJ : RETURN
-6500 REM Wall-aligned torch planes, elevated above the floor on iron brackets
-6510 PN=DDX*WNX(I)+DDY*WNY(I) : IF PN>=-0.015 THEN RETURN
-6515 VX=-WNY(I) : VY=WNX(I) : TPD=VX*DX+VY*DY : TPA=-VX*DY+VY*DX
-6520 TD1=DEPTH-0.12*TPD : TC1=ACROSS-0.12*TPA : TD2=DEPTH+0.12*TPD : TC2=ACROSS+0.12*TPA
-6530 IF TD1<=0.08 AND TD2<=0.08 THEN RETURN
-6540 IF TD1<0.08 THEN TC1=TC1+(TC2-TC1)*(0.08-TD1)/(TD2-TD1):TD1=0.08
-6545 IF TD2<0.08 THEN TC2=TC2+(TC1-TC2)*(0.08-TD2)/(TD1-TD2):TD2=0.08
-6550 X1=320+PROJ*TC1/TD1 : X2=320+PROJ*TC2/TD2
-6560 XLO=MAX(0,INT(MIN(X1,X2)/CW)) : XHI=MIN(COLS-1,INT(MAX(X1,X2)/CW))
-6565 IF XLO>XHI THEN RETURN
-6570 FLICKER=1+0.025*SIN(T*10+I*2.7)+0.018*SIN(T*17+I)
-6580 FOR SC=XLO TO XHI
-6590   CAMERA=2*(SC+0.5)/COLS-1 : RX=DX+PLX*CAMERA : RY=DY+PLY*CAMERA : DEN=RX*WNX(I)+RY*WNY(I)
-6600   IF ABS(DEN)<1E-9 THEN GOTO 6750
-6610   TD=PN/DEN : IF TD<0.08 OR TD>=ZBUF(SC) OR TD>FAR THEN GOTO 6750
-6620   TX=INT((0.5+((PX+RX*TD-OX(I))*VX+(PY+RY*TD-OY(I))*VY)/0.24)*16) : IF TX<0 OR TX>15 THEN GOTO 6750
-6630   SH=PROJ*0.52/TD : BOTTOM=HOR-0.1*PROJ/TD : LASTCOL=-1 : STARTY=0
-6640   FOR TY=0 TO 32
-6650     SCOLOR=-1 : IF TY<32 THEN SCOLOR=ART(0,TY,TX)
-6660     IF SCOLOR=LASTCOL THEN GOTO 6740
-6670     IF LASTCOL<0 THEN GOTO 6730
-6680     YB=BOTTOM+STARTY*SH/32 : YT=BOTTOM+TY*SH/32
-6690     IF STARTY>=17 THEN YB=BOTTOM+(YB-BOTTOM)*FLICKER:YT=BOTTOM+(YT-BOTTOM)*FLICKER
-6700     YB=MAX(40,INT(YB)) : YT=MIN(439,INT(YT))
-6710     IF YT<YB THEN GOTO 6730
-6720     FRECTANGLE SC*CW,YB,(SC+1)*CW-1,YT,PAL(LASTCOL)
-6730     STARTY=TY : LASTCOL=SCOLOR
-6740   NEXT TY
-6750 NEXT SC : RETURN
-7000 REM Explored minimap; unseen rooms stay hidden until rays visit them
-7010 FRECTANGLE 508,310,635,437,RGB(7,14,20)
-7020 RECTANGLE 508,310,635,437,RGB(105,127,120)
-7030 FOR Y=0 TO N-1 : FOR X=0 TO N-1
-7040 IF SEEN(Y,X)=0 THEN GOTO 7080
-7050 MC=RGB(46,56,57) : IF W(Y,X)>0 THEN MC=RGB(116,126,124)
-7060 IF W(Y,X)=3 THEN MC=RGB(155,101,42)
-7070 FRECTANGLE 515+X*6,431-Y*6,519+X*6,427-Y*6,MC
-7080 NEXT X : NEXT Y
-7090 IF HAVE=0 AND SEEN(INT(OY(12)),INT(OX(12))) THEN FCIRCLE 515+OX(12)*6,432-OY(12)*6,2,PAL(7)
-7100 IF SEEN(16,17) THEN FCIRCLE 518+17*6,429-16*6,2,PAL(9)
-7110 AX=515+PX*6 : AY=432-PY*6 : FCIRCLE AX,AY,2,RGB(244,225,155)
-7120 DRAW AX,AY,AX+DX*6,AY-DY*6,RGB(244,225,155)
-7130 RETURN
-7500 REM A brass lantern held in the foreground, with a small animated flame
-7510 LX=548+SIN(PACE)*2 : LY=42+COS(PACE)*3
-7520 FRECTANGLE LX-5,LY-4,LX+48,LY+73,RGB(17,18,21)
-7530 FCIRCLE LX+22,LY+81,12,RGB(152,112,51) : FCIRCLE LX+22,LY+81,8,RGB(14,18,23)
-7540 FRECTANGLE LX,LY,LX+43,LY+68,RGB(182,134,60)
-7550 FRECTANGLE LX+5,LY+10,LX+38,LY+60,RGB(24,40,43)
-7560 FCIRCLE LX+22,LY+27,10,RGB(93,53,23),1.7
-7570 FH=45+SIN(T*11)*1.3 : FTRIANGLE LX+13,LY+23,LX+31,LY+23,LX+22+SIN(T*7)*2,LY+FH,RGB(248,145,33)
-7580 FTRIANGLE LX+18,LY+23,LX+26,LY+23,LX+22,LY+36,RGB(255,234,150)
-7590 FRECTANGLE LX+20,LY+9,LX+24,LY+18,RGB(198,158,89)
-7600 FRECTANGLE LX+3,LY+4,LX+40,LY+8,RGB(240,190,103)
-7610 FRECTANGLE LX-4,LY+61,LX+47,LY+67,RGB(213,163,75)
-7620 FRECTANGLE LX+18,LY+10,LX+20,LY+59,RGB(181,138,61)
-7630 RETURN
-8000 REM HUD and the win overlay are deliberately drawn after the world
-8010 FRECTANGLE 0,0,639,39,RGB(10,17,23) : FRECTANGLE 0,440,639,479,RGB(10,17,23)
-8020 DRAW 0,439,639,439,RGB(124,105,63) : DRAW 0,40,639,40,RGB(124,105,63)
-8030 IF HUD=0 AND WON=0 THEN RETURN
-8040 SMALLFONT TRANSPARENT : INK RGB(233,214,173)
-8050 KS$="--" : IF HAVE THEN KS$="GOLD"
-8060 FS$="FREE" : IF CAP THEN FS$="CAP60"
-8062 AS$="OFF" : IF MUSIC AND WON=0 THEN AS$="ON"
-8064 IF MUTED THEN AS$="MUTE"
-8070 LOCATE 2,0 : GPRINT "AVL DUNGEON  ";COLS;" COLS  KEY:";KS$;"  ";USING "###.0";FPS;" FPS ";FS$;"  AUDIO:";AS$
-8080 INK RGB(143,174,182) : LOCATE 2,1
-8090 IF T<MSGT THEN GPRINT MSG$ ELSE GPRINT "RENDER ";USING "##.0";RENDERMS;" ms  |  FIND THE KEY - OPEN THE GATE - ESCAPE"
-8100 LOCATE 2,28 : GPRINT "W/S OR UP/DOWN WALK  LEFT/RIGHT TURN  A/D STRAFE  SPACE RUN  E GATE"
-8110 LOCATE 2,29 : GPRINT "M MAP  Q QUALITY  F FPS  R RESTART  H HUD  B MUSIC  N MUTE  ESC EXIT"
-8120 IF WON=0 THEN RETURN
-8130 FRECTANGLE 115,183,525,292,RGB(10,22,29) : RECTANGLE 115,183,525,292,PAL(9)
-8140 BIGFONT TRANSPARENT : INK PAL(10) : LOCATE 14,13 : GPRINT "YOU ESCAPED!"
-8150 SMALLFONT TRANSPARENT : INK RGB(232,208,147) : LOCATE 27,17 : GPRINT "R - RETURN TO THE DUNGEON"
-8160 RETURN
-9000 REM Original PCM assets, loaded once; channel 1 music, 2 steps, 3-5 events
-9010 AUDIO ON : MUSIC=1 : MUTED=0
-9020 AUDIO LOAD 1,"assets/audio/dungeon/lantern-path-loop.wav"
-9030 AUDIO LOAD 2,"assets/audio/dungeon/step-stone-a.wav"
-9040 AUDIO LOAD 3,"assets/audio/dungeon/step-stone-b.wav"
-9050 AUDIO LOAD 4,"assets/audio/dungeon/key-chime.wav"
-9060 AUDIO LOAD 5,"assets/audio/dungeon/gate-open.wav"
-9070 AUDIO LOAD 6,"assets/audio/dungeon/victory-fanfare.wav"
-9075 AUDIO LOAD 7,"assets/audio/dungeon/gate-locked.wav"
-9080 RETURN
-9100 REM Distance-driven alternating footsteps; pressing against a wall is silent
-9110 IF WON OR MOVED<0.000001 THEN RETURN
-9120 FOOTDIST=FOOTDIST+MOVED
-9130 IF FOOTDIST<0.62 THEN RETURN
-9140 FOOTDIST=FOOTDIST-0.62 : FOOT=1-FOOT
-9150 IF MUTED THEN RETURN
-9160 AUDIO PLAY 2,2+FOOT,0,0.4,(FOOT*2-1)*0.1,1+RUNNING*0.08
-9170 RETURN
-9200 REM Audio preferences survive R; re-enabling output starts a fresh music loop
-9210 IF K$="B" THEN MUSIC=1-MUSIC:GOSUB 9250
-9220 IF K$="N" THEN MUTED=1-MUTED:GOSUB 9260
-9230 RETURN
-9250 IF MUSIC=0 THEN AUDIO STOP 1:RETURN
-9252 IF MUTED=0 AND WON=0 THEN AUDIO PLAY 1,1,1,0.7
-9254 RETURN
-9260 IF MUTED THEN AUDIO OFF:RETURN
-9262 AUDIO ON : GOSUB 9250 : RETURN
-9300 IF MUTED=0 THEN AUDIO PLAY 3,4,0,0.85
-9305 RETURN
-9310 IF MUTED=0 THEN AUDIO PLAY 4,5,0,0.85
-9315 RETURN
-9320 AUDIO STOP 1 : AUDIO STOP 2
-9322 IF MUTED=0 THEN AUDIO PLAY 5,6,0,0.85
-9324 RETURN
-9330 REM The stuck latch shares the gate channel; key repeat cannot stutter it.
-9332 IF MUTED OR T<LOCKUNTIL THEN RETURN
-9334 AUDIO PLAY 4,7,0,0.85 : LOCKUNTIL=T+0.5
-9336 RETURN
+10 ' A first-person maze with textured walls, music and sound effects.
+20 ' Find the key, open the gate and reach the escape portal.
+30 ' W/S or UP/DOWN walks; LEFT/RIGHT turns; A/D strafes; SPACE runs; E opens the gate.
+40 ' M map; Q quality; F FPS limit; R restart; H HUD; B music; N mute; ESC exit.
+50 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
+60 N=19 : Cols=640 : Cap=1 : MapOn=0 : Hud=1 : Radius=0.18
+70 Plane=0.66 : Proj=320/Plane : Far=18 : Nt=12 : No=14
+80 DIM W(N-1,N-1),Seen(N-1,N-1),Light(N-1,N-1),Rows$(N-1)
+90 DIM Ox(No-1),Oy(No-1),Wnx(Nt-1),Wny(Nt-1),Kind(No-1),Order(No-1),Od(No-1),ZBuf(639)
+100 DIM Art(2,31,15),Pal(10),Br(3071),Bg(3071),Bb(3071)
+110 DIM D(639,479),CamX(N,N),CamZ(N,N),Glow(N,N)
+120 DIM Ax(3),Az(3),Au(3),Av(3),Al(3),Bx(3),Bz(3),Bu(3),Bv(3),Bl(3)
+130 ' Shared state: maze/player/audio, immutable textures and reusable clipping buffers.
+140 DIM Fx(3),Fy(3),Fq(3),Fr(3),Fg(3),Fb(3)
+145 DIM MaskRuns(2,15),MaskRunStart(2,15,31),MaskRunEnd(2,15,31),MaskRunColor(2,15,31)
+150 SMALLFONT TRANSPARENT : INK RGB(224,201,144)
+160 LOCATE 3,2 : GPRINT "AVL DUNGEON - CARVING STONE AND LIGHT..." : FRAME
+170 T=0 : CALL loadMaze : CALL buildWallTextures : CALL buildObjectArt(Art,Pal) : CALL buildMaskRuns(Art,MaskRuns,MaskRunStart,MaskRunEnd,MaskRunColor) : CALL loadAudio : CALL resetPlay
+180 Last=TIME : TLast=TIME : Fps=0 : Count=0 : Frames=0 : T=0
+190 ' Main loop; elapsed-time motion and bounded collision substeps.
+200 WHILE 1
+210   Now=TIME : Dt=MAX(0.001,MIN(0.05,Now-Last)) : Last=Now : T=T+Dt
+220   K$=UPPER$(INKEY$)
+230   IF K$=CHR$(27) OR KEYDOWN(27) THEN EXIT WHILE
+240   IF K$="M" THEN MapOn=1-MapOn
+250   IF K$="H" THEN Hud=1-Hud
+260   IF K$="F" THEN Cap=1-Cap
+270   IF K$="Q" THEN Cols=Cols*2:IF Cols>640 THEN Cols=160
+280   IF K$="R" THEN
+290     CALL resetPlay : Last=TIME
+300   ELSE
+310     CALL handleAudioKeys
+320     Cw=640/Cols
+330     Turn=ABS(KEYDOWN(29))-ABS(KEYDOWN(28))
+340     Walk=MAX(ABS(KEYDOWN(87)),ABS(KEYDOWN(30)))-MAX(ABS(KEYDOWN(83)),ABS(KEYDOWN(31)))
+350     Strafe=ABS(KEYDOWN(68))-ABS(KEYDOWN(65)) : Running=ABS(KEYDOWN(32))
+360     IF Won THEN Turn=0:Walk=0:Strafe=0
+370     Ang=Ang+Turn*Dt*1.9 : Ang=Ang-2*PI*INT(Ang/(2*PI))
+380     Dx=COS(Ang) : Dy=SIN(Ang) : Plx=-Dy*Plane : Ply=Dx*Plane
+390     CALL movePlayer : CALL tryGate
+400     Hor=240+SIN(Pace)*2 : Tr=TIME : CLG OFFSCREEN
+410     CALL drawPlanes : CALL drawWalls : CALL drawObjects : CALL drawLantern
+420     IF MapOn THEN CALL drawMinimap
+430     RenderMs=0.85*RenderMs+150*(TIME-Tr)
+440     CALL drawHud
+450     IF Cap THEN FRAME 60 ELSE FRAME
+460     Count=Count+1 : Frames=Frames+1
+470     IF TIME-TLast>=0.5 THEN Fps=Count/(TIME-TLast):Count=0:TLast=TIME
+480   ENDIF
+490 WEND
+500 AUDIO STOP : SCREEN CLOSE
+510 END
+520 ' Circle movement, normalized diagonals, separate-axis sliding
+530 DEF SUB movePlayer
+540   LOCAL Speed, Mx, My, Steps, Mstep, OldX, OldY, Nx
+550   LOCAL Ny
+560   Speed=2.2+Running*1.3 : Mx=(Dx*Walk-Dy*Strafe)*Speed*Dt : My=(Dy*Walk+Dx*Strafe)*Speed*Dt
+570   IF Walk<>0 AND Strafe<>0 THEN Mx=Mx*0.70710678118655:My=My*0.70710678118655
+580   Steps=MAX(1,INT(MAX(ABS(Mx),ABS(My))/0.08)+1) : Mx=Mx/Steps : My=My/Steps
+590   OldX=Px : OldY=Py
+600   FOR Mstep=1 TO Steps
+610     Nx=Px+Mx : IF FNCanOccupy(W,Nx,Py) THEN Px=Nx
+620     Ny=Py+My : IF FNCanOccupy(W,Px,Ny) THEN Py=Ny
+630   NEXT Mstep
+640   Moved=SQR((Px-OldX)^2+(Py-OldY)^2) : Pace=Pace+Moved*7
+650   CALL updateFootsteps
+660   Seen(INT(Py),INT(Px))=1
+670   IF Have=0 AND (Px-Ox(12))^2+(Py-Oy(12))^2<0.3 THEN
+680     Have=1:Msg$="GOLD KEY FOUND - FIND THE LOCKED GATE":MsgT=T+4:CALL playKey
+690   ENDIF
+700   IF Won=0 AND Opened AND (Px-Ox(13))^2+(Py-Oy(13))^2<0.28 THEN
+710     Won=1:Msg$="YOU ESCAPED AVL DUNGEON!  PRESS R TO EXPLORE AGAIN":MsgT=T+99999:CALL playVictory
+720   ENDIF
+730 SUBEND
+740 ' Exact circle-to-solid-tile test; whole World array is passed by reference.
+750 DEF FNCanOccupy(World,PosX,PosY)
+760   LOCAL Cx,Cy,Qx,Qy
+770   FNCanOccupy=0
+780   IF PosX<Radius OR PosY<Radius OR PosX>N-Radius OR PosY>N-Radius THEN EXIT FN
+790   FOR Cy=INT(PosY-Radius) TO INT(PosY+Radius)
+800     FOR Cx=INT(PosX-Radius) TO INT(PosX+Radius)
+810       IF World(Cy,Cx)<>0 THEN
+820         Qx=MAX(Cx,MIN(Cx+1,PosX)) : Qy=MAX(Cy,MIN(Cy+1,PosY))
+830         IF (PosX-Qx)^2+(PosY-Qy)^2<Radius*Radius THEN EXIT FN
+840       ENDIF
+850     NEXT Cx
+860   NEXT Cy
+870   FNCanOccupy=1
+880 FNEND
+890 ' The key is collected by proximity; E opens only the nearby gate
+900 DEF SUB tryGate
+910   LOCAL Dd, Facing
+920   IF K$<>"E" OR Opened OR Won THEN EXIT SUB
+930   Dd=(Px-14.5)^2+(Py-15.5)^2 : Facing=(14.5-Px)*Dx+(15.5-Py)*Dy
+940   IF Dd>2.25 OR Facing<0.15 THEN Msg$="MOVE CLOSER AND FACE THE LOCKED GATE":MsgT=T+2:EXIT SUB
+950   IF Have=0 THEN Msg$="THE GATE NEEDS THE GOLD KEY":MsgT=T+3:CALL playLatch:EXIT SUB
+960   W(15,14)=0 : Opened=1 : Msg$="GATE UNLOCKED - REACH THE BLUE PORTAL" : MsgT=T+4 : CALL playGate
+970 SUBEND
+980 ' Reset play state; generated textures and display settings are retained
+990 DEF SUB resetPlay
+1000   Px=2.5 : Py=2.5 : Ang=0 : Pace=0 : Have=0 : Opened=0 : Won=0
+1010   MAT Seen=0 : W(15,14)=3 : RenderMs=0
+1020   Msg$="FIND THE GOLD KEY, UNLOCK THE GATE, REACH THE PORTAL" : MsgT=T+4
+1030   AUDIO STOP : FootDist=0 : Foot=0 : LockUntil=0 : CALL syncMusic
+1040 SUBEND
+1050 ' Maze layout: nine rooms, loops, pillars and a sealed exit room
+1060 DEF SUB loadMaze
+1070   LOCAL Y, X, I, A$
+1080   RESTORE 1260
+1090   FOR Y=0 TO N-1
+1100     READ Rows$(Y)
+1110     FOR X=0 TO N-1
+1120       A$=MID$(Rows$(Y),X+1,1) : W(Y,X)=0
+1130       IF A$="#" THEN
+1140         W(Y,X)=1 : IF (X*7+Y*3) MOD 11<3 THEN W(Y,X)=2
+1150       ENDIF
+1160       IF A$="D" THEN W(Y,X)=3
+1170       IF A$="K" THEN Ox(12)=X+0.5:Oy(12)=Y+0.5
+1180     NEXT X
+1190   NEXT Y
+1200   RESTORE 1340
+1210   FOR I=0 TO Nt-1 : READ Ox(I),Oy(I),Wnx(I),Wny(I) : Kind(I)=0 : NEXT I
+1220   Kind(12)=1 : Ox(13)=17.5 : Oy(13)=16.5 : Kind(13)=2
+1230   CALL buildLighting(Light,Glow,Ox,Oy)
+1240 SUBEND
+1250 ' Move the single K in this map to reposition the gold key.
+1260 DATA "###################","#.....##.....##...#","#.................#"
+1270 DATA "#.....##.....##...#","#.....###.#####...#","##.######.######.##"
+1280 DATA "##.###.....#####.##","#...##..#..##.....#","#..............#..#"
+1290 DATA "#...##.....##..#.K#","#...#####.###..#..#","#...#####.###.....#"
+1300 DATA "##.######.#...#####","##.#####....#######","#.....##....###...#"
+1310 DATA "#.............D...#","#.....##....###..E#","#.....##....###...#"
+1320 DATA "###################"
+1330 ' Wall torch centres and outward normals; 0.04 in front of solid stone
+1340 DATA 3.5,1.04,0,1,5.96,3.5,-1,0,10.5,1.04,0,1,11.5,3.96,0,-1
+1350 DATA 17.96,2.5,-1,0,1.04,9.5,1,0,7.5,6.04,0,1,17.96,8.5,-1,0
+1360 DATA 16.5,11.96,0,-1,3.5,17.96,0,-1,9.5,17.96,0,-1,16.5,14.04,0,1
+1370 ' Stone/moss/iron-bound oak base texels; gentle detail limits shimmer
+1380 DEF SUB buildWallTextures
+1390   LOCAL M, Y, X, I, By, Bx, Grain, Var
+1400   LOCAL R, G, B, L, Tile, Ax, Ay, Shade
+1410   LOCAL C
+1420   FOR M=0 TO 2
+1430     FOR Y=0 TO 31
+1440       FOR X=0 TO 31
+1450         I=M*1024+Y*32+X : By=Y\8 : Bx=(X+(By MOD 2)*8) MOD 16
+1460         Grain=3*SIN(X*0.8+Y*0.6)+2*COS(Y*0.9-X*0.4)
+1470         Var=((X+(By MOD 2)*8)\16*7+By*11) MOD 13-6
+1480         R=105+Var+Grain : G=116+Var+Grain : B=124+Var+Grain
+1490         IF Bx<1 OR Y MOD 8<1 THEN R=39:G=44:B=51
+1500         IF Bx=1 OR Y MOD 8=1 THEN R=R+15:G=G+15:B=B+15
+1510         IF M=1 THEN R=R*0.83:G=G*0.94:B=B*0.82
+1520         IF M=2 THEN
+1530           R=97+10*SIN(X*0.8)+Grain : G=60+5*SIN(X*0.8)+Grain : B=32+Grain
+1540           IF X MOD 8=0 THEN R=44:G=29:B=20
+1550           IF Y=6 OR Y=7 OR Y=24 OR Y=25 THEN R=65:G=73:B=79
+1560           IF (X=3 OR X=27) AND (Y=7 OR Y=24) THEN R=190:G=156:B=88
+1570         ENDIF
+1580         Br(I)=MAX(0,R) : Bg(I)=MAX(0,G) : Bb(I)=MAX(0,B)
+1590       NEXT X
+1600     NEXT Y
+1610   NEXT M
+1620   ' One immutable variable holds a 256 x 384 prelit texture atlas.
+1630   ' Simple ATLAS$ enables the interpreter 's decoded texture cache.
+1640   FOR M=0 TO 2
+1650     FOR L=0 TO 31
+1660       Tile=M*32+L : Ax=(Tile MOD 8)*32 : Ay=(Tile\8)*32 : Shade=0.11+L*0.89/31
+1670       FOR Y=0 TO 31
+1680         FOR X=0 TO 31
+1690           I=M*1024+Y*32+X : C=RGB(INT(Br(I)*Shade),INT(Bg(I)*Shade),INT(Bb(I)*Shade))
+1700           PLOT Ax+X,Ay+Y,C
+1710         NEXT X
+1720       NEXT Y
+1730     NEXT L
+1740   NEXT M
+1750   Atlas$=SPRITE$(0,0,255,383)
+1760   CALL buildPlaneTextures
+1770 SUBEND
+1780 ' Tiny pixel masks: wall-mounted torch, gold key, cyan escape portal
+1790 DEF SUB buildObjectArt(Masks,Palette)
+1800   LOCAL Y, X, D2
+1810   MAT Masks=-1
+1820   Palette(0)=RGB(42,44,48) : Palette(1)=RGB(108,94,65) : Palette(2)=RGB(188,118,44)
+1830   Palette(3)=RGB(248,87,19) : Palette(4)=RGB(255,161,27) : Palette(5)=RGB(255,234,127)
+1840   Palette(6)=RGB(236,179,57) : Palette(7)=RGB(255,231,123) : Palette(8)=RGB(20,99,141)
+1850   Palette(9)=RGB(49,205,226) : Palette(10)=RGB(191,250,236)
+1860   FOR Y=1 TO 10 : FOR X=5 TO 10 : Masks(0,Y,X)=0 : IF X=5 OR Y=10 THEN Masks(0,Y,X)=1
+1870   NEXT X : NEXT Y
+1880   FOR Y=7 TO 16 : FOR X=7 TO 8 : Masks(0,Y,X)=1
+1890   NEXT X : NEXT Y
+1900   FOR Y=14 TO 17 : FOR X=3 TO 12 : Masks(0,Y,X)=2 : NEXT X : NEXT Y
+1910   FOR Y=17 TO 30
+1920     FOR X=1 TO 14
+1930       D2=((X-7.5)/6)^2+((Y-23)/8)^2
+1940       IF D2<=1 THEN
+1950         Masks(0,Y,X)=3 : IF D2<0.55 THEN Masks(0,Y,X)=4:IF D2<0.2 THEN Masks(0,Y,X)=5
+1960       ENDIF
+1970     NEXT X
+1980   NEXT Y
+1990   FOR Y=10 TO 25 : FOR X=0 TO 15
+2000       D2=(X-4.5)^2+(Y-20)^2 : IF D2>=8 AND D2<21 THEN Masks(1,Y,X)=7
+2010       IF (Y=19 OR Y=20) AND X>=8 THEN Masks(1,Y,X)=6
+2020       IF (X=11 OR X=14) AND Y>=15 AND Y<=19 THEN Masks(1,Y,X)=7
+2030   NEXT X : NEXT Y : CALL buildPortalArt(Masks)
+2040 SUBEND
+2050 ' One unlit texture per plane; TQUAD supplies the vertex lighting.
+2060 DEF SUB buildPlaneTextures
+2070   LOCAL Y, X, Grain, Luma
+2080   FOR Y=0 TO 31 : FOR X=0 TO 31
+2090       Grain=3*SIN(X*0.6+Y*0.9) : Luma=93+Grain+((X\16+Y\16) MOD 2)*8
+2100       IF X MOD 16=0 OR Y MOD 16=0 THEN Luma=56
+2110       PLOT X,Y,RGB(INT(Luma),INT(Luma*1.02),INT(Luma*1.03))
+2120       Luma=65+Grain : IF (X+(Y\8 MOD 2)*8) MOD 16=0 OR Y MOD 8=0 THEN Luma=39
+2130       PLOT X+40,Y,RGB(INT(Luma*0.75),INT(Luma*0.84),INT(Luma))
+2140   NEXT X : NEXT Y
+2150   Floor$=SPRITE$(0,0,31,31) : Ceil$=SPRITE$(40,0,71,31)
+2160 SUBEND
+2170 DEF SUB buildPortalArt(Masks)
+2180   LOCAL Y, X, D2
+2190   FOR Y=1 TO 30 : FOR X=0 TO 15
+2200       D2=((X-7.5)/7)^2+((Y-16)/14)^2
+2210       IF D2>0.75 AND D2<=1 THEN Masks(2,Y,X)=9
+2220       IF D2>0.86 AND D2<0.95 THEN Masks(2,Y,X)=10
+2230       IF D2<=0.75 THEN Masks(2,Y,X)=8
+2240       IF Y<12 AND D2<0.75 AND Y MOD 3=0 THEN Masks(2,Y,X)=10
+2250   NEXT X : NEXT Y
+2260 SUBEND
+2270 ' Fixed world tiles keep texture and torch light in the same place.
+2271 ' Solid cells need no planes; wall/floor rounding can change a few edge pixels.
+2280 DEF SUB drawPlanes
+2290   LOCAL Y, X, Cx, Cz, Near, Pad, Edge, Flicker
+2300   LOCAL Half
+2310   FRECTANGLE 0,40,639,439,RGB(9,13,19) : MAT D=0
+2320   Near=0.1 : Pad=SQR(0.5) : Edge=Pad*SQR(1+Plane^2) : Flicker=1+0.045*SIN(T*10)+0.025*SIN(T*17)
+2330   FOR Y=0 TO N : FOR X=0 TO N
+2340       CamX(Y,X)=-(X-Px)*Dy+(Y-Py)*Dx : CamZ(Y,X)=(X-Px)*Dx+(Y-Py)*Dy
+2350   NEXT X : NEXT Y
+2360   FOR Y=0 TO N-1 : FOR X=0 TO N-1
+2370       Cx=CamX(Y,X)+(Dx-Dy)*0.5 : Cz=CamZ(Y,X)+(Dx+Dy)*0.5
+2380       IF W(Y,X)=0 AND Cz+Pad>=Near AND ABS(Cx)<=Plane*Cz+Edge THEN
+2390         Ax(0)=CamX(Y,X) : Az(0)=CamZ(Y,X) : Au(0)=X*32 : Av(0)=Y*32 : Al(0)=Glow(Y,X)
+2400         Ax(1)=CamX(Y,X+1) : Az(1)=CamZ(Y,X+1) : Au(1)=(X+1)*32 : Av(1)=Y*32 : Al(1)=Glow(Y,X+1)
+2410         Ax(2)=CamX(Y+1,X+1) : Az(2)=CamZ(Y+1,X+1) : Au(2)=(X+1)*32 : Av(2)=(Y+1)*32 : Al(2)=Glow(Y+1,X+1)
+2420         Ax(3)=CamX(Y+1,X) : Az(3)=CamZ(Y+1,X) : Au(3)=X*32 : Av(3)=(Y+1)*32 : Al(3)=Glow(Y+1,X)
+2430         IF MAX(Az(0),Az(1),Az(2),Az(3))>=Near THEN
+2440           IF MIN(Az(0),Az(1),Az(2),Az(3))>=Near THEN
+2450             Bn=4 : MAT Bx=Ax : MAT Bz=Az : MAT Bu=Au : MAT Bv=Av : MAT Bl=Al
+2460             CALL drawClippedPlane(Flicker)
+2470           ELSE
+2480             ' Clip the original triangles separately to preserve their lighting.
+2490             FOR Half=0 TO 1 : CALL clipPlaneTriangle(Half,Near,Flicker) : NEXT Half
+2500           ENDIF
+2510         ENDIF
+2520       ENDIF
+2530   NEXT X : NEXT Y
+2540 SUBEND
+2550 ' Clip triangle 0,1,2 or 0,2,3 against the near plane.
+2560 DEF SUB clipPlaneTriangle(Half,Near,Flicker)
+2570   LOCAL K0, K1, K, Mix
+2580   Bn=0 : K0=Half+2
+2590   FOR K=0 TO 2
+2600     K1=0 : IF K>0 THEN K1=Half+K
+2610     IF (Az(K0)>=Near)<>(Az(K1)>=Near) THEN
+2620       Mix=(Near-Az(K0))/(Az(K1)-Az(K0))
+2630       Bx(Bn)=Ax(K0)+(Ax(K1)-Ax(K0))*Mix : Bz(Bn)=Near : Bu(Bn)=Au(K0)+(Au(K1)-Au(K0))*Mix : Bv(Bn)=Av(K0)+(Av(K1)-Av(K0))*Mix : Bl(Bn)=Al(K0)+(Al(K1)-Al(K0))*Mix : Bn=Bn+1
+2640     ENDIF
+2650     IF Az(K1)>=Near THEN
+2660       Bx(Bn)=Ax(K1) : Bz(Bn)=Az(K1) : Bu(Bn)=Au(K1) : Bv(Bn)=Av(K1) : Bl(Bn)=Al(K1) : Bn=Bn+1
+2670     ENDIF
+2680     K0=K1 : NEXT K
+2690   CALL drawClippedPlane(Flicker)
+2700 SUBEND
+2710 DEF SUB drawClippedPlane(Flicker)
+2720   LOCAL J, Gl
+2730   IF Bn<3 THEN EXIT SUB
+2740   FOR J=0 TO Bn-1
+2750     Fq(J)=1/Bz(J) : Fx(J)=320+Proj*Bx(J)*Fq(J) : Fy(J)=Hor-0.5*Proj*Fq(J) : Gl=Bl(J)*Flicker
+2760     Fr(J)=255*(0.12+1.8*Gl) : Fg(J)=255*(0.14+1.2*Gl) : Fb(J)=255*(0.18+0.55*Gl)
+2770   NEXT J
+2780   IF Bn=4 THEN
+2790     TQUAD Floor$,D,Fx(0),Fy(0),Fq(0),Bu(0),Bv(0),Fr(0),Fg(0),Fb(0),Fx(1),Fy(1),Fq(1),Bu(1),Bv(1),Fr(1),Fg(1),Fb(1),Fx(2),Fy(2),Fq(2),Bu(2),Bv(2),Fr(2),Fg(2),Fb(2),Fx(3),Fy(3),Fq(3),Bu(3),Bv(3),Fr(3),Fg(3),Fb(3)
+2800     TQUAD Ceil$,D,Fx(0),2*Hor-Fy(0),Fq(0),Bu(0),Bv(0),Fr(0),Fg(0),Fb(0),Fx(1),2*Hor-Fy(1),Fq(1),Bu(1),Bv(1),Fr(1),Fg(1),Fb(1),Fx(2),2*Hor-Fy(2),Fq(2),Bu(2),Bv(2),Fr(2),Fg(2),Fb(2),Fx(3),2*Hor-Fy(3),Fq(3),Bu(3),Bv(3),Fr(3),Fg(3),Fb(3)
+2810   ELSE
+2820     TTRIANGLE Floor$,D,Fx(0),Fy(0),Fq(0),Bu(0),Bv(0),Fr(0),Fg(0),Fb(0),Fx(1),Fy(1),Fq(1),Bu(1),Bv(1),Fr(1),Fg(1),Fb(1),Fx(2),Fy(2),Fq(2),Bu(2),Bv(2),Fr(2),Fg(2),Fb(2)
+2830     TTRIANGLE Ceil$,D,Fx(0),2*Hor-Fy(0),Fq(0),Bu(0),Bv(0),Fr(0),Fg(0),Fb(0),Fx(1),2*Hor-Fy(1),Fq(1),Bu(1),Bv(1),Fr(1),Fg(1),Fb(1),Fx(2),2*Hor-Fy(2),Fq(2),Bu(2),Bv(2),Fr(2),Fg(2),Fb(2)
+2840   ENDIF
+2850 SUBEND
+2860 ' DDA rays use camera-plane distance: walls and sprites share one depth
+2870 DEF SUB drawWalls
+2880   LOCAL C, Camera, Rx, Ry, Gx, Gy, DelX, DelY
+2890   LOCAL Sx, Sy, Sdx, Sdy, Dstep, Dist, Matl
+2900   LOCAL Side, WallX, TexX, Gl, Shade, Sh, Tile, U
+2910   LOCAL V, Lh, WLow, WHigh, Yb, Yt, Vb, Vt
+2915   ' The maze keeps a solid border; every ray hits before N*2 steps.
+2920   FOR C=0 TO Cols-1
+2930     Camera=2*(C+0.5)/Cols-1 : Rx=Dx+Plx*Camera : Ry=Dy+Ply*Camera
+2940     Gx=INT(Px) : Gy=INT(Py) : DelX=1E+30 : DelY=1E+30
+2950     IF ABS(Rx)>1E-12 THEN DelX=ABS(1/Rx)
+2960     IF ABS(Ry)>1E-12 THEN DelY=ABS(1/Ry)
+2970     Sx=1 : Sy=1 : Sdx=(Gx+1-Px)*DelX : Sdy=(Gy+1-Py)*DelY
+2980     IF Rx<0 THEN Sx=-1:Sdx=(Px-Gx)*DelX
+2990     IF Ry<0 THEN Sy=-1:Sdy=(Py-Gy)*DelY
+3010     FOR Dstep=1 TO N*2
+3020       IF Sdx<Sdy THEN Sdx=Sdx+DelX:Gx=Gx+Sx:Side=0 ELSE Sdy=Sdy+DelY:Gy=Gy+Sy:Side=1
+3040       Seen(Gy,Gx)=1
+3050       Matl=W(Gy,Gx) : IF Matl>0 THEN EXIT FOR
+3060     NEXT Dstep
+3080     Dist=Sdx-DelX : IF Side=1 THEN Dist=Sdy-DelY
+3090     Dist=MAX(0.001,Dist)
+3130     ZBuf(C)=Dist : WallX=Py+Dist*Ry : IF Side=1 THEN WallX=Px+Dist*Rx
+3140     WallX=WallX-INT(WallX) : TexX=INT(WallX*32)
+3150     IF (Side=0 AND Rx>0) OR (Side=1 AND Ry<0) THEN TexX=31-TexX
+3160     Gl=Light(Gy,Gx)
+3170     Shade=(0.1+0.82/(1+Dist*0.2)+Gl*0.13) : IF Side=1 THEN Shade=Shade*0.82
+3180     Sh=MAX(0,MIN(31,INT(Shade*31))) : Tile=(Matl-1)*32+Sh
+3190     U=(Tile MOD 8)*32+TexX+0.5 : V=(Tile\8)*32 : Lh=Proj/Dist
+3200     WLow=Hor-Lh*0.5 : WHigh=Hor+Lh*0.5 : Yb=MAX(40,WLow) : Yt=MIN(440,WHigh)
+3210     Vb=V+(Yb-WLow)*32/Lh : Vt=V+(Yt-WLow)*32/Lh
+3220     TRECTANGLE Atlas$,C*Cw,Yb,(C+1)*Cw,Yt,U,Vb,U,Vt
+3230   NEXT C
+3240 SUBEND
+3250 ' Depth-sort objects; torches use wall planes, key and portal billboards
+3260 DEF SUB drawObjects
+3270   LOCAL I, Obj, Sk, Ddy, Ddx, Depth, Across
+3280   CALL sortObjects(Order,Od,Ox,Oy)
+3290   FOR Obj=0 TO No-1
+3300     I=Order(Obj) : Sk=Kind(I)
+3310     IF Sk<>1 OR Have=0 THEN
+3320       Ddy=Oy(I)-Py : Ddx=Ox(I)-Px : Depth=Ddx*Dx+Ddy*Dy : Across=-Ddx*Dy+Ddy*Dx
+3330       IF Sk=0 THEN CALL drawWallTorch(I,Ddx,Ddy,Depth,Across) ELSE CALL drawBillboard(Sk,Depth,Across)
+3340     ENDIF
+3350   NEXT Obj
+3360 SUBEND
+3370 ' Key and portal billboards; reject invisible objects before scanning their masks.
+3379 ' Precalculated immutable mask runs preserve color order and transparent gaps.
+3380 DEF SUB drawBillboard(Sk,Depth,Across)
+3390   LOCAL Center,Sw,Sh,Z0,SLeft,Bottom,XLo,XHi, RunIndex
+3400   LOCAL Sc,Tx,LastCol,StartY,Ty,Yb,Yt
+3410   IF Depth<0.12 OR Depth>Far THEN EXIT SUB
+3420   Center=320+Proj*Across/Depth
+3430   IF Sk=1 THEN Sw=Proj*0.46/Depth:Sh=Proj*0.46/Depth:Z0=0.25+0.035*SIN(T*3) ELSE Sw=Proj*0.75/Depth:Sh=Proj*0.91/Depth:Z0=0.02
+3440   SLeft=Center-Sw*0.5 : Bottom=Hor+(Z0-0.5)*Proj/Depth
+3450   IF SLeft>639 OR SLeft+Sw<0 THEN EXIT SUB
+3460   XLo=MAX(0,INT(SLeft/Cw)) : XHi=MIN(Cols-1,INT((SLeft+Sw)/Cw))
+3470   FOR Sc=XLo TO XHi
+3480     Tx=INT(((Sc+0.5)*Cw-SLeft)*16/Sw)
+3490     IF Depth<ZBuf(Sc) AND Tx>=0 AND Tx<=15 THEN
+3510       FOR RunIndex=0 TO MaskRuns(Sk,Tx)-1
+3520         StartY=MaskRunStart(Sk,Tx,RunIndex) : Ty=MaskRunEnd(Sk,Tx,RunIndex) : LastCol=MaskRunColor(Sk,Tx,RunIndex)
+3530         Yb=Bottom+StartY*Sh/32 : Yt=Bottom+Ty*Sh/32
+3540         Yb=MAX(40,INT(Yb)) : Yt=MIN(439,INT(Yt))
+3550         IF Yt>=Yb THEN FRECTANGLE Sc*Cw,Yb,(Sc+1)*Cw-1,Yt,Pal(LastCol)
+3560       NEXT RunIndex
+3620     ENDIF
+3630   NEXT Sc
+3640 SUBEND
+3650 ' Wall-aligned torch planes, elevated above the floor on iron brackets
+3659 ' Precalculated immutable mask runs preserve color order and transparent gaps.
+3660 DEF SUB drawWallTorch(I,Ddx,Ddy,Depth,Across)
+3670   LOCAL Pn, Vx, Vy, Tpd, Tpa, Td1, Tc1, Td2, RunIndex
+3680   LOCAL Tc2, X1, X2, XLo, XHi, Flicker, Sc, Camera
+3690   LOCAL Rx, Ry, Den, Td, Tx, Sh, Bottom, LastCol
+3700   LOCAL StartY, Ty, Yb, Yt
+3710   Pn=Ddx*Wnx(I)+Ddy*Wny(I) : IF Pn>=-0.015 THEN EXIT SUB
+3720   Vx=-Wny(I) : Vy=Wnx(I) : Tpd=Vx*Dx+Vy*Dy : Tpa=-Vx*Dy+Vy*Dx
+3730   Td1=Depth-0.12*Tpd : Tc1=Across-0.12*Tpa : Td2=Depth+0.12*Tpd : Tc2=Across+0.12*Tpa
+3740   IF Td1<=0.08 AND Td2<=0.08 THEN EXIT SUB
+3750   IF Td1<0.08 THEN Tc1=Tc1+(Tc2-Tc1)*(0.08-Td1)/(Td2-Td1):Td1=0.08
+3760   IF Td2<0.08 THEN Tc2=Tc2+(Tc1-Tc2)*(0.08-Td2)/(Td1-Td2):Td2=0.08
+3770   X1=320+Proj*Tc1/Td1 : X2=320+Proj*Tc2/Td2
+3780   XLo=MAX(0,INT(MIN(X1,X2)/Cw)) : XHi=MIN(Cols-1,INT(MAX(X1,X2)/Cw))
+3790   IF XLo>XHi THEN EXIT SUB
+3800   Flicker=1+0.025*SIN(T*10+I*2.7)+0.018*SIN(T*17+I)
+3810   FOR Sc=XLo TO XHi
+3820     Camera=2*(Sc+0.5)/Cols-1 : Rx=Dx+Plx*Camera : Ry=Dy+Ply*Camera : Den=Rx*Wnx(I)+Ry*Wny(I)
+3830     IF ABS(Den)>=1E-9 THEN
+3840       Td=Pn/Den
+3850       IF Td>=0.08 AND Td<ZBuf(Sc) AND Td<=Far THEN
+3860         Tx=INT((0.5+((Px+Rx*Td-Ox(I))*Vx+(Py+Ry*Td-Oy(I))*Vy)/0.24)*16)
+3870         IF Tx>=0 AND Tx<=15 THEN
+3880           Sh=Proj*0.52/Td : Bottom=Hor-0.1*Proj/Td
+3890           FOR RunIndex=0 TO MaskRuns(0,Tx)-1
+3900             StartY=MaskRunStart(0,Tx,RunIndex) : Ty=MaskRunEnd(0,Tx,RunIndex) : LastCol=MaskRunColor(0,Tx,RunIndex)
+3910             Yb=Bottom+StartY*Sh/32 : Yt=Bottom+Ty*Sh/32
+3920             IF StartY>=17 THEN Yb=Bottom+(Yb-Bottom)*Flicker:Yt=Bottom+(Yt-Bottom)*Flicker
+3930             Yb=MAX(40,INT(Yb)) : Yt=MIN(439,INT(Yt))
+3940             IF Yt>=Yb THEN FRECTANGLE Sc*Cw,Yb,(Sc+1)*Cw-1,Yt,Pal(LastCol)
+3950           NEXT RunIndex
+4010         ENDIF
+4020       ENDIF
+4030     ENDIF
+4040   NEXT Sc
+4050 SUBEND
+4060 ' Explored minimap; unseen rooms stay hidden until rays visit them
+4070 DEF SUB drawMinimap
+4080   LOCAL Y, X, Mc, Ax, Ay
+4090   FRECTANGLE 508,310,635,437,RGB(7,14,20)
+4100   RECTANGLE 508,310,635,437,RGB(105,127,120)
+4110   FOR Y=0 TO N-1 : FOR X=0 TO N-1
+4120       IF Seen(Y,X) THEN
+4130         Mc=RGB(46,56,57) : IF W(Y,X)>0 THEN Mc=RGB(116,126,124)
+4140         IF W(Y,X)=3 THEN Mc=RGB(155,101,42)
+4150         FRECTANGLE 515+X*6,431-Y*6,519+X*6,427-Y*6,Mc
+4160       ENDIF
+4170   NEXT X : NEXT Y
+4180   IF Have=0 AND Seen(INT(Oy(12)),INT(Ox(12))) THEN FCIRCLE 515+Ox(12)*6,432-Oy(12)*6,2,Pal(7)
+4190   IF Seen(16,17) THEN FCIRCLE 518+17*6,429-16*6,2,Pal(9)
+4200   Ax=515+Px*6 : Ay=432-Py*6 : FCIRCLE Ax,Ay,2,RGB(244,225,155)
+4210   DRAW Ax,Ay,Ax+Dx*6,Ay-Dy*6,RGB(244,225,155)
+4220 SUBEND
+4230 ' Opaque brass, alpha glass and flame glow; the handle stays open
+4240 DEF SUB drawLantern
+4250   LOCAL Lx, Ly, Fh
+4260   Lx=548+SIN(Pace)*2 : Ly=42+COS(Pace)*3
+4270   FRECTANGLE Lx+5,Ly+10,Lx+38,Ly+60,RGB(85,139,144) ALPHA 0.18
+4280   CIRCLE Lx+22,Ly+81,11,RGB(152,112,51) : CIRCLE Lx+22,Ly+81,10,RGB(213,163,75)
+4290   FRECTANGLE Lx,Ly,Lx+43,Ly+9,RGB(182,134,60) : FRECTANGLE Lx,Ly+60,Lx+43,Ly+68,RGB(182,134,60)
+4300   FRECTANGLE Lx,Ly+10,Lx+4,Ly+59,RGB(182,134,60) : FRECTANGLE Lx+39,Ly+10,Lx+43,Ly+59,RGB(182,134,60)
+4310   FCIRCLE Lx+22,Ly+27,10,RGB(255,161,46),1.7 ALPHA 0.2
+4320   Fh=45+SIN(T*11)*1.3 : FTRIANGLE Lx+13,Ly+23,Lx+31,Ly+23,Lx+22+SIN(T*7)*2,Ly+Fh,RGB(248,145,33) ALPHA 0.9
+4330   FTRIANGLE Lx+18,Ly+23,Lx+26,Ly+23,Lx+22,Ly+36,RGB(255,234,150)
+4340   FRECTANGLE Lx+20,Ly+9,Lx+24,Ly+18,RGB(198,158,89)
+4350   FRECTANGLE Lx+3,Ly+4,Lx+40,Ly+8,RGB(240,190,103)
+4360   FRECTANGLE Lx-4,Ly+61,Lx+47,Ly+67,RGB(213,163,75)
+4370   FRECTANGLE Lx+18,Ly+10,Lx+20,Ly+59,RGB(181,138,61)
+4380 SUBEND
+4390 ' HUD and the win overlay are deliberately drawn after the world
+4400 DEF SUB drawHud
+4410   LOCAL Ks$, Fs$, As$
+4420   FRECTANGLE 0,0,639,39,RGB(10,17,23) : FRECTANGLE 0,440,639,479,RGB(10,17,23)
+4430   DRAW 0,439,639,439,RGB(124,105,63) : DRAW 0,40,639,40,RGB(124,105,63)
+4440   IF Hud=0 AND Won=0 THEN EXIT SUB
+4450   SMALLFONT TRANSPARENT : INK RGB(233,214,173)
+4460   Ks$="--" : IF Have THEN Ks$="GOLD"
+4470   Fs$="FREE" : IF Cap THEN Fs$="CAP60"
+4480   As$="OFF" : IF Music AND Won=0 THEN As$="ON"
+4490   IF Muted THEN As$="MUTE"
+4500   LOCATE 2,0 : GPRINT "AVL DUNGEON  ";Cols;" COLS  KEY:";Ks$;"  ";USING "###.0";Fps;" FPS ";Fs$;"  AUDIO:";As$
+4510   INK RGB(143,174,182) : LOCATE 2,1
+4520   IF T<MsgT THEN GPRINT Msg$ ELSE GPRINT "RENDER ";USING "##.0";RenderMs;" ms  |  FIND THE KEY - OPEN THE GATE - ESCAPE"
+4530   LOCATE 2,28 : GPRINT "W/S OR UP/DOWN WALK  LEFT/RIGHT TURN  A/D STRAFE  SPACE RUN  E GATE"
+4540   LOCATE 2,29 : GPRINT "M MAP  Q QUALITY  F FPS  R RESTART  H HUD  B MUSIC  N MUTE  ESC EXIT"
+4550   IF Won=0 THEN EXIT SUB
+4560   FRECTANGLE 115,183,525,292,RGB(10,22,29) : RECTANGLE 115,183,525,292,Pal(9)
+4570   BIGFONT TRANSPARENT : INK Pal(10) : LOCATE 14,13 : GPRINT "YOU ESCAPED!"
+4580   SMALLFONT TRANSPARENT : INK RGB(232,208,147) : LOCATE 27,17 : GPRINT "R - RETURN TO THE DUNGEON"
+4590 SUBEND
+4600 ' Original PCM assets, loaded once; channel 1 music, 2 steps, 3-5 events
+4610 DEF SUB loadAudio
+4620   AUDIO ON : Music=1 : Muted=0
+4630   AUDIO LOAD 1,"assets/audio/dungeon/lantern-path-loop.wav"
+4640   AUDIO LOAD 2,"assets/audio/dungeon/step-stone-a.wav"
+4650   AUDIO LOAD 3,"assets/audio/dungeon/step-stone-b.wav"
+4660   AUDIO LOAD 4,"assets/audio/dungeon/key-chime.wav"
+4670   AUDIO LOAD 5,"assets/audio/dungeon/gate-open.wav"
+4680   AUDIO LOAD 6,"assets/audio/dungeon/victory-fanfare.wav"
+4690   AUDIO LOAD 7,"assets/audio/dungeon/gate-locked.wav"
+4700 SUBEND
+4710 ' Distance-driven alternating footsteps; pressing against a wall is silent
+4720 DEF SUB updateFootsteps
+4730   IF Won OR Moved<0.000001 THEN EXIT SUB
+4740   FootDist=FootDist+Moved
+4750   IF FootDist<0.62 THEN EXIT SUB
+4760   FootDist=FootDist-0.62 : Foot=1-Foot
+4770   IF Muted THEN EXIT SUB
+4780   AUDIO PLAY 2,2+Foot,0,0.4,(Foot*2-1)*0.1,1+Running*0.08
+4790 SUBEND
+4800 ' Audio preferences survive R; re-enabling output starts a fresh music loop
+4810 DEF SUB handleAudioKeys
+4820   IF K$="B" THEN Music=1-Music:CALL syncMusic
+4830   IF K$="N" THEN Muted=1-Muted:CALL syncOutput
+4840 SUBEND
+4850 DEF SUB syncMusic
+4860   IF Music=0 THEN AUDIO STOP 1:EXIT SUB
+4870   IF Muted=0 AND Won=0 THEN AUDIO PLAY 1,1,1,0.7
+4880 SUBEND
+4890 DEF SUB syncOutput
+4900   IF Muted THEN AUDIO OFF:EXIT SUB
+4910   AUDIO ON : CALL syncMusic
+4920 SUBEND
+4930 DEF SUB playKey
+4940   IF Muted=0 THEN AUDIO PLAY 3,4,0,0.85
+4950 SUBEND
+4960 DEF SUB playGate
+4970   IF Muted=0 THEN AUDIO PLAY 4,5,0,0.85
+4980 SUBEND
+4990 DEF SUB playVictory
+5000   AUDIO STOP 1 : AUDIO STOP 2
+5010   IF Muted=0 THEN AUDIO PLAY 5,6,0,0.85
+5020 SUBEND
+5030 ' The stuck latch shares the gate channel; key repeat cannot stutter it.
+5040 DEF SUB playLatch
+5050   IF Muted OR T<LockUntil THEN EXIT SUB
+5060   AUDIO PLAY 4,7,0,0.85 : LockUntil=T+0.5
+5070 SUBEND
+5080 ' Warm light is tied to fixed map coordinates, independent of the render grid.
+5090 DEF SUB buildLighting(LightMap,VertexGlow,ObjectX,ObjectY)
+5100   LOCAL Y,X,I,L,D2
+5110   FOR Y=0 TO N-1 : FOR X=0 TO N-1
+5120       L=0
+5130       FOR I=0 TO Nt-1
+5140         D2=(X+0.5-ObjectX(I))^2+(Y+0.5-ObjectY(I))^2 : L=MAX(L,1/(1+D2*1.6))
+5150       NEXT I
+5160       LightMap(Y,X)=L
+5170   NEXT X : NEXT Y
+5180   FOR Y=0 TO N : FOR X=0 TO N
+5190       L=0 : FOR I=0 TO Nt-1 : L=MAX(L,1/(1+((X-ObjectX(I))^2+(Y-ObjectY(I))^2)*1.6)) : NEXT I
+5200       VertexGlow(Y,X)=L
+5210   NEXT X : NEXT Y
+5220 SUBEND
+5230 DEF SUB sortObjects(ObjectOrder,ObjectDistance,ObjectX,ObjectY)
+5240   LOCAL I,J,Tmp
+5250   FOR I=0 TO No-1 : ObjectOrder(I)=I : ObjectDistance(I)=(ObjectX(I)-Px)^2+(ObjectY(I)-Py)^2 : NEXT I
+5260   FOR I=0 TO No-2 : FOR J=I+1 TO No-1
+5270       IF ObjectDistance(ObjectOrder(I))<ObjectDistance(ObjectOrder(J)) THEN Tmp=ObjectOrder(I):ObjectOrder(I)=ObjectOrder(J):ObjectOrder(J)=Tmp
+5280   NEXT J : NEXT I
+5290 SUBEND
+20000 ' Immutable mask runs retain the same transparent gaps, color order and Ty=32 flush.
+20010 DEF SUB buildMaskRuns(Masks,Counts,Starts,Ends,Colors)
+20020   LOCAL Sk,Tx,Ty,LastColor,StartY,MaskColor,RunIndex
+20030   FOR Sk=0 TO 2 : FOR Tx=0 TO 15
+20040       RunIndex=0 : LastColor=-1 : StartY=0
+20050       FOR Ty=0 TO 32
+20060         MaskColor=-1 : IF Ty<32 THEN MaskColor=Masks(Sk,Ty,Tx)
+20070         IF MaskColor<>LastColor THEN
+20080           IF LastColor>=0 THEN
+20090             Starts(Sk,Tx,RunIndex)=StartY : Ends(Sk,Tx,RunIndex)=Ty : Colors(Sk,Tx,RunIndex)=LastColor : RunIndex=RunIndex+1
+20100           ENDIF
+20110           StartY=Ty : LastColor=MaskColor
+20120         ENDIF
+20130       NEXT Ty
+20140       Counts(Sk,Tx)=RunIndex
+20150   NEXT Tx : NEXT Sk
+20160 SUBEND

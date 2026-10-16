@@ -1,6 +1,6 @@
 10 GPRINT "hello";
 20 BIGFONT
-30 GPRINT "adios";
+30 GPRINT "bye";
 40 SMALLFONT
 50 GPRINT "hello";
 60 BIGFONT

@@ -39,6 +39,7 @@ def copy_tree(src: Path, dst: Path) -> None:
         "__pycache__", "*.pyc", ".pytest_cache",
         "catalog.tsv",
         "f-scores.csv", "f-records.csv", "f-text.txt",
+        "g-dustline-best.csv",
     )
 
     shutil.copytree(src, dst, ignore=ignore_patterns)
@@ -147,6 +148,8 @@ def build_package(skip_build: bool) -> Path:
     if not exe.exists():
         raise SystemExit(f"Missing release executable: {exe}")
 
+    if stage.resolve().parent != RELEASE_DIR.resolve() or stage.is_symlink():
+        raise SystemExit(f"Unsafe staging directory: {stage}")
     if stage.exists():
         shutil.rmtree(stage)
     if zip_path.exists():

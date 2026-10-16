@@ -15,7 +15,7 @@ fn is_legacy_short_variable_name(name: &str) -> bool {
         [first] => first.is_ascii_uppercase(),
         [first, second] if first.is_ascii_uppercase() && second.is_ascii_digit() => true,
         [first, second] if first.is_ascii_uppercase() && second.is_ascii_uppercase() => {
-            !matches!(name, "TO" | "IF" | "ON" | "PI" | "OR")
+            !matches!(name, "TO" | "IF" | "ON" | "PI" | "OR" | "DI" | "EI")
         }
         _ => false,
     }
@@ -27,10 +27,13 @@ mod tests {
 
     #[test]
     fn generated_reserved_names_keep_legacy_short_variable_exceptions() {
-        for name in ["A", "A1", "AB", "X$"] {
+        for name in ["A", "A1", "AB", "X$", "AS", "CD", "FN", "SQ"] {
             assert!(!is_reserved_identifier_name(name), "{name}");
         }
-        for name in ["IF", "ON", "OR", "PI", "TO", "PRINT", "RIGHT$"] {
+        for name in [
+            "IF", "ON", "OR", "PI", "TO", "DI", "EI", "di$", "Ei$", "PRINT", "RIGHT$", "ALPHA",
+            "alpha", "AlPhA$",
+        ] {
             assert!(is_reserved_identifier_name(name), "{name}");
         }
     }

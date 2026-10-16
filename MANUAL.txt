@@ -730,22 +730,32 @@ Quick notes (plotting)
 + CIRCLE x,y,r,c,i,f[,asp]          Arc
 + CIRCLER dx,dy,r[,c][,asp]         Full circle/ellipse (relative center)
 + CIRCLER dx,dy,r,c,i,f[,asp]       Arc (relative center)
-+ FCIRCLE x,y,r[,c][,asp]           Full filled circle/ellipse
-+ FCIRCLE x,y,r,c,i,f[,asp]         Filled sector
-+ FCIRCLER dx,dy,r[,c][,asp]        Full filled circle/ellipse (relative center)
-+ FCIRCLER dx,dy,r,c,i,f[,asp]      Filled sector (relative center)
++ FCIRCLE x,y,r[,c][,asp] [ALPHA a]           Full filled circle/ellipse
++ FCIRCLE x,y,r,c,i,f[,asp] [ALPHA a]         Filled sector
++ FCIRCLER dx,dy,r[,c][,asp] [ALPHA a]        Full filled circle/ellipse (relative center)
++ FCIRCLER dx,dy,r,c,i,f[,asp] [ALPHA a]      Filled sector (relative center)
 + RECTANGLE x0,y0,x1,y1[,c]         Rectangle (outline)
-+ FRECTANGLE x0,y0,x1,y1[,c]        Filled rectangle
++ FRECTANGLE x0,y0,x1,y1[,c] [ALPHA a]        Filled rectangle
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triangle (outline)
-+ FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Filled triangle
++ FTRIANGLE x0,y0,x1,y1,x2,y2[,c] [ALPHA a]   Filled triangle
 + GTRIANGLE D,x0,y0,q0,r0,g0,b0,x1,y1,q1,r1,g1,b1,x2,y2,q2,r2,g2,b2
                                       Gouraud triangle with a depth buffer
-+ TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
-                                      Textured filled rectangle
-+ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
-                                      Textured filled triangle
-+ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3
-                                      Textured filled quadrilateral
++ TRECTANGLE gscr$,x0,y0,x1,y1[,t] [ALPHA a]
+                                      Textured filled rectangle (one full tile)
++ TRECTANGLE gscr$,x0,y0,x1,y1,u0,v0,u1,v1[,t] [ALPHA a]
+                                      Textured filled rectangle (explicit UV)
++ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2[,t] [ALPHA a]
+                                      Affine textured filled triangle
++ TTRIANGLE gscr$,D,x0,y0,q0,u0,v0,x1,y1,q1,u1,v1,x2,y2,q2,u2,v2[,t]
+                                      Perspective textured triangle with depth
++ TTRIANGLE gscr$,D,x0,y0,q0,u0,v0,r0,g0,b0,x1,y1,q1,u1,v1,r1,g1,b1,x2,y2,q2,u2,v2,r2,g2,b2[,t]
+                                      Also modulate the texture by vertex RGB
++ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3[,t] [ALPHA a]
+                                      Affine textured filled quadrilateral
++ TQUAD gscr$,D,x0,y0,q0,u0,v0,x1,y1,q1,u1,v1,x2,y2,q2,u2,v2,x3,y3,q3,u3,v3[,t]
+                                      Perspective textured quadrilateral with depth
++ TQUAD gscr$,D,x0,y0,q0,u0,v0,r0,g0,b0,x1,y1,q1,u1,v1,r1,g1,b1,x2,y2,q2,u2,v2,r2,g2,b2,x3,y3,q3,u3,v3,r3,g3,b3[,t]
+                                      Also modulate the texture by vertex RGB
 + FILL [c]                         Flood-fill from the graphics cursor, using `c` or the current `INK`
 + FILL x,y[,c]                     Flood-fill from the specified position
 
@@ -756,12 +766,31 @@ Quick notes (figures)
 - Radius `r` is in user units (if `SCALE` is active, it adapts automatically).
 - `RECTANGLE/TRIANGLE` respect `MASK` and `PENWIDTH` just like `DRAW`.
 - `TRECTANGLE/TTRIANGLE/TQUAD` use a `gscr$` texture, typically loaded with `BLOAD "img.png",T$` or captured with `SPRITE$`.
+- Every form accepts an optional final transparent color `t`, resolved exactly as in `SPRITE`: a palette index, packed RGB value, color name, or RGB string. Omit `t` for an opaque texture; `t=0` makes black transparent. For example, `TRECTANGLE T$,20,20,180,140,6` uses magenta as the transparent color, while `TRECTANGLE T$,20,20,180,140,0,0,64,64,6` also supplies UV coordinates.
+- Transparency compares the sampled original RGB texel before any vertex RGB modulation. Matching texels leave both the destination color and `D` untouched, so farther geometry can show through even if drawn afterwards. This is exact color-key transparency; graphics strings store RGB, not PNG alpha. These texture commands do not register sprite collision identities.
 - In `TRECTANGLE`, `(u0,v0)` is assigned to `(x0,y0)` and `(u1,v1)` to `(x1,y1)`; the other two corners use `(u1,v0)` and `(u0,v1)`.
-- In `TTRIANGLE/TQUAD`, each vertex pairs a screen position `(x,y)` with a texture position `(u,v)`. The renderer linearly interpolates `u,v` inside each triangle, so scaling, rotation, mirroring, and shearing are inferred from those vertex correspondences.
+- In the original `TTRIANGLE/TQUAD` forms without a depth array, each vertex pairs a screen position `(x,y)` with a texture position `(u,v)`. The renderer linearly interpolates `u,v` inside each triangle, so scaling, rotation, mirroring, and shearing are inferred from those vertex correspondences.
 - `SCALE` affects only the screen coordinates `x,y`. The `u,v` coordinates remain texture texels and are not scaled by the user coordinate system.
 - Texture coordinates wrap automatically. `u=0,v=0` is the lower-left texel; `u=width,v=height` reaches one complete tile.
 - If `TRECTANGLE` omits UV coordinates, it maps exactly one full texture tile over the rectangle.
-- `TTRIANGLE/TQUAD` use affine texture mapping and nearest-texel sampling (`floor(u),floor(v)`). They are ideal for fast 2D effects and mesh-based approximations; they do not do bilinear filtering or perspective correction.
+- All texture forms use nearest-texel sampling (`floor(u),floor(v)`), without bilinear filtering. The original `TTRIANGLE/TQUAD` forms retain affine texture mapping for fast 2D effects and mesh-based approximations. The forms with `D` add depth testing and perspective correction (below).
+
+2D opacity with ALPHA
+
+`FRECTANGLE`, `FTRIANGLE`, `FCIRCLE`, `FCIRCLER`, `TRECTANGLE`, and the affine forms of `TTRIANGLE/TQUAD` accept an optional final `ALPHA a` clause. `SPRITE` and `SPRITE MOVE` use the same clause (6.7). It belongs to that single drawing call; it does not change a global graphics setting. `ALPHA` is a reserved word, like `TO` and `STEP`; use a different variable name, such as `OPACITY`.
+
+- `a` is a numeric expression evaluated once, and must be finite and between 0 and 1 inclusive. Omitting the clause means 1 (opaque); 0 leaves destination colors unchanged. Invalid opacity produces an error before drawing.
+- Each RGB channel is rounded from `a*source+(1-a)*destination`. A texture's transparent color still creates complete holes; only the other original texels are blended. PNG alpha is not imported and opacity is uniform across the call.
+- Draw the background first, then objects and overlays in their desired 2D order. Rebuild or restore the scene each frame when fading or moving a translucent object: blending repeatedly onto the previous frame accumulates color.
+- The filled primitives blend each covered pixel once, including the shared diagonal of an affine `TQUAD`. They retain their clipping, coordinate, and graphics cursor rules. Opacity does not alter `INK`.
+- This clause is limited to the listed 2D commands. The depth-buffer forms of `TTRIANGLE/TQUAD` and `GTRIANGLE` do not accept `ALPHA`, including `ALPHA 1`; their existing depth and color-key behavior is unchanged. Outlines, `PLOT`, `DRAW`, `FILL`, text, and `CLG` do not accept it either.
+
+```basic
+10 SCREEN : MODE 640 : PAPER 4 : CLG
+20 FRECTANGLE 80,80,420,300,RGB(255,180,40) ALPHA .5
+30 FCIRCLE 350,230,100,RGB(40,220,255) ALPHA .6
+40 FRAME : PAUSE 2 : SCREEN CLOSE : END
+```
 
 GTRIANGLE: Gouraud shading and depth
 
@@ -790,6 +819,27 @@ Example (the second triangle has greater `q` and covers the first where they ove
 70 PAUSE 1
 80 SCREEN CLOSE : END
 ```
+
+TTRIANGLE/TQUAD: perspective textures, depth, and vertex lighting
+
+Without the optional final transparent color, the affine forms take 13 arguments for `TTRIANGLE` and 17 for `TQUAD`. Add an unindexed numeric depth array `D` after the texture string and supply `x,y,q,u,v` for each vertex to enable perspective-correct texture mapping and depth testing: 17 arguments for `TTRIANGLE`, or 22 for `TQUAD`. Add three color multipliers to every vertex (`x,y,q,u,v,r,g,b`) for texture modulation: 26 or 34 arguments respectively. Either all vertices supply RGB or none do. An optional final `t` adds one argument to any of these forms; it never replaces a vertex multiplier.
+
+- `D`, screen coordinates, positive inverse depth `q`, depth comparison, viewport clipping, and clearing follow the `GTRIANGLE` rules above. Textured primitives and `GTRIANGLE` can share one buffer and occlude each other regardless of drawing order.
+- UV coordinates remain wrapped texel coordinates, with `(0,0)` at the texture's lower-left corner. The renderer interpolates `q`, `u*q`, and `v*q` across the screen, then divides the latter two by interpolated `q` to sample the texture with perspective correction. Equal vertex depths produce an affine mapping.
+- RGB values are separate numeric multipliers, normally 0..255. White `(255,255,255)` preserves the texture, black `(0,0,0)` darkens it to black, and a colored multiplier tints it. Omitted RGB defaults to white at every vertex. A triangle with white RGB at all vertices uses the sampled texel directly, without color interpolation or modulation. Otherwise, channels interpolate with perspective correction, are clamped to 0..255, multiply the sampled texture channels by `channel/255`, and the result is rounded. Lighting is calculated by the BASIC program; the commands do not calculate normals, lights, or shadows.
+- `TQUAD` splits the supplied vertices into triangles `(0,1,2)` and `(0,2,3)`. Supply a convex quadrilateral with its vertices in boundary order. No subdivision is needed for a perspective-correct planar face. Lighting is sampled only at its four supplied vertices and interpolated across those two triangles; no finer mesh is generated. A small light spot inside a face requires explicit subdivision or per-pixel lighting.
+- Any vertex with `q<=0` skips the entire primitive, including both halves of a quad. Near-plane clipping remains the program's responsibility. Both vertex orders draw; `MASK` and `PENWIDTH` are ignored, and `INK` is preserved.
+- All arguments, the texture, and the depth array's type and full-screen shape are validated before any color/depth writes or cursor change. Even the fourth vertex of a quad is validated before either half draws. Non-finite numeric arguments raise an error. A valid call leaves the graphics cursor at the last supplied vertex, including when no pixels are drawn.
+
+`samples/g-cube-tquad.bas` reads its eight vertices and six face connections from `DATA`, following the other cube examples. It demonstrates native perspective correction and depth testing with one `TQUAD` per cube face, using `q=1/Z3` after projection and clearing its depth buffer each frame.
+
+`samples/g-tunnel-tquad.bas` uses two boundary rings and 48 native perspective-correct `TQUAD` walls, with inverse depth proportional to each ring's projected radius. This removes subdivisions along the tunnel's depth; angular segments remain necessary to represent its cylindrical shape. Its cylinder mapping replaces the former logarithmic radial UV mapping.
+
+`samples/g-cube-textured-light.bas` starts with a paused textured cube and a nearby point light with strong distance attenuation and low ambient light. Move the mouse to compare the four vertex brightness values shown on the most visible face; F switches to broad lighting and V toggles these markers. SPACE resumes or pauses rotation. Press 1 for unmodulated perspective textures, 2 for lighting, T to switch between native quads and pairs of triangles, G for the Gouraud fin sharing the depth buffer, M to animate the light, C to toggle the frame-rate cap, and ESC to exit. It builds on `g-cube-tquad.bas` and `g-cube-light.bas`.
+
+`samples/g-texture-transparent.bas` builds one magenta-backed grille with `SPRITE$` for a compact 2D comparison over a checkerboard. Four columns show `TRECTANGLE` with automatic UVs, `TRECTANGLE` with explicit repeating UVs, `TTRIANGLE`, and `TQUAD`. Two rows compare opaque calls with calls that add final color `6` (magenta), revealing the background through the grille. ESC exits. Continue with `samples/g-cube-transparent.bas` for perspective textures and shared depth.
+
+`samples/g-dungeon.bas` and `samples/g-dungeon-cpc.bas` use one unlit texture for the floor and one for the ceiling. A mesh of fixed world tiles uses torch light precalculated at its vertices, so the warm pools of light stay in place as the camera moves or turns. Only a gentle time-based flicker changes their brightness. Native `TQUAD` supplies perspective correction and RGB interpolation; tiles crossing the near plane have their original triangles clipped separately, preserving the same light field. Q adjusts wall resolution while the lighting mesh stays fixed. Walls and object occlusion retain their existing raycasting path.
 
 6.4 Colors
 
@@ -988,11 +1038,11 @@ This intentionally alternates images as quickly as possible and reports the meas
 
 6.7 Sprites
 
-+ SPRITE gscr$,x,y[,t[,id]]     Draws the sprite stored in `gscr$` at `(x,y)`. `t` is an optional transparent color. `id` (integer > 0) sets the sprite-sprite collision identifier.
++ SPRITE gscr$,x,y[,t[,id]] [ALPHA a]     Draws the sprite stored in `gscr$` at `(x,y)`. `t` is an optional transparent color. `id` (integer > 0) sets the sprite-sprite collision identifier.
 + SPRITE HITTEST gscr$,x,y[,t[,id]]
                                 Evaluates collisions for that sprite at `(x,y)` without drawing it or modifying the internal map.
 + SPRITE DEL id                 Removes `id` from the internal sprite-sprite collision map.
-+ SPRITE MOVE id,x,y[,t]        Redraws the last sprite associated with `id` at `(x,y)`.
++ SPRITE MOVE id,x,y[,t] [ALPHA a]        Redraws the last sprite associated with `id` at `(x,y)`.
                                 If `t` is omitted, it reuses the transparency saved in the last `SPRITE ... ,id`.
 + gscr$ = SPRITE$(x1,y1,x2,y2)  Captures the logical region defined by the two points and returns the sprite string.
 + COLMODE n                     Enables collision detection in `SPRITE`: 0=off, 1=color, 2=sprite, 3=both.
@@ -1011,6 +1061,10 @@ General notes
 - `SPRITE` respects `ORIGIN`, the graphics window, and canvas clipping. It does not force a refresh; call `FRAME` when you want to display the result.
 - Remember the anchor: `SPRITE ... ,X,Y` uses `Y` as the bottom edge. If you are coming from `LABEL` with `MOVE X,Y` (top edge), convert `Y` with `Ysprite = Ytext - (height - 1)`.
 - `SPRITE HITTEST` uses exactly the same clipping and transparency rules as `SPRITE`, but does not alter either the graphics buffer or the owner map.
+- `SPRITE ... ALPHA a` blends non-key pixels with the current background; omitted opacity defaults to 1. `SPRITE MOVE ... ALPHA a` overrides the registered sprite's opacity, while omitting the clause reuses its saved opacity. Color key and opacity are saved independently.
+- Opacity is visual only: even `ALPHA 0` keeps the original non-key collision footprint and collision results. `SPRITE HITTEST` tests that footprint and does not accept `ALPHA`. In `COLMODE 2/3`, another sprite's occupied pixels still block drawing as before, so use `COLMODE 0` for visual overlays; detect collisions separately with `SPRITE HITTEST` if needed.
+- Color collision still tests the current destination RGB. Pixels already blended by a previous call are tested using their resulting displayed color, rather than the original source color.
+- `samples/g-sprite-alpha.bas` restores `assets/anime.png` each frame and moves a large, multicolored anime fairy. Its opacity fades between exact 0% and 100%, holding both endpoints briefly; the area outside the character remains transparent. SPACE pauses, C toggles the FPS cap, and ESC exits. The panels demonstrate `FRECTANGLE ... ALPHA`.
 - Parameter `t` accepts any color format (`INK`, `RGB`, palette indices). Pixels of that color are left untouched.
 - If you do not pass `id`, sprite-sprite detection uses an internal identifier based on frame drawing order (`CLG/COLRESET` reset that map).
 - If you pass `id`, that value is used as the sprite identifier for collisions (allowing you to control groups or the "same object" across frames).
@@ -1075,7 +1129,7 @@ What `id` adds (and why it matters)
 - That enables a useful `HITID` (knowing what you collided with).
 - That enables `SPRITE MOVE id,...` (moving using the image already registered for that `id`).
 - That enables `SPRITE DEL id` (removing it from the collision map).
-- A successful `SPRITE ...,id` registers that image and transparency for later `SPRITE MOVE id,...` calls. The collision example below, also available as `samples/g-sprite5.bas`, redraws with `SPRITE` directly.
+- A successful `SPRITE ...,id` registers that image, transparency, and opacity for later `SPRITE MOVE id,...` calls. The collision example below, also available as `samples/g-sprite5.bas`, redraws with `SPRITE` directly.
 
 Recommended pattern for a fixed background (without `CLG` per frame)
 - 1. Restore the old sprite backgrounds in `COLMODE 0`.
@@ -1420,9 +1474,9 @@ Notes
 
 8.2 Error handling
 
-+ ON ERROR GOTO n        Enables a handler; on error, execution jumps to line `n`.
-+ ON ERROR GOTO 0        Disables the handler and clears `ERL`/`ERR`.
-+ ON ERROR RESUME NEXT   Enables "implicit catch" mode: on error, it behaves like `RESUME NEXT`.
++ ON ERROR GOTO n        Enables a handler in the current routine, or globally at the top level.
++ ON ERROR GOTO 0        Disables that handler and clears `ERL`/`ERR`.
++ ON ERROR RESUME NEXT   Enables implicit continuation after an error in that scope.
 + ERR                    Function. Numeric code of the last runtime error (0 if none is active).
 + ERL                    Function. Line number where the last error occurred (0 if none is active).
 + RESUME                 Repeats the statement that caused the error.
@@ -1431,9 +1485,20 @@ Notes
 + ERROR n                Explicitly raises error `n`. For example, `ERROR 15` raises a syntax error.
 
 Flow and notes
+
+Procedure-local handlers follow the VB6 model: the current routine handles an
+error first, then its callers. Top-level handlers retain AVL BASIC's legacy
+behavior for compatibility.
+
 - Without a handler: on error, execution stops and reports: "Line <n>. <message>".
-- With a handler: when the error occurs, `ERR` and `ERL` are set and execution jumps to the target line; after a successful `RESUME`, both return to 0.
-- Re-entries: if a new error occurs while the handler is running, execution aborts with "Error in the error handler ...".
+- With a handler: when the error occurs, `ERR` and `ERL` identify its code and original source line. A successful explicit `RESUME` clears the handled error; when returning to an outer active handler, that handler's pending `ERR`/`ERL` are restored.
+- Inside a multiline `DEF SUB` or `DEF FN`, `ON ERROR` belongs to that invocation. Each call starts without a local handler; returning discards its handler and restores the caller's error state. `ON ERROR GOTO 0` disables only the current invocation's handler, leaving its callers' handlers available.
+- Each valid local `ON ERROR` statement clears the visible `ERR`/`ERL`. Changing the policy inside an active handler preserves its separate pending `RESUME` state, including `ON ERROR GOTO 0`: it disables future trapping in that invocation without cancelling the error already being handled. `RESUME` requires an active handler context; a remembered error from implicit continuation alone does not make `RESUME` valid.
+- A local `ON ERROR GOTO n` handler and the target of a local `RESUME n` must be lines within the same routine. The handler can access that invocation's parameters and `LOCAL` variables. Leave the normal path with `EXIT SUB` or `EXIT FN` before the handler lines so execution does not fall through into them.
+- An enabled handler is active while processing an error. An error without a local handler, or a new error inside an active handler, propagates to the nearest calling routine with an enabled, inactive handler. The abandoned calls release their locals, array aliases and control-flow state. If no handler is available, the error is reported normally; an unhandled error inside an active handler reports "Error in the error handler ...".
+- When a caller handles an error from a deeper call, `RESUME` retries the caller's entire `CALL` statement or expression-containing statement; `RESUME NEXT` skips that statement. `RESUME n` continues within the handling caller. It cannot re-enter an abandoned callee. `ERL` still reports the original failing line in that callee.
+- Local `ON ERROR RESUME NEXT` skips the failing statement, or the calling statement when the error propagates from a deeper routine, without entering a handler. `ERR` and `ERL` remain available for inspection; use `ON ERROR GOTO 0` to clear them and disable this mode. The top-level implicit mode continues to clear the handled error for compatibility.
+- Compatibility: top-level `ON ERROR` retains the existing global model. If no procedure-local handler catches an error, the global handler can process it while the failing routine remains suspended; its `RESUME` can continue inside that retained routine as before. If this resumes an active local handler after a second error, its original pending `ERR`/`ERL` are restored. Installing or disabling a local handler does not replace the global handler. Top-level `ON ERROR GOTO 0` still clears the global handler and its pending `RESUME` state. `GOSUB` does not create a procedure-local error scope.
 - `ERROR n`: if error `n` is not among the interpreter's predefined ones, it is treated as a custom error number.
 
 Example (handled error followed by an intentional unhandled error)
@@ -1454,6 +1519,31 @@ Expected output from the preceding example
 Error 200 occurred on line 20
 Line 40. Target line does not exist.
 ```
+
+Local handlers in a subroutine and a multiline function
+```basic
+10 CALL ShowRatio(12,0)
+20 PRINT FNRatio(12,3)
+30 PRINT FNRatio(12,0)
+40 END
+100 DEF SUB ShowRatio(Numerator,Denominator)
+110 ON ERROR GOTO 150
+120 PRINT Numerator/Denominator
+130 EXIT SUB
+150 PRINT "Cannot calculate ratio; error ";ERR;" at line ";ERL
+160 RESUME 130
+170 SUBEND
+200 DEF FNRatio(Numerator,Denominator)
+210 ON ERROR GOTO 250
+220 FNRatio=Numerator/Denominator
+230 EXIT FN
+250 FNRatio=0
+260 RESUME 230
+270 FNEND
+```
+`ShowRatio` handles its own division by zero and returns normally. `FNRatio`
+returns the quotient, or zero if its calculation fails. The handler is installed
+separately on each invocation; neither routine changes its caller's handler.
 
 Complete table of error codes
 1  Instruction not allowed in a program.
@@ -1850,8 +1940,9 @@ executing its body.
   - In a multiline function, a non-scalar value may only be returned with `MAT FNNAME = ...`. That return is passed back by value and only accepts one- or two-dimensional arrays, just like `MAT`. Modifying the returned array does not modify an input array.
   - Inside the block, the function name may be used as a local variable.
   - Indirect calls between functions are allowed, but a function may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
-  - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the function body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
+  - `ON ERROR` and `RESUME` are allowed with a handler local to each invocation. Numeric handler and continuation targets must be within the same function. Errors can propagate to a calling routine; see section 8.2 for caller-side `RESUME` and compatibility with global handlers.
+  - From the start of execution, `GOTO`, `GOSUB`, and `ON ERROR` written outside may not select a line in the function body; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
 
 Definition and usage example
 ```basic
@@ -1935,9 +2026,9 @@ Multiline subroutines
   - If a scalar and an array share the same base name, both `A` and a grouped identifier such as `(A)` refer to the scalar. There is no separate syntax to pass the whole array as an argument if a homonymous scalar exists.
   - Inside the block, the subroutine name may be used as a local variable. Its previous value is restored on exit.
   - Indirect calls between subroutines are allowed, but a subroutine may not re-enter itself.
-  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
-  - From the start of execution, `GOTO`, `GOSUB`, `ON ERROR`, and `RESUME` may not jump into the subroutine body from outside; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program.
-  - An error handler established by the calling program can handle an error raised during `CALL`, just as for a multiline function. The handler may use `RESUME NEXT` subject to the same jump restrictions. This does not permit `ON ERROR` or `RESUME` in the routine body. `TRON` also traces the executed routine lines.
+  - Inside the body, nested `DEF FN` and `DEF SUB` blocks and the following control statements are not allowed (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` may be used inside a subroutine, but not inside `DEF FN`.
+  - `ON ERROR` and `RESUME` are allowed with a handler local to each invocation. Numeric handler and continuation targets must be within the same subroutine. An available caller handler can catch an error propagated during `CALL`; its `RESUME` retries the call and `RESUME NEXT` continues after it. See section 8.2 for full rules and compatibility with global handlers.
+  - From the start of execution, `GOTO`, `GOSUB`, and `ON ERROR` written outside may not select a line in the subroutine body; the interpreter rejects this with `Invalid target line`, even when the definition appears later in the program. `TRON` also traces the executed routine lines.
 
 Subroutine example
 ```basic

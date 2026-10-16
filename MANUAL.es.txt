@@ -743,22 +743,32 @@ Notas rápidas (trazado)
 + CIRCLE x,y,r,c,i,f[,asp]          Arco.
 + CIRCLER dx,dy,r[,c][,asp]         Circunferencia/elipse completa (centro relativo).
 + CIRCLER dx,dy,r,c,i,f[,asp]       Arco (centro relativo).
-+ FCIRCLE x,y,r[,c][,asp]           Círculo/elipse relleno completo.
-+ FCIRCLE x,y,r,c,i,f[,asp]         Sector relleno.
-+ FCIRCLER dx,dy,r[,c][,asp]        Círculo/elipse relleno completo (centro relativo).
-+ FCIRCLER dx,dy,r,c,i,f[,asp]      Sector relleno (centro relativo).
++ FCIRCLE x,y,r[,c][,asp] [ALPHA a]           Círculo/elipse relleno completo.
++ FCIRCLE x,y,r,c,i,f[,asp] [ALPHA a]         Sector relleno.
++ FCIRCLER dx,dy,r[,c][,asp] [ALPHA a]        Círculo/elipse relleno completo (centro relativo).
++ FCIRCLER dx,dy,r,c,i,f[,asp] [ALPHA a]      Sector relleno (centro relativo).
 + RECTANGLE x0,y0,x1,y1[,c]         Rectángulo (contorno).
-+ FRECTANGLE x0,y0,x1,y1[,c]        Rectángulo relleno.
++ FRECTANGLE x0,y0,x1,y1[,c] [ALPHA a]        Rectángulo relleno.
 + TRIANGLE x0,y0,x1,y1,x2,y2[,c]    Triángulo (contorno).
-+ FTRIANGLE x0,y0,x1,y1,x2,y2[,c]   Triángulo relleno.
++ FTRIANGLE x0,y0,x1,y1,x2,y2[,c] [ALPHA a]   Triángulo relleno.
 + GTRIANGLE D,x0,y0,q0,r0,g0,b0,x1,y1,q1,r1,g1,b1,x2,y2,q2,r2,g2,b2
                                       Triángulo Gouraud con buffer de profundidad.
-+ TRECTANGLE gscr$,x0,y0,x1,y1[,u0,v0,u1,v1]
-                                      Rectángulo relleno texturado.
-+ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2
-                                      Triángulo relleno texturado.
-+ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3
-                                      Cuadrilátero relleno texturado.
++ TRECTANGLE gscr$,x0,y0,x1,y1[,t] [ALPHA a]
+                                      Rectángulo relleno texturado (un tile completo).
++ TRECTANGLE gscr$,x0,y0,x1,y1,u0,v0,u1,v1[,t] [ALPHA a]
+                                      Rectángulo relleno texturado (UV explícitas).
++ TTRIANGLE gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2[,t] [ALPHA a]
+                                      Triángulo relleno texturado afín.
++ TTRIANGLE gscr$,D,x0,y0,q0,u0,v0,x1,y1,q1,u1,v1,x2,y2,q2,u2,v2[,t]
+                                      Triángulo texturado en perspectiva con profundidad.
++ TTRIANGLE gscr$,D,x0,y0,q0,u0,v0,r0,g0,b0,x1,y1,q1,u1,v1,r1,g1,b1,x2,y2,q2,u2,v2,r2,g2,b2[,t]
+                                      También modula la textura por RGB de los vértices.
++ TQUAD gscr$,x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,x3,y3,u3,v3[,t] [ALPHA a]
+                                      Cuadrilátero relleno texturado afín.
++ TQUAD gscr$,D,x0,y0,q0,u0,v0,x1,y1,q1,u1,v1,x2,y2,q2,u2,v2,x3,y3,q3,u3,v3[,t]
+                                      Cuadrilátero texturado en perspectiva con profundidad.
++ TQUAD gscr$,D,x0,y0,q0,u0,v0,r0,g0,b0,x1,y1,q1,u1,v1,r1,g1,b1,x2,y2,q2,u2,v2,r2,g2,b2,x3,y3,q3,u3,v3,r3,g3,b3[,t]
+                                      También modula la textura por RGB de los vértices.
 + FILL [c]                         Rellena desde el cursor gráfico, con `c` o el `INK` actual
 + FILL x,y[,c]                     Rellena desde la posición indicada
 
@@ -769,12 +779,31 @@ Notas rápidas (figuras)
 - El radio `r` está en unidades de usuario (si hay `SCALE`, se adapta automáticamente).
 - `RECTANGLE/TRIANGLE` respetan `MASK` y `PENWIDTH` como `DRAW`.
 - `TRECTANGLE/TTRIANGLE/TQUAD` usan una textura `gscr$`, normalmente cargada con `BLOAD "img.png",T$` o capturada con `SPRITE$`.
+- Todas las formas admiten un color transparente final opcional `t`, resuelto igual que en `SPRITE`: índice de paleta, RGB empaquetado, nombre de color o cadena RGB. Omite `t` para una textura opaca; `t=0` hace transparente el negro. Por ejemplo, `TRECTANGLE T$,20,20,180,140,6` usa el magenta como color transparente, mientras que `TRECTANGLE T$,20,20,180,140,0,0,64,64,6` también indica las coordenadas UV.
+- La transparencia compara el RGB original del texel muestreado antes de aplicar la modulación RGB de los vértices. Los texels que coinciden dejan intactos tanto el color de destino como `D`, de modo que la geometría lejana se ve por los huecos incluso si se dibuja después. Es transparencia por coincidencia exacta de color; las cadenas gráficas almacenan RGB, no el alfa del PNG. Estas órdenes texturadas no registran identidades de colisión de sprites.
 - En `TRECTANGLE`, `(u0,v0)` se asigna a `(x0,y0)` y `(u1,v1)` a `(x1,y1)`; las otras dos esquinas usan `(u1,v0)` y `(u0,v1)`.
-- En `TTRIANGLE/TQUAD`, cada vértice combina una posición de pantalla `(x,y)` con una posición de textura `(u,v)`. El motor interpola linealmente las `u,v` dentro de cada triángulo, así que el escalado, giro, espejo o inclinación se deducen de esas correspondencias.
+- En las formas originales de `TTRIANGLE/TQUAD` sin array de profundidad, cada vértice combina una posición de pantalla `(x,y)` con una posición de textura `(u,v)`. El motor interpola linealmente las `u,v` dentro de cada triángulo, así que el escalado, giro, espejo o inclinación se deducen de esas correspondencias.
 - `SCALE` afecta solo a las coordenadas de pantalla `x,y`. Las coordenadas `u,v` siguen estando en texels de la textura y no se escalan con el sistema de usuario.
 - Las coordenadas de textura hacen wrap automático. `u=0,v=0` es el texel inferior-izquierdo; `u=ancho,v=alto` cubre un tile completo.
 - Si `TRECTANGLE` omite coordenadas UV, mapea un tile completo de la textura sobre el rectángulo.
-- `TTRIANGLE/TQUAD` usan mapeado afín y muestreo por texel más cercano (`floor(u),floor(v)`). Son ideales para efectos 2D rápidos y aproximaciones por malla; no hacen filtrado bilineal ni corrección de perspectiva.
+- Todas las formas texturadas usan muestreo por texel más cercano (`floor(u),floor(v)`), sin filtrado bilineal. Las formas originales de `TTRIANGLE/TQUAD` conservan el mapeado afín para efectos 2D rápidos y aproximaciones por malla. Las formas con `D` añaden profundidad y corrección de perspectiva (más abajo).
+
+Opacidad 2D con ALPHA
+
+`FRECTANGLE`, `FTRIANGLE`, `FCIRCLE`, `FCIRCLER`, `TRECTANGLE` y las formas afines de `TTRIANGLE/TQUAD` admiten una cláusula final opcional `ALPHA a`. `SPRITE` y `SPRITE MOVE` utilizan la misma cláusula (6.7). Se aplica solo a esa llamada de dibujo; no cambia un ajuste gráfico global. `ALPHA` es una palabra reservada, como `TO` y `STEP`; utiliza otro nombre de variable, por ejemplo `OPACITY`.
+
+- `a` es una expresión numérica evaluada una vez y debe ser finita, entre 0 y 1 inclusive. Omitir la cláusula equivale a 1 (opaco); 0 deja intactos los colores de destino. Una opacidad incorrecta produce un error antes de dibujar.
+- Cada canal RGB se redondea a partir de `a*origen+(1-a)*destino`. El color transparente de una textura sigue creando huecos completos; solo se mezclan los demás texels originales. No se importa el alfa del PNG y la opacidad es uniforme en toda la llamada.
+- Dibuja primero el fondo y después los objetos y paneles en el orden de superposición 2D deseado. Reconstruye o restaura la escena en cada fotograma al desvanecer o mover un objeto translúcido: mezclar repetidamente sobre el fotograma anterior acumula color.
+- Las primitivas rellenas mezclan cada píxel cubierto una sola vez, incluida la diagonal compartida de un `TQUAD` afín. Conservan sus reglas de recorte, coordenadas y cursor gráfico. La opacidad no cambia `INK`.
+- La cláusula se limita a las órdenes 2D enumeradas. Las formas de `TTRIANGLE/TQUAD` con buffer de profundidad y `GTRIANGLE` no admiten `ALPHA`, ni siquiera `ALPHA 1`; conservan su comportamiento de profundidad y color transparente. Tampoco la admiten contornos, `PLOT`, `DRAW`, `FILL`, texto ni `CLG`.
+
+```basic
+10 SCREEN : MODE 640 : PAPER 4 : CLG
+20 FRECTANGLE 80,80,420,300,RGB(255,180,40) ALPHA .5
+30 FCIRCLE 350,230,100,RGB(40,220,255) ALPHA .6
+40 FRAME : PAUSE 2 : SCREEN CLOSE : END
+```
 
 GTRIANGLE: sombreado Gouraud y profundidad
 
@@ -803,6 +832,27 @@ Ejemplo (el segundo triángulo tiene mayor `q` y cubre al primero donde se solap
 70 PAUSE 1
 80 SCREEN CLOSE : END
 ```
+
+TTRIANGLE/TQUAD: texturas en perspectiva, profundidad e iluminación por vértices
+
+Sin el color transparente final opcional, las formas afines reciben 13 argumentos para `TTRIANGLE` y 17 para `TQUAD`. Añade un array numérico sin índices `D` tras la cadena de textura y proporciona `x,y,q,u,v` por vértice para activar el mapeado con corrección de perspectiva y la prueba de profundidad: 17 argumentos para `TTRIANGLE` o 22 para `TQUAD`. Añade tres multiplicadores de color en cada vértice (`x,y,q,u,v,r,g,b`) para modular la textura: 26 o 34 argumentos, respectivamente. Todos los vértices deben incluir RGB, o ninguno. El `t` final opcional añade un argumento a cualquiera de estas formas; nunca sustituye un multiplicador de vértice.
+
+- `D`, las coordenadas de pantalla, la profundidad inversa positiva `q`, su comparación, el recorte del viewport y el borrado siguen las reglas de `GTRIANGLE` anteriores. Las primitivas texturadas y `GTRIANGLE` pueden compartir un buffer y ocultarse mutuamente independientemente del orden de dibujo.
+- Las UV siguen siendo coordenadas de texels con repetición, con `(0,0)` en la esquina inferior izquierda de la textura. Se interpolan `q`, `u*q` y `v*q` sobre la pantalla y se dividen las dos últimas por el `q` interpolado para muestrear con corrección de perspectiva. Si todos los vértices tienen la misma profundidad, el mapeado es afín.
+- Los RGB son multiplicadores numéricos separados, normalmente de 0 a 255. El blanco `(255,255,255)` conserva la textura, el negro `(0,0,0)` la oscurece hasta negro y un multiplicador coloreado la tiñe. Si se omiten los RGB, todos los vértices usan blanco. Un triángulo con RGB blanco en todos sus vértices utiliza directamente el texel muestreado, sin interpolación de color ni modulación. En los demás casos, los canales se interpolan con corrección de perspectiva, se limitan a 0..255, multiplican los canales del texel por `canal/255` y se redondea el resultado. El programa BASIC calcula la iluminación; las órdenes no calculan normales, luces ni sombras.
+- `TQUAD` divide los vértices en los triángulos `(0,1,2)` y `(0,2,3)`. Proporciona un cuadrilátero convexo con los vértices en orden de contorno. Una cara plana no necesita subdivisiones para obtener perspectiva correcta. La iluminación solo se muestrea en sus cuatro vértices y se interpola dentro de esos dos triángulos; no se genera una malla más fina. Un foco pequeño dentro de una cara requiere subdivisión explícita o iluminación por píxel.
+- Si algún vértice tiene `q<=0`, se omite la primitiva completa, incluidas ambas mitades del cuadrilátero. El recorte contra el plano cercano sigue siendo responsabilidad del programa. Se dibujan ambos órdenes de vértices; se ignoran `MASK` y `PENWIDTH` y se conserva `INK`.
+- Todos los argumentos, la textura y el tipo y dimensiones de pantalla completa del array se validan antes de escribir color/profundidad o cambiar el cursor. Incluso el cuarto vértice del cuadrilátero se valida antes de dibujar sus mitades. Los argumentos numéricos no finitos producen un error. Una llamada válida deja el cursor gráfico en el último vértice proporcionado, aunque no se dibuje ningún píxel.
+
+`samples/g-cube-tquad.bas` lee sus ocho vértices y las conexiones de sus seis caras de `DATA`, siguiendo los otros ejemplos del cubo. Muestra la corrección de perspectiva y la prueba de profundidad nativas con un `TQUAD` por cara del cubo, usando `q=1/Z3` tras la proyección y borrando el buffer de profundidad en cada fotograma.
+
+`samples/g-tunnel-tquad.bas` usa dos anillos límite y 48 paredes `TQUAD` con corrección de perspectiva nativa, con profundidad inversa proporcional al radio proyectado de cada anillo. Así elimina las subdivisiones a lo largo de la profundidad del túnel; los segmentos angulares siguen siendo necesarios para representar su forma cilíndrica. Su mapeado cilíndrico sustituye al anterior mapeado UV radial logarítmico.
+
+`samples/g-cube-textured-light.bas` empieza con un cubo texturado en pausa y una luz puntual cercana, con fuerte atenuación por distancia y poca luz ambiente. Mueve el ratón para comparar los cuatro valores de brillo señalados en los vértices de la cara más visible; F cambia a iluminación amplia y V alterna esos indicadores. ESPACIO reanuda o pausa el giro. Pulsa 1 para texturas en perspectiva sin modular, 2 para iluminación, T para alternar cuadriláteros nativos y parejas de triángulos, G para la aleta Gouraud que comparte el buffer de profundidad, M para animar la luz, C para alternar el límite de FPS y ESC para salir. Continúa los ejemplos `g-cube-tquad.bas` y `g-cube-light.bas`.
+
+`samples/g-texture-transparent.bas` crea una sola reja con fondo magenta mediante `SPRITE$` para una comparación 2D compacta sobre un damero. Cuatro columnas muestran `TRECTANGLE` con UV automáticas, `TRECTANGLE` con UV explícitas que repiten la textura, `TTRIANGLE` y `TQUAD`. Dos filas comparan llamadas opacas con llamadas que añaden el color final `6` (magenta), dejando ver el fondo por los huecos de la reja. ESC sale. Para texturas en perspectiva y profundidad compartida, continúa con `samples/g-cube-transparent.bas`.
+
+`samples/g-dungeon.bas` y `samples/g-dungeon-cpc.bas` usan una textura sin iluminar para el suelo y otra para el techo. Una malla de baldosas fijas en el mundo utiliza la luz de las antorchas precalculada en sus vértices, de modo que las zonas cálidas permanecen en su sitio al caminar o girar. Solo un parpadeo suave ligado al tiempo modifica su brillo. `TQUAD` resuelve la perspectiva y la interpolación RGB; las baldosas que cruzan el plano cercano recortan sus triángulos originales por separado, conservando el mismo campo de luz. Q ajusta la resolución de las paredes mientras la malla de iluminación permanece fija. Las paredes y la ocultación de objetos conservan su trazado de rayos existente.
 
 6.4 Colores
 
@@ -1001,11 +1051,11 @@ Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. A
 
 6.7 Sprites
 
-+ SPRITE gscr$,x,y[,t[,id]]     Dibuja el sprite almacenado en `gscr$` en `(x,y)`. `t` es color transparente opcional. `id` (entero > 0) fija el identificador de colisión sprite-sprite.
++ SPRITE gscr$,x,y[,t[,id]] [ALPHA a]     Dibuja el sprite almacenado en `gscr$` en `(x,y)`. `t` es color transparente opcional. `id` (entero > 0) fija el identificador de colisión sprite-sprite.
 + SPRITE HITTEST gscr$,x,y[,t[,id]]
                                 Evalúa colisiones de ese sprite en `(x,y)` sin dibujarlo ni modificar el mapa interno.
 + SPRITE DEL id                 Elimina `id` del mapa interno de colisión sprite-sprite.
-+ SPRITE MOVE id,x,y[,t]        Redibuja el último sprite asociado a `id` en `(x,y)`.
++ SPRITE MOVE id,x,y[,t] [ALPHA a]        Redibuja el último sprite asociado a `id` en `(x,y)`.
                                 Si se omite `t`, reutiliza la transparencia guardada en el último `SPRITE ... ,id`.
 + gscr$ = SPRITE$(x1,y1,x2,y2)  Captura la región lógica definida por los dos puntos y devuelve la cadena con el sprite.
 + COLMODE n                     Activa detección de colisiones en `SPRITE`: 0=off, 1=color, 2=sprite, 3=ambas.
@@ -1024,6 +1074,10 @@ Notas generales
 - `SPRITE` respeta `ORIGIN`, la ventana gráfica y el clipping del canvas. No fuerza refresco; llama a `FRAME` cuando quieras mostrar el resultado.
 - Recuerda el anclaje: `SPRITE ... ,X,Y` usa `Y` como borde inferior. Si vienes de un `LABEL` con `MOVE X,Y` (borde superior), convierte `Y` con `Ysprite = Ytexto - (alto - 1)`.
 - `SPRITE HITTEST` usa exactamente las mismas reglas de clipping y transparencia que `SPRITE`, pero no altera ni el buffer gráfico ni el mapa de propietarios.
+- `SPRITE ... ALPHA a` mezcla los píxeles distintos del color transparente con el fondo actual; si se omite, la opacidad es 1. `SPRITE MOVE ... ALPHA a` sustituye la opacidad del sprite registrado; sin cláusula, reutiliza la guardada. El color transparente y la opacidad se guardan por separado.
+- La opacidad es solo visual: incluso `ALPHA 0` mantiene la huella original de colisión de los píxeles distintos del color transparente y los resultados de colisión. `SPRITE HITTEST` comprueba esa huella y no admite `ALPHA`. En `COLMODE 2/3`, los píxeles ocupados por otro sprite siguen bloqueando el dibujo, así que utiliza `COLMODE 0` para superposiciones visuales; si hace falta, detecta colisiones por separado con `SPRITE HITTEST`.
+- La colisión por color sigue comprobando el RGB actual del destino. Los píxeles ya mezclados por una llamada anterior se comprueban con su color mostrado resultante, no con el color original de origen.
+- `samples/g-sprite-alpha.bas` restaura `assets/anime.png` cada fotograma y mueve un hada anime grande y multicolor. Su opacidad varía entre el 0% y el 100% exactos, manteniendo brevemente ambos extremos; el exterior del personaje permanece transparente. ESPACIO pausa, C alterna el límite de FPS y ESC sale. Los paneles muestran `FRECTANGLE ... ALPHA`.
 - El parámetro `t` acepta cualquier formato de color (`INK`, `RGB`, índices de paleta). Los píxeles de ese color se dejan intactos.
 - Si no pasas `id`, la detección sprite-sprite usa un identificador interno según el orden de dibujo del frame (`CLG/COLRESET` reinician ese mapa).
 - Si pasas `id`, ese valor se usa como identificador de sprite para las colisiones (permite controlar grupos o "mismo objeto" entre fotogramas).
@@ -1088,7 +1142,7 @@ Qué aporta el `id` (y por qué importa)
 - Eso permite `HITID` útil (saber contra quién chocaste).
 - Eso permite `SPRITE MOVE id,...` (mover usando la imagen ya registrada para ese `id`).
 - Eso permite `SPRITE DEL id` (eliminarlo del mapa de colisiones).
-- Una llamada correcta a `SPRITE ...,id` registra la imagen y su transparencia para posteriores llamadas a `SPRITE MOVE id,...`. El ejemplo de colisiones siguiente, también disponible como `samples/g-sprite5.bas`, vuelve a dibujar directamente con `SPRITE`.
+- Una llamada correcta a `SPRITE ...,id` registra la imagen, su transparencia y su opacidad para posteriores llamadas a `SPRITE MOVE id,...`. El ejemplo de colisiones siguiente, también disponible como `samples/g-sprite5.bas`, vuelve a dibujar directamente con `SPRITE`.
 
 Patrón recomendado para fondo fijo (sin `CLG` por frame)
 - 1. Restaurar fondos antiguos de sprites en `COLMODE 0`.
@@ -1433,9 +1487,9 @@ Notas
 
 8.2 Procesamiento de errores
 
-+ ON ERROR GOTO n        Activa un procesador; ante un error, la ejecución salta a la línea n.
-+ ON ERROR GOTO 0        Desactiva el procesador y limpia `ERL`/`ERR`.
-+ ON ERROR RESUME NEXT   Activa el modo “captura implícita”: ante error, equivale a `RESUME NEXT`.
++ ON ERROR GOTO n        Activa un manejador en la rutina actual, o global en el nivel superior.
++ ON ERROR GOTO 0        Desactiva ese manejador y limpia `ERL`/`ERR`.
++ ON ERROR RESUME NEXT   Activa la continuación implícita tras un error en ese ámbito.
 + ERR                    Función. Código numérico del último error en ejecución (0 si no hay ninguno activo).
 + ERL                    Función. Número de línea donde se produjo el último error (0 si no hay ninguno activo).
 + RESUME                 Repite la instrucción que causó el error.
@@ -1444,9 +1498,20 @@ Notas
 + ERROR n                Genera el error n de forma explícita. Por ejemplo, `ERROR 15` provoca un error de sintaxis.
 
 Flujo y notas
+
+Los manejadores locales a procedimientos siguen el modelo de VB6: primero se
+busca un manejador en la rutina actual y después en sus llamadores. Los del nivel
+superior conservan el comportamiento anterior de AVL BASIC por compatibilidad.
+
 - Sin procesador: ante un error, la ejecución se detiene e informa: “Línea <n>. <mensaje>”.
-- Con procesador: al producirse el error, `ERR` y `ERL` se fijan y se salta a la línea objetivo; tras un `RESUME` correcto, ambos vuelven a 0.
-- Reentradas: si ocurre un nuevo error mientras se ejecuta el procesador, se aborta con “Error en el procesador de errores …”.
+- Con manejador: al producirse el error, `ERR` y `ERL` identifican su código y la línea original. Un `RESUME` explícito correcto limpia el error procesado; al volver a un manejador exterior activo, se restauran los `ERR`/`ERL` pendientes de ese manejador.
+- Dentro de un `DEF SUB` o `DEF FN` multilínea, `ON ERROR` pertenece a esa invocación. Cada llamada empieza sin manejador local; al retornar, se descarta su manejador y se restaura el estado de error del llamador. `ON ERROR GOTO 0` desactiva solo el manejador de la invocación actual, dejando disponibles los de sus llamadores.
+- Toda instrucción local `ON ERROR` válida limpia los `ERR`/`ERL` visibles. Cambiar la política dentro de un manejador activo conserva su estado pendiente de `RESUME` por separado, incluido `ON ERROR GOTO 0`: desactiva futuras capturas en esa invocación sin cancelar el error que ya se está procesando. `RESUME` requiere un contexto de manejador activo; recordar un error de continuación implícita no basta para permitir `RESUME`.
+- El manejador de un `ON ERROR GOTO n` local y el destino de un `RESUME n` local deben ser líneas de la misma rutina. El manejador puede acceder a los parámetros y variables `LOCAL` de esa invocación. Termina el camino normal con `EXIT SUB` o `EXIT FN` antes de las líneas del manejador para no ejecutarlas por caída.
+- Un manejador habilitado está activo mientras procesa un error. Un error sin manejador local, o un nuevo error dentro de un manejador activo, se propaga a la rutina llamadora más cercana que tenga un manejador habilitado e inactivo. Las llamadas abandonadas liberan sus variables locales, alias de arrays y estado de control. Si no hay ningún manejador disponible, el error se informa normalmente; un error sin manejar dentro de un manejador activo informa «Error en el procesador de errores …».
+- Cuando un llamador procesa un error de una llamada más profunda, `RESUME` repite su instrucción `CALL` completa o la instrucción que contiene la expresión; `RESUME NEXT` omite esa instrucción. `RESUME n` continúa dentro del llamador que procesa el error. No puede volver a entrar en una rutina abandonada. `ERL` sigue indicando la línea original del fallo en esa rutina.
+- Un `ON ERROR RESUME NEXT` local omite la instrucción que falla, o la instrucción que realiza la llamada cuando el error se propaga desde una rutina más profunda, sin entrar en un manejador. `ERR` y `ERL` siguen disponibles para consultarlos; utiliza `ON ERROR GOTO 0` para limpiarlos y desactivar este modo. El modo implícito del nivel superior sigue limpiando el error procesado por compatibilidad.
+- Compatibilidad: `ON ERROR` en el nivel superior conserva el modelo global anterior. Si ningún manejador local de procedimiento captura un error, el manejador global puede procesarlo mientras la rutina que falló permanece suspendida; su `RESUME` puede continuar dentro de esa rutina conservada, como antes. Si así se reanuda un manejador local activo después de un segundo error, se restauran sus `ERR`/`ERL` pendientes originales. Instalar o desactivar un manejador local no sustituye al global. `ON ERROR GOTO 0` en el nivel superior sigue limpiando el manejador global y su estado pendiente de `RESUME`. `GOSUB` no crea un ámbito de errores de procedimiento.
 - ERROR n: si el error `n` no está entre los predefinidos por el intérprete, se considera un número de error personalizado.
 
 Ejemplo (error procesado seguido de un error deliberadamente sin procesar)
@@ -1467,6 +1532,31 @@ Salida esperada del ejemplo anterior
 Error 200 occurred on line 20
 Line 40. Target line does not exist.
 ```
+
+Manejadores locales en una subrutina y una función multilínea
+```basic
+10 CALL ShowRatio(12,0)
+20 PRINT FNRatio(12,3)
+30 PRINT FNRatio(12,0)
+40 END
+100 DEF SUB ShowRatio(Numerator,Denominator)
+110 ON ERROR GOTO 150
+120 PRINT Numerator/Denominator
+130 EXIT SUB
+150 PRINT "Cannot calculate ratio; error ";ERR;" at line ";ERL
+160 RESUME 130
+170 SUBEND
+200 DEF FNRatio(Numerator,Denominator)
+210 ON ERROR GOTO 250
+220 FNRatio=Numerator/Denominator
+230 EXIT FN
+250 FNRatio=0
+260 RESUME 230
+270 FNEND
+```
+`ShowRatio` procesa su propia división por cero y retorna normalmente. `FNRatio`
+devuelve el cociente, o cero si falla el cálculo. El manejador se instala por
+separado en cada invocación; ninguna rutina cambia el manejador de su llamador.
 
 Tabla completa de códigos de error
 1  Instrucción no permitida en un programa.
@@ -1867,8 +1957,9 @@ durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
   - En una función multilínea, un valor no escalar solo puede devolverse con `MAT FNNAME = ...`. Ese retorno se devuelve por valor y solo admite arrays de una o dos dimensiones, igual que `MAT`. Modificar el array devuelto no modifica un array de entrada.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una función no puede reentrar en sí misma.
-  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
-  - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la función desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
+  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma función. Los errores pueden propagarse a una rutina llamadora; la sección 8.2 explica `RESUME` desde el llamador y la compatibilidad con manejadores globales.
+  - Desde el inicio de la ejecución, `GOTO`, `GOSUB` y `ON ERROR` escritos fuera no pueden seleccionar una línea del cuerpo de la función: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
 
 Ejemplo de definición y uso
 ```basic
@@ -1952,9 +2043,9 @@ Subrutinas multilínea
   - Si existen a la vez un escalar y un array con el mismo nombre base, tanto `A` como un identificador agrupado como `(A)` se refieren al escalar. No hay una sintaxis separada para pasar el array completo como parámetro si existe un escalar homónimo.
   - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
   - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en sí misma.
-  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`ON ERROR`, `RESUME`, `CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
-  - Desde el inicio de la ejecución, no se puede usar `GOTO`, `GOSUB`, `ON ERROR` o `RESUME` para saltar al cuerpo de la subrutina desde fuera: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
-  - Un manejador de errores establecido por el programa llamador puede procesar un error surgido durante `CALL`, igual que en una función multilínea. El manejador puede utilizar `RESUME NEXT` con las mismas restricciones de salto. Esto no permite escribir `ON ERROR` ni `RESUME` en el cuerpo de la rutina. `TRON` también traza las líneas ejecutadas de la rutina.
+  - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
+  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma subrutina. Un manejador disponible del llamador puede capturar un error propagado durante `CALL`; su `RESUME` repite la llamada y `RESUME NEXT` continúa después de ella. La sección 8.2 detalla las reglas y la compatibilidad con manejadores globales.
+  - Desde el inicio de la ejecución, `GOTO`, `GOSUB` y `ON ERROR` escritos fuera no pueden seleccionar una línea del cuerpo de la subrutina: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa. `TRON` también traza las líneas ejecutadas de la rutina.
 
 Ejemplo de subrutina
 ```basic

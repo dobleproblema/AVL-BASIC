@@ -1,3 +1,4 @@
+mod alpha_ops;
 mod array_expr;
 mod audio_commands;
 mod color_lut;
@@ -7,9 +8,19 @@ mod mat_compiled;
 mod mat_compiled_tests;
 mod mat_stats;
 mod mat_subarrays;
+mod texture_ops;
+#[cfg(test)]
+mod texture_ops_tests;
+#[cfg(test)]
+mod texture_transparency_tests;
 
+use alpha_ops::compile_alpha_clause;
 use gouraud_ops::CompiledGouraud;
 use mat_compiled::CompiledMatAssignment;
+use texture_ops::{
+    compile_textured_quad_statement, compile_textured_triangle_statement, CompiledTexturedQuad,
+    CompiledTexturedTriangle,
+};
 
 use crate::audio::{cpc::Note as SoundNote, AudioSystem};
 use crate::console;
@@ -1282,6 +1293,7 @@ enum UserFunction {
         local_specs: Rc<[LocalSpec]>,
         start: Cursor,
         end: Cursor,
+        uses_error_handling: bool,
     },
 }
 
@@ -1309,6 +1321,7 @@ struct UserSub {
     local_specs: Vec<LocalSpec>,
     start: Cursor,
     end: Cursor,
+    uses_error_handling: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1504,6 +1517,39 @@ struct RuntimeErrorState {
 }
 
 #[derive(Debug, Clone)]
+struct RoutineErrorFlow {
+    for_stack: Vec<ForFrame>,
+    while_stack: Vec<WhileFrame>,
+    if_stack: Vec<Cursor>,
+    gosub_stack: Vec<GosubFrame>,
+    if_gosub_base: usize,
+    pending_if_branch: Option<Cursor>,
+}
+
+#[derive(Debug)]
+struct RoutineErrorScope {
+    name: Rc<str>,
+    is_function: bool,
+    handler_line: Option<i32>,
+    resume_next: bool,
+    active: bool,
+    used: bool,
+    error: Option<RuntimeErrorState>,
+    flow: Option<RoutineErrorFlow>,
+    saved_visible_error: Option<RuntimeErrorState>,
+}
+
+#[derive(Debug, Default)]
+struct ProceduralErrorState {
+    // One ordered scope per call; functions and SUBs otherwise have separate stacks.
+    scopes: Vec<RoutineErrorScope>,
+    // Locals suspended by a legacy global handler cannot catch its own errors.
+    global_error_scope_base: usize,
+    // A legacy fallback may temporarily replace a local handler's visible Err.
+    global_saved_visible_error: Option<RuntimeErrorState>,
+}
+
+#[derive(Debug, Clone)]
 struct CompiledAssignment {
     targets: Vec<CompiledLValue>,
     rhs: Expr,
@@ -1656,6 +1702,7 @@ struct CompiledRect {
     y2: CompiledNumberExpr,
     color: Option<CompiledColorExpr>,
     filled: bool,
+    alpha: Option<CompiledNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -1805,6 +1852,7 @@ struct CompiledTriangle {
     y2: CompiledNumberExpr,
     color: Option<CompiledColorExpr>,
     filled: bool,
+    alpha: Option<CompiledNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -1818,6 +1866,7 @@ struct CompiledCircle {
     aspect: Option<CompiledNumberExpr>,
     relative: bool,
     filled: bool,
+    alpha: Option<CompiledNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -1841,49 +1890,18 @@ struct CompiledTextureSource {
 #[derive(Debug, Clone)]
 struct CompiledTexturedRect {
     texture: CompiledTextureSource,
-    x0: Expr,
-    y0: Expr,
-    x1: Expr,
-    y1: Expr,
-    uv: Option<(Expr, Expr, Expr, Expr)>,
-}
-
-#[derive(Debug, Clone)]
-struct CompiledTexturedTriangle {
-    texture: CompiledTextureSource,
-    x0: Expr,
-    y0: Expr,
-    u0: Expr,
-    v0: Expr,
-    x1: Expr,
-    y1: Expr,
-    u1: Expr,
-    v1: Expr,
-    x2: Expr,
-    y2: Expr,
-    u2: Expr,
-    v2: Expr,
-}
-
-#[derive(Debug, Clone)]
-struct CompiledTexturedQuad {
-    texture: CompiledTextureSource,
-    x0: Expr,
-    y0: Expr,
-    u0: Expr,
-    v0: Expr,
-    x1: Expr,
-    y1: Expr,
-    u1: Expr,
-    v1: Expr,
-    x2: Expr,
-    y2: Expr,
-    u2: Expr,
-    v2: Expr,
-    x3: Expr,
-    y3: Expr,
-    u3: Expr,
-    v3: Expr,
+    x0: CompiledNumberExpr,
+    y0: CompiledNumberExpr,
+    x1: CompiledNumberExpr,
+    y1: CompiledNumberExpr,
+    uv: Option<(
+        CompiledNumberExpr,
+        CompiledNumberExpr,
+        CompiledNumberExpr,
+        CompiledNumberExpr,
+    )>,
+    transparent: Option<CompiledColorExpr>,
+    alpha: Option<CompiledNumberExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -2432,6 +2450,9 @@ pub struct Interpreter {
     sub_call_stack: Vec<Rc<str>>,
     active_functions: Vec<ActiveFunctionFrame>,
     active_subs: Vec<ActiveSubFrame>,
+    // The normal call path reads only the depth; error bookkeeping is lazy and cold.
+    routine_error_depth: usize,
+    procedural_errors: Option<Box<ProceduralErrorState>>,
     fn_line_owner: HashMap<i32, String>,
     sub_line_owner: HashMap<i32, String>,
     expression_cache: HashMap<String, Rc<Expr>>,
@@ -2550,6 +2571,8 @@ impl Interpreter {
             sub_call_stack: Vec::new(),
             active_functions: Vec::new(),
             active_subs: Vec::new(),
+            routine_error_depth: 0,
+            procedural_errors: None,
             fn_line_owner: HashMap::new(),
             sub_line_owner: HashMap::new(),
             expression_cache: HashMap::new(),
@@ -3874,6 +3897,8 @@ impl Interpreter {
         self.error_handler_line = None;
         self.error_resume_next = false;
         self.handling_error = false;
+        self.routine_error_depth = 0;
+        self.procedural_errors = None;
         self.last_error = None;
         self.stopped_cursor = None;
         self.pause_deadline = None;
@@ -5333,9 +5358,7 @@ impl Interpreter {
             }
         }
         if self.inside_multiline_routine()
-            && (starts_keyword(&upper, "ON ERROR")
-                || starts_keyword(&upper, "CHAIN MERGE")
-                || first == "RESUME"
+            && (starts_keyword(&upper, "CHAIN MERGE")
                 || first == "DEF"
                 || matches!(first, "AFTER" | "EVERY" | "DI" | "EI" | "CHAIN" | "MERGE"))
         {
@@ -5417,10 +5440,16 @@ impl Interpreter {
             "RELEASE" => self.execute_sound_release(command[7..].trim()),
             "AUDIO" => self.execute_audio(command[5..].trim()),
             "DI" => {
+                if upper != "DI" {
+                    return Err(self.err(ErrorCode::Syntax));
+                }
                 self.interrupts_enabled = false;
                 Ok(())
             }
             "EI" => {
+                if upper != "EI" {
+                    return Err(self.err(ErrorCode::Syntax));
+                }
                 self.interrupts_enabled = true;
                 self.sound_poll_forced = self.has_sound_handlers;
                 self.process_timers(cursor).map(|_| ())
@@ -7268,7 +7297,11 @@ impl Interpreter {
             .as_ref()
             .map(|expr| expr.eval(self))
             .transpose()?;
-        if !compiled.filled
+        if let Some(alpha) = &compiled.alpha {
+            let alpha = self.eval_alpha(alpha)?;
+            self.graphics
+                .filled_rectangle_with_alpha(x1, y1, x2, y2, color, alpha)?;
+        } else if !compiled.filled
             || !self
                 .graphics
                 .filled_rectangle_unscaled(x1, y1, x2, y2, color)
@@ -7317,8 +7350,14 @@ impl Interpreter {
             .as_ref()
             .map(|expr| expr.eval(self))
             .transpose()?;
-        self.graphics
-            .triangle(x0, y0, x1, y1, x2, y2, color, compiled.filled);
+        if let Some(alpha) = &compiled.alpha {
+            let alpha = self.eval_alpha(alpha)?;
+            self.graphics
+                .filled_triangle_with_alpha(x0, y0, x1, y1, x2, y2, color, alpha)?;
+        } else {
+            self.graphics
+                .triangle(x0, y0, x1, y1, x2, y2, color, compiled.filled);
+        }
         if window_blocked {
             Ok(())
         } else {
@@ -7378,8 +7417,14 @@ impl Interpreter {
             start = start.map(f64::to_radians);
             end = end.map(f64::to_radians);
         }
-        self.graphics
-            .circle_arc(x, y, radius, color, compiled.filled, start, end, aspect)?;
+        if let Some(alpha) = &compiled.alpha {
+            let alpha = self.eval_alpha(alpha)?;
+            self.graphics
+                .filled_circle_with_alpha(x, y, radius, color, start, end, aspect, alpha)?;
+        } else {
+            self.graphics
+                .circle_arc(x, y, radius, color, compiled.filled, start, end, aspect)?;
+        }
         if window_blocked {
             Ok(())
         } else {
@@ -7437,7 +7482,34 @@ impl Interpreter {
                 ))
             })
             .transpose()?;
-        self.graphics.textured_rect(&texture, x0, y0, x1, y1, uv)?;
+        let transparent = compiled
+            .transparent
+            .as_ref()
+            .map(|expr| expr.eval(self))
+            .transpose()?;
+        if let Some(alpha) = &compiled.alpha {
+            let alpha = self.eval_alpha(alpha)?;
+            self.graphics.textured_rect_with_alpha(
+                &texture,
+                x0,
+                y0,
+                x1,
+                y1,
+                uv,
+                transparent,
+                alpha,
+            )?;
+        } else {
+            self.graphics.textured_rect_with_transparency(
+                &texture,
+                x0,
+                y0,
+                x1,
+                y1,
+                uv,
+                transparent,
+            )?;
+        }
         if window_blocked {
             Ok(())
         } else {
@@ -7445,73 +7517,8 @@ impl Interpreter {
         }
     }
 
-    fn execute_compiled_textured_triangle(
-        &mut self,
-        compiled: &CompiledTexturedTriangle,
-    ) -> BasicResult<()> {
-        let window_blocked = self.graphics_window_blocked();
-        if !window_blocked {
-            self.ensure_graphics_window()?;
-        }
-        let texture = self.eval_compiled_texture(&compiled.texture)?;
-        let x0 = self.eval_texture_number(&compiled.x0)?;
-        let y0 = self.eval_texture_number(&compiled.y0)?;
-        let u0 = self.eval_texture_number(&compiled.u0)?;
-        let v0 = self.eval_texture_number(&compiled.v0)?;
-        let x1 = self.eval_texture_number(&compiled.x1)?;
-        let y1 = self.eval_texture_number(&compiled.y1)?;
-        let u1 = self.eval_texture_number(&compiled.u1)?;
-        let v1 = self.eval_texture_number(&compiled.v1)?;
-        let x2 = self.eval_texture_number(&compiled.x2)?;
-        let y2 = self.eval_texture_number(&compiled.y2)?;
-        let u2 = self.eval_texture_number(&compiled.u2)?;
-        let v2 = self.eval_texture_number(&compiled.v2)?;
-        self.graphics
-            .textured_triangle(&texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2)?;
-        if window_blocked {
-            Ok(())
-        } else {
-            self.refresh_graphics_window_after_ensure()
-        }
-    }
-
-    fn execute_compiled_textured_quad(
-        &mut self,
-        compiled: &CompiledTexturedQuad,
-    ) -> BasicResult<()> {
-        let window_blocked = self.graphics_window_blocked();
-        if !window_blocked {
-            self.ensure_graphics_window()?;
-        }
-        let texture = self.eval_compiled_texture(&compiled.texture)?;
-        let x0 = self.eval_texture_number(&compiled.x0)?;
-        let y0 = self.eval_texture_number(&compiled.y0)?;
-        let u0 = self.eval_texture_number(&compiled.u0)?;
-        let v0 = self.eval_texture_number(&compiled.v0)?;
-        let x1 = self.eval_texture_number(&compiled.x1)?;
-        let y1 = self.eval_texture_number(&compiled.y1)?;
-        let u1 = self.eval_texture_number(&compiled.u1)?;
-        let v1 = self.eval_texture_number(&compiled.v1)?;
-        let x2 = self.eval_texture_number(&compiled.x2)?;
-        let y2 = self.eval_texture_number(&compiled.y2)?;
-        let u2 = self.eval_texture_number(&compiled.u2)?;
-        let v2 = self.eval_texture_number(&compiled.v2)?;
-        let x3 = self.eval_texture_number(&compiled.x3)?;
-        let y3 = self.eval_texture_number(&compiled.y3)?;
-        let u3 = self.eval_texture_number(&compiled.u3)?;
-        let v3 = self.eval_texture_number(&compiled.v3)?;
-        self.graphics.textured_quad(
-            &texture, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, x3, y3, u3, v3,
-        )?;
-        if window_blocked {
-            Ok(())
-        } else {
-            self.refresh_graphics_window_after_ensure()
-        }
-    }
-
-    fn eval_texture_number(&mut self, expr: &Expr) -> BasicResult<f64> {
-        eval_compiled_number(self, expr).map_err(|mut e| {
+    fn eval_texture_number(&mut self, expr: &CompiledNumberExpr) -> BasicResult<f64> {
+        expr.eval(self).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
             }
@@ -8838,6 +8845,35 @@ impl Interpreter {
     fn execute_on_error(&mut self, command: &str) -> BasicResult<()> {
         let tail = command[8..].trim();
         let upper = tail.to_ascii_uppercase();
+        if let Some(index) = self.current_routine_error_scope() {
+            if upper == "RESUME NEXT" {
+                let scope = &mut self.procedural_errors.as_mut().unwrap().scopes[index];
+                scope.handler_line = None;
+                scope.resume_next = true;
+                scope.used = true;
+                self.last_error = None;
+                return Ok(());
+            }
+            if starts_keyword(&upper, "GOTO") {
+                let line = parse_line_number_literal(tail[4..].trim())
+                    .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+                if line != 0 {
+                    if self.line_index(line).is_none() {
+                        return Err(self.err(ErrorCode::TargetLineNotFound));
+                    }
+                    if !self.line_belongs_to_error_scope(line, index) {
+                        return Err(self.err(ErrorCode::InvalidTargetLine));
+                    }
+                }
+                let scope = &mut self.procedural_errors.as_mut().unwrap().scopes[index];
+                scope.handler_line = (line != 0).then_some(line);
+                scope.resume_next = false;
+                scope.used = true;
+                self.last_error = None;
+                return Ok(());
+            }
+            return Err(self.err(ErrorCode::Syntax));
+        }
         if upper == "RESUME NEXT" {
             self.error_handler_line = None;
             self.error_resume_next = true;
@@ -8884,6 +8920,49 @@ impl Interpreter {
     }
 
     fn execute_resume(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
+        if let Some(index) = self.current_routine_error_scope() {
+            if !self.routine_error_scopes()[index].active {
+                return Err(self.err(ErrorCode::HandlerError));
+            }
+            let Some(state) = self.routine_error_scopes()[index].error.clone() else {
+                return Err(self.err(ErrorCode::HandlerError));
+            };
+            let arg = arg.trim();
+            let target = if arg.is_empty() || arg == "0" || arg.eq_ignore_ascii_case("NEXT") {
+                None
+            } else {
+                let line = parse_line_number_literal(arg)
+                    .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+                if self.line_index(line).is_none() {
+                    return Err(self.err(ErrorCode::TargetLineNotFound));
+                }
+                if !self.line_belongs_to_error_scope(line, index) {
+                    return Err(self.err(ErrorCode::InvalidTargetLine));
+                }
+                Some(line)
+            };
+            if let Some(flow) = self.procedural_errors.as_mut().unwrap().scopes[index]
+                .flow
+                .take()
+            {
+                self.restore_routine_error_flow(flow);
+            }
+            if let Some(line) = target {
+                self.jump_to_line_for_resume(line, cursor)?;
+            } else {
+                *cursor = if arg.eq_ignore_ascii_case("NEXT") {
+                    state.next
+                } else {
+                    state.retry
+                };
+                self.return_line_plan = state.plan;
+            }
+            let scope = &mut self.procedural_errors.as_mut().unwrap().scopes[index];
+            scope.active = false;
+            scope.error = None;
+            self.last_error = None;
+            return Ok(());
+        }
         let Some(state) = self.last_error.clone() else {
             return Err(BasicError::new(ErrorCode::HandlerError)
                 .with_detail("Error in error handler: RESUME without ERROR."));
@@ -8901,7 +8980,10 @@ impl Interpreter {
             self.jump_to_line_for_resume(line, cursor)?;
         }
         self.handling_error = false;
-        self.last_error = None;
+        self.last_error = self.procedural_errors.as_mut().and_then(|state| {
+            state.global_error_scope_base = 0;
+            state.global_saved_visible_error.take()
+        });
         Ok(())
     }
 
@@ -9452,7 +9534,13 @@ impl Interpreter {
             match self.assign_mat_input_value(&name, &indexes, &raw_token) {
                 Ok(()) => entries[entry_idx].position += 1,
                 Err(err) => {
-                    if self.error_resume_next || self.error_handler_line.is_some() {
+                    if self.error_resume_next
+                        || self.error_handler_line.is_some()
+                        || self
+                            .routine_error_scopes()
+                            .iter()
+                            .any(|scope| scope.resume_next || scope.handler_line.is_some())
+                    {
                         self.fill_mat_input_defaults(&entries, entry_idx, position);
                         return Err(err);
                     }
@@ -10872,6 +10960,7 @@ impl Interpreter {
             self.fn_line_owner.insert(line, name.clone());
         }
         let fn_name = Rc::<str>::from(name.as_str());
+        let uses_error_handling = self.routine_uses_error_handling(start, end);
         self.single_line_function_cache.remove(name.as_str());
         self.functions.insert(
             name,
@@ -10881,6 +10970,7 @@ impl Interpreter {
                 local_specs: Rc::from(local_specs.into_boxed_slice()),
                 start,
                 end: end.clone(),
+                uses_error_handling,
             },
         );
         *cursor = self.cursor_after_cached_command(Cursor {
@@ -10909,6 +10999,7 @@ impl Interpreter {
             self.sub_line_owner.insert(line, name.clone());
         }
         let sub_name = Rc::<str>::from(name.as_str());
+        let uses_error_handling = self.routine_uses_error_handling(start, end);
         self.subs.insert(
             name,
             Rc::new(UserSub {
@@ -10917,6 +11008,7 @@ impl Interpreter {
                 local_specs,
                 start,
                 end: end.clone(),
+                uses_error_handling,
             }),
         );
         *cursor = self.cursor_after_cached_command(Cursor {
@@ -11098,11 +11190,32 @@ impl Interpreter {
     }
 
     fn inside_multiline_function(&self) -> bool {
-        !self.handling_error && !self.active_functions.is_empty()
+        if self.handling_error {
+            return self.handler_inside_multiline_routine(true);
+        }
+        !self.active_functions.is_empty()
     }
 
     fn inside_multiline_sub(&self) -> bool {
-        !self.handling_error && !self.active_subs.is_empty()
+        if self.handling_error {
+            return self.handler_inside_multiline_routine(false);
+        }
+        !self.active_subs.is_empty()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn handler_inside_multiline_routine(&self, is_function: bool) -> bool {
+        let Some(line) = self.current_line else {
+            return false;
+        };
+        if is_function {
+            self.active_function_name()
+                .is_some_and(|name| self.function_for_line(line) == Some(name))
+        } else {
+            self.active_sub_name()
+                .is_some_and(|name| self.sub_for_line(line) == Some(name))
+        }
     }
 
     fn inside_multiline_routine(&self) -> bool {
@@ -11125,6 +11238,102 @@ impl Interpreter {
 
     fn sub_for_line(&self, line: i32) -> Option<&str> {
         self.sub_line_owner.get(&line).map(String::as_str)
+    }
+
+    fn line_belongs_to_error_scope(&self, line: i32, index: usize) -> bool {
+        let scope = &self.routine_error_scopes()[index];
+        let owner = if scope.is_function {
+            self.function_for_line(line)
+        } else {
+            self.sub_for_line(line)
+        };
+        owner == Some(scope.name.as_ref())
+    }
+
+    fn current_routine_error_scope(&self) -> Option<usize> {
+        let index = self.routine_error_depth.checked_sub(1)?;
+        self.current_line
+            .filter(|line| self.line_belongs_to_error_scope(*line, index))
+            .map(|_| index)
+    }
+
+    fn routine_error_scopes(&self) -> &[RoutineErrorScope] {
+        self.procedural_errors
+            .as_ref()
+            .map_or(&[], |state| &state.scopes)
+    }
+
+    fn global_error_scope_base(&self) -> usize {
+        self.procedural_errors
+            .as_ref()
+            .map_or(0, |state| state.global_error_scope_base)
+    }
+
+    fn routine_uses_error_handling(&self, start: Cursor, end: Cursor) -> bool {
+        self.compiled_line_cache[start.line_idx..=end.line_idx]
+            .iter()
+            .flat_map(|commands| commands.iter())
+            .any(|command| {
+                matches!(command.as_ref(), CachedCommand::Raw(source)
+                    if starts_keyword(&source.to_ascii_uppercase(), "ON ERROR")
+                        || first_word_is(source, "RESUME"))
+            })
+    }
+
+    fn push_routine_error_scope(&mut self, name: Rc<str>, is_function: bool) {
+        let scope = RoutineErrorScope {
+            name,
+            is_function,
+            handler_line: None,
+            resume_next: false,
+            active: false,
+            used: false,
+            error: None,
+            flow: None,
+            saved_visible_error: self.last_error.clone(),
+        };
+        let state = self.procedural_errors.get_or_insert_with(Box::default);
+        state.scopes.push(scope);
+        self.routine_error_depth = state.scopes.len();
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn run_routine_with_error_scope(
+        &mut self,
+        name: Rc<str>,
+        is_function: bool,
+        start: Cursor,
+    ) -> BasicResult<RunOutcome> {
+        self.push_routine_error_scope(name, is_function);
+        let result = self.run_from(start);
+        self.pop_routine_error_scope();
+        result
+    }
+
+    fn pop_routine_error_scope(&mut self) {
+        let state = self.procedural_errors.as_mut();
+        let scope = state.and_then(|state| state.scopes.pop());
+        self.routine_error_depth = self.routine_error_scopes().len();
+        if let Some(scope) = scope {
+            // Preserve legacy global behavior for routines which never opted in.
+            // A child handler must also leave an already-active caller resumable.
+            if scope.used
+                || self.handling_error
+                || self.routine_error_scopes().iter().any(|scope| scope.active)
+            {
+                self.last_error = scope.saved_visible_error;
+            }
+        }
+    }
+
+    fn restore_routine_error_flow(&mut self, flow: RoutineErrorFlow) {
+        self.for_stack = flow.for_stack;
+        self.while_stack = flow.while_stack;
+        self.if_stack = flow.if_stack;
+        self.gosub_stack = flow.gosub_stack;
+        self.if_gosub_base = flow.if_gosub_base;
+        self.pending_if_branch = flow.pending_if_branch;
     }
 
     fn return_value_for_active_function(&mut self, lhs: &str, value: &Value) {
@@ -11779,6 +11988,15 @@ impl Interpreter {
     }
 
     fn execute_rect(&mut self, args: &str, filled: bool) -> BasicResult<()> {
+        let (args, alpha) = compile_alpha_clause(args)?;
+        if alpha.is_some() {
+            if !filled {
+                return Err(self.err(ErrorCode::ArgumentMismatch));
+            }
+            let mut compiled = compile_rect_statement(args, filled)?;
+            compiled.alpha = alpha;
+            return self.execute_compiled_rect(&compiled);
+        }
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if !(4..=5).contains(&parts.len()) {
@@ -11794,6 +12012,15 @@ impl Interpreter {
     }
 
     fn execute_triangle(&mut self, args: &str, filled: bool) -> BasicResult<()> {
+        let (args, alpha) = compile_alpha_clause(args)?;
+        if alpha.is_some() {
+            if !filled {
+                return Err(self.err(ErrorCode::ArgumentMismatch));
+            }
+            let mut compiled = compile_triangle_statement(args, filled)?;
+            compiled.alpha = alpha;
+            return self.execute_compiled_triangle(&compiled);
+        }
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if !(6..=7).contains(&parts.len()) {
@@ -11827,6 +12054,15 @@ impl Interpreter {
     }
 
     fn execute_circle(&mut self, args: &str, filled: bool) -> BasicResult<()> {
+        let (args, alpha) = compile_alpha_clause(args)?;
+        if alpha.is_some() {
+            if !filled {
+                return Err(self.err(ErrorCode::ArgumentMismatch));
+            }
+            let mut compiled = compile_circle_statement(args, false, filled)?;
+            compiled.alpha = alpha;
+            return self.execute_compiled_circle(&compiled);
+        }
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if !(3..=7).contains(&parts.len()) {
@@ -11843,6 +12079,15 @@ impl Interpreter {
     }
 
     fn execute_circle_relative(&mut self, args: &str, filled: bool) -> BasicResult<()> {
+        let (args, alpha) = compile_alpha_clause(args)?;
+        if alpha.is_some() {
+            if !filled {
+                return Err(self.err(ErrorCode::ArgumentMismatch));
+            }
+            let mut compiled = compile_circle_statement(args, true, filled)?;
+            compiled.alpha = alpha;
+            return self.execute_compiled_circle(&compiled);
+        }
         self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if !(3..=7).contains(&parts.len()) {
@@ -12385,26 +12630,40 @@ impl Interpreter {
         self.ensure_graphics_window()?;
         let upper = args.to_ascii_uppercase();
         if starts_keyword(&upper, "DEL") {
-            let id = self.eval_number(args[3..].trim())? as i32;
+            let (body, alpha) = compile_alpha_clause(args[3..].trim())?;
+            if alpha.is_some() {
+                return Err(self.err(ErrorCode::ArgumentMismatch));
+            }
+            let id = self.eval_number(body)? as i32;
             self.graphics.sprite_delete(id);
             return Ok(());
         }
         if starts_keyword(&upper, "MOVE") {
-            let nums = split_arguments(args[4..].trim());
-            if nums.len() < 3 {
+            let (body, alpha) = compile_alpha_clause(args[4..].trim())?;
+            let nums = split_arguments(body);
+            if !(3..=4).contains(&nums.len()) {
                 return Err(self.err(ErrorCode::ArgumentMismatch));
             }
             let id = self.eval_number(&nums[0])? as i32;
             let x = self.eval_number(&nums[1])?;
             let y = self.eval_number(&nums[2])?;
             let transparent = nums.get(3).map(|s| self.eval_color(s)).transpose()?;
-            self.graphics.sprite_move(id, x, y, transparent)?;
+            let alpha = alpha
+                .as_ref()
+                .map(|expr| self.eval_alpha(expr))
+                .transpose()?;
+            self.graphics
+                .sprite_move_with_alpha(id, x, y, transparent, alpha)?;
             return self.refresh_graphics_window();
         }
         let hittest = starts_keyword(&upper, "HITTEST");
         let body = if hittest { args[7..].trim() } else { args };
+        let (body, alpha) = compile_alpha_clause(body)?;
+        if hittest && alpha.is_some() {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
         let parts = split_arguments(body);
-        if parts.len() < 3 {
+        if !(3..=5).contains(&parts.len()) {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let sprite = self.eval_value(&parts[0])?.into_string()?;
@@ -12415,8 +12674,14 @@ impl Interpreter {
             .get(4)
             .map(|s| self.eval_number(s).map(|n| n as i32))
             .transpose()?;
-        self.graphics
-            .draw_sprite(&sprite, x, y, transparent, id, hittest)?;
+        if let Some(alpha) = &alpha {
+            let alpha = self.eval_alpha(alpha)?;
+            self.graphics
+                .draw_sprite_with_alpha(&sprite, x, y, transparent, id, hittest, alpha)?;
+        } else {
+            self.graphics
+                .draw_sprite(&sprite, x, y, transparent, id, hittest)?;
+        }
         if hittest {
             Ok(())
         } else {
@@ -12708,6 +12973,8 @@ impl Interpreter {
         self.error_handler_line = None;
         self.error_resume_next = false;
         self.handling_error = false;
+        self.routine_error_depth = 0;
+        self.procedural_errors = None;
         self.last_error = None;
         self.stopped_cursor = None;
         self.pause_deadline = None;
@@ -12839,6 +13106,63 @@ impl Interpreter {
         retry: Cursor,
         next: Cursor,
     ) -> BasicResult<bool> {
+        let local_base = if self.handling_error {
+            self.global_error_scope_base()
+        } else {
+            0
+        };
+        if let Some(index) = self
+            .routine_error_scopes()
+            .iter()
+            .enumerate()
+            .skip(local_base)
+            .rev()
+            .find_map(|(index, scope)| {
+                (!scope.active && (scope.handler_line.is_some() || scope.resume_next))
+                    .then_some(index)
+            })
+        {
+            if index + 1 != self.routine_error_depth {
+                // Let normal call cleanup restore locals, aliases and control
+                // stacks. The owning caller catches its CALL/expression below.
+                return Ok(false);
+            }
+            let plan = self.retain_current_line();
+            let state = RuntimeErrorState {
+                number: basic_error_number(&err),
+                line: err.line.or(self.current_line).unwrap_or(0),
+                retry,
+                next: if plan.is_some() {
+                    next
+                } else {
+                    self.cursor_after_cached_command(next)
+                },
+                plan,
+            };
+            self.last_error = Some(state.clone());
+            let scope = &mut self.procedural_errors.as_mut().unwrap().scopes[index];
+            if scope.resume_next {
+                *cursor = state.next;
+                self.return_line_plan = state.plan;
+                // Automatic continuation retains ERR/ERL but does not activate
+                // an error handler or create a continuation for RESUME.
+                return Ok(true);
+            }
+            scope.error = Some(state.clone());
+            let handler = scope.handler_line.unwrap();
+            scope.active = true;
+            scope.flow = Some(RoutineErrorFlow {
+                for_stack: self.for_stack.clone(),
+                while_stack: self.while_stack.clone(),
+                if_stack: std::mem::take(&mut self.if_stack),
+                gosub_stack: self.gosub_stack.clone(),
+                if_gosub_base: self.if_gosub_base,
+                pending_if_branch: self.pending_if_branch.take(),
+            });
+            self.if_gosub_base = self.gosub_stack.len();
+            self.jump_to_line_unchecked(handler, cursor)?;
+            return Ok(true);
+        }
         if err
             .detail
             .as_deref()
@@ -12849,6 +13173,10 @@ impl Interpreter {
         let line = err.line.or(self.current_line).unwrap_or(0);
         let number = basic_error_number(&err);
         let plan = self.retain_current_line();
+        let saved_visible_error = (!self.handling_error
+            && self.routine_error_scopes().iter().any(|scope| scope.active))
+        .then(|| self.last_error.clone())
+        .flatten();
         self.last_error = Some(RuntimeErrorState {
             number,
             line,
@@ -12872,11 +13200,15 @@ impl Interpreter {
                 self.return_line_plan = state.plan.clone();
             }
             self.handling_error = false;
-            self.last_error = None;
+            self.last_error = saved_visible_error;
             return Ok(true);
         }
         if let Some(handler) = self.error_handler_line {
             self.handling_error = true;
+            if let Some(state) = self.procedural_errors.as_mut() {
+                state.global_error_scope_base = self.routine_error_depth;
+                state.global_saved_visible_error = saved_visible_error;
+            }
             self.jump_to_line_unchecked(handler, cursor)?;
             return Ok(true);
         }
@@ -14422,15 +14754,24 @@ impl Interpreter {
                 params,
                 local_specs,
                 start,
+                uses_error_handling,
                 ..
             } => {
                 let params = params.clone();
                 let local_specs = local_specs.clone();
                 let start = start.clone();
+                let uses_error_handling = *uses_error_handling;
                 if params.len() != args.len() {
                     return Err(self.err(ErrorCode::ArgumentMismatch));
                 }
-                self.call_multiline_function(call_name, &params, &local_specs, args, start)
+                self.call_multiline_function(
+                    call_name,
+                    &params,
+                    &local_specs,
+                    args,
+                    start,
+                    uses_error_handling,
+                )
             }
         }
     }
@@ -14778,8 +15119,11 @@ impl Interpreter {
         self.active_subs.push(ActiveSubFrame {
             name: sub.name.clone(),
         });
-
-        let run_result = self.run_from(sub.start);
+        let run_result = if sub.uses_error_handling || self.routine_error_depth != 0 {
+            self.run_routine_with_error_scope(sub.name.clone(), false, sub.start)
+        } else {
+            self.run_from(sub.start)
+        };
         self.active_subs.pop();
         self.sub_call_stack.pop();
 
@@ -14804,6 +15148,7 @@ impl Interpreter {
         local_specs: &[LocalSpec],
         args: Vec<Value>,
         start: Cursor,
+        uses_error_handling: bool,
     ) -> BasicResult<Value> {
         let references_previous_return = args
             .iter()
@@ -14875,8 +15220,11 @@ impl Interpreter {
             name: name.clone(),
             return_value: None,
         });
-
-        let run_result = self.run_from(start);
+        let run_result = if uses_error_handling || self.routine_error_depth != 0 {
+            self.run_routine_with_error_scope(name.clone(), true, start)
+        } else {
+            self.run_from(start)
+        };
         let active = self.active_functions.pop();
         let mut return_value = active.and_then(|frame| frame.return_value);
         let return_array = if let Some(Value::ArrayRef(source)) = &return_value {
@@ -14915,6 +15263,23 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn calls_without_local_error_statements_do_not_allocate_error_scopes() {
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text(
+                "10 FOR I=1 TO 1000:CALL Work:NEXT:END\n\
+             100 DEF SUB Work\n110 A=FNValue(2)\n120 SUBEND\n\
+             200 DEF FNValue(X)\n210 FNValue=X+1\n220 FNEND",
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert!(interpreter.procedural_errors.is_none());
+        assert_eq!(interpreter.routine_error_depth, 0);
+        assert_eq!(interpreter.numeric_variables.get("A"), Some(&3.0));
+    }
 
     #[test]
     fn repeated_local_shadowing_reuses_reference_storage() {
@@ -20893,6 +21258,10 @@ fn compile_draw_statement(source: &str, relative: bool) -> BasicResult<CompiledD
 }
 
 fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRect> {
+    let (source, alpha) = compile_alpha_clause(source)?;
+    if !filled && alpha.is_some() {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
     let args = split_arguments(source);
     if !(4..=5).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
@@ -20907,6 +21276,7 @@ fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRec
             .map(|arg| compile_color_expression(arg.trim()))
             .transpose()?,
         filled,
+        alpha,
     })
 }
 
@@ -21120,6 +21490,10 @@ fn compile_number_expression(source: &str) -> BasicResult<CompiledNumberExpr> {
 }
 
 fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<CompiledTriangle> {
+    let (source, alpha) = compile_alpha_clause(source)?;
+    if !filled && alpha.is_some() {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
     let args = split_arguments(source);
     if !(6..=7).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
@@ -21136,6 +21510,7 @@ fn compile_triangle_statement(source: &str, filled: bool) -> BasicResult<Compile
             .map(|arg| compile_color_expression(arg.trim()))
             .transpose()?,
         filled,
+        alpha,
     })
 }
 
@@ -21144,6 +21519,10 @@ fn compile_circle_statement(
     relative: bool,
     filled: bool,
 ) -> BasicResult<CompiledCircle> {
+    let (source, alpha) = compile_alpha_clause(source)?;
+    if !filled && alpha.is_some() {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    }
     let args = split_arguments(source);
     if !(3..=7).contains(&args.len()) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
@@ -21176,6 +21555,7 @@ fn compile_circle_statement(
         aspect,
         relative,
         filled,
+        alpha,
     })
 }
 
@@ -21216,75 +21596,34 @@ fn compile_texture_source(source: &str) -> BasicResult<CompiledTextureSource> {
 }
 
 fn compile_textured_rect_statement(source: &str) -> BasicResult<CompiledTexturedRect> {
+    let (source, alpha) = compile_alpha_clause(source)?;
     let args = split_arguments(source);
-    if !matches!(args.len(), 5 | 9) || args.iter().any(|arg| arg.trim().is_empty()) {
+    if !matches!(args.len(), 5 | 6 | 9 | 10) || args.iter().any(|arg| arg.trim().is_empty()) {
         return Err(BasicError::new(ErrorCode::ArgumentMismatch));
     }
-    let uv = if args.len() == 9 {
+    let uv = if args.len() >= 9 {
         Some((
-            compile_expression(args[5].trim())?,
-            compile_expression(args[6].trim())?,
-            compile_expression(args[7].trim())?,
-            compile_expression(args[8].trim())?,
+            compile_number_expression(args[5].trim())?,
+            compile_number_expression(args[6].trim())?,
+            compile_number_expression(args[7].trim())?,
+            compile_number_expression(args[8].trim())?,
         ))
     } else {
         None
     };
     Ok(CompiledTexturedRect {
         texture: compile_texture_source(&args[0])?,
-        x0: compile_expression(args[1].trim())?,
-        y0: compile_expression(args[2].trim())?,
-        x1: compile_expression(args[3].trim())?,
-        y1: compile_expression(args[4].trim())?,
+        x0: compile_number_expression(args[1].trim())?,
+        y0: compile_number_expression(args[2].trim())?,
+        x1: compile_number_expression(args[3].trim())?,
+        y1: compile_number_expression(args[4].trim())?,
         uv,
-    })
-}
-
-fn compile_textured_triangle_statement(source: &str) -> BasicResult<CompiledTexturedTriangle> {
-    let args = split_arguments(source);
-    if args.len() != 13 || args.iter().any(|arg| arg.trim().is_empty()) {
-        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
-    }
-    Ok(CompiledTexturedTriangle {
-        texture: compile_texture_source(&args[0])?,
-        x0: compile_expression(args[1].trim())?,
-        y0: compile_expression(args[2].trim())?,
-        u0: compile_expression(args[3].trim())?,
-        v0: compile_expression(args[4].trim())?,
-        x1: compile_expression(args[5].trim())?,
-        y1: compile_expression(args[6].trim())?,
-        u1: compile_expression(args[7].trim())?,
-        v1: compile_expression(args[8].trim())?,
-        x2: compile_expression(args[9].trim())?,
-        y2: compile_expression(args[10].trim())?,
-        u2: compile_expression(args[11].trim())?,
-        v2: compile_expression(args[12].trim())?,
-    })
-}
-
-fn compile_textured_quad_statement(source: &str) -> BasicResult<CompiledTexturedQuad> {
-    let args = split_arguments(source);
-    if args.len() != 17 || args.iter().any(|arg| arg.trim().is_empty()) {
-        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
-    }
-    Ok(CompiledTexturedQuad {
-        texture: compile_texture_source(&args[0])?,
-        x0: compile_expression(args[1].trim())?,
-        y0: compile_expression(args[2].trim())?,
-        u0: compile_expression(args[3].trim())?,
-        v0: compile_expression(args[4].trim())?,
-        x1: compile_expression(args[5].trim())?,
-        y1: compile_expression(args[6].trim())?,
-        u1: compile_expression(args[7].trim())?,
-        v1: compile_expression(args[8].trim())?,
-        x2: compile_expression(args[9].trim())?,
-        y2: compile_expression(args[10].trim())?,
-        u2: compile_expression(args[11].trim())?,
-        v2: compile_expression(args[12].trim())?,
-        x3: compile_expression(args[13].trim())?,
-        y3: compile_expression(args[14].trim())?,
-        u3: compile_expression(args[15].trim())?,
-        v3: compile_expression(args[16].trim())?,
+        transparent: if matches!(args.len(), 6 | 10) {
+            Some(compile_color_expression(args.last().unwrap().trim())?)
+        } else {
+            None
+        },
+        alpha,
     })
 }
 

@@ -6684,6 +6684,29 @@ mod tests {
     }
 
     #[test]
+    fn alpha_is_highlighted_and_normalized_as_a_reserved_keyword() {
+        let source = "10 FRECTANGLE 0,0,20,20 alpha Opacity:PRINT \"alpha\" ' alpha";
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let highlighted = syntax_highlight_with_theme_for_test(source, theme);
+            assert!(highlighted.contains(&format!("{}ALPHA{RESET}", palette.keyword)));
+            assert!(!highlighted.contains(&format!("{}alpha{RESET}", palette.variable)));
+            assert!(highlighted.contains(&format!("{}Opacity{RESET}", palette.variable)));
+            assert!(highlighted.contains(&format!("{}\"alpha\"{RESET}", palette.string)));
+            assert!(highlighted.contains(&format!("{} alpha{RESET}", palette.comment)));
+        }
+        let palette = current_syntax_palette();
+        let raw = syntax_highlight_raw_with_cases("SPRITE MOVE 1,20,30 alpha .5", true, None);
+        assert!(raw.contains(&format!("{}ALPHA{RESET}", palette.keyword)));
+        assert_eq!(
+            normalize_code("FRECTANGLE 0,0,20,20 alpha Opacity"),
+            "FRECTANGLE 0,0,20,20 ALPHA Opacity"
+        );
+        assert_eq!(normalize_code("alphabet=7"), "alphabet=7");
+        assert!(is_known_basic_word("ALPHA"));
+    }
+
+    #[test]
     fn highlighted_functions_constants_and_operators_have_help_topics() {
         for word in language::other_words() {
             assert!(

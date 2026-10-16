@@ -31,9 +31,7 @@ struct DebugControlIdentity {
 impl DebugControlIdentity {
     fn error(interpreter: &Interpreter) -> Option<(i32, i32, Cursor, Cursor)> {
         interpreter
-            .handling_error
-            .then(|| interpreter.last_error.as_ref())
-            .flatten()
+            .active_runtime_error()
             .map(|error| (error.number, error.line, error.retry, error.next))
     }
 
@@ -50,12 +48,13 @@ impl DebugControlIdentity {
                 .map(|frame| frame.name.as_ref()))
             && self.timer_markers == interpreter.timer_isr_markers
             && self.mouse == interpreter.handling_mouse_event
-            && self.handling_error == interpreter.handling_error
+            && self.handling_error == interpreter.handling_runtime_error()
             && self.error == Self::error(interpreter)
     }
 
     fn is_parent_of(&self, interpreter: &Interpreter) -> bool {
-        let error_entry = !self.handling_error && interpreter.handling_error;
+        let error_entry = interpreter.handling_runtime_error()
+            && (!self.handling_error || self.error != Self::error(interpreter));
         let deeper = interpreter.run_depth > self.run_depth
             || interpreter.gosub_stack.len() > self.gosubs.len()
             || error_entry;
@@ -79,7 +78,7 @@ impl DebugControlIdentity {
                 .starts_with(&self.timer_markers)
             && (!self.mouse || interpreter.handling_mouse_event)
             && (error_entry
-                || (self.handling_error == interpreter.handling_error
+                || (self.handling_error == interpreter.handling_runtime_error()
                     && self.error == Self::error(interpreter)))
     }
 
@@ -99,7 +98,7 @@ impl DebugControlIdentity {
                 .collect(),
             timer_markers: interpreter.timer_isr_markers.clone(),
             mouse: interpreter.handling_mouse_event,
-            handling_error: interpreter.handling_error,
+            handling_error: interpreter.handling_runtime_error(),
             error: Self::error(interpreter),
         }
     }
@@ -173,6 +172,29 @@ fn inherited_and_local_match(actual: &[Cursor], inherited: &[Cursor], lexical: &
 }
 
 impl Interpreter {
+    fn active_runtime_error(&self) -> Option<&RuntimeErrorState> {
+        let base = if self.handling_error {
+            self.global_error_scope_base()
+        } else {
+            0
+        };
+        self.routine_error_scopes()
+            .iter()
+            .skip(base)
+            .rev()
+            .find(|scope| scope.active)
+            .and_then(|scope| scope.error.as_ref())
+            .or_else(|| {
+                self.handling_error
+                    .then_some(self.last_error.as_ref())
+                    .flatten()
+            })
+    }
+
+    fn handling_runtime_error(&self) -> bool {
+        self.handling_error || self.routine_error_scopes().iter().any(|scope| scope.active)
+    }
+
     #[cold]
     pub(super) fn sync_debug_control_scope(&mut self) {
         let Some(state) = self.debugger_state.as_ref() else {
@@ -213,7 +235,7 @@ impl Interpreter {
                     && self.gosub_stack.is_empty()
                     && self.active_subs.is_empty()
                     && self.active_functions.is_empty()
-                    && !self.handling_error
+                    && !self.handling_runtime_error()
                     && !self.handling_mouse_event
                     && self.for_stack.is_empty()
                     && self.while_stack.is_empty()
@@ -459,7 +481,13 @@ impl Interpreter {
                     None,
                 )
                 .is_some();
-        if (self.last_error.is_some() && !self.handling_error)
+        let visible_local_error_only = self
+            .routine_error_scopes()
+            .last()
+            .is_some_and(|scope| scope.resume_next && !scope.active);
+        if (self.last_error.is_some()
+            && !self.handling_runtime_error()
+            && !visible_local_error_only)
             || self
                 .pause_deadline
                 .is_some_and(|(owner, _)| owner == current)
@@ -483,8 +511,9 @@ impl Interpreter {
             .debugger_state
             .as_ref()
             .and_then(|state| state.active_routines.last());
-        let handler_active =
-            !self.gosub_stack.is_empty() || self.handling_error || self.handling_mouse_event;
+        let handler_active = !self.gosub_stack.is_empty()
+            || self.handling_runtime_error()
+            || self.handling_mouse_event;
         let routine_matches = match (&source.routine, active_routine) {
             (None, None) => true,
             (None, Some(_)) if handler_active => true,

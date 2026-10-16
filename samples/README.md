@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **137 runnable programs**. They are not filler or API
+AVL BASIC ships with **143 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-137-program catalog. On GitHub, select any image or program name
+143-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -63,8 +63,8 @@ to inspect its BASIC source.
   <a id="highlight-g-dungeon"></a>
   <a href="g-dungeon.bas"><img src="showcase/g-dungeon.png" alt="AVL Dungeon running in AVL BASIC" width="100%"></a><br>
   <strong>6. AVL Dungeon</strong><br>
-  Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects.<br>
-  <sub><strong>Shows:</strong> DDA raycasting · TRECTANGLE · TQUAD · depth testing · AUDIO · WAV</sub><br>
+  Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects.<br>
+  <sub><strong>Shows:</strong> DEF SUB · DEF FN · LOCAL · array references · block IF · DDA raycasting · TRECTANGLE · TQUAD · perspective correction · vertex lighting · light map · depth testing · ALPHA · AUDIO · WAV</sub><br>
   <code>RUN "/samples/g-dungeon.bas"</code>
 </td>
 <td width="50%" valign="top">
@@ -150,12 +150,12 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-origin-scale"></a>
-  <a href="g-origin-scale.bas"><img src="showcase/g-origin-scale.png" alt="Four-Panel Plot Gallery running in AVL BASIC" width="100%"></a><br>
-  <strong>16. Four-Panel Plot Gallery</strong><br>
-  Four independent mathematical canvases share one screen: plots, data, axes and fractals.<br>
-  <sub><strong>Shows:</strong> DEF SUB · ORIGIN and SCALE · GRAPHRANGE</sub><br>
-  <code>RUN "/samples/g-origin-scale.bas"</code>
+  <a id="highlight-g-dustline"></a>
+  <a href="g-dustline.bas"><img src="showcase/g-dustline.png" alt="Dustline running in AVL BASIC" width="100%"></a><br>
+  <strong>16. Dustline</strong><br>
+  Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times.<br>
+  <sub><strong>Shows:</strong> DEF SUB · multiline DEF FN · LOCAL · array references · block IF · procedure error handling · BLOAD · TRECTANGLE · ALPHA · fixed-step physics · KEYDOWN · AUDIO · sequential files · spatial indexing</sub><br>
+  <code>RUN "/samples/g-dustline.bas"</code>
 </td>
 <td width="50%" valign="top">
   <a id="highlight-g-bifurcation"></a>
@@ -186,12 +186,12 @@ to inspect its BASIC source.
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <a id="highlight-g-cloth-realtime"></a>
-  <a href="g-cloth-realtime.bas"><img src="showcase/g-cloth-realtime.png" alt="Real-Time Cloth running in AVL BASIC" width="100%"></a><br>
-  <strong>20. Real-Time Cloth</strong><br>
+  <a id="highlight-g-cloth"></a>
+  <a href="g-cloth.bas"><img src="showcase/g-cloth.png" alt="Cloth running in AVL BASIC" width="100%"></a><br>
+  <strong>20. Cloth</strong><br>
   Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs.<br>
-  <sub><strong>Shows:</strong> XPBD · GTRIANGLE · fixed-step physics · state interpolation · MOUSE · FRAME</sub><br>
-  <code>RUN "/samples/g-cloth-realtime.bas"</code>
+  <sub><strong>Shows:</strong> DEF SUB · DEF FN · LOCAL · array references · block IF · MAT · XPBD · GTRIANGLE · fixed-step physics · state interpolation · MOUSE · FRAME</sub><br>
+  <code>RUN "/samples/g-cloth.bas"</code>
 </td>
 <td width="50%"></td>
 </tr>
@@ -201,26 +201,41 @@ Every image above was captured from the real Rust runtime.
 
 ## Suggested learning routes
 
-- **From wireframes to texture mapping:** `g-cube2.bas` → `g-cube-tquad.bas`.
+- **From wireframes to perspective texture mapping:** `g-cube2.bas` → `g-cube-tquad.bas`; DATA defines the eight vertices and six face connections, and one native TQUAD per face supplies inverse depth for perspective correction and depth testing.
 - **Interpolate colors and hide faces with depth:** `g-cube.bas` → `g-cube-gouraud.bas`.
 - **Move a diffuse light with the mouse:** `g-cube-gouraud.bas` → `g-cube-light.bas`.
+- **Combine perspective textures, lighting, and shared depth:** `g-cube-tquad.bas` + `g-cube-light.bas` → `g-cube-textured-light.bas`; a paused cube and nearby point light expose four vertex brightness values. Move the mouse; F compares nearby/broad light, V toggles vertex markers, SPACE resumes rotation, 1/2 compare texture and lighting, T switches quads/triangles, G toggles the Gouraud fin, M animates the light, C toggles the frame-rate cap, and ESC exits. The four light samples are interpolated across two triangles; a small spot within a face needs explicit subdivision or per-pixel lighting.
+- **Cut holes in 2D textured shapes:** `g-texture-transparent.bas`; compare opaque and transparent rows over a checkerboard. Four columns show TRECTANGLE with automatic UVs, TRECTANGLE with repeating UVs, TTRIANGLE, and TQUAD. Adding final color 6 (magenta) opens the grille holes, just as in SPRITE; ESC exits.
+- **Fade a flying fairy over a picture:** `g-sprite-alpha.bas` combines `SPRITE MOVE ... ALPHA` with the existing anime background and a large, multicolored anime fairy; the area outside the character remains transparent while its colors fade between 0% and 100%.
+- **Give parts of a sprite different opacity:** `g-sprite-alpha.bas` → `g-sprite-layers.bas`; capture the body and wings from a two-frame sheet, move both sprites together, and draw the 50%-opaque wings before the fully opaque body. Change WINGALPHA to adjust only the wings.
+- **See through a rotating textured cube:** `g-texture-transparent.bas` → `g-cube-transparent.bas`; six perspective-correct grille faces share depth with a four-corner Gouraud background, so each hole reveals the farther faces or the interpolated background colors.
 - **Explore light on curves and overlapping surfaces:** `g-cube-light.bas` → `g-knot-light.bas`.
+- **Light a first-person scene with textured quads:** `g-cube-textured-light.bas` → `g-dungeon.bas` / `g-dungeon-cpc.bas`; one texture per plane and a fixed world mesh keep the precalculated torch lighting anchored to the floor and ceiling while the camera moves. Near-plane clipping preserves each tile's original triangles and interpolated light. The foreground lantern keeps its brass opaque and uses ALPHA for glass and flame glow. Q changes wall resolution.
 - **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.
 - **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.
 - **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.
-- **Watch and interact with falling cloth:** `g-cloth-realtime.bas`; pause the simulation, restart the fall, or pull the fabric with the mouse.
+- **Watch and interact with falling cloth:** `g-cloth.bas`; pause the simulation, restart the fall, or pull the fabric with the mouse.
+- **Use array arithmetic in a simulation:** `g-cloth.bas` uses `MAT` for particle velocities and light-space coordinates. Its default 128×128 shadow map and 3×3 filter preserve the original penumbra width; set `ShadowSize=256` and `ShadowPcf=5` to restore the original shadow quality. Physical resolution and solver passes stay unchanged.
+- **Organize larger BASIC programs:** `g-cloth.bas`, `g-dungeon.bas` and `g-dungeon-cpc.bas` use named procedures and functions, local variables, array reference parameters, mixed-case names and indented blocks. Short conditions stay inline and closely related statements can share a line with colons. Cloth keeps its solver operations together to avoid extra calls per particle; a few forward skips to loop ends preserve fast rejection in its hottest solver loops, since AVL BASIC has no `CONTINUE FOR`. Its lighting calculation remains a subroutine, while a function validates checkpoint headers. The CPC dungeon retains top-level audio handlers and interrupt-control bridges: `ON SQ`, `DI` and `EI` have procedure restrictions, and a queue callback can interrupt a function, where `CALL` is forbidden. Those handlers keep their legacy `GOSUB`/`RETURN` form.
 - **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →
   `g-zoomer-tquad.bas`.
 - **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.
 - **Build a demoscene effect:** `g-starfield.bas` + `g-sine-scroll.bas` →
   `g-old-school.bas`.
-- **Compare two tunnel engines:** `g-tunnel.bas` → `g-tunnel-tquad.bas`.
+- **Compare two tunnel engines:** `g-tunnel.bas` → `g-tunnel-tquad.bas`; two boundary rings and 48 native perspective-correct TQUAD walls replace depth subdivisions. Angular segments still describe the cylindrical geometry.
 - **Learn collisions, then build a game:** `g-balls.bas` + `g-sprite5.bas` →
   `g-arkanoid.bas`.
+- **Drive a scrolling time trial:** [`g-dustline.bas`](g-dustline.bas) combines controllable drifts, banked corners, spectators, persistent pixel mud, a session-best ghost and a saved lap record; [see the running sample](showcase/g-dustline.png). Mud is thrown only while sliding and covers track arrows, wooden planks and kerbs. Run `RUN "/samples/g-dustline.bas"`. Use arrows or WASD to drive, SPACE for the handbrake, P to pause, R to restart, G to show or hide the ghost, M to mute, and ESC to exit. The ghost appears after the first valid lap and is replaced when you improve the session best, accompanied by a brighter lap sound. Colored splits compare each sector with its best time from completed valid session laps; the minimap highlights the latest completed sector until the next split or the finish. Restarting preserves session records and the ghost, and recording continues while the ghost is hidden. Invalid laps and demo laps cannot improve session records. At the title screen, ENTER starts and D runs the demo.
+  Repeated passes reshape and recolor the existing mud clods. Untouched patches stay fully visible for 30 seconds of driving, then gradually fade over another 60-90 seconds, so old trails clear without a sudden reset at the finish. Pausing also pauses soil aging. The split display and minimap share vivid green and red highlights.
+  The softer tyre-on-dirt sound is audible only while the rear tyres slide fast enough to leave mud marks; it fades out when grip returns or the car becomes airborne.
+  Five automatic audio-only gears let the engine pitch rise and fall at shifts, with separate upshift and downshift speeds to prevent hunting. They shape the sound independently of the car physics.
+  Curb impacts and hard landings share a short, low thump.
+  The prerendered surroundings use faceted lighting and fixed grass color patterns with a limited palette on a two-pixel grid; the dirt track retains its finer granular material. Scenery silhouettes clear the projected track and raised kerbs; directional shadows follow the terrain and remain attached to their objects. The complete finish is baked into the background, adding no drawing work per frame.
+  The source also demonstrates modern BASIC: 51 named procedures, multiline functions, local variables, whole-array reference parameters for initialization and sector records, indentation and apostrophe comments. Compound variable names use mixed case, such as `CarScale`. Block IF statements organize longer branches; short conditions remain inline, with or without ELSE, and closely related statements can share a line with colons. Record loading and saving handle their own file errors with procedure-local `ON ERROR` and `RESUME`; the main program retains a global handler for unexpected errors. This organization preserves the approved driving, mud and scenery.
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 137 programs
+## Full catalog — 143 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -244,39 +259,42 @@ demo.
 | <a id="sample-g-smoke"></a>[`g-smoke.bas`](g-smoke.bas) [★](#highlight-g-smoke) | Interactive two-dimensional fluid simulation with pressure projection, vorticity and smoothly shaded dye. | fluid simulation, MAT, bilinear interpolation, FRAME |
 | <a id="sample-g-starfield"></a>[`g-starfield.bas`](g-starfield.bas) | Two thousand depth-recycled stars flow through 3D. | 3D projection, depth recycling, FRAME |
 | <a id="sample-g-sunflower"></a>[`g-sunflower.bas`](g-sunflower.bas) | Animated phyllotaxis spiral with hue cycling. | phyllotaxis, custom RGB, FRAME |
-| <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) | A seamless textured tunnel turns a ring mesh into a fluid animated ride. | TQUAD, mesh generation, texture animation |
+| <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) | Two boundary rings form a cylindrical tunnel with 48 native perspective-correct textured walls. | TQUAD, perspective correction, depth buffer, cylindrical geometry, texture animation |
 | <a id="sample-g-tunnel"></a>[`g-tunnel.bas`](g-tunnel.bas) | BASIC texture lookup creates a block-rendered tunnel. | BLOAD, TEST, texture mapping |
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
-### Games, applications, and algorithmic scenes (7)
+### Games, applications, and algorithmic scenes (8)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
-| <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured first-person maze, find the gold key and escape through the locked gate, with original music and sound effects. | DDA raycasting, TRECTANGLE, TQUAD, depth testing, AUDIO, WAV |
-| <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play AVL Dungeon with the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting |
+| <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects. | DEF SUB, DEF FN, LOCAL, array references, block IF, DDA raycasting, TRECTANGLE, TQUAD, perspective correction, vertex lighting, light map, depth testing, ALPHA, AUDIO, WAV |
+| <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play the same maze with warm torch lighting, the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | DEF SUB, DEF FN, LOCAL, array references, block IF, SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting, TQUAD, perspective correction, vertex lighting, light map, ALPHA |
+| <a id="sample-g-dustline"></a>[`g-dustline.bas`](g-dustline.bas) [★](#highlight-g-dustline) | Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times. | DEF SUB, multiline DEF FN, LOCAL, array references, block IF, procedure error handling, BLOAD, TRECTANGLE, ALPHA, fixed-step physics, KEYDOWN, AUDIO, sequential files, spatial indexing |
 | <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
 
-### 3D, lighting, and texture mapping (19)
+### 3D, lighting, and texture mapping (21)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
 | <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
-| <a id="sample-g-cloth-realtime"></a>[`g-cloth-realtime.bas`](g-cloth-realtime.bas) [★](#highlight-g-cloth-realtime) | Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs. | XPBD, GTRIANGLE, fixed-step physics, state interpolation, MOUSE, FRAME |
+| <a id="sample-g-cloth"></a>[`g-cloth.bas`](g-cloth.bas) [★](#highlight-g-cloth) | Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs. | DEF SUB, DEF FN, LOCAL, array references, block IF, MAT, XPBD, GTRIANGLE, fixed-step physics, state interpolation, MOUSE, FRAME |
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
 | <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; Z toggles depth, SPACE pauses rotation, and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, RGB interpolation, array depth buffer |
 | <a id="sample-g-cube-light"></a>[`g-cube-light.bas`](g-cube-light.bas) | A mouse-controlled diffuse light shades a rotating cube; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | MOUSE, Lambert lighting, GTRIANGLE, depth buffer |
+| <a id="sample-g-cube-textured-light"></a>[`g-cube-textured-light.bas`](g-cube-textured-light.bas) | A paused copper-textured cube exposes four vertex brightness values under a nearby mouse-controlled point light; F compares broad lighting, V toggles markers, SPACE rotates, and a Gouraud fin shares the depth buffer. | TTRIANGLE, TQUAD, perspective correction, RGB modulation, vertex lighting, distance attenuation, GTRIANGLE, shared depth buffer, MOUSE |
 | <a id="sample-g-knot-light"></a>[`g-knot-light.bas`](g-knot-light.bas) [★](#highlight-g-knot-light) | A nearby mouse-controlled diffuse light shades a smooth tubular knot; SPACE pauses rotation while the light remains active, and C toggles the 60 FPS cap, with measured FPS in the HUD. | parametric mesh, smooth normals, MOUSE, GTRIANGLE, depth buffer |
 | <a id="sample-g-shadow"></a>[`g-shadow.bas`](g-shadow.bas) | An introductory cast-shadow example with a mouse-controlled point light, an arch, and a uniform 96 x 96 floor grid; S toggles shadows and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, cast shadows, uniform floor mesh, MOUSE, depth buffers, FRAME |
 | <a id="sample-g-shadow-adaptive"></a>[`g-shadow-adaptive.bas`](g-shadow-adaptive.bas) [★](#highlight-g-shadow-adaptive) | Move the light with the mouse and watch the arch cast shadows across the floor. | GTRIANGLE, cast shadows, shared calculations, conservative bounds, adaptive floor mesh |
 | <a id="sample-g-cube2"></a>[`g-cube2.bas`](g-cube2.bas) | Two depth-sorted cubes orbit in opposite phases. | 3D projection, depth sorting, FTRIANGLE |
 | <a id="sample-g-cube3"></a>[`g-cube3.bas`](g-cube3.bas) | Rotating cube fills outlined faces using flood fill. | 3D projection, DRAW, FILL |
-| <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | A spinning textured cube built from projection math and affine quads. | 3D projection, back-face culling, TQUAD |
+| <a id="sample-g-cube-tquad"></a>[`g-cube-tquad.bas`](g-cube-tquad.bas) | Eight vertices defined in DATA and six native perspective-correct TQUAD faces form a spinning textured cube with depth testing. | 3D projection, DATA, perspective correction, depth buffer, TQUAD |
+| <a id="sample-g-cube-transparent"></a>[`g-cube-transparent.bas`](g-cube-transparent.bas) | Six perspective-correct grille faces rotate over a four-corner Gouraud background; transparent texels reveal farther faces and background colors through a shared depth buffer. | TQUAD, color-key transparency, SPRITE$, perspective correction, GTRIANGLE, RGB interpolation, shared depth buffer |
 | <a id="sample-g-demo"></a>[`g-demo.bas`](g-demo.bas) | Filled rotating cube behind a diagonal text scroll. | 3D projection, FTRIANGLE, LDIR |
 | <a id="sample-g-gouraud"></a>[`g-gouraud.bas`](g-gouraud.bas) | A mathematical surface rendered with a software Z-buffer and per-vertex lighting. | Z-buffer, barycentric rasterization, vertex lighting |
 | <a id="sample-g-lambert"></a>[`g-lambert.bas`](g-lambert.bas) | Painter-sorted surface uses flat Lambert lighting. | painter's algorithm, Lambert shading, quicksort |
@@ -320,7 +338,7 @@ demo.
 | <a id="sample-g-function5"></a>[`g-function5.bas`](g-function5.bas) | Plots sinc with sampled stems and labeled axes. | DEF FN, GRAPH, sample stems |
 | <a id="sample-g-function6"></a>[`g-function6.bas`](g-function6.bas) | Plots a composite trigonometric-exponential string expression. | GRAPH, string expression, SCALE |
 | <a id="sample-g-function7"></a>[`g-function7.bas`](g-function7.bas) | Plots an enormous polynomial with exponential tick labels. | DEF FN, exponential labels, axes |
-| <a id="sample-g-origin-scale"></a>[`g-origin-scale.bas`](g-origin-scale.bas) [★](#highlight-g-origin-scale) | Four independent mathematical canvases share one screen: plots, data, axes and fractals. | DEF SUB, ORIGIN and SCALE, GRAPHRANGE |
+| <a id="sample-g-origin-scale"></a>[`g-origin-scale.bas`](g-origin-scale.bas) | Four independent mathematical canvases share one screen: plots, data, axes and fractals. | DEF SUB, ORIGIN and SCALE, GRAPHRANGE |
 | <a id="sample-g-regression"></a>[`g-regression.bas`](g-regression.bas) | Fits and plots a linear regression from DATA. | least squares, DATA, GRAPH |
 | <a id="sample-g-scale"></a>[`g-scale.bas`](g-scale.bas) | Demonstrates axis-label placement on a data scale. | SCALE, CROSSAT, axis labels |
 | <a id="sample-g-scale2"></a>[`g-scale2.bas`](g-scale2.bas) | Draws a labeled cardioid in polar coordinates. | polar coordinates, SCALE, DRAW |
@@ -331,7 +349,7 @@ demo.
 | <a id="sample-g-scale7"></a>[`g-scale7.bas`](g-scale7.bas) | Shows aspect-ratio effects on two nominal circles. | SCALE, CIRCLE, aspect ratio |
 | <a id="sample-g-scale8"></a>[`g-scale8.bas`](g-scale8.bas) | Builds a DATA-driven bar chart with scaled axes. | DATA, RECTANGLE, scaled axes |
 
-### Drawing, color, and coordinate primitives (10)
+### Drawing, color, and coordinate primitives (11)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -344,6 +362,7 @@ demo.
 | <a id="sample-g-origin2"></a>[`g-origin2.bas`](g-origin2.bas) | Random shapes are clipped to a custom viewport. | ORIGIN, clipping, filled primitives |
 | <a id="sample-g-palette"></a>[`g-palette.bas`](g-palette.bas) | Displays all 32 indexed colors in a grid. | FILL, LOCATE, indexed colors |
 | <a id="sample-g-relative"></a>[`g-relative.bas`](g-relative.bas) | Short path demonstrates relative moves and draws. | DRAWR, MOVER, named colors |
+| <a id="sample-g-texture-transparent"></a>[`g-texture-transparent.bas`](g-texture-transparent.bas) | Compare opaque and transparent rows of 2D rectangles, triangles, and quads over a checkerboard, including automatic and repeating UVs; ESC exits. | TRECTANGLE, TTRIANGLE, TQUAD, color-key transparency, SPRITE$, wrapped UVs |
 | <a id="sample-g-width"></a>[`g-width.bas`](g-width.bas) | Compares pen widths on lines and overlapping points. | PENWIDTH, DRAW, PLOT |
 
 ### Text and typography (13)
@@ -364,13 +383,15 @@ demo.
 | <a id="sample-g-text"></a>[`g-text.bas`](g-text.bas) | Scrolls numeric text by changing its substring offset. | GPRINT, MID$, font modes |
 | <a id="sample-g-usflag"></a>[`g-usflag.bas`](g-usflag.bas) | Draws a text-cell United States flag. | LOCATE, GPRINT, PAPER |
 
-### Sprites, images, and frame animation (8)
+### Sprites, images, and frame animation (10)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-balls"></a>[`g-balls.bas`](g-balls.bas) [★](#highlight-g-balls) | Fifty numbered sprites bounce and collide without full clears. | sprite collisions, dirty redraw, COLMODE |
 | <a id="sample-g-png-animation"></a>[`g-png-animation.bas`](g-png-animation.bas) | A short anime dance loops from preloaded PNG frames. | BLOAD, string arrays, SCREEN, FRAME |
 | <a id="sample-g-sprite"></a>[`g-sprite.bas`](g-sprite.bas) | Captures and redraws one sprite with transparency variants. | SPRITE$, SPRITE, transparency |
+| <a id="sample-g-sprite-alpha"></a>[`g-sprite-alpha.bas`](g-sprite-alpha.bas) | A large, multicolored anime fairy moves and fades from 0% to 100% opacity over an anime image; translucent panels use the same ALPHA clause. | SPRITE MOVE, ALPHA, color-key transparency, BLOAD, frame restoration |
+| <a id="sample-g-sprite-layers"></a>[`g-sprite-layers.bas`](g-sprite-layers.bas) | Two aligned anime fairy sprites move together: half-transparent wings behind a fully opaque body. | SPRITE$, SPRITE MOVE, ALPHA, sprite layers, color-key transparency |
 | <a id="sample-g-sprite2"></a>[`g-sprite2.bas`](g-sprite2.bas) | Repeats sprite transparency inside a scaled viewport. | SPRITE$, ORIGIN, transparency |
 | <a id="sample-g-sprite3"></a>[`g-sprite3.bas`](g-sprite3.bas) | Benchmarks many randomly placed transparent sprites. | SPRITE$, RND, FRAME |
 | <a id="sample-g-sprite4"></a>[`g-sprite4.bas`](g-sprite4.bas) | Drags a sprite while restoring its captured background. | mouse events, background capture, SPRITE |

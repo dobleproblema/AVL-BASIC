@@ -8,7 +8,8 @@ AVL BASIC is a native Rust implementation of a classic-style BASIC system with
 line-numbered programs, immediate mode, an integrated full-screen editor and
 debugger, structured control flow, matrix operations, sequential data files,
 sprites, mouse and keyboard input, a complete built-in graphics environment
-with Gouraud shading and depth testing, CPC-style sound synthesis, and modern
+with Gouraud shading, perspective-correct textured triangles and quads, shared
+depth testing, CPC-style sound synthesis, and modern
 audio playback.
 
 The project is built around the Rust runtime: a fast native executable for
@@ -24,6 +25,31 @@ plain text and recoverable CSV records. Start with the compact examples for
 result. It requires all three arguments, evaluates the condition once, and
 evaluates only the chosen branch. See [the IIF example](samples/iif.bas).
 
+`TTRIANGLE` and `TQUAD` accept an optional depth-buffer form that combines
+perspective-correct texture mapping with vertex RGB modulation. Share the same
+numeric depth array with `GTRIANGLE` to mix textured and Gouraud surfaces;
+calculate lighting in BASIC and pass its colors at each vertex. Existing affine
+texture syntax keeps its behavior. See the self-contained
+[textured cube light example](samples/g-cube-textured-light.bas) and manual
+section 6.3 for the three forms.
+
+An optional final transparent color works like `SPRITE` in `TRECTANGLE`,
+`TTRIANGLE`, and `TQUAD`. Start with the compact
+[2D texture comparison](samples/g-texture-transparent.bas), then the
+[transparent cube](samples/g-cube-transparent.bas), which combines six
+grille-textured faces with a four-corner Gouraud background;
+transparent texels leave the shared depth buffer untouched.
+
+
+2D sprites, filled shapes, and affine textures accept a final `ALPHA expression`
+clause for opacity from 0 to 1. Color-key holes remain fully transparent;
+`SPRITE MOVE` remembers opacity, and fading does not change collision masks.
+The [sprite opacity example](samples/g-sprite-alpha.bas) moves a large,
+multicolored anime fairy over an anime image and fades it between 0% and 100%.
+The [sprite layers example](samples/g-sprite-layers.bas) moves two aligned
+sprites together: half-transparent wings behind a fully opaque fairy body.
+Depth-buffer primitives keep their existing behavior. See manual sections 6.3
+and 6.7.
 ## Interactive by design
 
 AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
@@ -81,9 +107,9 @@ not mockups or engine screenshots:
   Deep fractal detail rendered directly with AVL BASIC graphics.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-dungeon"><img src="samples/showcase/g-dungeon.png" alt="Textured first-person dungeon with a lantern" width="100%"></a><br>
+  <a href="samples/README.md#highlight-g-dungeon"><img src="samples/showcase/g-dungeon.png" alt="Textured first-person dungeon with warm torch lighting and a lantern" width="100%"></a><br>
   <strong>AVL Dungeon</strong><br>
-  Find the key and escape a textured maze with original audio.
+  Find the key and escape a maze with warm torch lighting and original audio.
 </td>
 </tr>
 <tr>
@@ -98,14 +124,14 @@ not mockups or engine screenshots:
   Procedural generation with its solution drawn through the maze.
 </td>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-origin-scale"><img src="samples/showcase/g-origin-scale.png" alt="Four mathematical plotting viewports" width="100%"></a><br>
-  <strong>Four-Panel Plot Gallery</strong><br>
-  Independent viewports combine plots, data, axes, and fractals.
+  <a href="samples/README.md#highlight-g-dustline"><img src="samples/showcase/g-dustline.png" alt="Dustline dirt-track racing with drifts, persistent mud, and a session-best ghost" width="100%"></a><br>
+  <strong>Dustline</strong><br>
+  Race a banked dirt circuit with drifts, jumps, a ghost, and sector times.
 </td>
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 137-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 143-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -163,7 +189,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-137 sample programs and their visual gallery are optional companion material.
+143 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -241,7 +267,8 @@ adding a practical modern feature set:
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
-- `ON ERROR`, `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
+- procedure-local `ON ERROR`/`RESUME` with caller propagation and compatible global handlers,
+- `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - triangles with interpolated RGB and a depth buffer stored in a BASIC array,
 - CPC-style sound queues and envelopes, plus modern audio playback controls,
@@ -289,7 +316,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 137 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 143 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source
@@ -297,6 +324,13 @@ connection.
 - [`packaging/`](packaging/): release packaging scripts
 
 ## Release Packaging
+
+Maintainer documentation tools are kept outside the checkout. Set
+`AVL_BASIC_TOOLS_DIR` to the directory containing `render_manuals.py` and
+`render_readme.py`; the packagers pass the current checkout through
+`AVL_BASIC_REPO`. Install that directory's pinned `requirements-docs.txt`
+dependency in the Python environment used for packaging. Both packagers
+regenerate the offline HTML from the current TXT manuals and Markdown README.
 
 After validation, run `python packaging/package_windows_release.py --skip-build`
 for Windows, or `python3 packaging/package_linux_release.py --skip-build` on
