@@ -187,7 +187,7 @@
 2670   LastLap=0 : LastDelta=0 : Laps=0
 2700   Collisions=0 : Jumps=0 : MaxHeight=0
 2730   RecN=0 : RecFull=0 : GhostPlay=0
-2760   SectorDone=0 : MiniView=0 : SplitDelta=0
+2760   SectorDone=0 : MiniView=0 : SplitDelta=0 : SectorInvalid=0
 2790   MAT DustL=0
 2800   IF AudioReady THEN CALL resetAudio
 2830 SUBEND
@@ -423,14 +423,16 @@
 5570 SUBEND
 5580 ' ----------------------------------------------------------------------
 5590 DEF SUB findTrack
-5600   LOCAL Gc, Gr, Seed, BestD2, Ni, Nn
+5600   LOCAL Gc, Gr, Seed, BestD2, Ni, Nn, ProbeSpan
 5610   LOCAL Sx, Sy, Along, Nx, Ny, Dx
 5620   LOCAL Dy, Dd
-5630   ' Coarse spatial lookup + exact projection onto five nearby line segments.
+5630   ' Only a flagged hairpin cell needs nine segments; normal cells still probe five.
 5640   Gc=MAX(0,MIN(GridW-1,INT(Qx/GridStep))) : Gr=MAX(0,MIN(GridH-1,INT(Qy/GridStep)))
 5660   Seed=VAL(MID$(Grid$(Gr),Gc*3+1,3))
+5662   ProbeSpan=2
+5664   IF Seed>=Np THEN Seed=Seed-Np:ProbeSpan=4
 5670   BestD2=1E+20
-5680   FOR Ni=Seed-2 TO Seed+2
+5680   FOR Ni=Seed-ProbeSpan TO Seed+ProbeSpan
 5690     Nn=(Ni+Np) MOD Np
 5700     Sx=Qx-TrX(Nn) : Sy=Qy-TrY(Nn)
 5720     Along=MAX(0,MIN(TrL(Nn),Sx*TrDx(Nn)+Sy*TrDy(Nn)))
@@ -546,6 +548,7 @@
 7210     LapStart=CrossTime : LapTime=0 : Invalid=0
 7240     MAT Splits=0
 7250     SplitDelta=0 : NextGate=1
+7252     SectorDone=0 : MiniView=0 : SectorInvalid=0
 7270     CALL startGhost
 7280   ENDIF
 7290 SUBEND
@@ -553,11 +556,14 @@
 7310 DEF SUB completeLap
 7320   IF Started=0 THEN
 7330     Started=1 : LapStart=CrossTime : Invalid=0
+7340     SectorDone=0 : MiniView=0 : SectorInvalid=0
 7360     CALL startGhost
 7370     EXIT SUB
 7380   ENDIF
 7390   LastLap=CrossTime-LapStart : Laps=Laps+1
 7410   Splits(3)=LastLap
+7412   ' Freeze S3 against the previous reference before publishing any new bests.
+7414   SectorDone=3 : CALL compareSector
 7420   LastDelta=0
 7430   IF Best>0 THEN LastDelta=LastLap-Best
 7460   Msg$="LAP "+FNCLOCK$(LastLap) : MsgT=TIME+4
@@ -768,7 +774,7 @@
 10380 DEF SUB startGhost
 10390   ' Start at the exact finish crossing; restart preserves the best ghost.
 10400   RecN=0 : RecFull=0
-10420   GhostPlay=0 : SectorDone=0 : MiniView=0
+10420   GhostPlay=0
 10450   RecNext=1/30
 10460   IF Demo THEN EXIT SUB
 10490   CALL readCarPose
@@ -845,10 +851,11 @@
 11430 ' ----------------------------------------------------------------------
 11440 DEF SUB compareSector
 11450   ' Compare individual sectors with session bests from completed valid laps.
+11455   SectorInvalid=Invalid
 11460   SectorTime=Splits(SectorDone)-Splits(SectorDone-1)
 11470   SectorDelta=0 : SectorColor=RGB(171,180,172) : MiniView=0
 11500   SectorRef=SectorBest(SectorDone)
-11510   IF Demo OR Invalid OR SectorRef<=0 THEN EXIT SUB
+11510   IF Demo OR SectorInvalid OR SectorRef<=0 THEN EXIT SUB
 11540   SectorDelta=SectorTime-SectorRef
 11550   MiniView=SectorDone*2 : SectorColor=SectorRed
 11570   IF SectorDelta<0 THEN MiniView=MiniView-1:SectorColor=SectorGreen
@@ -1045,7 +1052,7 @@
 14495   LOCAL SplitText$
 14500   INK SectorColor
 14510   ' Right-align every sector result with the progress bar's right edge.
-14520   IF Invalid THEN
+14520   IF SectorInvalid THEN
 14530     SplitText$="INVALID SECTOR"
 14560   ELSEIF SectorRef<=0 OR Demo THEN
 14570     SplitText$="S"+DEC$(SectorDone,"0")+" NO REFERENCE"
@@ -1102,9 +1109,12 @@
 15280 ' ----------------------------------------------------------------------
 15290 DEF SUB emitMud
 15300   LOCAL Ca, Sa, Ax1, Ay1, Ax2, Ay2
-15310   LOCAL Splat, MudSide, MudBack, Skidding
+15310   LOCAL Splat, MudSide, MudBack, Skidding, LaunchSpin
 15320   Skidding=ABS(SlipR)>0.12 AND Speed>80
-15330   IF Air OR Skidding=0 THEN
+15322   ' Visual wheelspin holds through first, then fades through second (85 km/h).
+15324   LaunchSpin=0
+15326   IF Throttle>0 AND Brake=0 AND Vf>=0 THEN LaunchSpin=MAX(0,MIN(1,(85-Speed*0.36)/40))
+15330   IF Air OR (Skidding=0 AND LaunchSpin=0) THEN
 15340     MarkValid=0 : MarkT=0
 15360     EXIT SUB
 15370   ENDIF
@@ -1126,14 +1136,15 @@
 15600     MarkValid=1
 15610     EXIT SUB
 15620   ENDIF
-15630   ' Only sliding tyres disturb soil; repeated crossings remix existing patches.
+15630   ' Keep lateral drift unchanged; launch wheelspin only cuts visible rear ruts.
 15640   RutCut=0.1+MIN(0.25,ABS(SlipR)*0.45)+Handbrake*0.08
+15642   IF Skidding=0 THEN RutCut=0.28*LaunchSpin
 15650   RutX0=Last1X : RutY0=Last1Y : RutX1=Ax1 : RutY1=Ay1
 15690   CALL stampRut
 15700   RutX0=Last2X : RutY0=Last2Y : RutX1=Ax2 : RutY1=Ay2
 15740   CALL stampRut
-15750   ' Broad sideways clods also settle over arrows, the wood deck and kerbs.
-15760   FOR Splat=1 TO 2
+15750   ' Only lateral drift throws broad clods; launches leave two rear-wheel tracks.
+15760   FOR Splat=1 TO 2*ABS(Skidding)
 15770     MudSide=(RND-0.5)*(36+MIN(1,ABS(SlipR))*85)
 15780     MudBack=14+RND*27
 15790     MWx=Px-MudBack*Ca-MudSide*Sa
