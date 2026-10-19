@@ -436,7 +436,7 @@ fn resume_next_preserves_block_if_and_loop_continuations() {
 }
 
 #[test]
-fn global_gosub_helpers_keep_global_error_setup_and_legacy_continuation() {
+fn global_gosub_helpers_install_a_root_handler_that_unwinds_the_call() {
     assert_eq!(
         output(
             r#"10 CALL Work
@@ -450,12 +450,12 @@ fn global_gosub_helpers_keep_global_error_setup_and_legacy_continuation() {
 130 Tail=1
 140 SUBEND"#,
         ),
-        " 1  1  1  5  120  0  0\n"
+        " 0  0  1  5  120  0  0\n"
     );
 }
 
 #[test]
-fn legacy_global_handler_still_resumes_inside_a_suspended_sub_or_function() {
+fn root_handler_restores_bindings_and_skips_the_failed_sub_or_function() {
     for (kind, invoke, result, exit, end) in [
         ("SUB Work", "CALL Work", "Result", "EXIT SUB", "SUBEND"),
         ("FNWork", "Result=FNWork", "FNWork", "EXIT FN", "FNEND"),
@@ -467,17 +467,17 @@ fn legacy_global_handler_still_resumes_inside_a_suspended_sub_or_function() {
              100 DEF {kind}\n110 LOCAL L\n120 L=3\n130 ERROR 5\n\
              140 {result}=L\n150 {exit}\n200 {end}"
         );
-        assert_eq!(output(&source), " 4  99  5  130  0  0\n");
+        assert_eq!(output(&source), " 0  100  5  130  0  0\n");
     }
 }
 
 #[test]
-fn legacy_global_resume_next_does_not_unwind_the_failed_routine() {
+fn root_on_error_resume_next_unwinds_and_preserves_the_original_error() {
     assert_eq!(
         output(
             r#"10 ON ERROR RESUME NEXT
 20 CALL Work
-30 PRINT Result;AfterError;Caught;FaultLine
+30 PRINT Result;AfterError;Caught;FaultLine;ERR;ERL
 40 END
 100 DEF SUB Work
 110 LOCAL L
@@ -485,8 +485,213 @@ fn legacy_global_resume_next_does_not_unwind_the_failed_routine() {
 130 Result=L
 140 SUBEND"#,
         ),
-        " 7  1  0  0\n"
+        " 0  0  0  0  5  120\n"
     );
+}
+
+#[test]
+fn root_only_pera_handler_continues_after_the_outermost_call() {
+    let source = r#"100 DEF SUB PERA1(A)
+110 PRINT "pera1"
+115 PRINT A/0
+120 PRINT "pera1 final"
+125 EXIT SUB
+140 SUBEND
+145 DEF SUB PERA2(A)
+155 PRINT "pera2"
+160 CALL PERA1(1)
+165 PRINT "pera2 final"
+170 EXIT SUB
+185 SUBEND
+190 ON ERROR GOTO 215
+195 PRINT "root"
+200 CALL PERA2(2)
+205 PRINT "root final"
+210 END
+215 PRINT ERL;" - root error"
+220 RESUME NEXT"#;
+    for run in [output, fast_output] {
+        assert_eq!(
+            run(source),
+            "root\npera2\npera1\n 115  - root error\nroot final\n"
+        );
+    }
+}
+
+#[test]
+fn root_resume_repeats_the_entire_nested_call_or_function_expression() {
+    for resume in ["RESUME", "RESUME 0"] {
+        for (invoke, parent, parent_body, parent_end, leaf, leaf_body, leaf_end) in [
+            (
+                "CALL Parent(3)",
+                "SUB Parent(X)",
+                "Result=FNChild(X)+10",
+                "SUBEND",
+                "FNChild(X)",
+                "FNChild=X*2",
+                "FNEND",
+            ),
+            (
+                "Result=FNParent(3)+10",
+                "FNParent(X)",
+                "FNParent=FNChild(X)",
+                "FNEND",
+                "FNChild(X)",
+                "FNChild=X*2",
+                "FNEND",
+            ),
+        ] {
+            let source = format!(
+                "10 X=99:ON ERROR GOTO 80\n20 {invoke}:RootTail=1\n\
+                 30 PRINT Result;X;ParentCalls;ChildCalls;Caught;FaultLine;Observed;RootTail;ERR;ERL\n40 END\n\
+                 80 Caught=ERR:FaultLine=ERL:Observed=X:Ready=1:{resume}\n\
+                 100 DEF {parent}\n110 ParentCalls=ParentCalls+1\n120 {parent_body}\n130 {parent_end}\n\
+                 300 DEF {leaf}\n310 ChildCalls=ChildCalls+1\n320 IF Ready=0 THEN ERROR 5\n330 {leaf_body}\n340 {leaf_end}"
+            );
+            for run in [output, fast_output] {
+                assert_eq!(
+                    run(&source),
+                    " 16  99  2  2  5  320  99  1  0  0\n",
+                    "{source}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn root_recovery_restores_aliases_local_arrays_and_root_control_flow() {
+    for policy in ["ON ERROR GOTO 80", "ON ERROR RESUME NEXT"] {
+        let source = format!(
+            "10 DIM Source(0),Values(0),Temp(0):Values(0)=99:Temp(0)=88:I=77\n\
+             20 {policy}\n30 FOR N=1 TO 2\n40 IF N>0 THEN\n\
+             50 CALL Parent(Source):Total=Total+N:Caught=ERR:FaultLine=ERL\n\
+             60 ENDIF\n65 NEXT N\n70 PRINT Source(0);Values(0);Temp(0);UBOUND(Temp);I;Total;ChildTail;ParentTail;Observed;Hits;Caught;FaultLine;ERR;ERL:END\n\
+             80 Observed=Values(0)+Temp(0)+I:Hits=Hits+1:RESUME NEXT\n\
+             100 DEF SUB Parent(Values)\n110 LOCAL Temp(2),I\n120 Temp(0)=7\n\
+             130 FOR I=1 TO 2\n140 IF I>0 THEN\n150 Answer=FNChild(Values)\n\
+             160 ENDIF\n170 NEXT I\n180 ParentTail=1\n190 SUBEND\n\
+             300 DEF FNChild(Values)\n310 LOCAL Temp(4),I\n320 Temp(0)=55:Values(0)=Values(0)+1\n\
+             330 FOR I=1 TO 2\n340 IF I>0 THEN\n350 ERROR 5:ChildTail=1\n\
+             360 ENDIF\n370 NEXT I\n380 FNChild=7\n390 FNEND"
+        );
+        for run in [output, fast_output] {
+            assert_eq!(
+                run(&source),
+                if policy.ends_with("80") {
+                    " 2  99  88  0  77  3  0  0  264  2  0  0  0  0\n"
+                } else {
+                    " 2  99  88  0  77  3  0  0  0  0  5  350  5  350\n"
+                },
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn root_implicit_recovery_does_not_make_an_explicit_resume_valid() {
+    let source = "10 ON ERROR RESUME NEXT\n20 ERROR 5:Captured=ERR:CapturedLine=ERL\n30 RESUME NEXT\n40 PRINT Captured;CapturedLine;ERR;ERL\n50 END";
+    for run in [output, fast_output] {
+        assert_eq!(
+            run(source),
+            format!(" 5  20  {}  30\n", ErrorCode::HandlerError.number())
+        );
+    }
+}
+
+#[test]
+fn a_root_gosub_helper_can_resume_its_callers_active_local_handler() {
+    let source = r#"10 CALL Work
+20 PRINT Tail;Hits;ERR;ERL:END
+80 RESUME NEXT
+100 DEF SUB Work
+110 ON ERROR GOTO 180
+120 ERROR 5:Tail=1
+130 EXIT SUB
+180 Hits=Hits+1:GOSUB 80
+190 SUBEND"#;
+    for run in [output, fast_output] {
+        assert_eq!(run(source), " 1  1  0  0\n");
+    }
+}
+
+#[test]
+fn root_recovery_unwinds_a_timer_interruption_created_inside_the_failed_call() {
+    for (invocation, declaration, terminator) in [
+        ("CALL Work", "SUB Work", "SUBEND"),
+        ("Result=FNWork", "FNWork", "FNEND"),
+    ] {
+        let source = format!(
+            "10 ON ERROR GOTO 150\n20 AFTER 2 GOSUB 80\n30 {invocation}\n\
+             40 AFTER 1 GOSUB 90\n50 PAUSE 30\n60 PRINT Hits;Caught;WorkTail:END\n\
+             80 ERROR 5:RETURN\n90 Hits=Hits+1:RETURN\n150 Caught=Caught+1:RESUME NEXT\n\
+             200 DEF {declaration}\n210 PAUSE 100\n220 WorkTail=1\n230 {terminator}"
+        );
+        for run in [output, fast_output] {
+            assert_eq!(run(&source), " 1  1  0\n", "{source}");
+        }
+    }
+}
+
+#[test]
+fn root_recovery_keeps_a_timer_interruption_that_was_running_before_the_call() {
+    let source = r#"10 ON ERROR GOTO 150
+20 AFTER 1 GOSUB 80
+30 PAUSE 30
+40 AFTER 1 GOSUB 90
+50 PAUSE 30
+60 PRINT Hits;Caught;WorkTail;IsrTail:END
+80 CALL Work:IsrTail=1:RETURN
+90 Hits=Hits+1:RETURN
+150 Caught=Caught+1:RESUME NEXT
+200 DEF SUB Work
+210 ERROR 5:WorkTail=1
+220 SUBEND"#;
+    for run in [output, fast_output] {
+        assert_eq!(run(source), " 1  1  0  1\n");
+    }
+}
+
+#[test]
+fn root_resume_discards_unfinished_handler_loops_before_restoring_the_caller() {
+    let source = r#"10 ON ERROR GOTO 100
+20 FOR I=1 TO 2
+30 ERROR 5:Hits=Hits+1
+40 NEXT
+50 PRINT Hits;I;J:END
+100 FOR J=1 TO 1
+110 RESUME NEXT
+120 NEXT J"#;
+    for run in [output, fast_output] {
+        assert_eq!(run(source), " 2  3  1\n");
+    }
+}
+
+#[test]
+fn root_resume_line_cannot_reenter_an_abandoned_routine() {
+    let source = "10 ON ERROR GOTO 80\n20 CALL Work\n30 END\n80 RESUME 120\n100 DEF SUB Work\n110 ERROR 5\n120 EXIT SUB\n130 SUBEND";
+    let mut interpreter = loaded(source);
+    assert_eq!(
+        interpreter.run_loaded().unwrap_err().code,
+        ErrorCode::InvalidTargetLine
+    );
+}
+
+#[test]
+fn root_resume_unwinds_a_timer_interruption_created_inside_the_handler() {
+    let source = r#"10 ON ERROR GOTO 100
+20 ERROR 5:Tail=1
+30 AFTER 1 GOSUB 90
+40 PAUSE 30
+50 PRINT Hits;Caught;Tail;ERR;ERL:END
+80 RESUME NEXT
+90 Hits=Hits+1:RETURN
+100 Caught=Caught+1:AFTER 1 GOSUB 80:PAUSE 30
+110 RESUME NEXT"#;
+    for run in [output, fast_output] {
+        assert_eq!(run(source), " 1  1  1  0  0\n");
+    }
 }
 
 #[test]
@@ -623,7 +828,7 @@ fn local_on_error_resume_next_skips_an_unhandled_callee_after_cleanup() {
 }
 
 #[test]
-fn a_local_handler_precedes_the_legacy_global_handler() {
+fn a_local_handler_precedes_the_root_handler() {
     assert_eq!(
         output(
             r#"10 ON ERROR GOTO 80
@@ -705,7 +910,7 @@ fn routines_without_error_handlers_keep_nested_binding_and_exit_behavior() {
 }
 
 #[test]
-fn a_legacy_global_handler_keeps_its_pending_error_while_a_local_helper_recovers() {
+fn a_root_handler_keeps_its_pending_error_while_a_local_helper_recovers() {
     assert_eq!(
         output(
             r#"10 ON ERROR GOTO 80
@@ -975,7 +1180,7 @@ fn fast_dispatch_ancestor_resume_repeats_the_call_after_unwind() {
 }
 
 #[test]
-fn legacy_global_recovery_restores_the_interrupted_local_handlers_pending_error() {
+fn root_recovery_discards_an_abandoned_local_handlers_pending_error() {
     assert_eq!(
         output(
             r#"10 ON ERROR GOTO 80
@@ -991,12 +1196,12 @@ fn legacy_global_recovery_restores_the_interrupted_local_handlers_pending_error(
 190 RESUME NEXT
 200 SUBEND"#,
         ),
-        " 5  120  6  180  5  120  1  0  0\n"
+        " 5  120  6  180  0  0  0  0  0\n"
     );
 }
 
 #[test]
-fn legacy_global_implicit_resume_restores_the_active_local_handlers_pending_error() {
+fn root_implicit_resume_discards_an_abandoned_local_handler() {
     assert_eq!(
         output(
             r#"10 ON ERROR RESUME NEXT
@@ -1011,7 +1216,7 @@ fn legacy_global_implicit_resume_restores_the_active_local_handlers_pending_erro
 190 RESUME NEXT
 200 SUBEND"#,
         ),
-        " 5  120  5  120  1  0  0\n"
+        " 5  120  0  0  0  6  180\n"
     );
 }
 
@@ -1102,7 +1307,7 @@ fn disabling_an_active_handler_preserves_resume_but_does_not_catch_later_errors(
 }
 
 #[test]
-fn global_fallback_restores_cleared_visible_error_without_losing_local_resume() {
+fn root_fallback_abandons_a_disabled_local_handlers_pending_resume() {
     for (policy, hits) in [("ON ERROR GOTO 80", 1), ("ON ERROR RESUME NEXT", 0)] {
         let source = format!(
             "10 {policy}\n20 CALL Work\n\
@@ -1115,7 +1320,11 @@ fn global_fallback_restores_cleared_visible_error_without_losing_local_resume() 
         );
         assert_eq!(
             output(&source),
-            format!(" 5  120  0  0  0  0  1  {hits}  0  0\n"),
+            format!(
+                " 5  120  0  0  0  0  0  {hits}  {}  {}\n",
+                if hits == 0 { 6 } else { 0 },
+                if hits == 0 { 200 } else { 0 },
+            ),
             "{source}"
         );
     }

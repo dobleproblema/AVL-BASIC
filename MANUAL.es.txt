@@ -12,6 +12,7 @@ Licencia: MIT. Ver `COPYING`.
 1.  - Arranque rápido
 1.1 - Normalización del código
 2.  - Sintaxis esencial
+2.1 - Etiquetas de destino
 3.  - Control de flujo
 4.  - Datos y memoria
 4.1 - Matrices y MAT
@@ -169,6 +170,51 @@ Notas rápidas
 - Las funciones sin argumentos se usan sin paréntesis.
 - El separador `:` encadena instrucciones en una línea; `'` comenta hasta fin de línea.
 - Las cadenas literales están delimitadas por dobles comillas (") y estas no pueden aparecer en su interior. No interpreta nada como un carácter de control. Todo es texto literal.
+
+2.1 Etiquetas de destino
+
+Una etiqueta da un nombre a una línea sin sustituir su número. Debe ser la única sentencia de la línea, pero admite un comentario final con apóstrofo (`'`):
+```basic
+100 MiEtiqueta: ' Destino de salto
+```
+El número de línea positivo sigue siendo obligatorio y determina el orden del programa. Los dos puntos deben estar inmediatamente después del nombre; se permiten indentación, espacios finales y un comentario opcional, con o sin espacio antes del apóstrofo. No se admite ninguna otra instrucción (tampoco `REM`) ni un segundo separador antes del comentario. Al alcanzar esa línea, la ejecución continúa normalmente con la siguiente. El número de la línea también sigue siendo un destino válido.
+
+Los nombres empiezan por una letra ASCII o `_` y continúan con letras ASCII, dígitos o `_`, sin sufijos de tipo como `$`. No distinguen mayúsculas y minúsculas y no pueden ser palabras reservadas. Una instrucción existente como `100 END:` conserva su significado y no declara una etiqueta. `LABEL` conserva exclusivamente su función de dibujar texto gráfico.
+
+Ámbitos y destinos
+- Las etiquetas de cada `DEF SUB` o `DEF FN` multilínea pertenecen a esa definición; el programa principal tiene un ámbito raíz separado. El mismo nombre puede repetirse en distintas rutinas, pero no dos veces dentro del mismo ámbito.
+- Los destinos simbólicos se buscan únicamente en el ámbito del código que los utiliza. No se buscan en llamadores ni en otras rutinas. No permiten entrar desde fuera en el cuerpo de un procedimiento. Cada llamada utiliza los destinos de su definición y conserva su propio contexto de ejecución.
+- Se admiten en `GOTO`, `GOSUB`, `ON ERROR GOTO`, `RESUME etiqueta` y las listas de `ON expresión GOTO/GOSUB`. Las listas pueden mezclar números y etiquetas: `ON N GOTO Inicio,200,Final`.
+- En un `IF` se usa la instrucción explícita: `IF X THEN GOTO Final` o `IF X GOTO Final`. La abreviatura `THEN Final` no es un salto a una etiqueta.
+- `ON ERROR GOTO 0`, `RESUME`, `RESUME 0` y `RESUME NEXT` conservan sus significados especiales. Los demás argumentos que requieren números de línea, como los de `RUN`, `RESTORE`, `EDIT` o `DELETE`, conservan su sintaxis numérica.
+
+Se permiten referencias adelantadas: el destino puede declararse más abajo en el programa. Al preparar la ejecución se comprueban declaraciones, duplicados y referencias simbólicas, con mensajes que identifican la etiqueta y su ámbito. La propagación de errores no amplía su visibilidad: el manejador que captura el error utiliza sus propios destinos. `ERL` sigue devolviendo el número de la línea donde ocurrió el fallo.
+
+Ejemplo: un manejador local y otro raíz
+```basic
+10 ON ERROR GOTO RootError
+20 CALL Divide(0)
+30 END
+100 DEF SUB Divide(D)
+110 ON ERROR GOTO Recover
+120 PRINT 10/D
+130 EXIT SUB
+140 Recover:
+150 PRINT "Division failed at line ";ERL
+160 RESUME Finished
+170 Finished:
+180 EXIT SUB
+190 SUBEND
+200 RootError:
+210 PRINT ERR;ERL
+220 RESUME NEXT
+```
+El manejador local imprime la línea 120 y `RESUME Finished` continúa dentro de `Divide`. Otra rutina puede definir su propia etiqueta `Recover` sin interferir con esta. `RootError` pertenece al programa principal.
+
+Edición y presentación
+- Las definiciones y las referencias a etiquetas tienen un color propio, con paletas para fondo claro y oscuro. Una variable, una cadena, un comentario o un valor de `DATA` con el mismo texto no se convierte por ello en una referencia.
+- `LIST`, `EDIT` y `SAVE` conservan la forma `MiEtiqueta:`. `RENUM` cambia los números y conserva los nombres y sus referencias, incluidas las listas mixtas. Tras editar, borrar, cargar o mezclar programas, los destinos se reconstruyen para reflejar el contenido vigente.
+- `TRON` muestra el número y el nombre al alcanzar una declaración, por ejemplo `[100 MiEtiqueta:]`; las líneas ordinarias conservan marcas como `[110]`. El depurador conserva el número y muestra la etiqueta en el código fuente y en la ubicación actual.
 
 3. Control de flujo
 
@@ -1487,11 +1533,11 @@ Notas
 
 8.2 Procesamiento de errores
 
-+ ON ERROR GOTO n        Activa un manejador en la rutina actual, o global en el nivel superior.
++ ON ERROR GOTO n        Activa un manejador en la rutina actual, o en el ámbito raíz si está fuera de una rutina.
 + ON ERROR GOTO 0        Desactiva ese manejador y limpia `ERL`/`ERR`.
 + ON ERROR RESUME NEXT   Activa la continuación implícita tras un error en ese ámbito.
-+ ERR                    Función. Código numérico del último error en ejecución (0 si no hay ninguno activo).
-+ ERL                    Función. Número de línea donde se produjo el último error (0 si no hay ninguno activo).
++ ERR                    Función. Código numérico del último error en ejecución (0 si no se conserva ninguno).
++ ERL                    Función. Número de línea donde se produjo el último error (0 si no se conserva ninguno).
 + RESUME                 Repite la instrucción que causó el error.
 + RESUME NEXT            Continúa en la siguiente instrucción de la misma línea (si existe) o en la siguiente línea.
 + RESUME n               Continúa en la primera instrucción de la línea n.
@@ -1499,9 +1545,9 @@ Notas
 
 Flujo y notas
 
-Los manejadores locales a procedimientos siguen el modelo de VB6: primero se
-busca un manejador en la rutina actual y después en sus llamadores. Los del nivel
-superior conservan el comportamiento anterior de AVL BASIC por compatibilidad.
+Los manejadores locales y el global siguen la misma regla: primero se busca un
+manejador en la rutina actual y después en sus llamadores, hasta el ámbito raíz.
+La ejecución se reanuda dentro del ámbito del manejador que captura el error.
 
 - Sin procesador: ante un error, la ejecución se detiene e informa: “Línea <n>. <mensaje>”.
 - Con manejador: al producirse el error, `ERR` y `ERL` identifican su código y la línea original. Un `RESUME` explícito correcto limpia el error procesado; al volver a un manejador exterior activo, se restauran los `ERR`/`ERL` pendientes de ese manejador.
@@ -1509,9 +1555,9 @@ superior conservan el comportamiento anterior de AVL BASIC por compatibilidad.
 - Toda instrucción local `ON ERROR` válida limpia los `ERR`/`ERL` visibles. Cambiar la política dentro de un manejador activo conserva su estado pendiente de `RESUME` por separado, incluido `ON ERROR GOTO 0`: desactiva futuras capturas en esa invocación sin cancelar el error que ya se está procesando. `RESUME` requiere un contexto de manejador activo; recordar un error de continuación implícita no basta para permitir `RESUME`.
 - El manejador de un `ON ERROR GOTO n` local y el destino de un `RESUME n` local deben ser líneas de la misma rutina. El manejador puede acceder a los parámetros y variables `LOCAL` de esa invocación. Termina el camino normal con `EXIT SUB` o `EXIT FN` antes de las líneas del manejador para no ejecutarlas por caída.
 - Un manejador habilitado está activo mientras procesa un error. Un error sin manejador local, o un nuevo error dentro de un manejador activo, se propaga a la rutina llamadora más cercana que tenga un manejador habilitado e inactivo. Las llamadas abandonadas liberan sus variables locales, alias de arrays y estado de control. Si no hay ningún manejador disponible, el error se informa normalmente; un error sin manejar dentro de un manejador activo informa «Error en el procesador de errores …».
-- Cuando un llamador procesa un error de una llamada más profunda, `RESUME` repite su instrucción `CALL` completa o la instrucción que contiene la expresión; `RESUME NEXT` omite esa instrucción. `RESUME n` continúa dentro del llamador que procesa el error. No puede volver a entrar en una rutina abandonada. `ERL` sigue indicando la línea original del fallo en esa rutina.
-- Un `ON ERROR RESUME NEXT` local omite la instrucción que falla, o la instrucción que realiza la llamada cuando el error se propaga desde una rutina más profunda, sin entrar en un manejador. `ERR` y `ERL` siguen disponibles para consultarlos; utiliza `ON ERROR GOTO 0` para limpiarlos y desactivar este modo. El modo implícito del nivel superior sigue limpiando el error procesado por compatibilidad.
-- Compatibilidad: `ON ERROR` en el nivel superior conserva el modelo global anterior. Si ningún manejador local de procedimiento captura un error, el manejador global puede procesarlo mientras la rutina que falló permanece suspendida; su `RESUME` puede continuar dentro de esa rutina conservada, como antes. Si así se reanuda un manejador local activo después de un segundo error, se restauran sus `ERR`/`ERL` pendientes originales. Instalar o desactivar un manejador local no sustituye al global. `ON ERROR GOTO 0` en el nivel superior sigue limpiando el manejador global y su estado pendiente de `RESUME`. `GOSUB` no crea un ámbito de errores de procedimiento.
+- Cuando un llamador, incluido el ámbito raíz, procesa un error de una llamada más profunda, `RESUME` repite su instrucción `CALL` completa o la instrucción que contiene la expresión; `RESUME NEXT` omite esa instrucción. `RESUME n` continúa dentro del ámbito que procesa el error; un destino del manejador raíz no puede entrar en el cuerpo de una rutina. No puede restaurar una invocación abandonada. `ERL` sigue indicando la línea original del fallo en esa rutina.
+- Un `ON ERROR RESUME NEXT`, local o del ámbito raíz, omite la instrucción que falla, o la instrucción que realiza la llamada cuando el error se propaga desde una rutina más profunda, sin entrar en un manejador. `ERR` y `ERL` siguen disponibles para consultarlos; utiliza `ON ERROR GOTO 0` para limpiarlos y desactivar este modo.
+- Ámbito raíz: si ningún manejador local captura el error, se abandonan todas las llamadas pendientes antes de ejecutar el manejador global. Su `RESUME` repite la instrucción raíz que inició la llamada y su `RESUME NEXT` continúa después de ella; no reanudan la invocación abandonada. Esto sustituye al comportamiento anterior, que conservaba la rutina suspendida. Instalar o desactivar un manejador local no sustituye al global. `ON ERROR GOTO 0` en el nivel superior sigue limpiando el manejador global y su estado pendiente de `RESUME`. `GOSUB` no crea un ámbito de errores de procedimiento.
 - ERROR n: si el error `n` no está entre los predefinidos por el intérprete, se considera un número de error personalizado.
 
 Ejemplo (error procesado seguido de un error deliberadamente sin procesar)
@@ -1557,6 +1603,24 @@ Manejadores locales en una subrutina y una función multilínea
 `ShowRatio` procesa su propia división por cero y retorna normalmente. `FNRatio`
 devuelve el cociente, o cero si falla el cálculo. El manejador se instala por
 separado en cada invocación; ninguna rutina cambia el manejador de su llamador.
+
+Manejador raíz ante un error de una llamada anidada
+```basic
+10 D=0:ON ERROR GOTO 80
+20 CALL Outer
+30 PRINT "root final"
+40 END
+80 PRINT ERL:D=2:RESUME NEXT
+100 DEF SUB Outer
+110 CALL Inner
+120 PRINT "outer final"
+130 SUBEND
+200 DEF SUB Inner
+210 PRINT 10/D
+220 PRINT "inner final"
+230 SUBEND
+```
+El manejador imprime `210`, abandona `Inner` y `Outer` y continúa en la línea 30: solo aparece `root final`. Si la línea 80 termina con `RESUME` en lugar de `RESUME NEXT`, repite `CALL Outer` de la línea 20 desde el principio; como el manejador ya ha puesto `D=2`, imprime `5` y los tres mensajes finales. `ERL` identifica la línea del fallo, no la instrucción que se reintenta.
 
 Tabla completa de códigos de error
 1  Instrucción no permitida en un programa.
@@ -1693,7 +1757,7 @@ Notas sobre DELETE
 - Parámetros no numéricos o rangos invertidos (`n>m`) provocan error.
 
 Notas sobre RENUM
-- Actualiza las referencias a líneas en `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF … THEN n`, `ELSE n`, `RESUME n` y `RESTORE n`.
+- Actualiza las referencias a líneas en `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF … THEN n`, `ELSE n`, `RESUME n` y `RESTORE n`. Las referencias por etiqueta conservan su nombre; las listas mixtas conservan las etiquetas y renumeran sus destinos numéricos.
 - Con el tercer parámetro opcional, solo se renumeran las líneas cuyo número actual sea `>= desde`.
 - Con el cuarto parámetro opcional, la renumeración se limita a las líneas cuyo número actual esté entre `desde` y `hasta`, ambos incluidos.
 - La renumeración parcial solo se acepta si los nuevos números del bloque caben en un hueco libre, sin sobrescribir ni intercalarse con líneas no renumeradas; en caso contrario da `INVALID_ARGUMENT`.
@@ -1860,8 +1924,8 @@ Sistema
 + KEYDOWN(código)
 + ERL | ERR
 
-- ERR: código numérico del último error en ejecución (0 si no hay ninguno activo).
-- ERL: número de línea donde se produjo el último error (0 si no hay ninguno activo).
+- ERR: código numérico del último error en ejecución (0 si no se conserva ninguno).
+- ERL: número de línea donde se produjo el último error (0 si no se conserva ninguno).
 - `INKEY$`: atiende una pulsación discreta desde la ventana gráfica activa o desde el teclado de la consola.
 - `INKEY$` devuelve un carácter cuando hay una pulsación pendiente o `""` si no hay ninguna. Léelo una vez en una variable, por ejemplo `K$=INKEY$`, y usa `ASC(K$)` solo después de comprobar `K$<>""`. Las teclas especiales utilizan los mismos códigos en la consola y en la ventana gráfica.
 - `KEYDOWN(código)`: devuelve `-1` si la tecla está actualmente pulsada y `0` si no.
@@ -1958,7 +2022,7 @@ durante la ejecución la omite, sin redefinir la rutina ni ejecutar su cuerpo.
   - Dentro del bloque, el nombre de la función puede usarse como una variable local.
   - Se permiten llamadas indirectas entre funciones, pero una función no puede reentrar en sí misma.
   - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`).
-  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma función. Los errores pueden propagarse a una rutina llamadora; la sección 8.2 explica `RESUME` desde el llamador y la compatibilidad con manejadores globales.
+  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma función. Los errores pueden propagarse a una rutina llamadora; la sección 8.2 explica `RESUME` desde el llamador y la recuperación en el ámbito raíz.
   - Desde el inicio de la ejecución, `GOTO`, `GOSUB` y `ON ERROR` escritos fuera no pueden seleccionar una línea del cuerpo de la función: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa.
 
 Ejemplo de definición y uso
@@ -2044,7 +2108,7 @@ Subrutinas multilínea
   - Dentro del bloque, el nombre de la subrutina puede usarse como una variable local. Su valor anterior se restaura al salir.
   - Se permiten llamadas indirectas entre subrutinas, pero una subrutina no puede reentrar en sí misma.
   - Dentro del cuerpo no se permiten `DEF FN` ni `DEF SUB` anidados ni las siguientes instrucciones de control (`CHAIN`, `MERGE`, `AFTER`, `EVERY`, `ON SQ`, `DI`, `EI`). `CALL` puede usarse dentro de una subrutina, pero no dentro de `DEF FN`.
-  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma subrutina. Un manejador disponible del llamador puede capturar un error propagado durante `CALL`; su `RESUME` repite la llamada y `RESUME NEXT` continúa después de ella. La sección 8.2 detalla las reglas y la compatibilidad con manejadores globales.
+  - Se permiten `ON ERROR` y `RESUME` con un manejador local a cada invocación. Los destinos numéricos del manejador y de continuación deben estar en la misma subrutina. Un manejador disponible del llamador puede capturar un error propagado durante `CALL`; su `RESUME` repite la llamada y `RESUME NEXT` continúa después de ella. La sección 8.2 detalla las reglas y la recuperación en el ámbito raíz.
   - Desde el inicio de la ejecución, `GOTO`, `GOSUB` y `ON ERROR` escritos fuera no pueden seleccionar una línea del cuerpo de la subrutina: el intérprete lo rechaza con `Invalid target line`, aunque la definición aparezca más adelante en el programa. `TRON` también traza las líneas ejecutadas de la rutina.
 
 Ejemplo de subrutina

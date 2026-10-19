@@ -45,6 +45,7 @@ const PROMPT_STYLE: &str = GREEN;
 const COMMENT_STYLE: &str = GREEN;
 const LINE_NUMBER_STYLE: &str = TAN;
 const VARIABLE_STYLE: &str = "\x1b[1m\x1b[38;5;39m";
+const LABEL_STYLE: &str = "\x1b[1m\x1b[38;5;220m";
 const NUMBER_STYLE: &str = TAN;
 const CURSOR_MARKER: char = '\u{E000}';
 
@@ -62,6 +63,7 @@ const LIGHT_PROMPT_STYLE: &str = VIVID_GREEN;
 const LIGHT_COMMENT_STYLE: &str = VIVID_GREEN;
 const LIGHT_LINE_NUMBER_STYLE: &str = VIVID_ORANGE;
 const LIGHT_VARIABLE_STYLE: &str = "\x1b[1m\x1b[38;5;33m";
+const LIGHT_LABEL_STYLE: &str = "\x1b[1m\x1b[38;5;178m";
 const LIGHT_NUMBER_STYLE: &str = VIVID_ORANGE;
 const LIGHT_STRING_STYLE: &str = ORCHID;
 const LIGHT_HEX_STYLE: &str = VIVID_GOLD;
@@ -83,6 +85,7 @@ struct SyntaxPalette {
     comment: &'static str,
     line_number: &'static str,
     variable: &'static str,
+    label: &'static str,
     number: &'static str,
     string: &'static str,
     hex: &'static str,
@@ -98,6 +101,7 @@ const DARK_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
     comment: COMMENT_STYLE,
     line_number: LINE_NUMBER_STYLE,
     variable: VARIABLE_STYLE,
+    label: LABEL_STYLE,
     number: NUMBER_STYLE,
     string: STRING_STYLE,
     hex: HEX_STYLE,
@@ -113,6 +117,7 @@ const LIGHT_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
     comment: LIGHT_COMMENT_STYLE,
     line_number: LIGHT_LINE_NUMBER_STYLE,
     variable: LIGHT_VARIABLE_STYLE,
+    label: LIGHT_LABEL_STYLE,
     number: LIGHT_NUMBER_STYLE,
     string: LIGHT_STRING_STYLE,
     hex: LIGHT_HEX_STYLE,
@@ -310,7 +315,26 @@ pub fn trace_text(ansi: bool, line: i32) -> String {
     }
 }
 
+pub fn trace_label_text(ansi: bool, line: i32, label: &str) -> String {
+    if ansi {
+        let palette = current_syntax_palette();
+        format!(
+            "{}[{line} {}{label}:{}]{RESET}",
+            palette.line_number, palette.label, palette.line_number
+        )
+    } else {
+        format!("[{line} {label}:]")
+    }
+}
+
 pub fn normalize_code(code: &str) -> String {
+    if is_label_declaration(code) {
+        return if code.contains('\'') {
+            code.to_string()
+        } else {
+            code.trim_end().to_string()
+        };
+    }
     let contextual_immediate = contextual_immediate_command(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code(main.trim_end());
@@ -391,7 +415,11 @@ fn highlight_normalized_code(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette, contextual_immediate));
+    if is_label_declaration(&line) {
+        push_styled(&mut out, palette.label, rest);
+    } else {
+        out.push_str(&highlight_main(rest, palette, contextual_immediate));
+    }
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -416,6 +444,9 @@ fn normalize_code_for_editing_marked(code: &str) -> String {
 }
 
 fn normalize_editing_assistance(code: &str, complete_extension: bool) -> String {
+    if is_label_declaration(code) {
+        return code.to_string();
+    }
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code_for_editing_marked(main.trim_end());
     if complete_extension {
@@ -458,7 +489,11 @@ pub fn syntax_highlight_raw_with_cases(
         out.push_str(RESET);
         rest = after;
     }
-    out.push_str(&highlight_main(rest, palette, contextual_immediate));
+    if is_label_declaration(&line) {
+        push_styled(&mut out, palette.label, rest);
+    } else {
+        out.push_str(&highlight_main(rest, palette, contextual_immediate));
+    }
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
         out.push('\'');
@@ -1623,8 +1658,13 @@ fn is_debugger_ctrl_c(code: KeyCode, modifiers: KeyModifiers) -> bool {
 }
 
 fn debug_location_status(snapshot: &crate::debugger::DebugSnapshot) -> String {
+    let source = &snapshot.location.source;
+    let (_, code) = split_line_number(source).unwrap_or(("", source));
+    let label = crate::labels::label_definition(code)
+        .map(|name| format!(" ({name})"))
+        .unwrap_or_default();
     format!(
-        "Ln {} Stmt {}",
+        "Ln {}{label} Stmt {}",
         snapshot.location.line,
         snapshot.location.statement + 1
     )
@@ -2957,6 +2997,9 @@ fn format_editing_separators_with_cursor(buffer: &mut Vec<char>, cursor: &mut us
 }
 
 fn format_editing_separators(source: &str) -> String {
+    if is_label_declaration(source) {
+        return source.to_string();
+    }
     let (main, comment) = split_single_quote_comment(source);
     let mut result = format_colon_separators(main);
     if let Some((spaces, comment)) = comment {
@@ -3102,6 +3145,23 @@ fn renumber_editor_line_references(code: &str, mapping: &HashMap<i32, i32>) -> S
             let ident: String = chars[start..i].iter().collect();
             let upper = ident.to_ascii_uppercase();
             out.push_str(&ident);
+            if upper == "REM" {
+                out.extend(chars[i..].iter());
+                break;
+            }
+            if upper == "DATA" {
+                let mut quoted = false;
+                while i < chars.len() {
+                    match chars[i] {
+                        ':' if !quoted => break,
+                        '"' => quoted = !quoted,
+                        _ => {}
+                    }
+                    out.push(chars[i]);
+                    i += 1;
+                }
+                continue;
+            }
             if matches!(
                 upper.as_str(),
                 "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESTORE" | "RESUME"
@@ -3129,23 +3189,33 @@ fn copy_renumbered_editor_line_list(
             i += 1;
         }
 
-        let number_start = i;
-        while i < chars.len() && chars[i].is_ascii_digit() {
-            i += 1;
-        }
-        if number_start == i {
-            return i;
-        }
-
-        let raw: String = chars[number_start..i].iter().collect();
-        if let Ok(old) = raw.parse::<i32>() {
-            if let Some(new_number) = mapping.get(&old) {
-                out.push_str(&new_number.to_string());
+        let target_start = i;
+        if chars.get(i).is_some_and(|ch| is_ident_start(*ch)) {
+            while i < chars.len() && is_ident_char(chars[i]) {
+                i += 1;
+            }
+            let label: String = chars[target_start..i].iter().collect();
+            if !crate::labels::label_identifier(&label) {
+                return target_start;
+            }
+            out.push_str(&label);
+        } else {
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            if target_start == i {
+                return i;
+            }
+            let raw: String = chars[target_start..i].iter().collect();
+            if let Ok(old) = raw.parse::<i32>() {
+                if let Some(new_number) = mapping.get(&old) {
+                    out.push_str(&new_number.to_string());
+                } else {
+                    out.push_str(&raw);
+                }
             } else {
                 out.push_str(&raw);
             }
-        } else {
-            out.push_str(&raw);
         }
 
         let mut probe = i;
@@ -3594,7 +3664,24 @@ fn render_debug_source_window(
     cases: Option<&HashMap<String, String>>,
 ) -> String {
     let (source, marker_col) = debug_source_window(line, 0, usize::MAX, statement, source_span);
-    let rendered = syntax_highlight_window_with_cases(&source, left_col, width, ansi, cases);
+    let original: String = line.iter().collect();
+    let rendered = if is_label_declaration(&original) {
+        // The execution marker is UI, not part of a declaration. Classify the
+        // original source first so it keeps both its label style and spelling.
+        let highlighted = syntax_highlight_raw_with_cases(&original, ansi, cases);
+        let marked = if let Some(column) = marker_col {
+            format!(
+                "{}{DEBUG_STATEMENT_PLACEHOLDER} {}",
+                rendered_line_window(&highlighted, 0, column),
+                rendered_line_window(&highlighted, column, usize::MAX)
+            )
+        } else {
+            highlighted
+        };
+        rendered_line_window(&marked, left_col, width)
+    } else {
+        syntax_highlight_window_with_cases(&source, left_col, width, ansi, cases)
+    };
     if let Some(marker_col) =
         marker_col.filter(|column| *column >= left_col && *column < left_col.saturating_add(width))
     {
@@ -5006,6 +5093,7 @@ fn uppercase_leading_help(line: &mut String) {
 fn normalize_main_code_inner(code: &str, editing: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
+    let label_spans = control_label_spans(&chars);
     let mut i = 0usize;
     while i < chars.len() {
         let ch = chars[i];
@@ -5057,7 +5145,9 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                 .map(|ch| ch.to_ascii_uppercase())
                 .collect();
             let displayed_word = if editing { &word } else { &upper };
-            if upper == "REM" && token_boundary(&chars, start, i) {
+            if label_spans.contains(&(start, i)) {
+                out.push_str(&word);
+            } else if upper == "REM" && token_boundary(&chars, start, i) {
                 out.push_str(displayed_word);
                 out.extend(chars[i..].iter());
                 return out;
@@ -5188,6 +5278,9 @@ fn next_non_marker(chars: &[char], mut index: usize, allow_cursor_marker: bool) 
 }
 
 fn format_colon_separators(source: &str) -> String {
+    if is_label_declaration(source) {
+        return source.to_string();
+    }
     let (prefix, body) = split_line_number(source).unwrap_or(("", source));
     let statements = split_listing_statements(body);
     if !statements.changed {
@@ -5576,6 +5669,7 @@ fn highlight_main(
 ) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
+    let label_spans = control_label_spans(&chars);
     let mut i = 0usize;
     let mut after_def = false;
     let mut expect_sub_name = false;
@@ -5611,6 +5705,9 @@ fn highlight_main(
                 && chars[..start].iter().all(|ch| ch.is_whitespace())
             {
                 push_styled(&mut out, palette.keyword, "HELP");
+            } else if label_spans.contains(&(start, i)) {
+                push_styled(&mut out, palette.label, &word);
+                after_def = false;
             } else if expect_sub_name {
                 push_styled(&mut out, palette.keyword, &upper);
                 expect_sub_name = false;
@@ -5831,6 +5928,148 @@ fn split_line_number(text: &str) -> Option<(&str, &str)> {
     }
 }
 
+fn is_label_declaration(source: &str) -> bool {
+    // The editing caret never separates a label's name from its colon. Keep
+    // the actual spelling and caret position intact before colon formatting.
+    if !source.contains(':') {
+        return false;
+    }
+    let plain = source.replace(CURSOR_MARKER, "");
+    let (_, code) = split_line_number(&plain).unwrap_or(("", &plain));
+    crate::labels::label_definition(code).is_some()
+}
+
+fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    let mut statement_head = Vec::new();
+    while index < chars.len() {
+        match chars[index] {
+            '\'' => break,
+            '"' => {
+                index += 1;
+                while index < chars.len() {
+                    let ch = chars[index];
+                    index += 1;
+                    if ch == '"' {
+                        break;
+                    }
+                }
+            }
+            ch if is_ident_start(ch) => {
+                let start = index;
+                index += 1;
+                while index < chars.len()
+                    && (is_ident_char(chars[index]) || chars[index] == CURSOR_MARKER)
+                {
+                    index += 1;
+                }
+                let word: String = chars[start..index]
+                    .iter()
+                    .filter(|ch| **ch != CURSOR_MARKER)
+                    .map(char::to_ascii_uppercase)
+                    .collect();
+                if word == "REM" {
+                    break;
+                }
+                if matches!(word.as_str(), "THEN" | "ELSE") {
+                    statement_head.clear();
+                    continue;
+                }
+                if statement_head.len() < 2 {
+                    statement_head.push(word.clone());
+                }
+                if word == "DATA" {
+                    let mut quoted = false;
+                    while index < chars.len() {
+                        match chars[index] {
+                            ':' if !quoted => break,
+                            '"' => quoted = !quoted,
+                            _ => {}
+                        }
+                        index += 1;
+                    }
+                } else if matches!(word.as_str(), "GOTO" | "GOSUB" | "RESUME") {
+                    // Event targets retain their numeric grammar. A following
+                    // ELSE/colon starts a new ordinary control statement.
+                    let event_target = statement_head.first().is_some_and(|head| {
+                        matches!(head.as_str(), "AFTER" | "EVERY")
+                            || (head == "ON"
+                                && statement_head
+                                    .get(1)
+                                    .is_some_and(|kind| matches!(kind.as_str(), "MOUSE" | "SQ")))
+                    });
+                    if !event_target {
+                        collect_control_label_targets(chars, index, &mut spans);
+                    }
+                }
+            }
+            _ => {
+                if chars[index] == ':' {
+                    statement_head.clear();
+                }
+                index += 1;
+            }
+        }
+    }
+    spans
+}
+
+fn collect_control_label_targets(
+    chars: &[char],
+    mut index: usize,
+    spans: &mut Vec<(usize, usize)>,
+) {
+    loop {
+        while index < chars.len() && (chars[index].is_whitespace() || chars[index] == CURSOR_MARKER)
+        {
+            index += 1;
+        }
+        let start = index;
+        let symbolic = chars.get(index).is_some_and(|ch| is_ident_start(*ch));
+        if symbolic {
+            while index < chars.len()
+                && (is_ident_char(chars[index]) || chars[index] == CURSOR_MARKER)
+            {
+                index += 1;
+            }
+            let name: String = chars[start..index]
+                .iter()
+                .filter(|ch| **ch != CURSOR_MARKER)
+                .collect();
+            if !crate::labels::label_identifier(&name) {
+                return;
+            }
+        } else {
+            while index < chars.len()
+                && (chars[index].is_ascii_digit() || chars[index] == CURSOR_MARKER)
+            {
+                index += 1;
+            }
+            if index == start {
+                return;
+            }
+        }
+        let mut next = index;
+        while next < chars.len() && (chars[next].is_whitespace() || chars[next] == CURSOR_MARKER) {
+            next += 1;
+        }
+        if next < chars.len()
+            && !matches!(chars[next], ',' | ':' | '\'')
+            && formatter_keyword_end(chars, next, "ELSE").is_none()
+        {
+            return;
+        }
+        if symbolic {
+            spans.push((start, index));
+        }
+        if chars.get(next) != Some(&',') {
+            return;
+        }
+        index = next + 1;
+    }
+}
+
 fn split_single_quote_comment(text: &str) -> (&str, Option<(usize, &str)>) {
     let mut in_string = false;
     for (idx, ch) in text.char_indices() {
@@ -5867,11 +6106,12 @@ pub fn is_known_basic_word(word: &str) -> bool {
 }
 
 fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, String>) -> String {
-    if cases.is_empty() {
+    if cases.is_empty() || is_label_declaration(source) {
         return source.to_string();
     }
     let mut out = String::with_capacity(source.len());
     let chars: Vec<char> = source.chars().collect();
+    let label_spans = control_label_spans(&chars);
     let mut i = 0usize;
     let mut in_string = false;
     let mut in_data = false;
@@ -5904,6 +6144,8 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
             } else if word.eq_ignore_ascii_case("DATA") && token_boundary(&chars, start, i) {
                 out.push_str(&word);
                 in_data = true;
+            } else if label_spans.contains(&(start, i)) {
+                out.push_str(&word);
             } else if let Some(display) = cases.get(&word.to_ascii_uppercase()) {
                 out.push_str(display);
             } else {
@@ -5980,6 +6222,264 @@ mod tests {
     }
 
     #[test]
+    fn label_declarations_keep_their_spelling_and_immediate_colon() {
+        for source in [
+            "100 MiEtiqueta:",
+            "MiEtiqueta:",
+            "120 FNMiEtiqueta:",
+            " 100 _Meta2:",
+            "100 MiEtiqueta: ' comentario",
+            "120 FNMiEtiqueta:'GOTO Missing:PRINT Other \"sin cerrar",
+            " 100 _Meta2:   ' comentario con espacios  ",
+        ] {
+            assert_eq!(normalize_code(source), source);
+            for cursor in 0..=source.chars().count() {
+                let marked = mark_cursor(source, cursor);
+                assert_eq!(normalize_editing_assistance(&marked, true), marked);
+                assert_eq!(format_editing_separators(&marked), marked);
+                assert_eq!(normalize_code_for_editing(source, cursor), source);
+                assert_eq!(normalized_cursor_position(source, cursor), cursor);
+            }
+        }
+        for source in [
+            "100 END:",
+            "100 PRINT:",
+            "100 MiEtiqueta :",
+            "100 MiEtiqueta:PRINT 1",
+            "100 MiEtiqueta:REM comment",
+            "100 MiEtiqueta:: ' comment",
+            "100 MiEtiqueta : ' comment",
+        ] {
+            assert!(!is_label_declaration(source), "{source}");
+        }
+        assert_eq!(normalize_code("100 END:"), "100 END :");
+        assert_eq!(normalize_code("100 PRINT:"), "100 PRINT :");
+    }
+
+    #[test]
+    fn label_traces_keep_numeric_destinations_and_use_the_label_style() {
+        assert_eq!(trace_text(false, 100), "[100]");
+        assert_eq!(
+            trace_label_text(false, 100, "MiEtiqueta"),
+            "[100 MiEtiqueta:]"
+        );
+        let palette = current_syntax_palette();
+        let rendered = trace_label_text(true, 100, "MiEtiqueta");
+        let chars = rendered_character_styles(&rendered);
+        assert_eq!(
+            chars.iter().map(|(ch, _)| ch).collect::<String>(),
+            "[100 MiEtiqueta:]"
+        );
+        assert_eq!(
+            chars
+                .iter()
+                .filter(|(_, style)| style.ends_with(palette.label))
+                .map(|(ch, _)| ch)
+                .collect::<String>(),
+            "MiEtiqueta:"
+        );
+        assert_eq!(
+            rendered_character_styles(&format!("{rendered}§")).last(),
+            Some(&('§', String::new()))
+        );
+    }
+
+    #[test]
+    fn label_prompt_typing_and_editor_caret_do_not_move_the_colon() {
+        for source in [
+            "100 MiEtiqueta:",
+            "120 FNMiEtiqueta:",
+            "100 MiEtiqueta: ' comentario",
+            "120 FNMiEtiqueta:'GOTO Missing:PRINT Other \"sin cerrar",
+        ] {
+            let mut buffer = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut buffer, &mut cursor, source);
+            assert_eq!(buffer.iter().collect::<String>(), source);
+            assert_eq!(cursor, buffer.len());
+            let colon = buffer.iter().position(|ch| *ch == ':').unwrap();
+            buffer.remove(colon);
+            cursor = colon;
+            type_prompt_text(&mut buffer, &mut cursor, ":");
+            assert_eq!(buffer.iter().collect::<String>(), source);
+            assert_eq!(cursor, colon + 1);
+            for position in 0..=buffer.len() {
+                let mut editing = buffer.clone();
+                let mut caret = position;
+                assert!(!format_editing_separators_with_cursor(
+                    &mut editing,
+                    &mut caret
+                ));
+                assert_eq!(editing, buffer);
+                assert_eq!(caret, position);
+            }
+        }
+    }
+
+    #[test]
+    fn labels_have_a_distinct_style_only_in_declarations_and_control_targets() {
+        let examples = [
+            ("100 MiEtiqueta:", "MiEtiqueta:"),
+            ("100 MiEtiqueta: ' comment", "MiEtiqueta:"),
+            ("100 MiEtiqueta:'GOTO Other", "MiEtiqueta:"),
+            ("10 GOTO MiEtiqueta", "MiEtiqueta"),
+            ("10 GOSUB MiEtiqueta", "MiEtiqueta"),
+            ("10 ON ERROR GOTO MiEtiqueta", "MiEtiqueta"),
+            ("10 RESUME MiEtiqueta", "MiEtiqueta"),
+            ("10 ON X GOTO MiEtiqueta,200,Otra", "MiEtiquetaOtra"),
+            ("10 ON X GOSUB 200,MiEtiqueta,300", "MiEtiqueta"),
+            (
+                "10 IF X THEN GOTO MiEtiqueta ELSE GOSUB Otra",
+                "MiEtiquetaOtra",
+            ),
+            ("10 MiEtiqueta=MiEtiqueta+1:PRINT MiEtiqueta", ""),
+            ("10 PRINT \"GOTO MiEtiqueta\"", ""),
+            ("10 REM GOTO MiEtiqueta", ""),
+            ("10 DATA GOTO MiEtiqueta,200:PRINT MiEtiqueta", ""),
+            ("10 PRINT 1 ' GOTO MiEtiqueta", ""),
+            ("100 END:", ""),
+            ("100 MiEtiqueta:PRINT 1", ""),
+            ("100 MiEtiqueta:REM comment", ""),
+            ("10 GOTO MiEtiqueta$", ""),
+            ("10 GOTO MiEtiqueta+1", ""),
+            ("10 RESUME NEXT", ""),
+            ("10 AFTER 1 GOSUB MiEtiqueta", ""),
+            ("10 EVERY 1 GOSUB MiEtiqueta", ""),
+            ("10 ON MOUSE LEFTDOWN GOSUB MiEtiqueta", ""),
+            ("10 ON SQ(1) GOSUB MiEtiqueta", ""),
+            ("10 ON SQValue GOTO MiEtiqueta", "MiEtiqueta"),
+            (
+                "10 IF X THEN AFTER 1 GOSUB MiEtiqueta ELSE GOSUB Otra",
+                "Otra",
+            ),
+            ("10 AFTER 1 GOSUB MiEtiqueta:GOSUB Otra", "Otra"),
+        ];
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            assert_ne!(palette.label, palette.variable);
+            assert_ne!(palette.label, palette.number);
+            assert_ne!(palette.label, palette.keyword);
+            for (source, expected) in examples {
+                let rendered = highlight_normalized_code(source.to_string(), true, None, palette);
+                let chars = rendered_character_styles(&rendered);
+                let labels: String = chars
+                    .iter()
+                    .filter(|(_, style)| style == palette.label)
+                    .map(|(ch, _)| ch)
+                    .collect();
+                assert_eq!(labels, expected, "{source}, {theme:?}");
+                assert_eq!(chars.iter().map(|(ch, _)| ch).collect::<String>(), source);
+            }
+        }
+    }
+
+    #[test]
+    fn label_spelling_is_independent_of_same_named_variables() {
+        let cases = HashMap::from([
+            ("MIETIQUETA".to_string(), "mIetiqueta".to_string()),
+            ("FNMETA".to_string(), "FNMeta".to_string()),
+        ]);
+        assert_eq!(
+            apply_identifier_case_for_display("100 MiEtiqueta:", &cases),
+            "100 MiEtiqueta:"
+        );
+        assert_eq!(
+            apply_identifier_case_for_display("10 MiEtiqueta=1:GOTO MiEtiqueta", &cases),
+            "10 mIetiqueta=1:GOTO MiEtiqueta"
+        );
+        assert_eq!(normalize_code("10 goto FNmeta"), "10 GOTO FNmeta");
+        assert_eq!(
+            apply_identifier_case_for_display("10 GOTO FNmeta", &cases),
+            "10 GOTO FNmeta"
+        );
+        let lines = ["10 mIetiqueta=1", "20 MiEtiqueta:", "30 GOTO MIETIQUETA"]
+            .map(|line| line.chars().collect());
+        let display_cases = editor_identifier_cases(&lines, None);
+        assert_eq!(
+            display_cases.get("MIETIQUETA").map(String::as_str),
+            Some("mIetiqueta")
+        );
+    }
+
+    #[test]
+    fn commented_label_declarations_keep_comment_text_and_its_own_style() {
+        let cases = HashMap::from([
+            ("MIETIQUETA".to_string(), "mIetiqueta".to_string()),
+            ("OTHER".to_string(), "other".to_string()),
+        ]);
+        for source in [
+            "100 MiEtiqueta: ' GOTO Other:PRINT \"sin cerrar",
+            "100 MiEtiqueta:'GOTO Other:MiEtiqueta  ",
+        ] {
+            assert_eq!(normalize_code(source), source);
+            assert_eq!(
+                syntax_highlight_with_cases(source, false, Some(&cases)),
+                source
+            );
+            assert_eq!(
+                syntax_highlight_raw_with_cases(source, false, Some(&cases)),
+                source
+            );
+            for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+                let palette = syntax_palette_for(theme);
+                let rendered =
+                    highlight_normalized_code(source.to_string(), true, Some(&cases), palette);
+                let chars = rendered_character_styles(&rendered);
+                assert_eq!(chars.iter().map(|(ch, _)| ch).collect::<String>(), source);
+                assert_eq!(
+                    chars
+                        .iter()
+                        .filter(|(_, style)| style == palette.label)
+                        .map(|(ch, _)| ch)
+                        .collect::<String>(),
+                    "MiEtiqueta:"
+                );
+                assert_eq!(
+                    chars
+                        .iter()
+                        .filter(|(_, style)| style == palette.comment)
+                        .map(|(ch, _)| ch)
+                        .collect::<String>(),
+                    source.split_once('\'').unwrap().1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn editor_renum_keeps_symbolic_targets_and_updates_later_numeric_elements() {
+        let mapping = HashMap::from([(100, 10), (200, 20), (300, 30)]);
+        for (source, expected) in [
+            (
+                "ON X GOTO Salida,200,Otra,300",
+                "ON X GOTO Salida,20,Otra,30",
+            ),
+            ("ON X GOSUB 100,Salida,200", "ON X GOSUB 10,Salida,20"),
+            (
+                "ON ERROR GOTO Salida:RESUME 300",
+                "ON ERROR GOTO Salida:RESUME 30",
+            ),
+            (
+                "IF X THEN GOTO Salida ELSE GOTO 200",
+                "IF X THEN GOTO Salida ELSE GOTO 20",
+            ),
+            ("Salida:", "Salida:"),
+            ("Salida:'GOTO Missing,200", "Salida:'GOTO Missing,200"),
+            (
+                "PRINT \"GOTO Salida,200\":REM GOTO Salida,300",
+                "PRINT \"GOTO Salida,200\":REM GOTO Salida,300",
+            ),
+            (
+                "DATA GOTO Salida,200:ON X GOTO Salida,300",
+                "DATA GOTO Salida,200:ON X GOTO Salida,30",
+            ),
+            ("PRINT 1 ' GOTO Salida,200", "PRINT 1 ' GOTO Salida,200"),
+        ] {
+            assert_eq!(renumber_editor_line_references(source, &mapping), expected);
+        }
+    }
+
+    #[test]
     fn fullscreen_windows_do_not_reclassify_clipped_words() {
         let source = "10 PRINT printer : PRINTER=1 : PRINT h : PRINT";
         let palette = current_syntax_palette();
@@ -6028,6 +6528,11 @@ mod tests {
             "10 DEF SUB myproc(A,B): PRINT A",
             "10 CALL myproc(1,2):PRINT h",
             "10 PRINT &HFF+&X101+1E-9:END",
+            "100 MiEtiqueta:",
+            "100 MiEtiqueta:' GOTO Other : PRINT 1 \"quoted\"",
+            "10 MiEtiqueta=1:GOTO MiEtiqueta",
+            "10 ON X GOTO MiEtiqueta,200,Otra",
+            "10 IF X THEN GOTO MiEtiqueta ELSE GOSUB Otra",
         ] {
             for ansi in [false, true] {
                 for cases in [None, Some(&cases)] {
@@ -6083,6 +6588,12 @@ mod tests {
             ("10 REM PRINT : DATA 1", "REM"),
             ("10 PRINT \"PRINT : REM\":PRINT PRINTER", "PRINT PRINTER"),
             ("10 PRINT \"\u{E001}\":END", "END"),
+            ("100 MiEtiqueta:", "MiEtiqueta:"),
+            ("100 MiEtiqueta:' GOTO Other : PRINT 1", "MiEtiqueta:"),
+            (
+                "10 IF X THEN GOTO MiEtiqueta ELSE GOSUB Otra",
+                "GOTO MiEtiqueta",
+            ),
         ] {
             let line = source.chars().collect::<Vec<_>>();
             let start = source.find(statement).unwrap();
@@ -6121,6 +6632,115 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn debugger_current_label_keeps_label_style_with_its_real_statement_span() {
+        use crate::debugger::{DebugAction, DebugSnapshot, Debugger};
+        use crate::{Interpreter, RunOutcome};
+
+        for comment in [
+            String::new(),
+            " ' comentario".to_string(),
+            "'GOTO Other:PRINT \"sin cerrar".to_string(),
+            format!("' marcador literal {DEBUG_STATEMENT_PLACEHOLDER}"),
+        ] {
+            let observed = Rc::new(RefCell::new(None::<DebugSnapshot>));
+            let captured = observed.clone();
+            let mut debugger = Debugger::interactive_editable(move |snapshot, _, _| {
+                *captured.borrow_mut() = Some(snapshot.clone());
+                Ok(DebugAction::Continue)
+            });
+            debugger.replace_breakpoints([100]);
+            let mut interpreter = Interpreter::new();
+            interpreter
+                .program
+                .load_text(&format!(
+                    "10 mIetiqueta=7:GOTO MiEtiqueta\n100 MiEtiqueta:{comment}\n110 END"
+                ))
+                .unwrap();
+            interpreter.set_debugger(debugger);
+            assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+            let snapshot = observed.borrow().as_ref().unwrap().clone();
+            assert_eq!(snapshot.location.line, 100);
+            let source = &snapshot.location.source;
+            let span = snapshot.location.source_span.as_ref().unwrap();
+            assert!(source[span.clone()].starts_with("MiEtiqueta:"));
+            let line: Vec<_> = source.chars().collect();
+            let cases = HashMap::from([("MIETIQUETA".to_string(), "mIetiqueta".to_string())]);
+            let mut expected = source.clone();
+            expected.insert_str(span.start, "▶ ");
+            let palette = current_syntax_palette();
+            for ansi in [false, true] {
+                let full = render_debug_source_window(
+                    &line,
+                    0,
+                    usize::MAX,
+                    snapshot.location.statement,
+                    Some(span),
+                    ansi,
+                    Some(&cases),
+                );
+                let chars = rendered_character_styles(&full);
+                assert_eq!(chars.iter().map(|(ch, _)| ch).collect::<String>(), expected);
+                assert_eq!(full.matches('▶').count(), 1);
+                assert_eq!(
+                    full.matches(DEBUG_STATEMENT_PLACEHOLDER).count(),
+                    comment.matches(DEBUG_STATEMENT_PLACEHOLDER).count()
+                );
+                if ansi {
+                    assert_eq!(
+                        chars
+                            .iter()
+                            .filter(|(_, style)| style.ends_with(palette.label))
+                            .map(|(ch, _)| ch)
+                            .collect::<String>(),
+                        "MiEtiqueta:"
+                    );
+                    assert_eq!(
+                        chars
+                            .iter()
+                            .filter(|(_, style)| style.ends_with(palette.comment))
+                            .map(|(ch, _)| ch)
+                            .collect::<String>(),
+                        comment
+                            .strip_prefix(' ')
+                            .unwrap_or(&comment)
+                            .strip_prefix('\'')
+                            .unwrap_or("")
+                    );
+                    let selected = apply_debug_selection_style(&full, &[6..16], true);
+                    assert_eq!(visible_width(&selected), expected.chars().count());
+                    assert!(selected.contains(palette.label));
+                    assert_eq!(selected.matches('▶').count(), 1);
+                }
+                for left in 0..=chars.len() + 1 {
+                    for width in [0, 1, 2, 4, 12, 60] {
+                        let clipped = render_debug_source_window(
+                            &line,
+                            left,
+                            width,
+                            snapshot.location.statement,
+                            Some(span),
+                            ansi,
+                            Some(&cases),
+                        );
+                        let start = left.min(chars.len());
+                        let end = left.saturating_add(width).min(chars.len());
+                        assert_eq!(
+                            rendered_character_styles(&clipped),
+                            chars[start..end],
+                            "left={left}, width={width}, source={source}"
+                        );
+                        assert_eq!(
+                            rendered_character_styles(&format!("{clipped}§")).last(),
+                            Some(&('§', String::new()))
+                        );
+                    }
+                }
+            }
+            assert_eq!(*observed.borrow().as_ref().unwrap(), snapshot);
         }
     }
 
@@ -7345,6 +7965,23 @@ mod tests {
         assert!(selected.starts_with(SELECTION_STYLE));
         assert!(selected.contains(&format!("{RESET}{SELECTION_STYLE}")));
         assert!(selected.ends_with(SELECTION_END_STYLE));
+        let source = "100 MiEtiqueta:";
+        let rendered = syntax_highlight_raw_with_cases(source, true, None);
+        let selected = apply_selection_to_rendered(&rendered, true, Some((4, 14)));
+        assert_eq!(visible_width(&selected), source.chars().count());
+        assert_eq!(
+            rendered_character_styles(&selected)
+                .iter()
+                .map(|(ch, _)| ch)
+                .collect::<String>(),
+            source
+        );
+        assert!(selected.contains(current_syntax_palette().label));
+        assert!(selected.contains(SELECTION_STYLE));
+        assert_eq!(
+            rendered_character_styles(&format!("{selected}§")).last(),
+            Some(&('§', String::new()))
+        );
     }
 
     #[test]
@@ -7917,6 +8554,30 @@ mod tests {
         }
         assert!(debug_status_message(&snapshot, "Breakpoint set at 10")
             .starts_with("BREAKPOINT | Ln 20 Stmt 2 |"));
+    }
+
+    #[test]
+    fn debugger_location_shows_the_label_alongside_its_numeric_line() {
+        let mut snapshot = sample_debug_snapshot();
+        snapshot.location.line = 100;
+        snapshot.location.statement = 0;
+        snapshot.location.source = "100 MiEtiqueta:".to_string();
+        assert_eq!(
+            debug_location_status(&snapshot),
+            "Ln 100 (MiEtiqueta) Stmt 1"
+        );
+        for source in [
+            "100 MiEtiqueta: ' comentario",
+            "100 MiEtiqueta:'GOTO Missing",
+        ] {
+            snapshot.location.source = source.to_string();
+            assert_eq!(
+                debug_location_status(&snapshot),
+                "Ln 100 (MiEtiqueta) Stmt 1"
+            );
+        }
+        snapshot.location.source = "100 PRINT 1".to_string();
+        assert_eq!(debug_location_status(&snapshot), "Ln 100 Stmt 1");
     }
 
     #[test]

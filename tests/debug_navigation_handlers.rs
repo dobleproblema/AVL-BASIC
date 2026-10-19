@@ -384,23 +384,23 @@ fn error_handler_navigation_preserves_err_erl_and_each_resume_mode() {
 }
 
 #[test]
-fn external_error_handler_keeps_suspended_sub_and_function_local_bindings() {
+fn root_error_handler_navigation_sees_restored_bindings_and_unwound_calls() {
     for (source, kind, expected) in [
         (
             "10 DEF SUB WORK\n20 LOCAL L\n30 L=3\n40 L=10/0\n50 RESULT=L\n60 SUBEND\n70 ON ERROR GOTO 200\n80 L=99:CALL WORK\n90 PRINT RESULT;L;H;ERR;ERL\n100 END\n200 H=H+1\n210 L=L+1\n220 RESUME NEXT",
             DebugFrameKind::Sub,
-            " 11  99  1  0  0\n",
+            " 0  11  1  0  0\n",
         ),
         (
             "10 DEF FNF(X)\n20 LOCAL L\n30 L=X+1\n40 L=10/0\n50 FNF=L*2\n60 FNEND\n70 ON ERROR GOTO 200\n80 L=99:RESULT=FNF(2)\n90 PRINT RESULT;L;H;ERR;ERL\n100 END\n200 H=H+1\n210 L=L+1\n220 RESUME NEXT",
             DebugFrameKind::Function,
-            " 22  99  1  0  0\n",
+            " 0  11  1  0  0\n",
         ),
     ] {
         let (mut interpreter, outcome, calls) = run(source, &[220], move |snapshot, breakpoints, access| {
             assert_eq!((snapshot.err, snapshot.erl), (6, 40));
-            assert!(snapshot.stack.iter().any(|frame| frame.kind == kind));
-            assert_eq!(number(snapshot, "L"), Some(4.0));
+            assert!(!snapshot.stack.iter().any(|frame| frame.kind == kind));
+            assert_eq!(number(snapshot, "L"), Some(100.0));
             let edited = access.set_scalar("L", DebugValue::Number(10.0)).unwrap();
             move_to(&edited, access, 210, "L=L+1");
             breakpoints.clear();

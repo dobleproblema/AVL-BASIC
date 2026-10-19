@@ -9,6 +9,7 @@ pub mod graphics;
 mod help;
 pub mod interpreter;
 mod keyboard;
+pub mod labels;
 mod language;
 pub mod lexer;
 pub mod program;

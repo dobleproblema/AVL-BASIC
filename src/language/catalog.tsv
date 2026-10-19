@@ -172,14 +172,14 @@ statement	both	EXIT FOR		EXIT FOR	-	Leaves the current FOR loop.	FOR,NEXT	-
 statement	both	WHILE		WHILE condition	condition: Numeric expression	Starts a loop that continues while the condition is nonzero.	WEND,EXIT WHILE	-
 statement	both	WEND		WEND	-	Ends the current WHILE loop.	WHILE,EXIT WHILE	-
 statement	both	EXIT WHILE		EXIT WHILE	-	Leaves the current WHILE loop.	WHILE,WEND	-
-statement	both	GOTO		GOTO line	line: Target line number	Jumps to a program line.	GOSUB,ON GOTO	-
-statement	program	GOSUB		GOSUB line	line: Subroutine line number	Calls a line-numbered subroutine.	RETURN,ON GOSUB	-
+statement	both	GOTO		GOTO line	line: Target line number or label in the current scope	Jumps to a program line by number or scope-local label.	GOSUB,ON GOTO	-
+statement	program	GOSUB		GOSUB line	line: Subroutine line number or label in the current scope	Calls a line-numbered subroutine by number or scope-local label.	RETURN,ON GOSUB	-
 statement	program	RETURN		RETURN	-	Returns from the most recent GOSUB or interrupt routine.	GOSUB	-
-statement	program	ON GOTO		ON selector GOTO line1,line2[,...]	selector: One-based target index; line1: First target line; line2: Additional target lines	Selects one of several GOTO targets.	GOTO,ON GOSUB	-
-statement	program	ON GOSUB		ON selector GOSUB line1,line2[,...]	selector: One-based target index; line1: First subroutine line; line2: Additional subroutine lines	Selects one of several GOSUB targets.	GOSUB,ON GOTO	-
-statement	program	ON ERROR		ON ERROR GOTO line || ON ERROR GOTO 0 || ON ERROR RESUME NEXT	line: Handler line in the current routine, or at the top level	Sets the current call's error handler, or the compatible global handler at the top level; unhandled errors can propagate to callers.	ERROR,RESUME,ERR,ERL,DEF SUB,DEF FN	-
+statement	program	ON GOTO		ON selector GOTO line1,line2[,...]	selector: One-based target index; line1: First line number or scope-local label; line2: Additional numeric or symbolic targets	Selects one of several GOTO targets.	GOTO,ON GOSUB	-
+statement	program	ON GOSUB		ON selector GOSUB line1,line2[,...]	selector: One-based target index; line1: First subroutine line number or scope-local label; line2: Additional numeric or symbolic targets	Selects one of several GOSUB targets.	GOSUB,ON GOTO	-
+statement	program	ON ERROR		ON ERROR GOTO line || ON ERROR GOTO 0 || ON ERROR RESUME NEXT	line: Handler line number or label in the current routine or root scope	Sets the current call's error handler, or the root handler outside a routine; unhandled errors propagate to callers and abandon intervening calls.	ERROR,RESUME,ERR,ERL,DEF SUB,DEF FN	-
 statement	program	ERROR		ERROR number	number: BASIC error number	Raises the specified runtime error.	ON ERROR,RESUME,ERR	-
-statement	program	RESUME		RESUME || RESUME NEXT || RESUME line	line: Optional continuation line; local handlers require the same routine	Retries, skips, or redirects the handled statement; a procedure caller retries or skips its whole calling statement.	ON ERROR,ERROR,ERR,ERL,DEF SUB,DEF FN	-
+statement	program	RESUME		RESUME || RESUME NEXT || RESUME line	line: Optional continuation line number or label in the handling routine or root scope	Retries, skips, or redirects the statement in the handling scope; callers, including the root, retry or skip their whole CALL or expression statement.	ON ERROR,ERROR,ERR,ERL,DEF SUB,DEF FN	-
 statement	program	STOP		STOP	-	Stops the program while preserving a resumable execution context.	CONT,END	-
 statement	immediate	CONT		CONT	-	Resumes a program stopped by STOP or Ctrl+C.	STOP,RUN	-
 statement	both	END		END	-	Ends program execution without preserving a continuation.	STOP	-
@@ -447,8 +447,8 @@ function	expression	MOUSELEFT		MOUSELEFT	-	Returns -1 while the left mouse butto
 function	expression	MOUSERIGHT		MOUSERIGHT	-	Returns -1 while the right mouse button is pressed, otherwise 0.	MOUSELEFT,ON MOUSE	builtin,zero-arg
 function	expression	MOUSEEVENT$		MOUSEEVENT$	-	Returns the name of the last received mouse event.	ON MOUSE,MOUSEX,MOUSEY	builtin,zero-arg
 function	expression	REMAIN		REMAIN(timer)	timer: timer number from 0 to 3	Returns the remaining timer count in 1/50-second ticks.	AFTER,EVERY,CANCEL	builtin
-function	expression	ERR		ERR	-	Returns the active runtime error number, or 0.	ERL,ON ERROR,RESUME	builtin,zero-arg
-function	expression	ERL		ERL	-	Returns the line of the active runtime error, or 0.	ERR,ON ERROR,RESUME	builtin,zero-arg
+function	expression	ERR		ERR	-	Returns the retained runtime error number, or 0; implicit error recovery keeps it available.	ERL,ON ERROR,RESUME	builtin,zero-arg
+function	expression	ERL		ERL	-	Returns the original line of the retained runtime error, or 0.	ERR,ON ERROR,RESUME	builtin,zero-arg
 function	expression	VERSION$		VERSION$	-	Returns the AVL-BASIC language version.	-	builtin,zero-arg
 
 # PRINT-only functions

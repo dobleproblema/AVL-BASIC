@@ -267,7 +267,8 @@ adding a practical modern feature set:
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
-- procedure-local `ON ERROR`/`RESUME` with caller propagation and compatible global handlers,
+- routine-local line labels (`100 Name:`), including named error handlers and distinct highlighting,
+- procedure-local and root `ON ERROR`/`RESUME` with uniform caller recovery,
 - `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - triangles with interpolated RGB and a depth buffer stored in a BASIC array,
@@ -334,10 +335,9 @@ regenerate the offline HTML from the current TXT manuals and Markdown README.
 
 After validation, run `python packaging/package_windows_release.py --skip-build`
 for Windows, or `python3 packaging/package_linux_release.py --skip-build` on
-Linux/WSL. Both packages include the HTML manuals, the complete sample tree
-and license notices. The Linux archive
-preserves executable permissions and records the
-binary's minimum glibc version.
+Linux/WSL. Both packages include the HTML manuals, the complete sample tree and
+license notices. The Linux archive preserves executable permissions and records
+the binary's minimum glibc version.
 
 Unpacked staging directories and raw executables are local build output.
 Versioned Windows ZIPs are retained in Git as in earlier releases; downloadable

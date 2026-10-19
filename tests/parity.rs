@@ -1411,14 +1411,14 @@ fn disabling_error_handler_inside_handler_still_reports_nested_handler_error() {
 }
 
 #[test]
-fn on_error_resume_next_clears_err_and_erl_after_skipped_error() {
+fn on_error_resume_next_preserves_err_and_erl_after_skipped_error() {
     let output = run_rust(
         r#"10 ON ERROR RESUME NEXT
 20 ERROR 200
 30 PRINT ERR;ERL"#,
     );
 
-    assert_eq!(output, " 0  0\n");
+    assert_eq!(output, " 200  20\n");
 }
 
 #[test]

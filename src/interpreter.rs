@@ -50,7 +50,7 @@ use crate::window::{
     MouseSnapshot,
 };
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -1543,10 +1543,7 @@ struct RoutineErrorScope {
 struct ProceduralErrorState {
     // One ordered scope per call; functions and SUBs otherwise have separate stacks.
     scopes: Vec<RoutineErrorScope>,
-    // Locals suspended by a legacy global handler cannot catch its own errors.
-    global_error_scope_base: usize,
-    // A legacy fallback may temporarily replace a local handler's visible Err.
-    global_saved_visible_error: Option<RuntimeErrorState>,
+    root_flow: Option<RoutineErrorFlow>,
 }
 
 #[derive(Debug, Clone)]
@@ -1919,9 +1916,19 @@ enum CompiledLValue {
     },
 }
 
+#[derive(Debug)]
+struct SymbolicCommand {
+    source: Rc<str>,
+    line: i32,
+    inline_sub_call: bool,
+    // A retained MERGE tail keeps its spelling and rebinds after catalog changes.
+    bound: RefCell<Option<(u64, String, Rc<CachedCommand>)>>,
+}
+
 #[derive(Debug, Clone)]
 enum CachedCommand {
     Noop,
+    Symbolic(Rc<SymbolicCommand>),
     Raw(Rc<str>),
     MatAssignment(Rc<CompiledMatAssignment>),
     Assignment(Rc<CompiledAssignment>),
@@ -2422,6 +2429,9 @@ pub struct Interpreter {
     compiled_line_cache: Rc<[Rc<[Rc<CachedCommand>]>]>,
     line_index_cache: HashMap<i32, usize>,
     line_numbers_cache: Rc<[i32]>,
+    line_labels: HashMap<(String, String), i32>,
+    label_generation: u64,
+    compiling_line: Option<i32>,
     next_after_for_cache: HashMap<Cursor, Cursor>,
     wend_after_while_cache: HashMap<Cursor, Cursor>,
     next_if_branch_cache: HashMap<Cursor, IfBranch>,
@@ -2478,6 +2488,7 @@ pub struct Interpreter {
     interrupts_enabled: bool,
     handling_mouse_event: bool,
     error_handler_line: Option<i32>,
+    root_label_handler: Option<String>,
     error_resume_next: bool,
     handling_error: bool,
     last_error: Option<RuntimeErrorState>,
@@ -2544,6 +2555,9 @@ impl Interpreter {
             compiled_line_cache: Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice()),
             line_index_cache: HashMap::new(),
             line_numbers_cache: Rc::from(Vec::<i32>::new().into_boxed_slice()),
+            line_labels: HashMap::new(),
+            label_generation: 0,
+            compiling_line: None,
             next_after_for_cache: HashMap::new(),
             wend_after_while_cache: HashMap::new(),
             next_if_branch_cache: HashMap::new(),
@@ -2596,6 +2610,7 @@ impl Interpreter {
             interrupts_enabled: true,
             handling_mouse_event: false,
             error_handler_line: None,
+            root_label_handler: None,
             error_resume_next: false,
             handling_error: false,
             last_error: None,
@@ -3332,8 +3347,19 @@ impl Interpreter {
     }
 
     fn execute_immediate_goto(&mut self, arg: &str) -> BasicResult<()> {
-        let line = parse_line_number_literal(arg.trim())
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let line = if crate::labels::label_identifier(arg.trim()) {
+            self.ensure_routine_catalog()?;
+            *self
+                .line_labels
+                .get(&("root".to_string(), arg.trim().to_ascii_uppercase()))
+                .ok_or_else(|| {
+                    BasicError::new(ErrorCode::TargetLineNotFound)
+                        .with_detail(format!("Undefined label '{}' in scope root", arg.trim()))
+                })?
+        } else {
+            parse_line_number_literal(arg.trim())
+                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?
+        };
         if self.command_cache.is_empty() || self.compiled_command_cache.is_empty() {
             self.rebuild_command_cache();
         }
@@ -3895,6 +3921,7 @@ impl Interpreter {
         self.stale_graphics_window_poll_counter = 0;
         self.last_graphics_window_pump = Instant::now();
         self.error_handler_line = None;
+        self.root_label_handler = None;
         self.error_resume_next = false;
         self.handling_error = false;
         self.routine_error_depth = 0;
@@ -3936,6 +3963,7 @@ impl Interpreter {
         self.fn_line_owner.clear();
         self.sub_line_owner.clear();
         self.error_handler_line = None;
+        self.root_label_handler = None;
         self.error_resume_next = false;
         self.expression_cache.clear();
         self.graphics.reset_state();
@@ -4071,7 +4099,7 @@ impl Interpreter {
             }
             self.current_line = Some(line_no);
             if self.trace {
-                self.write(&console::trace_text(self.ansi_output, line_no));
+                self.write_trace_line(line_no);
             }
             while cursor.cmd_idx < commands_len {
                 let poll_now = runtime_poll_skip == 0
@@ -4288,7 +4316,7 @@ impl Interpreter {
             }
             self.current_line = Some(line_no);
             if self.trace {
-                self.write(&console::trace_text(self.ansi_output, line_no));
+                self.write_trace_line(line_no);
             }
             while cursor.cmd_idx < commands_len {
                 let relocating = self.debugger_state.as_ref().is_some_and(|state| {
@@ -5723,6 +5751,20 @@ impl Interpreter {
     ) -> BasicResult<()> {
         match command {
             CachedCommand::Noop => Ok(()),
+            CachedCommand::Symbolic(symbolic) => {
+                self.ensure_routine_catalog()?;
+                let bound = self.bind_symbolic_command(symbolic)?;
+                self.execute_cached_command(&bound, cursor, line_commands)?;
+                if symbolic
+                    .source
+                    .to_ascii_uppercase()
+                    .starts_with("ON ERROR GOTO ")
+                    && self.current_routine_error_scope().is_none()
+                {
+                    self.root_label_handler = Some(symbolic.source[14..].trim().to_string());
+                }
+                Ok(())
+            }
             CachedCommand::Raw(command) => {
                 self.execute_command(command.as_ref(), cursor, line_commands)
             }
@@ -5988,6 +6030,40 @@ impl Interpreter {
                 self.interrupts_enabled = state.interrupts_enabled;
                 self.sound_poll_forced = self.has_sound_handlers;
             }
+        }
+    }
+
+    fn unwind_interrupts_to_gosub_depth(&mut self, depth: usize) {
+        // Every ISR owns a GOSUB frame. Discarding a call can abandon several
+        // nested ISRs; restore them in return order without touching an ISR
+        // which was already running when the call began.
+        loop {
+            let timer = self
+                .timer_isr_markers
+                .last()
+                .copied()
+                .filter(|d| *d >= depth);
+            let sound = self
+                .sound_isr_markers
+                .last()
+                .map(|(d, _)| *d)
+                .filter(|d| *d >= depth);
+            match (timer, sound) {
+                (Some(timer), sound) if sound.is_none_or(|sound| timer > sound) => {
+                    self.timer_isr_markers.pop();
+                    if let Some(state) = self.timer_isr_stack.pop() {
+                        self.current_interrupt_priority = state.priority;
+                        self.interrupts_enabled = state.interrupts_enabled;
+                    }
+                }
+                (_, Some(_)) => {
+                    if let Some((_, enabled)) = self.sound_isr_markers.pop() {
+                        self.interrupts_enabled = enabled;
+                    }
+                }
+                _ => break,
+            }
+            self.sound_poll_forced = self.has_sound_handlers;
         }
     }
 
@@ -8875,6 +8951,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::Syntax));
         }
         if upper == "RESUME NEXT" {
+            self.root_label_handler = None;
             self.error_handler_line = None;
             self.error_resume_next = true;
             return Ok(());
@@ -8884,6 +8961,7 @@ impl Interpreter {
             let line = parse_line_number_literal(target)
                 .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
             if line == 0 {
+                self.root_label_handler = None;
                 self.error_handler_line = None;
                 self.error_resume_next = false;
                 self.last_error = None;
@@ -8896,6 +8974,7 @@ impl Interpreter {
                 return Err(self.err(ErrorCode::InvalidTargetLine));
             }
             self.error_handler_line = Some(line);
+            self.root_label_handler = None;
             self.error_resume_next = false;
             return Ok(());
         }
@@ -8920,7 +8999,11 @@ impl Interpreter {
     }
 
     fn execute_resume(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
-        if let Some(index) = self.current_routine_error_scope() {
+        let active_scope = self
+            .routine_error_depth
+            .checked_sub(1)
+            .filter(|index| self.routine_error_scopes()[*index].active);
+        if let Some(index) = active_scope.or_else(|| self.current_routine_error_scope()) {
             if !self.routine_error_scopes()[index].active {
                 return Err(self.err(ErrorCode::HandlerError));
             }
@@ -8963,11 +9046,21 @@ impl Interpreter {
             self.last_error = None;
             return Ok(());
         }
-        let Some(state) = self.last_error.clone() else {
+        let Some(state) = self.last_error.clone().filter(|_| self.handling_error) else {
+            if self.error_resume_next && !self.handling_error {
+                return Err(self.err(ErrorCode::HandlerError));
+            }
             return Err(BasicError::new(ErrorCode::HandlerError)
                 .with_detail("Error in error handler: RESUME without ERROR."));
         };
         let arg = arg.trim();
+        if let Some(flow) = self
+            .procedural_errors
+            .as_mut()
+            .and_then(|state| state.root_flow.take())
+        {
+            self.restore_routine_error_flow(flow);
+        }
         if arg.is_empty() || arg == "0" {
             *cursor = state.retry;
             self.return_line_plan = state.plan.clone();
@@ -8980,10 +9073,7 @@ impl Interpreter {
             self.jump_to_line_for_resume(line, cursor)?;
         }
         self.handling_error = false;
-        self.last_error = self.procedural_errors.as_mut().and_then(|state| {
-            state.global_error_scope_base = 0;
-            state.global_saved_visible_error.take()
-        });
+        self.last_error = None;
         Ok(())
     }
 
@@ -10757,6 +10847,7 @@ impl Interpreter {
         let saved_line = self.current_line;
         let result = self
             .collect_program_routines()
+            .and_then(|_| self.prepare_line_labels())
             .map_err(|error| self.with_current_line(error));
         self.current_line = saved_line;
         if result.is_err() {
@@ -10770,6 +10861,137 @@ impl Interpreter {
             self.routines_prepared = true;
         }
         result
+    }
+
+    fn label_scope(&self, line: i32) -> String {
+        if let Some(name) = self.function_for_line(line) {
+            format!("FN {name}")
+        } else if let Some(name) = self.sub_for_line(line) {
+            format!("SUB {name}")
+        } else {
+            "root".to_string()
+        }
+    }
+
+    fn write_trace_line(&mut self, line: i32) {
+        let source = self
+            .active_line_plan
+            .as_ref()
+            .map(|plan| plan.source.as_ref())
+            .unwrap_or_else(|| self.program.get(line).unwrap_or(""));
+        let text = if let Some(label) = crate::labels::label_definition(source) {
+            console::trace_label_text(self.ansi_output, line, label)
+        } else {
+            console::trace_text(self.ansi_output, line)
+        };
+        self.write(&text);
+    }
+
+    fn symbolic_command(&self, source: &str, inline_sub_call: bool) -> Option<CachedCommand> {
+        if !crate::labels::target_ranges(source)
+            .iter()
+            .any(|range| crate::labels::label_identifier(&source[range.clone()]))
+        {
+            return None;
+        }
+        Some(CachedCommand::Symbolic(Rc::new(SymbolicCommand {
+            source: Rc::from(crate::labels::normalize_control_source(source)),
+            line: self.compiling_line.or(self.current_line).unwrap_or(0),
+            inline_sub_call,
+            bound: RefCell::new(None),
+        })))
+    }
+
+    fn bind_symbolic_command(
+        &mut self,
+        symbolic: &SymbolicCommand,
+    ) -> BasicResult<Rc<CachedCommand>> {
+        if let Some((generation, _, command)) = symbolic.bound.borrow().as_ref() {
+            if *generation == self.label_generation {
+                return Ok(command.clone());
+            }
+        }
+        // Retained tails keep the lexical scope from their initial preparation,
+        // even when MERGE deletes or replaces their original numbered line.
+        let scope = symbolic
+            .bound
+            .borrow()
+            .as_ref()
+            .map(|(_, scope, _)| scope.clone())
+            .unwrap_or_else(|| self.label_scope(symbolic.line));
+        let mut resolved = symbolic.source.to_string();
+        for range in crate::labels::target_ranges(&symbolic.source)
+            .into_iter()
+            .rev()
+        {
+            let name = &symbolic.source[range.clone()];
+            if !crate::labels::label_identifier(name) {
+                continue;
+            }
+            let Some(line) = self
+                .line_labels
+                .get(&(scope.clone(), name.to_ascii_uppercase()))
+            else {
+                return Err(BasicError::new(ErrorCode::TargetLineNotFound)
+                    .with_detail(format!("Undefined label '{name}' in scope {scope}"))
+                    .at_line(symbolic.line));
+            };
+            resolved.replace_range(range, &line.to_string());
+        }
+        let command = Rc::new(if symbolic.inline_sub_call {
+            CachedCommand::InlineSubCall(Rc::from(resolved))
+        } else {
+            self.compile_cached_command(&resolved)
+        });
+        *symbolic.bound.borrow_mut() = Some((self.label_generation, scope, command.clone()));
+        Ok(command)
+    }
+
+    fn prepare_line_labels(&mut self) -> BasicResult<()> {
+        self.line_labels.clear();
+        for &line in self.line_numbers_cache.iter() {
+            let code = self.program.get(line).unwrap_or("");
+            if let Some(name) = crate::labels::label_definition(code) {
+                let scope = self.label_scope(line);
+                let key = (scope.clone(), name.to_ascii_uppercase());
+                if let Some(previous) = self.line_labels.insert(key, line) {
+                    return Err(BasicError::new(ErrorCode::Syntax)
+                        .with_detail(format!("Duplicate label '{name}' in scope {scope} (first declared at line {previous})"))
+                        .at_line(line));
+                }
+            } else if let Some((prefix, _)) = code.trim().split_once(':') {
+                let candidate = prefix.trim();
+                let first = candidate
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                // A colon after a command keeps its existing meaning. A bare
+                // attempted declaration, including malformed names and reserved
+                // functions such as SIN, must fail before program side effects.
+                if !candidate.is_empty()
+                    && !language::is_keyword(&first)
+                    && !candidate.contains('=')
+                    && !candidate.starts_with(['\'', '"', '?'])
+                {
+                    let scope = self.label_scope(line);
+                    return Err(BasicError::new(ErrorCode::Syntax)
+                        .with_detail(format!(
+                            "Invalid label declaration '{candidate}' in scope {scope}"
+                        ))
+                        .at_line(line));
+                }
+            }
+        }
+        let commands = self.compiled_line_cache.clone();
+        for line in commands.iter() {
+            for command in line.iter() {
+                if let CachedCommand::Symbolic(symbolic) = command.as_ref() {
+                    self.bind_symbolic_command(symbolic)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn collect_program_routines(&mut self) -> BasicResult<()> {
@@ -11104,7 +11326,9 @@ impl Interpreter {
                 if trimmed.eq_ignore_ascii_case(terminator) {
                     return Ok(local_specs);
                 }
-                if first_word_is(trimmed, "REM") {
+                if first_word_is(trimmed, "REM")
+                    || crate::labels::label_definition(trimmed).is_some()
+                {
                     continue;
                 }
                 if first_word_is(trimmed, "LOCAL") {
@@ -11263,20 +11487,20 @@ impl Interpreter {
             .map_or(&[], |state| &state.scopes)
     }
 
-    fn global_error_scope_base(&self) -> usize {
-        self.procedural_errors
-            .as_ref()
-            .map_or(0, |state| state.global_error_scope_base)
-    }
-
     fn routine_uses_error_handling(&self, start: Cursor, end: Cursor) -> bool {
         self.compiled_line_cache[start.line_idx..=end.line_idx]
             .iter()
             .flat_map(|commands| commands.iter())
-            .any(|command| {
-                matches!(command.as_ref(), CachedCommand::Raw(source)
-                    if starts_keyword(&source.to_ascii_uppercase(), "ON ERROR")
-                        || first_word_is(source, "RESUME"))
+            .any(|command| match command.as_ref() {
+                CachedCommand::Raw(source) => {
+                    starts_keyword(&source.to_ascii_uppercase(), "ON ERROR")
+                        || first_word_is(source, "RESUME")
+                }
+                CachedCommand::Symbolic(symbolic) => {
+                    starts_keyword(&symbolic.source.to_ascii_uppercase(), "ON ERROR")
+                        || first_word_is(&symbolic.source, "RESUME")
+                }
+                _ => false,
             })
     }
 
@@ -11316,8 +11540,7 @@ impl Interpreter {
         let scope = state.and_then(|state| state.scopes.pop());
         self.routine_error_depth = self.routine_error_scopes().len();
         if let Some(scope) = scope {
-            // Preserve legacy global behavior for routines which never opted in.
-            // A child handler must also leave an already-active caller resumable.
+            // A child handler leaves its caller's visible and pending error intact.
             if scope.used
                 || self.handling_error
                 || self.routine_error_scopes().iter().any(|scope| scope.active)
@@ -11328,12 +11551,28 @@ impl Interpreter {
     }
 
     fn restore_routine_error_flow(&mut self, flow: RoutineErrorFlow) {
+        if self.gosub_stack.len() > flow.gosub_stack.len() {
+            self.unwind_interrupts_to_gosub_depth(flow.gosub_stack.len());
+        }
         self.for_stack = flow.for_stack;
         self.while_stack = flow.while_stack;
         self.if_stack = flow.if_stack;
         self.gosub_stack = flow.gosub_stack;
         self.if_gosub_base = flow.if_gosub_base;
         self.pending_if_branch = flow.pending_if_branch;
+    }
+
+    fn capture_routine_error_flow(&mut self) -> RoutineErrorFlow {
+        let flow = RoutineErrorFlow {
+            for_stack: self.for_stack.clone(),
+            while_stack: self.while_stack.clone(),
+            if_stack: std::mem::take(&mut self.if_stack),
+            gosub_stack: self.gosub_stack.clone(),
+            if_gosub_base: self.if_gosub_base,
+            pending_if_branch: self.pending_if_branch.take(),
+        };
+        self.if_gosub_base = self.gosub_stack.len();
+        flow
     }
 
     fn return_value_for_active_function(&mut self, lhs: &str, value: &Value) {
@@ -12826,6 +13065,33 @@ impl Interpreter {
                 relocate(&mut error.next);
             }
         }
+        if let Some(flow) = self
+            .procedural_errors
+            .as_mut()
+            .and_then(|state| state.root_flow.as_mut())
+        {
+            for frame in &mut flow.for_stack {
+                relocate(&mut frame.resume);
+            }
+            for frame in &mut flow.while_stack {
+                relocate(&mut frame.header);
+                relocate(&mut frame.resume);
+            }
+            for frame in &mut flow.if_stack {
+                relocate(frame);
+            }
+            for frame in &mut flow.gosub_stack {
+                if let Some(plan) = &frame.return_plan {
+                    frame.return_cursor.line_idx =
+                        new_lines.partition_point(|number| *number < plan.line);
+                } else {
+                    relocate(&mut frame.return_cursor);
+                }
+            }
+            if let Some(cursor) = &mut flow.pending_if_branch {
+                relocate(cursor);
+            }
+        }
         if let Some((cursor, _)) = &mut self.pause_deadline {
             relocate(cursor);
         }
@@ -12971,6 +13237,7 @@ impl Interpreter {
         self.handling_mouse_event = false;
         self.interrupts_enabled = true;
         self.error_handler_line = None;
+        self.root_label_handler = None;
         self.error_resume_next = false;
         self.handling_error = false;
         self.routine_error_depth = 0;
@@ -13106,16 +13373,10 @@ impl Interpreter {
         retry: Cursor,
         next: Cursor,
     ) -> BasicResult<bool> {
-        let local_base = if self.handling_error {
-            self.global_error_scope_base()
-        } else {
-            0
-        };
         if let Some(index) = self
             .routine_error_scopes()
             .iter()
             .enumerate()
-            .skip(local_base)
             .rev()
             .find_map(|(index, scope)| {
                 (!scope.active && (scope.handler_line.is_some() || scope.resume_next))
@@ -13151,17 +13412,16 @@ impl Interpreter {
             scope.error = Some(state.clone());
             let handler = scope.handler_line.unwrap();
             scope.active = true;
-            scope.flow = Some(RoutineErrorFlow {
-                for_stack: self.for_stack.clone(),
-                while_stack: self.while_stack.clone(),
-                if_stack: std::mem::take(&mut self.if_stack),
-                gosub_stack: self.gosub_stack.clone(),
-                if_gosub_base: self.if_gosub_base,
-                pending_if_branch: self.pending_if_branch.take(),
-            });
-            self.if_gosub_base = self.gosub_stack.len();
+            let flow = self.capture_routine_error_flow();
+            self.procedural_errors.as_mut().unwrap().scopes[index].flow = Some(flow);
             self.jump_to_line_unchecked(handler, cursor)?;
             return Ok(true);
+        }
+        if !self.active_subs.is_empty() || !self.active_functions.is_empty() {
+            // Root policies recover at their own CALL/expression, just like a
+            // local ancestor. Let every abandoned invocation restore its
+            // parameters, aliases and control stacks before dispatching there.
+            return Ok(false);
         }
         if err
             .detail
@@ -13173,10 +13433,6 @@ impl Interpreter {
         let line = err.line.or(self.current_line).unwrap_or(0);
         let number = basic_error_number(&err);
         let plan = self.retain_current_line();
-        let saved_visible_error = (!self.handling_error
-            && self.routine_error_scopes().iter().any(|scope| scope.active))
-        .then(|| self.last_error.clone())
-        .flatten();
         self.last_error = Some(RuntimeErrorState {
             number,
             line,
@@ -13200,15 +13456,26 @@ impl Interpreter {
                 self.return_line_plan = state.plan.clone();
             }
             self.handling_error = false;
-            self.last_error = saved_visible_error;
             return Ok(true);
         }
         if let Some(handler) = self.error_handler_line {
+            let handler = if let Some(name) = &self.root_label_handler {
+                *self
+                    .line_labels
+                    .get(&("root".to_string(), name.to_ascii_uppercase()))
+                    .ok_or_else(|| {
+                        BasicError::new(ErrorCode::TargetLineNotFound)
+                            .with_detail(format!("Undefined label '{name}' in scope root"))
+                            .at_line(line)
+                    })?
+            } else {
+                handler
+            };
             self.handling_error = true;
-            if let Some(state) = self.procedural_errors.as_mut() {
-                state.global_error_scope_base = self.routine_error_depth;
-                state.global_saved_visible_error = saved_visible_error;
-            }
+            let flow = self.capture_routine_error_flow();
+            self.procedural_errors
+                .get_or_insert_with(Box::default)
+                .root_flow = Some(flow);
             self.jump_to_line_unchecked(handler, cursor)?;
             return Ok(true);
         }
@@ -13293,6 +13560,8 @@ impl Interpreter {
     }
 
     fn clear_command_caches(&mut self) {
+        self.line_labels.clear();
+        self.label_generation = self.label_generation.wrapping_add(1);
         self.routines_prepared = false;
         self.routine_definition_skips.clear();
         self.command_cache.clear();
@@ -13314,8 +13583,14 @@ impl Interpreter {
         self.line_numbers_cache = Rc::from(lines.clone().into_boxed_slice());
         let mut compiled_lines = Vec::with_capacity(lines.len());
         for (idx, line) in lines.into_iter().enumerate() {
+            self.compiling_line = Some(line);
             let code = self.program.get(line).unwrap_or("");
-            let command_ranges = split_command_ranges(code);
+            let command_ranges = if crate::labels::label_definition(code).is_some() {
+                let leading = code.len() - code.trim_start().len();
+                vec![leading..code.trim_end().len()]
+            } else {
+                split_command_ranges(code)
+            };
             let commands: Vec<Rc<str>> = command_ranges
                 .iter()
                 .map(|range| Rc::<str>::from(&code[range.clone()]))
@@ -13339,6 +13614,7 @@ impl Interpreter {
             compiled_lines.push(Rc::from(compiled.into_boxed_slice()));
             self.line_index_cache.insert(line, idx);
         }
+        self.compiling_line = None;
         self.compiled_line_cache = Rc::from(compiled_lines.into_boxed_slice());
         self.rebuild_block_target_caches();
     }
@@ -13506,9 +13782,10 @@ impl Interpreter {
                     || (first_word_is(command, "ON")
                         && command.to_ascii_uppercase().contains(" GOSUB ")));
             if inline_sub_call {
-                compiled.push(Rc::new(CachedCommand::InlineSubCall(Rc::<str>::from(
-                    command,
-                ))));
+                compiled.push(Rc::new(
+                    self.symbolic_command(command, true)
+                        .unwrap_or_else(|| CachedCommand::InlineSubCall(Rc::<str>::from(command))),
+                ));
                 Self::push_visible_execution_metadata(
                     sources,
                     command_source_start..command_source_start + command.len(),
@@ -13649,6 +13926,12 @@ impl Interpreter {
 
     fn compile_cached_command(&mut self, command: &str) -> CachedCommand {
         let trimmed = command.trim();
+        if crate::labels::label_definition(trimmed).is_some() {
+            return CachedCommand::Noop;
+        }
+        if let Some(command) = self.symbolic_command(trimmed, false) {
+            return command;
+        }
         if trimmed.is_empty() {
             return CachedCommand::Noop;
         }
@@ -15129,6 +15412,9 @@ impl Interpreter {
 
         self.for_stack.truncate(saved_for_len);
         self.while_stack.truncate(saved_while_len);
+        if self.gosub_stack.len() > saved_gosub_len {
+            self.unwind_interrupts_to_gosub_depth(saved_gosub_len);
+        }
         self.gosub_stack.truncate(saved_gosub_len);
         self.if_stack = saved_if_stack;
         self.if_gosub_base = saved_if_gosub_base.min(self.gosub_stack.len());
@@ -15238,6 +15524,9 @@ impl Interpreter {
         self.function_call_stack.pop();
         self.for_stack.truncate(saved_for_len);
         self.while_stack.truncate(saved_while_len);
+        if self.gosub_stack.len() > saved_gosub_len {
+            self.unwind_interrupts_to_gosub_depth(saved_gosub_len);
+        }
         self.gosub_stack.truncate(saved_gosub_len);
         self.if_stack = saved_if_stack;
         self.if_gosub_base = saved_if_gosub_base.min(self.gosub_stack.len());
@@ -18673,14 +18962,14 @@ mod interpreter_tests {
     }
 
     #[test]
-    fn array_bindings_follow_existing_subroutine_error_unwind() {
+    fn root_error_handler_sees_restored_array_bindings_after_subroutine_unwind() {
         let mut interp = Interpreter::new();
         assert_fast_numeric_array_write_is_compiled(&mut interp, "P(0)=7");
         interp
             .program
             .load_text(
-                r#"10 DIM Z(1),Q(1)
-20 Z(0)=5:Q(0)=8
+                r#"10 DIM Z(1),Q(1),P(1)
+20 Z(0)=5:Q(0)=8:P(0)=3
 30 DEF SUB FAIL(P)
 40 LOCAL Q(1)
 50 Q(0)=99:P(0)=7
@@ -18689,13 +18978,16 @@ mod interpreter_tests {
 80 ON ERROR GOTO 120
 90 CALL FAIL(Z)
 100 END
-120 P(0)=1
-130 PRINT Z(0);Q(0);P(0)"#,
+120 P(0)=1:Caught=ERR:FaultLine=ERL
+130 PRINT Z(0);Q(0);P(0);Caught;FaultLine"#,
             )
             .unwrap();
 
         interp.run_loaded().unwrap();
-        assert_eq!(interp.take_output(), " 1  99  1\n");
+        assert_eq!(interp.take_output(), " 7  8  1  5  60\n");
+        assert!(interp.array_aliases.is_empty());
+        assert!(interp.active_subs.is_empty());
+        assert!(interp.sub_call_stack.is_empty());
     }
 
     #[test]
@@ -19968,6 +20260,9 @@ pub(crate) fn record_identifier_case_forms(
     cases: &mut HashMap<String, String>,
     overwrite: bool,
 ) {
+    if crate::labels::label_definition(source).is_some() {
+        return;
+    }
     let original_cases = overwrite.then(|| cases.clone());
     for command in split_commands(source) {
         let trimmed = command.trim_start();
@@ -19981,6 +20276,7 @@ pub(crate) fn record_identifier_case_forms(
         }
 
         let chars: Vec<char> = command.chars().collect();
+        let symbolic_ranges = crate::labels::symbolic_name_ranges(&command);
         let mut i = 0usize;
         let mut in_string = false;
         let mut after_def = false;
@@ -20005,6 +20301,13 @@ pub(crate) fn record_identifier_case_forms(
                     i += 1;
                 }
                 let ident: String = chars[start..i].iter().collect();
+                let byte_start: usize = chars[..start].iter().map(|ch| ch.len_utf8()).sum();
+                if symbolic_ranges
+                    .iter()
+                    .any(|range| range.contains(&byte_start))
+                {
+                    continue;
+                }
                 let upper = ident.to_ascii_uppercase();
 
                 if skip_callable_name {
@@ -20126,6 +20429,7 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
         return source.to_string();
     }
     let mut out = String::with_capacity(source.len());
+    let symbolic_ranges = crate::labels::symbolic_name_ranges(source);
     let mut chars = source.char_indices().peekable();
     let mut in_string = false;
     let mut in_data = false;
@@ -20154,6 +20458,10 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
                 }
             }
             let ident = &source[start..end];
+            if symbolic_ranges.iter().any(|range| range.contains(&start)) {
+                out.push_str(ident);
+                continue;
+            }
             if ident.eq_ignore_ascii_case("REM") && identifier_boundary(source, start, end) {
                 out.push_str(ident);
                 out.push_str(&source[end..]);
@@ -22012,6 +22320,40 @@ fn copy_renumbered_line_list(
             i += ch.len_utf8();
         }
         let number_start = i;
+        if code[i..]
+            .chars()
+            .next()
+            .is_some_and(is_reference_ident_start)
+        {
+            while i < code.len()
+                && code[i..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_reference_ident_char)
+            {
+                i += code[i..].chars().next().unwrap().len_utf8();
+            }
+            let name = &code[number_start..i];
+            if !crate::labels::label_identifier(name) {
+                return number_start;
+            }
+            out.push_str(name);
+            let mut probe = i;
+            while probe < code.len()
+                && code[probe..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+            {
+                probe += code[probe..].chars().next().unwrap().len_utf8();
+            }
+            if code[probe..].starts_with(',') {
+                out.push_str(&code[i..probe + 1]);
+                i = probe + 1;
+                continue;
+            }
+            return i;
+        }
         while i < code.len() {
             let ch = code[i..].chars().next().unwrap();
             if !ch.is_ascii_digit() {

@@ -173,14 +173,8 @@ fn inherited_and_local_match(actual: &[Cursor], inherited: &[Cursor], lexical: &
 
 impl Interpreter {
     fn active_runtime_error(&self) -> Option<&RuntimeErrorState> {
-        let base = if self.handling_error {
-            self.global_error_scope_base()
-        } else {
-            0
-        };
         self.routine_error_scopes()
             .iter()
-            .skip(base)
             .rev()
             .find(|scope| scope.active)
             .and_then(|scope| scope.error.as_ref())
