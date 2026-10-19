@@ -1,0 +1,2 @@
+93ea64a59cfb3d240d82feff0c51ae6e6b1c8375f9d5eaf4629dcd2a746ab36c  avl-basic-1.6.18-windows-x64.zip
+92a02d130d60da93b601b6b7416195ef670ebe7394288d0e759954431328311b  avl-basic-1.6.18-linux-x64.tar.gz
