@@ -1531,7 +1531,7 @@ Salida esperada
 + STOP                  Detiene la ejecución manteniendo el estado (línea actual, pilas y variables) y muestra `Line n. Program stopped.` con el estilo de interrupciones/errores del intérprete. Es un aviso de estado, no un error: no modifica `ERR`/`ERL` ni activa `ON ERROR`. Permite reanudar con `CONT` desde el punto donde se detuvo o, con `GOTO n`, desde cualquier línea.
 + CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Modificar el programa almacenado cancela el contexto detenido; usa `RUN` después de editar. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
 + END                   Finaliza el programa, dejando sonar el audio pendiente. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 46) porque no hay ejecución pendiente que continuar.
-+ RUN [línea-o-etiqueta] Ejecuta desde la línea numérica o etiqueta raíz indicada.
++ RUN [línea-o-etiqueta]  Ejecuta desde la línea numérica o etiqueta raíz indicada.
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
