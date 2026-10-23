@@ -340,3 +340,132 @@ fn trace_uses_the_label_name_while_preserving_its_comment_only_in_source() {
         assert_eq!(run(source, debug), "[20 JumpHere:][30] 7\n[40]\n");
     }
 }
+
+#[test]
+fn abbreviated_if_destinations_work_in_both_branches_and_local_scopes() {
+    let source = "10 IF 0 THEN Wrong ELSE Start\n20 Wrong:\n30 PRINT \"WRONG\":END\n40 Start:\n50 CALL Work:END\n100 DEF SUB Work\n110 IF 1 THEN Finish:PRINT \"WRONG\"\n120 PRINT \"WRONG\"\n130 Finish:\n140 PRINT \"OK\"\n150 SUBEND";
+    for debug in [false, true] {
+        assert_eq!(run(source, debug), "OK\n");
+    }
+    let source = "10 GOTO Start\n20 LocalOnly:\n30 END\n40 Start:\n50 CALL Work:END\n100 DEF SUB Work\n110 IF 1 THEN LocalOnly\n120 SUBEND";
+    let mut i = Interpreter::new();
+    i.program.load_text(source).unwrap();
+    let error = i.run_loaded().unwrap_err();
+    assert!(error
+        .detail
+        .unwrap()
+        .contains("Undefined label 'LocalOnly' in scope SUB WORK"));
+}
+
+#[test]
+fn armed_timer_and_sound_labels_follow_runtime_merge_in_both_execution_modes() {
+    for registration in ["AFTER 1 GOSUB Handler", "ON SQ(1) GOSUB Handler"] {
+        for debug in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::write(
+                directory.path().join("child.bas"),
+                "100 REM moved\n110 REM old body\n200 Handler:\n210 Hits=Hits+1:RETURN",
+            )
+            .unwrap();
+            let mut i = Interpreter::new();
+            i.root_dir = directory.path().to_path_buf();
+            i.current_dir = directory.path().to_path_buf();
+            i.program.load_text(&format!("10 DI:{registration}\n20 MERGE \"child\"\n30 EI:PAUSE 50\n40 PRINT Hits:END\n100 Handler:\n110 Hits=999:RETURN")).unwrap();
+            if debug {
+                i.set_debugger(Debugger::scripted([]));
+            }
+            i.run_loaded().unwrap();
+            assert_eq!(i.take_output(), " 1\n", "{registration}, debug={debug}");
+        }
+    }
+}
+
+#[test]
+fn repeating_timer_accepts_a_symbolic_root_handler() {
+    for debug in [false, true] {
+        let source = "10 EVERY 1 GOSUB Tick\n20 PAUSE 60\n30 CANCEL 0:PRINT Hits>0:END\n100 Tick:\n110 Hits=Hits+1:RETURN";
+        assert_eq!(run(source, debug), "-1\n");
+    }
+}
+
+#[test]
+fn numeric_restore_uses_the_rebuilt_exact_data_catalog_after_merge() {
+    for debug in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("child.bas"),
+            "100 REM changed\n110 DATA 7\n200 Records:\n210 DATA 99",
+        )
+        .unwrap();
+        let mut i = Interpreter::new();
+        i.root_dir = directory.path().to_path_buf();
+        i.current_dir = directory.path().to_path_buf();
+        i.program.load_text("10 GOSUB ReadOne\n20 MERGE \"child\"\n30 GOSUB ReadOne:END\n50 ReadOne:\n60 RESTORE 110:READ A:PRINT A:RETURN\n100 Records:\n110 DATA 3").unwrap();
+        if debug {
+            i.set_debugger(Debugger::scripted([]));
+        }
+        i.run_loaded().unwrap();
+        assert_eq!(i.take_output(), " 3\n 7\n");
+    }
+}
+
+#[test]
+fn renum_changes_only_complete_numeric_line_operands() {
+    let mut i = Interpreter::new();
+    i.program.load_text("10 RESTORE 100+N:PRINT \"GOTO 100\":REM GOTO 100\n20 DATA GOTO 100,\"GOTO 100\"\n30 ON SQ(1) GOSUB 100:AFTER 1 GOSUB 100\n40 ON MOUSE LEFTDOWN GOSUB 100\n50 CHAIN \"other\",100+N\n60 CHAIN MERGE \"other\",100,DELETE 100-110\n100 Here:\n110 DATA 3\n120 END\n130 CHAIN MERGE \"other\",,DELETE 100-110\n140 RENUM ,,100,110").unwrap();
+    i.process_immediate("RENUM 1000,10").unwrap();
+    let listing = i.program.list();
+    assert!(
+        listing.contains("RESTORE 100+N:PRINT \"GOTO 100\":REM GOTO 100"),
+        "{listing}"
+    );
+    assert!(listing.contains("DATA GOTO 100,\"GOTO 100\""), "{listing}");
+    assert!(
+        listing.contains("ON SQ(1) GOSUB 1060:AFTER 1 GOSUB 1060"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("ON MOUSE LEFTDOWN GOSUB 1060"),
+        "{listing}"
+    );
+    assert!(listing.contains("CHAIN \"other\",100+N"), "{listing}");
+    assert!(
+        listing.contains("CHAIN MERGE \"other\",100,DELETE 1060-1070"),
+        "{listing}"
+    );
+    assert!(listing.contains("1060 Here:"), "{listing}");
+    assert!(
+        listing.contains("CHAIN MERGE \"other\",,DELETE 1060-1070"),
+        "{listing}"
+    );
+    assert!(listing.contains("RENUM ,,1060,1070"), "{listing}");
+}
+
+#[test]
+fn numeric_mouse_registration_retains_its_legacy_local_target_validation() {
+    let source = "10 CALL Work:END\n100 DEF SUB Work\n110 ON MOUSE LEFTDOWN GOSUB 130\n120 EXIT SUB\n130 RETURN\n140 SUBEND";
+    for debug in [false, true] {
+        assert_eq!(run(source, debug), "");
+    }
+}
+
+#[test]
+fn renum_updates_decimal_restore_targets_and_preserves_other_numeric_forms() {
+    let mut i = Interpreter::new();
+    i.program.load_text("10 RESTORE 110:READ A:PRINT A:END\n20 RESTORE Records:RESTORE (Records):RESTORE 110+N:RESTORE &H6E:RESTORE +110\n100 Records:\n110 DATA 7").unwrap();
+    i.process_immediate("RENUM 1000,10").unwrap();
+    let listing = i.program.list();
+    assert!(
+        listing.contains("1000 RESTORE 1030:READ A:PRINT A:END"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains(
+            "1010 RESTORE Records:RESTORE (Records):RESTORE 110+N:RESTORE &H6E:RESTORE +110"
+        ),
+        "{listing}"
+    );
+    assert!(listing.contains("1020 Records:"), "{listing}");
+    assert_eq!(i.run_loaded().unwrap(), RunOutcome::End);
+    assert_eq!(i.take_output(), " 7\n");
+}

@@ -2,12 +2,15 @@ mod alpha_ops;
 mod array_expr;
 mod audio_commands;
 mod color_lut;
+mod fused_leaves;
 mod gouraud_ops;
 mod mat_compiled;
 #[cfg(test)]
 mod mat_compiled_tests;
 mod mat_stats;
 mod mat_subarrays;
+#[cfg(test)]
+mod symbolic_jump_tests;
 mod texture_ops;
 #[cfg(test)]
 mod texture_ops_tests;
@@ -178,6 +181,12 @@ impl NumericVariables {
     }
 
     #[inline(always)]
+    fn get_cached_or_zero(&mut self, name: &str, cache: &CachedNumericSlot) -> f64 {
+        let index = self.resolve_cached_slot(name, cache);
+        self.slots[index].value
+    }
+
+    #[inline(always)]
     fn insert_cached(&mut self, name: &str, cache: &CachedNumericSlot, value: f64) -> usize {
         let index = self.resolve_cached_slot(name, cache);
         let slot = &mut self.slots[index];
@@ -188,12 +197,7 @@ impl NumericVariables {
 
     #[inline(always)]
     fn get_resolved_or_zero(&self, index: usize) -> f64 {
-        let slot = &self.slots[index];
-        if slot.present {
-            slot.value
-        } else {
-            0.0
-        }
+        self.slots[index].value
     }
 
     #[inline(always)]
@@ -247,6 +251,9 @@ impl NumericVariables {
         let index = self.names.get(name).copied()?;
         let slot = &mut self.slots[index];
         let previous = slot.present.then_some(slot.value);
+        // Ordinary numeric reads return the stored value directly. Keep an
+        // absent slot at +0 while retaining presence for FN and LOCAL checks.
+        slot.value = 0.0;
         slot.present = false;
         previous
     }
@@ -837,12 +844,17 @@ impl ArrayValue {
         if self.dims.len() != 1 {
             return Err(BasicError::new(ErrorCode::InvalidIndex));
         }
-        if index < 0 || index as usize > self.dims[0] {
-            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
-        }
         match &self.data {
-            ArrayData::Number(values) => Ok(values[index as usize]),
-            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+            ArrayData::Number(values) => values
+                .get(index as usize)
+                .copied()
+                .ok_or_else(|| BasicError::new(ErrorCode::IndexOutOfRange)),
+            ArrayData::Str(_) => {
+                if index < 0 || index as usize > self.dims[0] {
+                    return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+                }
+                Err(BasicError::new(ErrorCode::TypeMismatch))
+            }
         }
     }
 
@@ -872,15 +884,20 @@ impl ArrayValue {
         if self.dims.len() != 1 {
             return Err(BasicError::new(ErrorCode::InvalidIndex));
         }
-        if index < 0 || index as usize > self.dims[0] {
-            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
-        }
         match &mut self.data {
             ArrayData::Number(values) => {
-                values[index as usize] = value;
+                let target = values
+                    .get_mut(index as usize)
+                    .ok_or_else(|| BasicError::new(ErrorCode::IndexOutOfRange))?;
+                *target = value;
                 Ok(())
             }
-            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
+            ArrayData::Str(_) => {
+                if index < 0 || index as usize > self.dims[0] {
+                    return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+                }
+                Err(BasicError::new(ErrorCode::TypeMismatch))
+            }
         }
     }
 
@@ -1710,6 +1727,10 @@ struct CachedTexture {
 #[derive(Debug, Clone)]
 enum FastNumberExpr {
     Number(f64),
+    BinaryLeaves(Box<fused_leaves::BinaryLeaves>),
+    BinaryConstVariable(Box<fused_leaves::BinaryConstVariable>),
+    FunctionLeaf(Box<fused_leaves::FunctionLeaf>),
+    UnaryLeaf(Box<fused_leaves::UnaryLeaf>),
     Var {
         name: String,
         slot: CachedNumericSlot,
@@ -1925,6 +1946,25 @@ struct SymbolicCommand {
     bound: RefCell<Option<(u64, String, Rc<CachedCommand>)>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CallbackId {
+    Timer(i32),
+    Mouse(String),
+    Sound(usize),
+}
+
+#[derive(Debug, Clone)]
+struct SymbolicCallback {
+    name: String,
+    line: i32,
+    generation: u64,
+}
+
+struct TransferEntry {
+    label: Option<String>,
+    numeric: BasicResult<i32>,
+}
+
 #[derive(Debug, Clone)]
 enum CachedCommand {
     Noop,
@@ -2109,6 +2149,10 @@ impl FastNumberExpr {
     fn eval(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
         match self {
             FastNumberExpr::Number(value) => Ok(*value),
+            FastNumberExpr::BinaryLeaves(node) => node.eval(interpreter),
+            FastNumberExpr::BinaryConstVariable(node) => node.eval(interpreter),
+            FastNumberExpr::FunctionLeaf(node) => node.eval(interpreter),
+            FastNumberExpr::UnaryLeaf(node) => node.eval(interpreter),
             FastNumberExpr::Var { name, slot } => interpreter.get_fast_number_variable(name, slot),
             FastNumberExpr::Function0(function) => Ok(match function {
                 FastZeroArgFunction::Rnd => interpreter.rng.next_f64(),
@@ -2153,44 +2197,12 @@ impl FastNumberExpr {
                 interpreter.get_array_number_cached_2d(name, slot, indexes[0], indexes[1])
             }
             FastNumberExpr::Function1 { function, arg } => {
-                let mut arg = arg.eval(interpreter)?;
-                Ok(match function {
-                    FastNumberFunction::Abs => arg.abs(),
-                    FastNumberFunction::Int => arg.floor(),
-                    FastNumberFunction::Sqr => {
-                        if arg < 0.0 {
-                            return Err(BasicError::new(ErrorCode::InvalidArgument));
-                        }
-                        checked_number(arg.sqrt())?
-                    }
-                    FastNumberFunction::Sin => {
-                        if interpreter.angle_degrees {
-                            arg = arg.to_radians();
-                        }
-                        arg.sin()
-                    }
-                    FastNumberFunction::Cos => {
-                        if interpreter.angle_degrees {
-                            arg = arg.to_radians();
-                        }
-                        arg.cos()
-                    }
-                    function => {
-                        return eval_extended_fast_number_function(
-                            *function,
-                            arg,
-                            interpreter.angle_degrees,
-                        );
-                    }
-                })
+                let arg = arg.eval(interpreter)?;
+                eval_fast_number_function(*function, arg, interpreter.angle_degrees)
             }
             FastNumberExpr::Unary { op, expr } => {
                 let value = expr.eval(interpreter)?;
-                Ok(match op {
-                    UnaryOp::Plus => value,
-                    UnaryOp::Minus => -value,
-                    UnaryOp::Not => (!logical_round(value)) as f64,
-                })
+                Ok(eval_fast_unary(*op, value))
             }
             FastNumberExpr::Min(args) => {
                 let mut value = args[0].eval(interpreter)?;
@@ -2226,6 +2238,46 @@ impl FastNumberExpr {
             }
         }
     }
+}
+
+#[inline(always)]
+fn eval_fast_unary(op: UnaryOp, value: f64) -> f64 {
+    match op {
+        UnaryOp::Plus => value,
+        UnaryOp::Minus => -value,
+        UnaryOp::Not => (!logical_round(value)) as f64,
+    }
+}
+
+#[inline(always)]
+fn eval_fast_number_function(
+    function: FastNumberFunction,
+    mut arg: f64,
+    angle_degrees: bool,
+) -> BasicResult<f64> {
+    Ok(match function {
+        FastNumberFunction::Abs => arg.abs(),
+        FastNumberFunction::Int => arg.floor(),
+        FastNumberFunction::Sqr => {
+            if arg < 0.0 {
+                return Err(BasicError::new(ErrorCode::InvalidArgument));
+            }
+            checked_number(arg.sqrt())?
+        }
+        FastNumberFunction::Sin => {
+            if angle_degrees {
+                arg = arg.to_radians();
+            }
+            arg.sin()
+        }
+        FastNumberFunction::Cos => {
+            if angle_degrees {
+                arg = arg.to_radians();
+            }
+            arg.cos()
+        }
+        function => return eval_extended_fast_number_function(function, arg, angle_degrees),
+    })
 }
 
 #[inline(never)]
@@ -2431,6 +2483,7 @@ pub struct Interpreter {
     line_numbers_cache: Rc<[i32]>,
     line_labels: HashMap<(String, String), i32>,
     label_generation: u64,
+    symbolic_callbacks: HashMap<CallbackId, SymbolicCallback>,
     compiling_line: Option<i32>,
     next_after_for_cache: HashMap<Cursor, Cursor>,
     wend_after_while_cache: HashMap<Cursor, Cursor>,
@@ -2557,6 +2610,7 @@ impl Interpreter {
             line_numbers_cache: Rc::from(Vec::<i32>::new().into_boxed_slice()),
             line_labels: HashMap::new(),
             label_generation: 0,
+            symbolic_callbacks: HashMap::new(),
             compiling_line: None,
             next_after_for_cache: HashMap::new(),
             wend_after_while_cache: HashMap::new(),
@@ -3165,7 +3219,8 @@ impl Interpreter {
             return Ok(true);
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "LIST") {
-            self.output.push_str(&self.render_program_list_range(arg)?);
+            let listing = self.render_program_list_range(arg)?;
+            self.output.push_str(&listing);
             return Ok(true);
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "FILES") {
@@ -3259,8 +3314,11 @@ impl Interpreter {
             }
             if let Some(span) = metadata.source_span() {
                 let text = &source[span];
-                let text = if matches!(command.as_ref(), CachedCommand::GotoConst { .. })
-                    && text.trim().parse::<i32>().is_ok()
+                let text = if matches!(
+                    command.as_ref(),
+                    CachedCommand::GotoConst { .. } | CachedCommand::Symbolic(_)
+                ) && (text.trim().parse::<i32>().is_ok()
+                    || crate::labels::label_identifier(text.trim()))
                 {
                     format!("GOTO {text}")
                 } else {
@@ -3336,6 +3394,8 @@ impl Interpreter {
             None
         } else if let Some(line) = parse_line_number_literal(arg) {
             Some(line)
+        } else if crate::labels::label_identifier(arg) {
+            Some(self.line_reference(arg, true, ErrorCode::InvalidLineNumber)?)
         } else {
             let _ = self.resolve_bas_literal_arg(arg)?;
             None
@@ -3347,19 +3407,7 @@ impl Interpreter {
     }
 
     fn execute_immediate_goto(&mut self, arg: &str) -> BasicResult<()> {
-        let line = if crate::labels::label_identifier(arg.trim()) {
-            self.ensure_routine_catalog()?;
-            *self
-                .line_labels
-                .get(&("root".to_string(), arg.trim().to_ascii_uppercase()))
-                .ok_or_else(|| {
-                    BasicError::new(ErrorCode::TargetLineNotFound)
-                        .with_detail(format!("Undefined label '{}' in scope root", arg.trim()))
-                })?
-        } else {
-            parse_line_number_literal(arg.trim())
-                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?
-        };
+        let line = self.line_reference(arg, true, ErrorCode::InvalidLineNumber)?;
         if self.command_cache.is_empty() || self.compiled_command_cache.is_empty() {
             self.rebuild_command_cache();
         }
@@ -3392,6 +3440,184 @@ impl Interpreter {
         Ok(())
     }
 
+    fn known_label(&mut self, source: &str, root: bool) -> BasicResult<Option<i32>> {
+        let name = source.trim();
+        if !crate::labels::label_identifier(name) {
+            return Ok(None);
+        }
+        if root && !self.routines_prepared {
+            return self.root_tool_label(name);
+        }
+        self.ensure_routine_catalog()?;
+        let scope = if root {
+            "root".to_string()
+        } else {
+            self.current_line
+                .map_or_else(|| "root".to_string(), |line| self.label_scope(line))
+        };
+        Ok(self
+            .line_labels
+            .get(&(scope, name.to_ascii_uppercase()))
+            .copied())
+    }
+
+    fn root_tool_label(&self, name: &str) -> BasicResult<Option<i32>> {
+        // LIST/EDIT/DELETE must remain usable while an unrelated jump or a
+        // routine body is unfinished. Discover lexical ownership without
+        // executing or validating the program's control-flow destinations.
+        let mut routines = Vec::new();
+        let mut found = None;
+        for line in self.program.line_numbers() {
+            let source = self.program.get(line).unwrap_or("");
+            if routines.is_empty()
+                && crate::labels::label_definition(source)
+                    .is_some_and(|label| label.eq_ignore_ascii_case(name))
+            {
+                if let Some(previous) = found {
+                    return Err(BasicError::new(ErrorCode::Syntax).at_line(line)
+                        .with_detail(format!("Duplicate label '{name}' in scope root (first declared at line {previous})")));
+                }
+                found = Some(line);
+            }
+            for command in split_commands(source) {
+                let text = command.trim().to_ascii_uppercase();
+                if first_word_is(&text, "DEF") {
+                    let body = text[3..].trim_start();
+                    if first_word_is(body, "SUB") {
+                        routines.push("SUB");
+                    } else if body.starts_with("FN") && !body.contains('=') {
+                        routines.push("FN");
+                    }
+                } else if text == "SUBEND" && routines.last() == Some(&"SUB") {
+                    routines.pop();
+                } else if text == "FNEND" && routines.last() == Some(&"FN") {
+                    routines.pop();
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    fn line_reference(&mut self, source: &str, root: bool, invalid: ErrorCode) -> BasicResult<i32> {
+        if let Some(line) = parse_line_number_literal(source) {
+            return Ok(line);
+        }
+        let name = source.trim();
+        if !crate::labels::label_identifier(name) {
+            return Err(self.err(invalid));
+        }
+        self.known_label(name, root)?.ok_or_else(|| {
+            let scope = if root {
+                "root".to_string()
+            } else {
+                self.current_line
+                    .map_or_else(|| "root".to_string(), |line| self.label_scope(line))
+            };
+            self.err(ErrorCode::TargetLineNotFound)
+                .with_detail(format!("Undefined label '{name}' in scope {scope}"))
+        })
+    }
+
+    fn line_range(
+        &mut self,
+        source: &str,
+        single_invalid: ErrorCode,
+        range_invalid: ErrorCode,
+    ) -> BasicResult<LineRangeSpec> {
+        if !source
+            .bytes()
+            .any(|ch| ch.is_ascii_alphabetic() || ch == b'_')
+        {
+            return parse_line_range_spec(source, single_invalid, range_invalid);
+        }
+        if let Some((start, end)) = source.trim().split_once('-') {
+            let start = if start.trim().is_empty() {
+                None
+            } else {
+                Some(self.line_reference(start, true, range_invalid)?)
+            };
+            let end = if end.trim().is_empty() {
+                None
+            } else {
+                Some(self.line_reference(end, true, range_invalid)?)
+            };
+            if start.is_some() && end.is_some() && start > end {
+                return Err(self.err(ErrorCode::InvalidArgument));
+            }
+            Ok(LineRangeSpec::Range(start, end))
+        } else {
+            Ok(LineRangeSpec::Single(self.line_reference(
+                source,
+                true,
+                single_invalid,
+            )?))
+        }
+    }
+
+    fn validate_callback_target(&self, line: i32) -> BasicResult<()> {
+        if self.function_for_line(line).is_some() || self.sub_for_line(line).is_some() {
+            return Err(self.err(ErrorCode::InvalidTargetLine));
+        }
+        Ok(())
+    }
+
+    fn callback_reference(
+        &mut self,
+        key: &CallbackId,
+        source: &str,
+    ) -> BasicResult<(i32, Option<SymbolicCallback>)> {
+        if let Some(line) = parse_line_number_literal(source) {
+            return Ok((line, None));
+        }
+        self.ensure_routine_catalog()?;
+        if let Some(binding) = self.symbolic_callbacks.get(key) {
+            if binding.generation == self.label_generation
+                && binding.name.eq_ignore_ascii_case(source.trim())
+            {
+                return Ok((binding.line, Some(binding.clone())));
+            }
+        }
+        let line = self.line_reference(source, true, ErrorCode::InvalidLineNumber)?;
+        Ok((
+            line,
+            Some(SymbolicCallback {
+                name: source.trim().to_string(),
+                line,
+                generation: self.label_generation,
+            }),
+        ))
+    }
+
+    fn set_callback_binding(&mut self, key: CallbackId, binding: Option<SymbolicCallback>) {
+        if let Some(binding) = binding {
+            self.symbolic_callbacks.insert(key, binding);
+        } else if !self.symbolic_callbacks.is_empty() {
+            self.symbolic_callbacks.remove(&key);
+        }
+    }
+
+    fn callback_target(&mut self, key: &CallbackId, numeric: i32) -> BasicResult<i32> {
+        let Some(binding) = self.symbolic_callbacks.get(key) else {
+            return Ok(numeric);
+        };
+        if binding.generation == self.label_generation {
+            return Ok(binding.line);
+        }
+        let name = binding.name.clone();
+        let line = self.line_reference(&name, true, ErrorCode::InvalidLineNumber)?;
+        self.validate_callback_target(line)?;
+        let generation = self.label_generation;
+        self.symbolic_callbacks.insert(
+            key.clone(),
+            SymbolicCallback {
+                name,
+                line,
+                generation,
+            },
+        );
+        Ok(line)
+    }
+
     fn execute_renum(&mut self, args: &str) -> BasicResult<()> {
         let parts = if args.trim().is_empty() {
             Vec::new()
@@ -3414,12 +3640,12 @@ impl Interpreter {
             10
         };
         let old_start = if let Some(part) = parts.get(2).filter(|part| !part.trim().is_empty()) {
-            parse_line_number_literal(part).ok_or_else(|| self.err(ErrorCode::Syntax))?
+            self.line_reference(part, true, ErrorCode::Syntax)?
         } else {
             0
         };
         let old_end = if let Some(part) = parts.get(3).filter(|part| !part.trim().is_empty()) {
-            Some(parse_line_number_literal(part).ok_or_else(|| self.err(ErrorCode::Syntax))?)
+            Some(self.line_reference(part, true, ErrorCode::Syntax)?)
         } else {
             None
         };
@@ -3587,7 +3813,7 @@ impl Interpreter {
             self.invalidate_continuation_after_program_change();
             return Ok(());
         }
-        let range = parse_line_range_spec(trimmed, ErrorCode::Syntax, ErrorCode::InvalidArgument)?;
+        let range = self.line_range(trimmed, ErrorCode::Syntax, ErrorCode::InvalidArgument)?;
         let lines = self.program.line_numbers();
         if let LineRangeSpec::Single(line) = range {
             if !lines.contains(&line) {
@@ -3657,8 +3883,7 @@ impl Interpreter {
     }
 
     fn execute_edit_line(&mut self, args: &str) -> BasicResult<()> {
-        let line =
-            parse_line_number_literal(args).ok_or_else(|| self.err(ErrorCode::InvalidArgument))?;
+        let line = self.line_reference(args, true, ErrorCode::InvalidArgument)?;
         let Some(code) = self.program.get(line) else {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         };
@@ -3897,6 +4122,7 @@ impl Interpreter {
         self.if_gosub_base = 0;
         self.pending_if_branch = None;
         self.timers.clear();
+        self.symbolic_callbacks.clear();
         self.timer_isr_stack.clear();
         self.timer_isr_markers.clear();
         if let Some(state) = self.debugger_state.as_mut() {
@@ -4007,6 +4233,8 @@ impl Interpreter {
             }
             if matches!(result, Ok(RunOutcome::End)) {
                 self.sound_handlers = [None; 3];
+                self.symbolic_callbacks
+                    .retain(|key, _| !matches!(key, CallbackId::Sound(_)));
                 self.has_sound_handlers = false;
                 self.sound_poll_forced = false;
                 self.sound_isr_markers.clear();
@@ -5753,12 +5981,41 @@ impl Interpreter {
             CachedCommand::Noop => Ok(()),
             CachedCommand::Symbolic(symbolic) => {
                 self.ensure_routine_catalog()?;
+                // A current simple jump already contains its resolved number
+                // and optional cursor. Copy these small values before mutating
+                // the interpreter instead of cloning its Rc and redispatching.
+                let cached_jump = {
+                    let bound = symbolic.bound.borrow();
+                    bound.as_ref().and_then(|(generation, _, command)| {
+                        if *generation != self.label_generation {
+                            return None;
+                        }
+                        match command.as_ref() {
+                            CachedCommand::GotoConst { line, target } => {
+                                Some((*line, *target, false))
+                            }
+                            CachedCommand::GosubConst { line, target } => {
+                                Some((*line, *target, true))
+                            }
+                            _ => None,
+                        }
+                    })
+                };
+                if let Some((line, target, gosub)) = cached_jump {
+                    if gosub {
+                        self.push_gosub_return(Cursor {
+                            line_idx: cursor.line_idx,
+                            cmd_idx: cursor.cmd_idx + 1,
+                        });
+                    }
+                    return self.jump_to_cached_line_checked(line, target.as_ref(), cursor, gosub);
+                }
                 let bound = self.bind_symbolic_command(symbolic)?;
                 self.execute_cached_command(&bound, cursor, line_commands)?;
                 if symbolic
                     .source
-                    .to_ascii_uppercase()
-                    .starts_with("ON ERROR GOTO ")
+                    .get(..14)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ON ERROR GOTO "))
                     && self.current_routine_error_scope().is_none()
                 {
                     self.root_label_handler = Some(symbolic.source[14..].trim().to_string());
@@ -7123,7 +7380,7 @@ impl Interpreter {
     ) -> BasicResult<f64> {
         debug_assert!(self.active_functions.is_empty() || !self.function_call_stack.is_empty());
         if self.function_call_stack.is_empty() {
-            return Ok(self.numeric_variables.get_cached(name, slot).unwrap_or(0.0));
+            return Ok(self.numeric_variables.get_cached_or_zero(name, slot));
         }
         self.get_cached_fn_number_variable(name, slot)
     }
@@ -8500,7 +8757,10 @@ impl Interpreter {
         if selected.is_empty() {
             return Ok(());
         }
-        if let Ok(line) = selected.trim().parse::<i32>() {
+        if selected.trim().parse::<i32>().is_ok()
+            || crate::labels::label_identifier(selected.trim())
+        {
+            let line = self.line_reference(selected.trim(), false, ErrorCode::InvalidLineNumber)?;
             return self.jump_to_line(line, cursor);
         }
         let subcommands = split_commands(selected);
@@ -8559,7 +8819,8 @@ impl Interpreter {
             });
             return Ok(());
         }
-        if let Ok(line) = rest.parse::<i32>() {
+        if rest.parse::<i32>().is_ok() || crate::labels::label_identifier(rest) {
+            let line = self.line_reference(rest, false, ErrorCode::InvalidLineNumber)?;
             return self.jump_to_line(line, cursor);
         }
         let subcommands = split_commands(rest);
@@ -8728,8 +8989,11 @@ impl Interpreter {
             return Ok(());
         }
 
-        let target = parse_line_number_literal(&targets[selector as usize - 1])
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let target = self.line_reference(
+            &targets[selector as usize - 1],
+            false,
+            ErrorCode::InvalidLineNumber,
+        )?;
         if kind == "GOSUB" {
             self.push_gosub_return(Cursor {
                 line_idx: cursor.line_idx,
@@ -8761,9 +9025,10 @@ impl Interpreter {
         if target_expr.is_empty() {
             return Err(self.err(ErrorCode::Syntax));
         }
-        let target_line = parse_line_number_literal(target_expr)
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let key = CallbackId::Mouse(event.to_string());
+        let (target_line, binding) = self.callback_reference(&key, target_expr)?;
         if target_line == 0 {
+            self.set_callback_binding(key, None);
             self.mouse_handlers.remove(event);
             self.mouse_event_queue
                 .retain(|queued_event| queued_event != event);
@@ -8775,6 +9040,10 @@ impl Interpreter {
         if self.line_index(target_line).is_none() {
             return Err(self.err(ErrorCode::TargetLineNotFound));
         }
+        if binding.is_some() {
+            self.validate_callback_target(target_line)?;
+        }
+        self.set_callback_binding(key, binding);
         self.mouse_handlers.insert(event.to_string(), target_line);
         self.mouse_event_queue
             .retain(|queued_event| queued_event != event);
@@ -8789,8 +9058,7 @@ impl Interpreter {
     }
 
     fn execute_inline_gosub(&mut self, target_expr: &str, mouse_event: bool) -> BasicResult<()> {
-        let line = parse_line_number_literal(target_expr)
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let line = self.line_reference(target_expr, false, ErrorCode::InvalidLineNumber)?;
         self.execute_inline_gosub_line(line, mouse_event, None)
     }
 
@@ -8876,8 +9144,8 @@ impl Interpreter {
         let return_cmd_idx = cursor.cmd_idx + 1;
         let old_lines = self.line_numbers_cache.clone();
         let result = if first_word_is(command, "GOSUB") {
-            let line = parse_line_number_literal(command[5..].trim())
-                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+            let line =
+                self.line_reference(command[5..].trim(), false, ErrorCode::InvalidLineNumber)?;
             self.execute_inline_gosub_line(line, false, Some((return_line, return_cmd_idx)))
         } else {
             self.execute_cached_inline_on_sub_call(command, cursor, return_line, return_cmd_idx)
@@ -8913,8 +9181,11 @@ impl Interpreter {
         if selector <= 0 || selector as usize > targets.len() {
             return Ok(());
         }
-        let line = parse_line_number_literal(&targets[selector as usize - 1])
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let line = self.line_reference(
+            &targets[selector as usize - 1],
+            false,
+            ErrorCode::InvalidLineNumber,
+        )?;
         self.execute_inline_gosub_line(line, false, Some((return_line, return_cmd_idx)))
     }
 
@@ -8931,8 +9202,8 @@ impl Interpreter {
                 return Ok(());
             }
             if starts_keyword(&upper, "GOTO") {
-                let line = parse_line_number_literal(tail[4..].trim())
-                    .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+                let line =
+                    self.line_reference(tail[4..].trim(), false, ErrorCode::InvalidLineNumber)?;
                 if line != 0 {
                     if self.line_index(line).is_none() {
                         return Err(self.err(ErrorCode::TargetLineNotFound));
@@ -8958,8 +9229,7 @@ impl Interpreter {
         }
         if starts_keyword(&upper, "GOTO") {
             let target = tail[4..].trim();
-            let line = parse_line_number_literal(target)
-                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+            let line = self.line_reference(target, false, ErrorCode::InvalidLineNumber)?;
             if line == 0 {
                 self.root_label_handler = None;
                 self.error_handler_line = None;
@@ -9014,8 +9284,7 @@ impl Interpreter {
             let target = if arg.is_empty() || arg == "0" || arg.eq_ignore_ascii_case("NEXT") {
                 None
             } else {
-                let line = parse_line_number_literal(arg)
-                    .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+                let line = self.line_reference(arg, false, ErrorCode::InvalidLineNumber)?;
                 if self.line_index(line).is_none() {
                     return Err(self.err(ErrorCode::TargetLineNotFound));
                 }
@@ -9068,8 +9337,7 @@ impl Interpreter {
             *cursor = state.next;
             self.return_line_plan = state.plan.clone();
         } else {
-            let line = parse_line_number_literal(arg)
-                .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+            let line = self.line_reference(arg, false, ErrorCode::InvalidLineNumber)?;
             self.jump_to_line_for_resume(line, cursor)?;
         }
         self.handling_error = false;
@@ -10714,12 +10982,21 @@ impl Interpreter {
             return Err(self.err(ErrorCode::Syntax));
         };
         let before = args[..pos].trim();
-        let target = parse_line_number_literal(&args[pos + 7..])
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
-        let Some(target_cursor) = self.cursor_for_line(target) else {
-            return Err(self.err(ErrorCode::TargetLineNotFound));
+        let target_source = args[pos + 7..].trim();
+        let numeric_target = parse_line_number_literal(target_source);
+        let symbolic_target = numeric_target.is_none();
+        let target = if let Some(line) = numeric_target {
+            line
+        } else {
+            self.line_reference(target_source, true, ErrorCode::InvalidLineNumber)?
         };
+        let target_cursor = self
+            .cursor_for_line(target)
+            .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?;
         self.validate_function_jump(target, &target_cursor, true)?;
+        if symbolic_target {
+            self.validate_callback_target(target)?;
+        }
         let parts = split_arguments(before);
         if parts.is_empty() || parts.len() > 2 {
             return Err(self.err(ErrorCode::ArgumentMismatch));
@@ -10733,6 +11010,13 @@ impl Interpreter {
         if !(0..=3).contains(&timer_no) {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
+        let key = CallbackId::Timer(timer_no);
+        let binding = symbolic_target.then(|| SymbolicCallback {
+            name: target_source.to_string(),
+            line: target,
+            generation: self.label_generation,
+        });
+        self.set_callback_binding(key, binding);
         let interval = Duration::from_millis((ticks as u64).saturating_mul(20));
         self.timers.retain(|timer| timer.number != timer_no);
         self.timers.push(BasicTimer {
@@ -10756,6 +11040,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
         self.timers.retain(|timer| timer.number != timer_no);
+        self.set_callback_binding(CallbackId::Timer(timer_no), None);
         Ok(())
     }
 
@@ -10786,7 +11071,8 @@ impl Interpreter {
             return self.process_sound_events(cursor);
         };
         let priority = self.timers[index].number;
-        let target = self.timers[index].target;
+        let target =
+            self.callback_target(&CallbackId::Timer(priority), self.timers[index].target)?;
         if self.timers[index].repeat {
             if self.timers[index].interval.is_zero() {
                 self.timers[index].next_fire = now + Duration::from_micros(100);
@@ -10888,6 +11174,18 @@ impl Interpreter {
     }
 
     fn symbolic_command(&self, source: &str, inline_sub_call: bool) -> Option<CachedCommand> {
+        // Transfers load another catalog, and prompt tools resolve their operands
+        // only when invoked. Keep this wrapper on actual runtime destinations.
+        if !matches!(
+            source
+                .split_whitespace()
+                .next()?
+                .to_ascii_uppercase()
+                .as_str(),
+            "GOTO" | "GOSUB" | "RESUME" | "ON" | "AFTER" | "EVERY"
+        ) {
+            return None;
+        }
         if !crate::labels::target_ranges(source)
             .iter()
             .any(|range| crate::labels::label_identifier(&source[range.clone()]))
@@ -10913,12 +11211,17 @@ impl Interpreter {
         }
         // Retained tails keep the lexical scope from their initial preparation,
         // even when MERGE deletes or replaces their original numbered line.
-        let scope = symbolic
-            .bound
-            .borrow()
-            .as_ref()
-            .map(|(_, scope, _)| scope.clone())
-            .unwrap_or_else(|| self.label_scope(symbolic.line));
+        let scope = if crate::labels::global_target(&symbolic.source) {
+            "root".to_string()
+        } else {
+            symbolic
+                .bound
+                .borrow()
+                .as_ref()
+                .map(|(_, scope, _)| scope.clone())
+                .unwrap_or_else(|| self.label_scope(symbolic.line))
+        };
+        let callback = crate::labels::global_target(&symbolic.source);
         let mut resolved = symbolic.source.to_string();
         for range in crate::labels::target_ranges(&symbolic.source)
             .into_iter()
@@ -10928,7 +11231,7 @@ impl Interpreter {
             if !crate::labels::label_identifier(name) {
                 continue;
             }
-            let Some(line) = self
+            let Some(&line) = self
                 .line_labels
                 .get(&(scope.clone(), name.to_ascii_uppercase()))
             else {
@@ -10936,10 +11239,18 @@ impl Interpreter {
                     .with_detail(format!("Undefined label '{name}' in scope {scope}"))
                     .at_line(symbolic.line));
             };
+            if callback {
+                // The callback retains the name, not just this registration's
+                // number, so an armed handler can rebind after MERGE/RENUM.
+                self.validate_callback_target(line)?;
+                continue;
+            }
             resolved.replace_range(range, &line.to_string());
         }
         let command = Rc::new(if symbolic.inline_sub_call {
             CachedCommand::InlineSubCall(Rc::from(resolved))
+        } else if resolved == symbolic.source.as_ref() {
+            CachedCommand::Raw(Rc::from(resolved))
         } else {
             self.compile_cached_command(&resolved)
         });
@@ -11908,6 +12219,7 @@ impl Interpreter {
         let Some(target) = self.mouse_handlers.get(&event).copied() else {
             return Ok(());
         };
+        let target = self.callback_target(&CallbackId::Mouse(event.clone()), target)?;
         self.handling_mouse_event = true;
         let result = self.execute_inline_gosub(&target.to_string(), true);
         self.handling_mouse_event = false;
@@ -13123,11 +13435,9 @@ impl Interpreter {
             return Err(self.err(ErrorCode::Syntax));
         }
         let path = self.resolve_bas_path_expr(&parts[0])?;
-        let entry = parts
-            .get(1)
-            .map(|part| self.eval_number(part).map(|n| n as i32))
-            .transpose()?;
+        let entry = self.prepare_transfer_entry(parts.get(1))?;
         self.load_file_preserving_runtime(&path)?;
+        let entry = self.resolve_transfer_entry(entry)?;
         let line_idx = if let Some(line) = entry {
             self.line_index(line)
                 .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?
@@ -13153,21 +13463,38 @@ impl Interpreter {
             return Err(self.err(ErrorCode::Syntax));
         }
         let path = self.resolve_bas_path_expr(&parts[0])?;
-        let entry = parts
-            .get(1)
-            .map(|part| self.eval_number(part).map(|n| n as i32))
-            .transpose()?;
+        let entry = self.prepare_transfer_entry(parts.get(1))?;
         let text = read_validated_program_text(&path)?;
         let text = self.normalize_merged_program_text(&text)?;
+        let mut deletions = Vec::new();
         for part in parts.iter().skip(2) {
             let trimmed = part.trim();
             if starts_keyword(&trimmed.to_ascii_uppercase(), "DELETE") {
                 let range = trimmed[6..].trim();
-                let (start, end) = parse_delete_range(range)?;
-                self.program.delete_range(start, end);
-                self.remove_program_breakpoints(start, end);
-                self.invalidate_continuation_after_program_change();
+                let pair = if range
+                    .bytes()
+                    .any(|ch| ch.is_ascii_alphabetic() || ch == b'_')
+                {
+                    if let Some((start, end)) = range.split_once('-') {
+                        let start =
+                            self.line_reference(start, true, ErrorCode::InvalidLineNumber)?;
+                        let end = self.line_reference(end, true, ErrorCode::InvalidLineNumber)?;
+                        (start.min(end), start.max(end))
+                    } else {
+                        let line =
+                            self.line_reference(range, true, ErrorCode::InvalidLineNumber)?;
+                        (line, line)
+                    }
+                } else {
+                    parse_delete_range(range)?
+                };
+                deletions.push(pair);
             }
+        }
+        for (start, end) in deletions {
+            self.program.delete_range(start, end);
+            self.remove_program_breakpoints(start, end);
+            self.invalidate_continuation_after_program_change();
         }
         self.program.merge_text(&text)?;
         self.refresh_identifier_case_from_program();
@@ -13176,6 +13503,7 @@ impl Interpreter {
         self.rebuild_command_cache();
         self.ensure_routine_catalog()?;
         self.expression_cache.clear();
+        let entry = self.resolve_transfer_entry(entry)?;
         let line_idx = if let Some(line) = entry {
             self.line_index(line)
                 .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?
@@ -13193,6 +13521,37 @@ impl Interpreter {
         self.reset_control_for_chain();
         self.restart_run_loop = true;
         Ok(())
+    }
+
+    fn prepare_transfer_entry(
+        &mut self,
+        source: Option<&String>,
+    ) -> BasicResult<Option<TransferEntry>> {
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let label =
+            crate::labels::label_identifier(source.trim()).then(|| source.trim().to_string());
+        let numeric = self.eval_number(source).map(|value| value as i32);
+        if label.is_none() {
+            return numeric.map(|line| {
+                Some(TransferEntry {
+                    label: None,
+                    numeric: Ok(line),
+                })
+            });
+        }
+        Ok(Some(TransferEntry { label, numeric }))
+    }
+
+    fn resolve_transfer_entry(&mut self, entry: Option<TransferEntry>) -> BasicResult<Option<i32>> {
+        let Some(entry) = entry else { return Ok(None) };
+        if let Some(name) = entry.label {
+            if let Some(line) = self.known_label(&name, true)? {
+                return Ok(Some(line));
+            }
+        }
+        entry.numeric.map(Some)
     }
 
     fn load_file_preserving_runtime(&mut self, path: &Path) -> BasicResult<()> {
@@ -13228,6 +13587,7 @@ impl Interpreter {
         self.if_gosub_base = 0;
         self.pending_if_branch = None;
         self.timers.clear();
+        self.symbolic_callbacks.clear();
         self.timer_isr_stack.clear();
         self.timer_isr_markers.clear();
         self.current_interrupt_priority = -1;
@@ -13260,14 +13620,12 @@ impl Interpreter {
     }
 
     fn jump_to(&mut self, target_expr: &str, cursor: &mut Cursor) -> BasicResult<()> {
-        let line = parse_line_number_literal(target_expr)
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let line = self.line_reference(target_expr, false, ErrorCode::InvalidLineNumber)?;
         self.jump_to_line_checked(line, cursor, false)
     }
 
     fn jump_to_gosub(&mut self, target_expr: &str, cursor: &mut Cursor) -> BasicResult<()> {
-        let line = parse_line_number_literal(target_expr)
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let line = self.line_reference(target_expr, false, ErrorCode::InvalidLineNumber)?;
         self.jump_to_line_checked(line, cursor, true)
     }
 
@@ -13756,8 +14114,8 @@ impl Interpreter {
         let mut start = 0usize;
         if let Some(first_range) = subcommand_ranges.first() {
             let first = &branch[first_range.clone()];
-            if let Ok(line) = first.parse::<i32>() {
-                let goto = format!("GOTO {line}");
+            if first.parse::<i32>().is_ok() || crate::labels::label_identifier(first) {
+                let goto = format!("GOTO {first}");
                 compiled.push(Rc::new(self.compile_cached_command(&goto)));
                 Self::push_visible_execution_metadata(
                     sources,
@@ -14302,12 +14660,12 @@ impl Interpreter {
         }
     }
 
-    fn render_program_list_range(&self, args: &str) -> BasicResult<String> {
+    fn render_program_list_range(&mut self, args: &str) -> BasicResult<String> {
         let lines = self.program.line_numbers();
         if args.trim().is_empty() {
             return Ok(self.render_program_lines(lines));
         }
-        let range = parse_line_range_spec(args, ErrorCode::Syntax, ErrorCode::TypeMismatch)?;
+        let range = self.line_range(args, ErrorCode::Syntax, ErrorCode::TypeMismatch)?;
         if let LineRangeSpec::Single(line) = range {
             if !lines.contains(&line) {
                 return Err(self.err(ErrorCode::TargetLineNotFound));
@@ -17466,7 +17824,13 @@ mod interpreter_tests {
             let expr = compile_expression(&source).unwrap();
             assert!(
                 matches!(
-                    compile_fast_number_expr(&expr, true),
+                    compile_fast_number_expr(&expr, true).map(|node| match node {
+                        FastNumberExpr::FunctionLeaf(node) => FastNumberExpr::Function1 {
+                            function: node.function(),
+                            arg: Box::new(FastNumberExpr::Number(0.0)),
+                        },
+                        node => node,
+                    }),
                     Some(FastNumberExpr::Function1 {
                         function: FastNumberFunction::Abs
                             | FastNumberFunction::Int
@@ -17488,7 +17852,13 @@ mod interpreter_tests {
             let expr = compile_expression(&source).unwrap();
             assert!(
                 matches!(
-                    compile_fast_number_expr(&expr, true),
+                    compile_fast_number_expr(&expr, true).map(|node| match node {
+                        FastNumberExpr::FunctionLeaf(node) => FastNumberExpr::Function1 {
+                            function: node.function(),
+                            arg: Box::new(FastNumberExpr::Number(0.0)),
+                        },
+                        node => node,
+                    }),
                     Some(FastNumberExpr::Function1 {
                         function: FastNumberFunction::Fix
                             | FastNumberFunction::Sgn
@@ -17857,6 +18227,166 @@ mod interpreter_tests {
         interp.graphics.set_scale(None).unwrap();
         assert_eq!(interp.eval_number("MOUSEX").unwrap(), 49.0);
         assert_eq!(interp.eval_number("MOUSEY").unwrap(), 127.0);
+    }
+
+    #[test]
+    fn numeric_zero_slot_reads_keep_presence_and_signed_values() {
+        let cache = CachedNumericSlot::default();
+        let mut variables = NumericVariables::default();
+        assert_eq!(variables.get_cached_or_zero("A", &cache).to_bits(), 0);
+        assert_eq!(variables.get_cached("A", &cache), None);
+        assert!(!variables.contains_key("A"));
+
+        let index = cache.index.get();
+        for bits in [
+            (-0.0_f64).to_bits(),
+            0x7ff8_0000_0000_0042,
+            7.5_f64.to_bits(),
+        ] {
+            let value = f64::from_bits(bits);
+            variables.insert_cached("A", &cache, value);
+            assert_eq!(variables.get_cached_or_zero("A", &cache).to_bits(), bits);
+            assert_eq!(variables.get_resolved_or_zero(index).to_bits(), bits);
+            assert_eq!(variables.remove("A").unwrap().to_bits(), bits);
+            assert_eq!(variables.get_cached_or_zero("A", &cache).to_bits(), 0);
+            assert_eq!(variables.get_resolved_or_zero(index).to_bits(), 0);
+            assert_eq!(variables.get_cached("A", &cache), None);
+            assert_eq!(variables.remove("A"), None);
+        }
+
+        // NEXT and self-updates have separate absent-variable behavior: an
+        // absent slot receives the delta itself, including its negative zero.
+        assert_eq!(
+            variables.add_to_slot(index, -0.0).to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert!(variables.contains_key("A"));
+    }
+
+    #[test]
+    fn numeric_zero_slot_reads_follow_local_restore_and_clear() {
+        let expression = compile_number_expression("A").unwrap();
+        let mut interp = Interpreter::new();
+        interp.numeric_variables.insert("A".to_string(), -0.0);
+        assert_eq!(
+            expression.eval(&mut interp).unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
+
+        let specs = [LocalSpec::Scalar("A".to_string())];
+        let mut saved_numeric = Vec::new();
+        let mut saved_string = Vec::new();
+        let mut saved_arrays = Vec::new();
+        let mut saved_aliases = Vec::new();
+        interp
+            .bind_local_specs_vec(
+                &specs,
+                &mut saved_numeric,
+                &mut saved_string,
+                &mut saved_arrays,
+                &mut saved_aliases,
+            )
+            .unwrap();
+        assert_eq!(expression.eval(&mut interp).unwrap().to_bits(), 0);
+        assert_eq!(interp.numeric_variables.get("A"), Some(&0.0));
+        interp.numeric_variables.insert("A".to_string(), 91.0);
+        restore_numeric_bindings_ref(&mut interp.numeric_variables, saved_numeric);
+        assert_eq!(
+            expression.eval(&mut interp).unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
+
+        restore_numeric_bindings_ref(&mut interp.numeric_variables, vec![("A", None)]);
+        assert_eq!(expression.eval(&mut interp).unwrap().to_bits(), 0);
+        assert_eq!(interp.numeric_variables.get("A"), None);
+        interp.process_immediate("A=42").unwrap();
+        assert_eq!(expression.eval(&mut interp).unwrap(), 42.0);
+        interp.process_immediate("CLEAR").unwrap();
+        assert_eq!(expression.eval(&mut interp).unwrap().to_bits(), 0);
+        assert_eq!(interp.numeric_variables.get("A"), None);
+    }
+
+    #[test]
+    fn numeric_zero_slot_failed_assignments_preserve_rng_and_first_error() {
+        let (optimized, reference) = compile_numeric_assignment_pair("RESULT=ABSENT+RND+A(3)");
+        let prepare = || {
+            let mut interp = Interpreter::new();
+            interp.current_line = Some(40);
+            interp.numeric_variables.insert("RESULT".to_string(), 73.0);
+            interp.numeric_variables.insert("ABSENT".to_string(), 99.0);
+            interp.numeric_variables.remove("ABSENT");
+            interp
+                .arrays
+                .insert("A".to_string(), ArrayValue::new("A", vec![2]));
+            interp
+        };
+        let mut fast = prepare();
+        let mut normal = prepare();
+        let fast_error = execute_numeric_assignment_candidate(&mut fast, &optimized).unwrap_err();
+        let normal_error = normal
+            .execute_compiled_assignment(reference.as_ref())
+            .unwrap_err();
+        assert_eq!(fast_error.code, ErrorCode::IndexOutOfRange);
+        assert_eq!(fast_error.line, Some(40));
+        assert_eq!(fast_error.code, normal_error.code);
+        assert_eq!(fast_error.line, normal_error.line);
+        assert_eq!(fast.numeric_variables.get("RESULT"), Some(&73.0));
+        assert_eq!(fast.numeric_variables.get("ABSENT"), None);
+        assert_eq!(fast.rng.next_f64(), normal.rng.next_f64());
+    }
+
+    #[test]
+    fn numeric_direct_1d_bounds_keep_rank_index_type_error_order() {
+        for name in ["A", "A$"] {
+            let mut array = ArrayValue::new(name, vec![2]);
+            for index in [i32::MIN, -1, 3, i32::MAX] {
+                assert_eq!(
+                    array.get_number_direct_1d(index).unwrap_err().code,
+                    ErrorCode::IndexOutOfRange
+                );
+                assert_eq!(
+                    array.set_number_direct_1d(index, 7.0).unwrap_err().code,
+                    ErrorCode::IndexOutOfRange
+                );
+            }
+            for index in [0, 2] {
+                if name.ends_with('$') {
+                    assert_eq!(
+                        array.get_number_direct_1d(index).unwrap_err().code,
+                        ErrorCode::TypeMismatch
+                    );
+                    assert_eq!(
+                        array.set_number_direct_1d(index, 7.0).unwrap_err().code,
+                        ErrorCode::TypeMismatch
+                    );
+                } else {
+                    assert_eq!(array.get_number_direct_1d(index).unwrap().to_bits(), 0);
+                    array.set_number_direct_1d(index, -0.0).unwrap();
+                    assert_eq!(
+                        array.get_number_direct_1d(index).unwrap().to_bits(),
+                        (-0.0_f64).to_bits()
+                    );
+                    assert_eq!(
+                        array.get_number(&[index]).unwrap().to_bits(),
+                        (-0.0_f64).to_bits()
+                    );
+                }
+            }
+            let mut wrong_rank = ArrayValue::new(name, vec![1, 1]);
+            for index in [-1, 0, i32::MAX] {
+                assert_eq!(
+                    wrong_rank.get_number_direct_1d(index).unwrap_err().code,
+                    ErrorCode::InvalidIndex
+                );
+                assert_eq!(
+                    wrong_rank
+                        .set_number_direct_1d(index, 7.0)
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::InvalidIndex
+                );
+            }
+        }
     }
 
     #[test]
@@ -21589,6 +22119,10 @@ fn compile_rect_statement(source: &str, filled: bool) -> BasicResult<CompiledRec
 }
 
 fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
+    compile_fast_number_expr_tree(expr, allow_arrays)
+}
+
+fn compile_fast_number_expr_tree(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
     match expr {
         Expr::Number(value) => Some(FastNumberExpr::Number(*value)),
         Expr::Var(name) => {
@@ -21638,7 +22172,107 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
         {
             let args = args
                 .iter()
-                .map(|arg| compile_fast_number_expr(arg, allow_arrays))
+                .map(|arg| compile_fast_number_expr_tree(arg, allow_arrays))
+                .collect::<Option<Vec<_>>>()?;
+            if name == "MIN" {
+                Some(FastNumberExpr::Min(args))
+            } else {
+                Some(FastNumberExpr::Max(args))
+            }
+        }
+        Expr::ArrayOrCall { name, args, .. } if args.len() == 1 => {
+            let function = match name.as_str() {
+                "ABS" => FastNumberFunction::Abs,
+                "INT" => FastNumberFunction::Int,
+                "SQR" => FastNumberFunction::Sqr,
+                "SIN" => FastNumberFunction::Sin,
+                "COS" => FastNumberFunction::Cos,
+                "FIX" => FastNumberFunction::Fix,
+                "SGN" => FastNumberFunction::Sgn,
+                "FRAC" => FastNumberFunction::Frac,
+                "LOG" => FastNumberFunction::Log,
+                "LOG10" => FastNumberFunction::Log10,
+                "EXP" => FastNumberFunction::Exp,
+                "TAN" => FastNumberFunction::Tan,
+                "ASN" => FastNumberFunction::Asn,
+                "ACS" => FastNumberFunction::Acs,
+                "ATN" => FastNumberFunction::Atn,
+                "COT" => FastNumberFunction::Cot,
+                "RTD" => FastNumberFunction::Rtd,
+                "DTR" => FastNumberFunction::Dtr,
+                "ROUND" => FastNumberFunction::Round,
+                _ => return None,
+            };
+            Some(fused_leaves::function(
+                function,
+                compile_fast_number_expr_tree(&args[0], allow_arrays)?,
+            ))
+        }
+        Expr::Unary { op, expr } => Some(fused_leaves::unary(
+            *op,
+            compile_fast_number_expr_tree(expr, allow_arrays)?,
+        )),
+        Expr::Binary { op, left, right } => {
+            let left = compile_fast_number_expr_tree(left, allow_arrays)?;
+            let right = compile_fast_number_expr_tree(right, allow_arrays)?;
+            Some(fused_leaves::binary(*op, left, right))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn compile_fast_number_expr_unfused(expr: &Expr, allow_arrays: bool) -> Option<FastNumberExpr> {
+    match expr {
+        Expr::Number(value) => Some(FastNumberExpr::Number(*value)),
+        Expr::Var(name) => {
+            if is_pi_constant_name(name) {
+                Some(FastNumberExpr::Number(std::f64::consts::PI))
+            } else if name == "INF" {
+                Some(FastNumberExpr::Number(f64::INFINITY))
+            } else if let Some(function) = compile_fast_zero_arg_function(name) {
+                Some(FastNumberExpr::Function0(function))
+            } else if !name.ends_with('$') && !name.starts_with("FN") && !is_zero_arg_function(name)
+            {
+                Some(FastNumberExpr::Var {
+                    name: name.clone(),
+                    slot: CachedNumericSlot::default(),
+                })
+            } else {
+                None
+            }
+        }
+        Expr::ArrayOrCall { name, args, .. } if args.is_empty() => {
+            if is_pi_constant_name(name) {
+                Some(FastNumberExpr::Number(std::f64::consts::PI))
+            } else {
+                compile_fast_zero_arg_function(name).map(FastNumberExpr::Function0)
+            }
+        }
+        Expr::ArrayOrCall { name, args, kind }
+            if allow_arrays && !name.ends_with('$') && *kind == ArrayOrCallKind::Array =>
+        {
+            match args.as_slice() {
+                [index] => Some(FastNumberExpr::Array1 {
+                    name: name.clone(),
+                    slot: CachedArraySlot::default(),
+                    index: Box::new(compile_fast_index_expr(index, allow_arrays)?),
+                }),
+                [index0, index1] => Some(FastNumberExpr::Array2 {
+                    name: name.clone(),
+                    slot: CachedArraySlot::default(),
+                    index0: Box::new(compile_fast_index_expr(index0, allow_arrays)?),
+                    index1: Box::new(compile_fast_index_expr(index1, allow_arrays)?),
+                }),
+                _ => None,
+            }
+        }
+        Expr::ArrayOrCall { name, args, .. }
+            if !args.is_empty() && matches!(name.as_str(), "MIN" | "MAX") =>
+        {
+            let args = args
+                .iter()
+                .map(|arg| compile_fast_number_expr_unfused(arg, allow_arrays))
                 .collect::<Option<Vec<_>>>()?;
             if name == "MIN" {
                 Some(FastNumberExpr::Min(args))
@@ -21671,16 +22305,16 @@ fn compile_fast_number_expr(expr: &Expr, allow_arrays: bool) -> Option<FastNumbe
             };
             Some(FastNumberExpr::Function1 {
                 function,
-                arg: Box::new(compile_fast_number_expr(&args[0], allow_arrays)?),
+                arg: Box::new(compile_fast_number_expr_unfused(&args[0], allow_arrays)?),
             })
         }
         Expr::Unary { op, expr } => Some(FastNumberExpr::Unary {
             op: *op,
-            expr: Box::new(compile_fast_number_expr(expr, allow_arrays)?),
+            expr: Box::new(compile_fast_number_expr_unfused(expr, allow_arrays)?),
         }),
         Expr::Binary { op, left, right } => {
-            let left = compile_fast_number_expr(left, allow_arrays)?;
-            let right = compile_fast_number_expr(right, allow_arrays)?;
+            let left = compile_fast_number_expr_unfused(left, allow_arrays)?;
+            let right = compile_fast_number_expr_unfused(right, allow_arrays)?;
             Some(match (left, right) {
                 (FastNumberExpr::Number(constant), expr) => FastNumberExpr::BinaryConst {
                     op: *op,
@@ -21718,6 +22352,8 @@ fn compile_fast_index_expr(expr: &Expr, allow_arrays: bool) -> Option<FastIndexE
             _ => None,
         };
         let index = match fast {
+            FastNumberExpr::BinaryLeaves(node) => node.into_index(),
+            FastNumberExpr::BinaryConstVariable(node) => node.into_index(),
             FastNumberExpr::Number(value) => FastIndexExpr::Number(value),
             FastNumberExpr::Var { name, slot } => FastIndexExpr::Var { name, slot },
             FastNumberExpr::BinaryConst {
@@ -22263,140 +22899,18 @@ fn print_using_format_expr(item: &str) -> Result<Option<&str>, ()> {
 }
 
 fn renumber_line_references(code: &str, mapping: &HashMap<i32, i32>) -> String {
-    let mut out = String::new();
-    let mut i = 0usize;
-    let mut in_string = false;
-    while i < code.len() {
-        let ch = code[i..].chars().next().unwrap();
-        if ch == '"' {
-            in_string = !in_string;
-            out.push(ch);
-            i += ch.len_utf8();
-            continue;
-        }
-        if !in_string && ch == '\'' {
-            out.push_str(&code[i..]);
-            break;
-        }
-        if !in_string && is_reference_ident_start(ch) {
-            let start = i;
-            i += ch.len_utf8();
-            while i < code.len() {
-                let next = code[i..].chars().next().unwrap();
-                if !is_reference_ident_char(next) {
-                    break;
-                }
-                i += next.len_utf8();
+    let mut result = code.to_string();
+    for range in crate::labels::renumber_target_ranges(code)
+        .into_iter()
+        .rev()
+    {
+        if let Some(old) = parse_line_number_literal(&code[range.clone()]) {
+            if let Some(new) = mapping.get(&old) {
+                result.replace_range(range, &new.to_string());
             }
-            let ident = &code[start..i];
-            out.push_str(ident);
-            if matches!(
-                ident.to_ascii_uppercase().as_str(),
-                "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESTORE" | "RESUME"
-            ) {
-                i = copy_renumbered_line_list(code, i, &mut out, mapping);
-            }
-            continue;
         }
-        out.push(ch);
-        i += ch.len_utf8();
     }
-    out
-}
-
-fn copy_renumbered_line_list(
-    code: &str,
-    mut i: usize,
-    out: &mut String,
-    mapping: &HashMap<i32, i32>,
-) -> usize {
-    loop {
-        while i < code.len() {
-            let ch = code[i..].chars().next().unwrap();
-            if !ch.is_whitespace() {
-                break;
-            }
-            out.push(ch);
-            i += ch.len_utf8();
-        }
-        let number_start = i;
-        if code[i..]
-            .chars()
-            .next()
-            .is_some_and(is_reference_ident_start)
-        {
-            while i < code.len()
-                && code[i..]
-                    .chars()
-                    .next()
-                    .is_some_and(is_reference_ident_char)
-            {
-                i += code[i..].chars().next().unwrap().len_utf8();
-            }
-            let name = &code[number_start..i];
-            if !crate::labels::label_identifier(name) {
-                return number_start;
-            }
-            out.push_str(name);
-            let mut probe = i;
-            while probe < code.len()
-                && code[probe..]
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-            {
-                probe += code[probe..].chars().next().unwrap().len_utf8();
-            }
-            if code[probe..].starts_with(',') {
-                out.push_str(&code[i..probe + 1]);
-                i = probe + 1;
-                continue;
-            }
-            return i;
-        }
-        while i < code.len() {
-            let ch = code[i..].chars().next().unwrap();
-            if !ch.is_ascii_digit() {
-                break;
-            }
-            i += ch.len_utf8();
-        }
-        if number_start == i {
-            return i;
-        }
-        let raw = &code[number_start..i];
-        if let Ok(old) = raw.parse::<i32>() {
-            if let Some(new_no) = mapping.get(&old) {
-                out.push_str(&new_no.to_string());
-            } else {
-                out.push_str(raw);
-            }
-        } else {
-            out.push_str(raw);
-        }
-        let mut probe = i;
-        while probe < code.len() {
-            let ch = code[probe..].chars().next().unwrap();
-            if !ch.is_whitespace() {
-                break;
-            }
-            probe += ch.len_utf8();
-        }
-        if probe < code.len() && code[probe..].starts_with(',') {
-            out.push_str(&code[i..probe + 1]);
-            i = probe + ','.len_utf8();
-            continue;
-        }
-        return i;
-    }
-}
-
-fn is_reference_ident_start(ch: char) -> bool {
-    ch.is_ascii_alphabetic() || ch == '_'
-}
-
-fn is_reference_ident_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+    result
 }
 
 fn wildcard_matches(pattern: &str, text: &str) -> bool {
@@ -23508,5 +24022,150 @@ mod debugger_runtime_tests {
             .refocus_graphics_on_use = true;
         interpreter.prepare_run().unwrap();
         assert!(!interpreter.take_graphics_refocus_after_debug());
+    }
+}
+
+#[cfg(test)]
+mod symbolic_callback_tests {
+    use super::*;
+
+    fn driver() -> Interpreter {
+        let mut i = Interpreter::new();
+        i.program.load_text("10 REM driver\n20 END\n100 Handler:\n110 Hits=Hits+1:RETURN\n200 DEF SUB LocalWork\n210 Handler:\n220 LocalOnly:\n230 RETURN\n240 SUBEND").unwrap();
+        i.rebuild_command_cache();
+        i.ensure_routine_catalog().unwrap();
+        i.current_line = Some(10);
+        i
+    }
+
+    fn move_handler(i: &mut Interpreter) {
+        i.program
+            .merge_text("100 REM moved\n110 REM old body\n300 Handler:\n310 Hits=Hits+1:RETURN")
+            .unwrap();
+        i.clear_command_caches();
+        i.rebuild_command_cache();
+        i.ensure_routine_catalog().unwrap();
+    }
+
+    #[test]
+    fn symbolic_mouse_handler_uses_root_scope_rebinds_and_clears_on_numeric_registration() {
+        let mut i = driver();
+        i.current_line = Some(230); // Register from a SUB with a same-named local label.
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB Handler")
+            .unwrap();
+        assert_eq!(i.mouse_handlers["LEFTDOWN"], 100);
+        assert!(i
+            .execute_on_mouse("ON MOUSE LEFTDOWN GOSUB LocalOnly")
+            .is_err());
+        // Numeric registrations retain their historical validation timing.
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB 210").unwrap();
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB Handler")
+            .unwrap();
+        move_handler(&mut i);
+        i.current_line = Some(10);
+        i.run_depth = 1;
+        i.graphics_window_used_this_run = true;
+        i.mouse_state.event = "LEFTDOWN".to_string();
+        i.process_mouse_event().unwrap();
+        assert_eq!(i.numeric_variables.get("HITS"), Some(&1.0));
+        let key = CallbackId::Mouse("LEFTDOWN".to_string());
+        assert_eq!(i.symbolic_callbacks[&key].line, 300);
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB Handler")
+            .unwrap();
+        i.mouse_event_consumed = false;
+        i.process_mouse_event().unwrap();
+        assert_eq!(i.numeric_variables.get("HITS"), Some(&2.0));
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB 0").unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+        assert!(!i.mouse_handlers.contains_key("LEFTDOWN"));
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB Handler")
+            .unwrap();
+        i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB 300").unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+    }
+
+    #[test]
+    fn armed_symbolic_timer_rebinds_once_and_cancel_removes_its_name() {
+        let mut i = driver();
+        i.execute_timer("0 GOSUB Handler", false).unwrap();
+        move_handler(&mut i);
+        i.current_line = Some(10);
+        i.run_depth = 1;
+        let mut cursor = i.cursor_for_line(20).unwrap();
+        assert!(i.process_timers(&mut cursor).unwrap());
+        assert_eq!(i.line_numbers_cache[cursor.line_idx], 300);
+        i.run_from(cursor).unwrap();
+        assert_eq!(i.numeric_variables.get("HITS"), Some(&1.0));
+        let key = CallbackId::Timer(0);
+        assert_eq!(i.symbolic_callbacks[&key].generation, i.label_generation);
+        i.execute_timer("1 GOSUB Handler", true).unwrap();
+        assert_eq!(i.symbolic_callbacks[&key].line, 300);
+        i.execute_cancel("0").unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+        i.execute_timer("1 GOSUB Handler", false).unwrap();
+        i.execute_timer("1 GOSUB 300", false).unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+        assert_eq!(
+            i.execute_timer("1 GOSUB 0", false).unwrap_err().code,
+            ErrorCode::TargetLineNotFound
+        );
+    }
+
+    #[test]
+    fn symbolic_sound_rebinds_rearms_and_zero_removes_the_binding() {
+        let mut i = driver();
+        i.execute_on_sq("ON SQ(1) GOSUB Handler").unwrap();
+        move_handler(&mut i);
+        i.current_line = Some(10);
+        i.run_depth = 1;
+        let mut cursor = i.cursor_for_line(20).unwrap();
+        assert!(i.process_sound_events(&mut cursor).unwrap());
+        assert_eq!(i.line_numbers_cache[cursor.line_idx], 300);
+        i.run_from(cursor).unwrap();
+        assert_eq!(i.numeric_variables.get("HITS"), Some(&1.0));
+        let key = CallbackId::Sound(0);
+        i.current_line = Some(10);
+        i.execute_on_sq("ON SQ(1) GOSUB Handler").unwrap();
+        assert_eq!(i.symbolic_callbacks[&key].line, 300);
+        i.execute_on_sq("ON SQ(1) GOSUB 0").unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+        assert_eq!(i.sound_handlers[0], None);
+        i.execute_on_sq("ON SQ(1) GOSUB Handler").unwrap();
+        i.execute_on_sq("ON SQ(1) GOSUB 300").unwrap();
+        assert!(!i.symbolic_callbacks.contains_key(&key));
+    }
+
+    #[test]
+    fn missing_armed_names_never_fall_back_to_old_callback_numbers() {
+        for family in 0..3 {
+            let mut i = driver();
+            let key = match family {
+                0 => {
+                    i.execute_timer("1 GOSUB Handler", false).unwrap();
+                    CallbackId::Timer(0)
+                }
+                1 => {
+                    i.execute_on_mouse("ON MOUSE LEFTDOWN GOSUB Handler")
+                        .unwrap();
+                    CallbackId::Mouse("LEFTDOWN".into())
+                }
+                _ => {
+                    i.execute_on_sq("ON SQ(1) GOSUB Handler").unwrap();
+                    CallbackId::Sound(0)
+                }
+            };
+            i.program
+                .add_source_line("100 REM deleted declaration")
+                .unwrap();
+            i.clear_command_caches();
+            i.rebuild_command_cache();
+            i.ensure_routine_catalog().unwrap();
+            let error = i.callback_target(&key, 100).unwrap_err();
+            assert_eq!(error.code, ErrorCode::TargetLineNotFound);
+            assert!(error
+                .detail
+                .unwrap()
+                .contains("Undefined label 'Handler' in scope root"));
+        }
     }
 }

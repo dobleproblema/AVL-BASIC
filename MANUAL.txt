@@ -183,10 +183,16 @@ Names start with an ASCII letter or `_`, followed by ASCII letters, digits or `_
 
 Scopes and destinations
 - Labels in each multiline `DEF SUB` or `DEF FN` belong to that definition; the main program has a separate root scope. The same name may appear in different routines, but cannot be declared twice in one scope.
-- Symbolic destinations are looked up only in the scope of the code using them, never in callers or other routines. They cannot enter a procedure body from outside. Each invocation uses its definition's destinations while retaining its own execution context.
-- Labels are accepted by `GOTO`, `GOSUB`, `ON ERROR GOTO`, `RESUME label`, and `ON expression GOTO/GOSUB` target lists. Lists may mix numbers and labels: `ON N GOTO Start,200,Finished`.
-- An `IF` uses an explicit instruction: `IF X THEN GOTO Finished` or `IF X GOTO Finished`. The shorthand `THEN Finished` is not a jump to a label.
-- `ON ERROR GOTO 0`, `RESUME`, `RESUME 0`, and `RESUME NEXT` retain their special meanings. Other arguments requiring line numbers, such as those of `RUN`, `RESTORE`, `EDIT`, or `DELETE`, retain their numeric syntax.
+- `GOTO`, `GOSUB`, `ON ERROR GOTO`, `RESUME`, and inline `IF` destinations use labels in the current routine's scope, or the root scope outside a routine. They never search callers or other routines. Labels do not allow entering a procedure body from outside.
+- Jump, entry and editing arguments that identify a program line also accept a label; `RESTORE` retains its numeric argument. This includes mixed `ON expression GOTO/GOSUB` lists, timer/mouse/sound handlers, `RUN`, `CHAIN` entry lines, `LIST`, `EDIT`, `DELETE`, range endpoints, and the `from`/`to` bounds of `RENUM`.
+- Inline `IF` accepts both explicit jumps (`IF X THEN GOTO Finished`, `IF X GOTO Finished`) and the shorthand `IF X THEN Finished ELSE Other`. A bare label at the start of either inline branch has the same control-flow behavior as its numeric line-number counterpart.
+- Timer, mouse, and sound-queue handlers are global: symbolic targets of `AFTER`, `EVERY`, `ON MOUSE`, and `ON SQ` always use the root scope, including an `ON MOUSE` registration inside a subroutine. They do not capture a routine's local labels or variables. Registered symbolic handlers keep following the label if `MERGE` or `RENUM` moves it; numeric registrations retain their existing numeric behavior. Existing restrictions on registering timers and sound handlers inside routines remain in force.
+- Immediate commands use root labels. `CHAIN` and `CHAIN MERGE` resolve a symbolic entry line in the resulting program's root scope after loading or merging; a `CHAIN MERGE ... DELETE` range refers to the original program before the file is merged.
+- Special numeric forms retain their meaning: `ON ERROR GOTO 0`, `ON MOUSE ... GOSUB 0`, `ON SQ(...) GOSUB 0`, `RESUME`, `RESUME 0`, and `RESUME NEXT`. `RENUM`'s new starting number and increment remain positive integers, because they create numbers rather than identify existing lines. `CONT`, `DEBUG`, and `RETURN` still take no arguments.
+
+Name ambiguities
+- `RESTORE` accepts a line number or numeric expression, including variables in their ordinary scope. The resulting numeric line must contain `DATA`; it does not resolve a label or search later lines. `RESTORE Name` evaluates the numeric variable even when a label has the same name. Bare `RESTORE` returns to the first value; a target line without data raises error 25.
+- `RUN Name` selects a root label; `RUN "Name"` selects a file. An undefined label raises a target error even if `Name.bas` exists: file names require quotes. Other line-target positions require a complete number or label, not an expression such as `Finished+1`; the historical numeric-expression forms of `RESTORE` and `CHAIN` retain their behavior.
 
 Forward references are allowed: a destination may be declared later in the program. Preparing execution checks declarations, duplicates, and symbolic references, with diagnostics identifying the label and scope. Error propagation does not extend label visibility: the handler catching the error uses its own destinations. `ERL` still returns the numeric line where the error occurred.
 
@@ -238,7 +244,7 @@ Editing and display
 + RESUME line                                                or at the first statement of the indicated line
 
 Quick notes
-- THEN/ELSE accept both line numbers and complete statements.
+- THEN/ELSE accept line numbers, labels in the current scope, and complete statements.
 - The block form is enabled when `IF ... THEN` appears by itself on its line: it ends with `END IF` and may include `ELSEIF`/`ELSE`.
 - `ON ... GOTO/GOSUB` uses 1-based indexing; if the index is out of range, there is no jump.
 - `RESUME` repeats the statement that caused the error; `RESUME NEXT` continues with the next one.
@@ -271,7 +277,7 @@ Change `V=75` to `V=0` or `V=25` to try the other two branches.
 + LET var1[=var2...]=value       LET is optional
 + READ variable-list             Reads values from `DATA` into variables
 + DATA constant-list             Stores constants for sequential `READ` operations
-+ RESTORE [line]                 Resets the `DATA` pointer to the beginning or to the specified DATA line
++ RESTORE [line]                 Resets the `DATA` pointer to the beginning or to a numeric line containing `DATA`
 + SWAP v1,v2                     Swaps values
 + CLEAR                          Clears all variables
 + NEW                            Clears all variables and the current program. Returns the interpreter to its initial state.
@@ -294,7 +300,7 @@ MID$(str$,pos[,len]) = value$   'pos is 1-based
 ```
 
 Quick notes
-- `READ` consumes the constants stored by `DATA` sequentially. Bare `RESTORE` returns to the first value; `RESTORE line` moves to the first value on that exact line, which must contain `DATA` (otherwise error 25).
+- `READ` consumes the constants stored by `DATA` sequentially. Bare `RESTORE` returns to the first value. `RESTORE line` evaluates a numeric argument or expression and requires `DATA` on that exact line; otherwise it raises error 25. Names are numeric variables in their ordinary scope, even when a label has the same name. For example, `DataLine=110:RESTORE DataLine` selects the data on line 110.
 - `CLEAR` clears variables, arrays and functions, resets the `DATA` pointer, and sets angular mode to radians (it does not clear the loaded program).
   * `CLEAR INPUT` empties the keyboard/input buffer without changing variables or the loaded program.
 
@@ -1292,6 +1298,7 @@ Notes
 - Events are generated only when the pointer is over the graphics window and the program is running. There are no global hooks outside the window.
 - `MOUSE` only changes cursor visibility (it does not capture or confine the mouse).
 - Routines registered with `ON MOUSE` are dispatched like interrupts: they respect `DI`/`EI`, are stacked like a `GOSUB`, and must finish with `RETURN`.
+- The target accepts a line number or root label. Even when registered inside a subroutine, it uses the root label namespace and does not capture that invocation's local state.
 - You can change or disable an event at any time. `ON MOUSE ... GOSUB 0` also removes pending activations of the specified event.
 - Combine `LEFTDOWN` + `LEFTDRAG` + `LEFTUP` (or their right-button equivalents) to implement drag selections. `MOVE` emits motion events even when no buttons are pressed.
 
@@ -1331,8 +1338,8 @@ Run these as two separate programs. The first draws rectangles between a left-bu
 
 7. Interrupts
 
-+ AFTER <timer delay>[, <timer number>] GOSUB <line number>  Schedules a one-shot timer interrupt
-+ EVERY <time period>[, <timer number>] GOSUB <line number>  Schedules a repeating timer interrupt
++ AFTER <timer delay>[, <timer number>] GOSUB <line-or-label>  Schedules a one-shot timer interrupt
++ EVERY <time period>[, <timer number>] GOSUB <line-or-label>  Schedules a repeating timer interrupt
 + EI              Enables timer, mouse and sound-queue interrupts previously inhibited with `DI`.
 + DI              Inhibits timer, mouse and sound-queue interrupts; it does not inhibit `CTRL+C` or stop sound playback.
 + CANCEL n        Permanently disables current timer `n`
@@ -1341,6 +1348,7 @@ Run these as two separate programs. The first draws rectangles between a left-bu
 Units and control
 - Time units: `AFTER`/`EVERY` arguments are in 1/50 s "ticks" (0.02 s per tick).
 - Timers: timer number ranges from 0 to 3. The default value is 0.
+- Handler targets accept numeric lines or root labels; they do not use procedure-local labels. Timer delays and timer numbers remain numeric expressions, and timers still cannot be registered inside `DEF FN` or `DEF SUB`.
 - `CANCEL n`: permanently disables the specified timer.
 - `REMAIN(n)`: returns the remaining timer count in ticks (it does not modify the timer).
 
@@ -1411,6 +1419,7 @@ Queue queries and events
 - `SQ(channel)` accepts exactly 1, 2, or 4. Bits 0..2 give the number of free pending slots (0..4); bits 3..5 describe a pending rendezvous; bit 6 indicates a held head note; bit 7 indicates a playing note. The playing, held and rendezvous states are exclusive. An empty idle channel returns 4.
 - `(SQ(1) AND 7)>0` tests whether channel A has queue room. `SQ(1)=4` means all of its notes have finished.
 - `ON SQ(channel) GOSUB line` arms a one-shot event for queue room, including a queue that already has room. Rearm it to receive another event; `ON SQ(channel) GOSUB 0` disables it. The handler must finish with `RETURN` and cannot interrupt itself: rearming inside it takes effect after return.
+- Its target accepts a numeric line or root label. The channel remains a numeric expression; a same-named label in a procedure is not a sound-event target.
 - `ON SQ` is program-only and cannot be registered inside `DEF FN` or `DEF SUB`. It follows `DI`/`EI`; inhibiting callbacks does not pause audio or queue progress. Handlers stop when the program ends; notes already queued continue playing.
 - Queue events are serviced between BASIC instructions, with an ordinary target cadence of 1 ms. Registering or rearming a handler requests service at the next eligible point; from inside its own handler, it waits for `RETURN`. Explicit queue changes and re-enabling interrupts also request immediate service. Long instructions may delay it. Playback and note durations retain their audio clock.
 
@@ -1509,10 +1518,11 @@ Expected output
 + STOP                  Stops execution while keeping the state (current line, stacks and variables) and displays `Line n. Program stopped.` using the interpreter's interruption/error style. This is a status notice, not an error: it does not alter `ERR`/`ERL` or invoke `ON ERROR`. Execution can be resumed with `CONT` from the point where it stopped or, with `GOTO n`, from any line.
 + CONT                  Resumes a program stopped by `STOP` or `CTRL+C`. While the program is stopped, you may change variable values or execute statements in immediate mode. Modifying the stored program cancels the stopped context; use `RUN` after editing. If the interruption was caused by closing a graphics window, `CONT` is not available.
 + END                   Ends the program, leaving pending audio playing. After `END`, or when the program reaches the end without an explicit `END`, `CONT` is no longer possible (it raises error 46) because there is no pending execution to continue.
-+ RUN [line]            If a line number is included, the program runs from that line.
++ RUN [line-or-label]   Starts from the specified numeric line or root label.
 
 Notes
 - `RUN` starts execution with a clean start (state reset). Use `CONT` or `GOTO n` only when you have stopped with `STOP`/`CTRL+C` and want to continue without restarting.
+- `RUN Name` uses a root label; `RUN "Name"` loads a file. A missing label never falls back to a file with the same name. `CONT` takes no target argument and resumes the saved execution position.
 - `END` and normal completion preserve pending audio; sound-event handlers stop with the program. `STOP`, an unhandled error, and interruption during BASIC execution stop audio and clear pending notes. `CONT` resumes BASIC without restarting those sounds; see sections 7.1 and 7.2.
 - During a numbered program, `CTRL+C` interrupts execution in the same way as `STOP`; it can be resumed with `CONT` without losing state, except when that interruption was triggered by closing a graphics window.
 - While statements or loops entered at the prompt are running, `CTRL+C` cancels that immediate execution and returns to `Ready`, preserving current variables and open data-file channels. The immediate command itself cannot be resumed with `CONT`; if a program was already stopped beforehand, `CONT` still resumes that program.
@@ -1693,14 +1703,16 @@ Range formats
 3 `-m`       From the beginning to line `m`
 4 `n-`       From `n` to the end
 
+Each endpoint can be a number or root label, for example `LIST Start-Finished`, `LIST -Finished`, or `DELETE Start-`. Endpoints are resolved before the command changes source. A label identifies its declaration line, including in `LIST Name` and `EDIT Name`; it does not select the following statement instead.
+
 9.2 Program editing and debugging (`EDIT` · `DEBUG` · `RENUM` · `DELETE`)
 
 + EDIT                            Opens a full-screen editor for the program in memory
-+ EDIT n                          Opens a line editor with the contents of line `n` prefilled
++ EDIT line-or-label              Opens a line editor with the identified declaration or program line prefilled
 + DEBUG                           Opens the debugger and pauses before the first statement
 + DELETE [range]                  Deletes program lines. Accepts the formats described in "Range formats".
 + LIST [range]                    Shows program lines. Accepts the formats described in "Range formats".
-+ RENUM [start[, step[, from[, to]]]]  Renumbers lines using positive integer values: default `start=10`, `step=10`, `from=0`, unlimited `to`.
++ RENUM [start[, step[, from[, to]]]]  New `start`/`step` are positive integers; old `from`/`to` bounds accept numbers or root labels. Defaults: `start=10`, `step=10`, `from=0`, unlimited `to`.
 
 Notes on `EDIT`
 - `EDIT` with no line number lets you browse and modify the whole program. F12 applies changes in memory and exits; Esc discards them. Use `SAVE` to write the program to disk.
@@ -1741,12 +1753,13 @@ Notes on `DELETE`
 - With no arguments: deletes the whole program in memory.
 - Range: accepts the formats indicated in "Range formats".
 - It also removes `DATA` items defined in the affected lines and internally reindexes the `DATA` pointer.
-- Non-numeric parameters or inverted ranges (`n>m`) raise an error.
+- Invalid or undefined symbolic endpoints and inverted ranges (`n>m` after resolving labels) raise an error before deleting source.
 
 Notes on `RENUM`
 - It updates line references in `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF ... THEN n`, `ELSE n`, `RESUME n` and `RESTORE n`. Label references keep their names; mixed lists preserve labels and renumber numeric targets.
 - With the optional third parameter, only lines whose current number is `>= from` are renumbered.
 - With the optional fourth parameter, renumbering is limited to lines whose current number is between `from` and `to`, inclusive.
+- These two bounds may be root labels, for example `RENUM 100,10,Start,Finished`. Resolve them against the original program; the new `start` and `step` values remain numeric.
 - Partial renumbering is only accepted if the block's new numbers fit in a free gap without overwriting or interleaving with non-renumbered lines; otherwise it raises `INVALID_ARGUMENT`.
 - If any reference points to a non-existent line, a warning is shown and that number is left unchanged.
 - It does not delete variables or functions; it clears control stacks and adjusts active timer targets so they point to the new lines.
@@ -1763,7 +1776,7 @@ RENUM 295,1,190,215 'Moves block 190-215 into the 295-298 gap.
 
 9.3 Other immediate utilities
 
-+ `RUN n`                              Executes from line `n` with a clean start (variables reset). Use `CONT` to continue after `STOP` or `CTRL+C` when the execution context is still resumable.
++ `RUN line-or-label`                  Executes from a numeric line or root label with a clean start (variables reset). Use `CONT` to resume a stopped context without restarting.
 + `RUN "prog.bas"`                     Loads and runs the indicated program (clean start).
 + `FILES "pattern"` | `CAT "pattern"`  Lists the contents of the current virtual directory.
 + `CD "path"`                          Changes the current virtual directory within the interpreter root.
@@ -1804,12 +1817,13 @@ Notes on `CD`
 
 Notes
 - `CHAIN` and `CHAIN MERGE` start the resulting program, including from immediate mode without a previous `STOP`. Execution begins at the specified line or the first program line. They preserve variables, arrays and open file channels with their positions, but reset control stacks, error handlers, timers and mouse handlers, and invalidate the previous `CONT` continuation.
+- A symbolic entry line is resolved in the resulting program's root scope after loading or merging: `CHAIN "next.bas",Entry` uses `Entry:` from that program, not the caller's labels. An existing resulting root label wins over a same-named numeric variable; otherwise, the numeric expression evaluated in the caller before loading is used. Parentheses or `+0` force that numeric form. `CHAIN MERGE` also accepts root labels in its `DELETE` range; these refer to the original program before deletion and merging.
 - `MERGE` combines source without starting it. Within a running program, execution continues after the statement using the BASIC line number, not its ordinal position. It finishes the pending statements from the line already being executed (even if the file replaces or deletes that line), then continues at the next higher line number in the combined program. Inserting earlier lines does not cause them to execute; later lines are reached in order. Active control state, handlers and open channels are retained. A successful source modification in immediate mode invalidates a pending continuation.
 - `MERGE` and `CHAIN MERGE` add new line numbers, replace matching line numbers and retain all other lines. They do not renumber automatically. For example, combining lines 10, 20 and 30 with lines 40, 50 and 60 leaves all six available in `LIST`; `CHAIN` without `MERGE` replaces the entire program. A file line containing only its number deletes that program line.
 - The `DATA` pointer returns to the beginning of the resulting program's data. `CHAIN` replaces the previous data; `MERGE` and `CHAIN MERGE` use the combined source's data. In `CHAIN MERGE`, `DELETE` is applied before the file's lines are incorporated.
 - Routine definitions belong to the current stored program: `CHAIN` replaces them with those in the new program, while `MERGE` and `CHAIN MERGE` rebuild them from the combined source. Replacing a definition at the same line is allowed; two definitions of the same routine at different lines raise error 63.
 - Before changing stored source, including a `DELETE` range, the interpreter checks that the file exists, contains valid UTF-8 and has program-line format on every nonempty physical line. A read or validation failure preserves the program and a pending continuation. Semantic errors in the resulting source or a missing or protected entry line may leave that source loaded and editable; they do not imply automatic restoration of the previous program.
-- File names: quotes are mandatory; paths relative to the current virtual directory and virtual absolute paths with `/` are accepted.
+- File names require quotes, including with `RUN`; an unquoted identifier after `RUN` selects a root label. Paths relative to the current virtual directory and virtual absolute paths with `/` are accepted.
 - Extension: if missing in `SAVE/LOAD/CHAIN/MERGE`, `.bas` is added; any other extension raises an error.
 - Program paths use the logical virtual tree described in section 9.3: `..` is clamped at its root, and absolute host paths and UNC paths are rejected. Data-file OPEN instead reports error 26 when `..` attempts to go above the virtual root (section 5.2).
 - When you load a program with `LOAD`, `RUN "file"` or `CHAIN`, AVL BASIC remembers that file's directory as the "program directory".

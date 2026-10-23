@@ -1135,7 +1135,7 @@ fn cd_and_files_accept_directory_junctions_inside_virtual_root() {
 }
 
 #[test]
-fn immediate_file_command_errors_match_python() {
+fn immediate_file_command_errors_and_symbolic_run() {
     let mut interp = Interpreter::new();
     assert_eq!(
         interp
@@ -1184,7 +1184,7 @@ fn immediate_file_command_errors_match_python() {
             .process_immediate("RUN per")
             .unwrap_err()
             .display_for_basic(),
-        "Missing quotes."
+        "Undefined label 'per' in scope root"
     );
     assert_eq!(
         interp
@@ -1210,7 +1210,7 @@ fn immediate_file_command_errors_match_python() {
 }
 
 #[test]
-fn immediate_files_and_range_errors_match_python() {
+fn immediate_files_and_symbolic_range_errors() {
     let temp = tempfile::tempdir().unwrap();
     let mut interp = Interpreter::new();
     interp.root_dir = temp.path().to_path_buf();
@@ -1244,21 +1244,21 @@ fn immediate_files_and_range_errors_match_python() {
             .process_immediate("LIST per")
             .unwrap_err()
             .display_for_basic(),
-        "Syntax error."
+        "Undefined label 'per' in scope root"
     );
     assert_eq!(
         interp
             .process_immediate("LIST a-b")
             .unwrap_err()
             .display_for_basic(),
-        "Invalid value type."
+        "Undefined label 'a' in scope root"
     );
     assert_eq!(
         interp
             .process_immediate("DELETE per")
             .unwrap_err()
             .display_for_basic(),
-        "Syntax error."
+        "Undefined label 'per' in scope root"
     );
     assert_eq!(
         interp
@@ -1279,7 +1279,7 @@ fn immediate_files_and_range_errors_match_python() {
             .process_immediate("EDIT per")
             .unwrap_err()
             .display_for_basic(),
-        "Invalid argument."
+        "Undefined label 'per' in scope root"
     );
     assert_eq!(
         interp

@@ -162,7 +162,7 @@ CLOSE
 
 # Program flow and error handling
 statement	both	REM	'	REM text || ' text	text: Comment text	Ignores the rest of the line.	-	-
-statement	both	IF		IF condition GOTO line [ELSE clause] || IF condition THEN clause [ELSE clause] || IF condition THEN	condition: Numeric expression; line: Target line; clause: Line number or statements	Executes a branch when the condition is nonzero.	ELSEIF,ELSE,END IF	-
+statement	both	IF		IF condition GOTO line [ELSE clause] || IF condition THEN clause [ELSE clause] || IF condition THEN	condition: Numeric expression; line: Target number or scope-local label; clause: Line number, scope-local label, or statements	Executes a branch when the condition is nonzero; bare THEN/ELSE labels behave like numeric line targets.	ELSEIF,ELSE,END IF	-
 statement	both	ELSEIF	ELSE IF	ELSEIF condition THEN || ELSE IF condition THEN	condition: Numeric expression	Starts another conditional branch in a block IF.	IF,ELSE,END IF	-
 statement	both	ELSE		ELSE	-	Starts the fallback branch of a block IF.	IF,ELSEIF,END IF	-
 statement	both	END IF	ENDIF	END IF || ENDIF	-	Ends a block IF.	IF,ELSEIF,ELSE	-
@@ -191,7 +191,7 @@ statement	both	DIM		DIM array(bound1[,bound2...])[,array(...)]	array: Array name
 statement	both	REDIM		REDIM array(bound1[,bound2...])[,array(...)]	array: Existing array; bound1: New inclusive upper bound; bound2: Additional bounds	Changes array bounds while preserving elements that still fit.	DIM,CLEAR	-
 statement	program	DATA		DATA constant1[,constant2...]	constant1: Numeric or string constant; constant2: Additional constants	Stores constants for sequential READ operations.	READ,RESTORE	-
 statement	both	READ		READ target1[,target2...]	target1: Variable or array element; target2: Additional targets	Reads values from DATA into variables.	DATA,RESTORE,MAT READ	-
-statement	both	RESTORE		RESTORE [line]	line: Optional DATA line number	Resets the DATA pointer globally or to a line.	DATA,READ	-
+statement	both	RESTORE		RESTORE [line]	line: Optional numeric expression identifying a line containing DATA	Bare RESTORE selects the first value. A numeric argument or expression requires DATA on that exact line; names are numeric variables in their ordinary scope, even if a label has the same name.	DATA,READ	-
 statement	both	SWAP		SWAP variable1,variable2	variable1: First variable; variable2: Second variable	Exchanges two values of the same type.	LET	-
 statement	both	CLEAR		CLEAR	-	Clears runtime data while keeping the stored program.	CLEAR INPUT,NEW	-
 statement	both	CLEAR INPUT		CLEAR INPUT	-	Empties the keyboard and input-event buffers.	CLEAR,INKEY$	-
@@ -283,14 +283,14 @@ statement	both	COLMODE		COLMODE mode	mode: Collision mode from 0 to 3	Selects co
 statement	both	COLCOLOR		COLCOLOR [color]	color: Optional color to detect	Selects a collision color or any non-background color.	COLMODE,SPRITE HITTEST	-
 statement	both	COLRESET		COLRESET	-	Clears collision results and the sprite ownership map.	COLMODE,SPRITE DEL	-
 statement	both	MOUSE		MOUSE ON|OFF|1|0	state: ON or 1 to show and OFF or 0 to hide	Shows or hides the pointer in the graphics window.	ON MOUSE,MOUSEX,MOUSEY	-
-statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: Mouse event name; line: Handler subroutine line	Registers or disables a mouse-event subroutine.	MOUSE,RETURN,DI,EI	-
+statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: Mouse event name; line: Handler line number or root label	Registers a global mouse-event subroutine, or disables it with 0; labels always use the root scope, including registration inside a subroutine.	MOUSE,RETURN,DI,EI	-
 
 # Sound and audio files
 statement	both	SOUND		SOUND state,period[,duration[,volume[,env[,ent[,noise]]]]]	state: Channels 1/2/4, rendezvous 8/16/32, hold 64, flush 128; period: 0..4095; duration: -32768..32767 centiseconds, default 20; volume: 0..15, default 12; env/ent: 0..15; noise: 0..31	Queues asynchronous classic tones/noise on three channels; a full queue waits interruptibly. Numeric arguments round to nearest integers, halves away from zero. Duration 0 uses one volume envelope; negative duration repeats it.	ENV,ENT,RELEASE,SQ,ON SQ,AUDIO	-
 statement	both	RELEASE		RELEASE mask	mask: Channel bits 1/2/4, combined as 1..7	Releases a held head note on each selected inactive classic channel; later held notes remain held.	SOUND,SQ	-
 statement	both	ENV		ENV id[,steps,delta,ticks[,steps,delta,ticks...]]	id: 1..15; steps: 0..127; delta: -128..127; ticks: 0..255 centiseconds, 0 means 256; up to five sections	Defines a volume envelope with modulo-16 steps; steps 0 sets absolute volume modulo 16. Without sections, deletes it.	SOUND,ENT	-
 statement	both	ENT		ENT id[,steps,delta,ticks[,steps,delta,ticks...]] || ENT id,=period,ticks[,=period,ticks...]	id: 1..15, negative to repeat; steps: 0..239; delta: -128..127; ticks: 0..255 centiseconds, 0 means 256; period: 0..4095; up to five sections	Defines tone-period changes or absolute-period sections. Steps 0 waits without changing the period. Without sections, deletes it.	SOUND,ENV	-
-statement	program	ON SQ		ON SQ(channel) GOSUB line	channel: 1, 2 or 4; line: Handler subroutine line, or 0 to disable	Arms a one-shot queue-room event; rearm for further events and finish the handler with RETURN. DI inhibits callbacks but not sound.	SOUND,SQ,RETURN,DI,EI	-
+statement	program	ON SQ		ON SQ(channel) GOSUB line	channel: 1, 2 or 4; line: Handler line number or root label, or 0 to disable	Arms a global one-shot queue-room event; rearm for further events and finish with RETURN. Registration inside DEF FN/DEF SUB remains forbidden. DI inhibits callbacks but not sound.	SOUND,SQ,RETURN,DI,EI	-
 statement	both	AUDIO		AUDIO ON|OFF || AUDIO LOAD id,"path" || AUDIO UNLOAD [id] || AUDIO PLAY channel,id[,loop[,volume[,pan[,rate]]]] || AUDIO STOP|PAUSE|RESUME [channel] || AUDIO VOLUME|PAN|RATE channel,value[,fade_ms]	channel: 1..32; id: Sample slot 1..64	Controls asynchronous audio-file playback. ON/OFF controls output; unavailable output uses silent timing. RUN, NEW and CLEAR reset audio.	AUDIO LOAD,AUDIO PLAY,AUDIO STOP,AUDIO PAUSE,AUDIO RESUME,AUDIO VOLUME,AUDIO PAN,AUDIO RATE,AUDIO UNLOAD,AUDIOAVAILABLE,AUDIOERROR$	-
 statement	both	AUDIO ON		AUDIO ON	-	Enables output for future playback and permits retrying the device. Existing silent sample voices need a new AUDIO PLAY to become audible.	AUDIO OFF,AUDIO PLAY,AUDIOAVAILABLE,AUDIOERROR$	-
 statement	both	AUDIO OFF		AUDIO OFF	-	Stops current classic and sample sounds and disables output, retaining loaded samples and envelopes. Later playback advances silently.	AUDIO ON,AUDIOAVAILABLE	-
@@ -305,8 +305,8 @@ statement	both	AUDIO PAN		AUDIO PAN channel,value[,fade_ms]	channel: 1..32; valu
 statement	both	AUDIO RATE		AUDIO RATE channel,value[,fade_ms]	channel: 1..32; value: 0.125..8; fade_ms: Integer milliseconds 0..600000, default 0	Changes playback speed and pitch immediately or with a smooth transition.	AUDIO PLAY,AUDIO VOLUME,AUDIO PAN	-
 
 # Timers, runtime state, and immediate utilities
-statement	both	AFTER		AFTER delay[,timer] GOSUB line	delay: Delay in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler subroutine line	Schedules a one-shot timer interrupt.	EVERY,CANCEL,REMAIN,DI,EI	-
-statement	both	EVERY		EVERY period[,timer] GOSUB line	period: Period in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler subroutine line	Schedules a repeating timer interrupt.	AFTER,CANCEL,REMAIN,DI,EI	-
+statement	both	AFTER		AFTER delay[,timer] GOSUB line	delay: Delay in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler line number or root label	Schedules a global one-shot timer interrupt; registration inside DEF FN/DEF SUB remains forbidden.	EVERY,CANCEL,REMAIN,DI,EI	-
+statement	both	EVERY		EVERY period[,timer] GOSUB line	period: Period in 1/50-second ticks; timer: Optional timer number 0 to 3; line: Handler line number or root label	Schedules a global repeating timer interrupt; registration inside DEF FN/DEF SUB remains forbidden.	AFTER,CANCEL,REMAIN,DI,EI	-
 statement	both	CANCEL		CANCEL timer	timer: Timer number from 0 to 3	Disables a timer permanently.	AFTER,EVERY,REMAIN	-
 statement	both	DI		DI	-	Inhibits timer, mouse and sound-queue interrupts; sound playback continues.	EI,AFTER,EVERY,ON MOUSE,ON SQ	-
 statement	both	EI		EI	-	Enables timer, mouse and sound-queue interrupts.	DI,AFTER,EVERY,ON MOUSE,ON SQ	-
@@ -318,16 +318,16 @@ statement	both	TROFF		TROFF	-	Disables program line tracing.	TRON	-
 statement	both	DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD	-
 statement	both	RAD		RAD	-	Selects radians for trigonometry and drawing angles.	DEG	-
 statement	immediate	DEBUG		DEBUG	-	Opens the full-screen debugger and pauses before the first statement.	EDIT,RUN	-
-statement	immediate	RUN		RUN || RUN line || RUN "filename"	line: Optional starting line; filename: Optional BASIC program path	Starts the loaded program or loads and runs a program file.	CONT,LOAD	-
-statement	immediate	LIST		LIST [range]	range: Optional line or line range	Displays stored program lines.	EDIT,DELETE	-
-statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number	Opens the full-screen program editor or edits one line.	DEBUG,LIST,RENUM	-
-statement	immediate	DELETE		DELETE [range]	range: Optional line or line range	Deletes selected program lines or the entire program.	LIST,NEW	-
-statement	immediate	RENUM		RENUM [start[,step[,from[,to]]]]	start: First new line number; step: New line increment; from: First old line; to: Last old line	Renumbers program lines and their references.	LIST,EDIT	-
+statement	immediate	RUN		RUN || RUN line || RUN "filename"	line: Starting line number or root label; filename: Quoted BASIC program path	Starts with clean state. An unquoted name requires a root label; a file name always requires quotes.	CONT,LOAD	-
+statement	immediate	LIST		LIST [range]	range: Optional line or inclusive/open line range; each endpoint is a number or root label	Displays stored program lines, including the declaration line selected by a label.	EDIT,DELETE	-
+statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number or root label	Opens the full-screen program editor or edits the identified line, including a label's own declaration.	DEBUG,LIST,RENUM	-
+statement	immediate	DELETE		DELETE [range]	range: Optional line or inclusive/open line range; each endpoint is a number or root label	Resolves endpoints before deleting selected program lines or the entire program.	LIST,NEW	-
+statement	immediate	RENUM		RENUM [start[,step[,from[,to]]]]	start: Positive first new line number; step: Positive numeric increment; from: First old number or root label; to: Last old number or root label	Resolves old bounds before renumbering program lines and their references; label names are preserved.	LIST,EDIT	-
 statement	immediate	SAVE		SAVE "filename"	filename: BASIC program path	Saves the stored program.	LOAD	-
 statement	immediate	LOAD		LOAD "filename"	filename: BASIC program path	Replaces the stored program with a file.	SAVE,RUN,NEW	-
 statement	both	MERGE		MERGE "filename"	filename: BASIC program path	Merges a file into the stored program while preserving runtime values.	CHAIN,CHAIN MERGE,LOAD	-
-statement	both	CHAIN		CHAIN "filename"[,line]	filename: BASIC program path; line: Optional starting line	Replaces the program and continues with preserved runtime values.	CHAIN MERGE,MERGE,RUN	-
-statement	both	CHAIN MERGE		CHAIN MERGE "filename"[,line][,DELETE first-last]	filename: BASIC program path; line: Optional starting line; first: First line to delete; last: Last line to delete	Optionally deletes lines, merges a file, and continues execution.	CHAIN,MERGE	-
+statement	both	CHAIN		CHAIN "filename"[,line]	filename: BASIC program path; line: Optional numeric entry expression or root label of the loaded program	A resulting root label wins after loading; otherwise uses the numeric entry expression evaluated before loading. Replaces source and continues with preserved runtime values.	CHAIN MERGE,MERGE,RUN	-
+statement	both	CHAIN MERGE		CHAIN MERGE "filename"[,line][,DELETE first-last]	filename: BASIC program path; line: Numeric entry expression or resulting root label; first/last: Numbers or original-program root labels	Resolves DELETE bounds in the original source, merges the file, then resolves symbolic entry in the resulting root scope and continues.	CHAIN,MERGE	-
 statement	immediate	FILES	CAT	FILES ["pattern"] || CAT ["pattern"]	pattern: Optional wildcard pattern	Lists matching files and all directories in the current virtual directory.	CD,LOAD	-
 statement	immediate	CD		CD "path"	path: Virtual directory path	Changes the current virtual directory.	FILES	-
 statement	immediate	EXIT	QUIT,SYSTEM	EXIT || QUIT || SYSTEM	-	Leaves the AVL-BASIC interpreter.	EXIT FOR,EXIT WHILE,EXIT FN,EXIT SUB	-

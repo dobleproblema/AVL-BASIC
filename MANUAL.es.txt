@@ -183,10 +183,16 @@ Los nombres empiezan por una letra ASCII o `_` y continúan con letras ASCII, d�
 
 Ámbitos y destinos
 - Las etiquetas de cada `DEF SUB` o `DEF FN` multilínea pertenecen a esa definición; el programa principal tiene un ámbito raíz separado. El mismo nombre puede repetirse en distintas rutinas, pero no dos veces dentro del mismo ámbito.
-- Los destinos simbólicos se buscan únicamente en el ámbito del código que los utiliza. No se buscan en llamadores ni en otras rutinas. No permiten entrar desde fuera en el cuerpo de un procedimiento. Cada llamada utiliza los destinos de su definición y conserva su propio contexto de ejecución.
-- Se admiten en `GOTO`, `GOSUB`, `ON ERROR GOTO`, `RESUME etiqueta` y las listas de `ON expresión GOTO/GOSUB`. Las listas pueden mezclar números y etiquetas: `ON N GOTO Inicio,200,Final`.
-- En un `IF` se usa la instrucción explícita: `IF X THEN GOTO Final` o `IF X GOTO Final`. La abreviatura `THEN Final` no es un salto a una etiqueta.
-- `ON ERROR GOTO 0`, `RESUME`, `RESUME 0` y `RESUME NEXT` conservan sus significados especiales. Los demás argumentos que requieren números de línea, como los de `RUN`, `RESTORE`, `EDIT` o `DELETE`, conservan su sintaxis numérica.
+- `GOTO`, `GOSUB`, `ON ERROR GOTO`, `RESUME` y los destinos de `IF` en línea usan las etiquetas del ámbito de la rutina actual, o del ámbito raíz fuera de una rutina. No buscan en llamadores ni en otras rutinas. Las etiquetas no permiten entrar desde fuera en el cuerpo de un procedimiento.
+- Los destinos de salto, entrada y edición que identifican una línea del programa admiten también una etiqueta; `RESTORE` conserva su argumento numérico. Esto incluye las listas mixtas de `ON expresión GOTO/GOSUB`, los manejadores de temporizador/ratón/sonido, `RUN`, las líneas de entrada de `CHAIN`, `LIST`, `EDIT`, `DELETE`, los extremos de rangos y los límites `desde`/`hasta` de `RENUM`.
+- Un `IF` en línea admite saltos explícitos (`IF X THEN GOTO Final`, `IF X GOTO Final`) y la abreviatura `IF X THEN Final ELSE Otro`. Una etiqueta aislada al comienzo de cada rama tiene el mismo comportamiento de control que su equivalente con número de línea.
+- Los manejadores de temporizador, ratón y cola de sonido son globales: los destinos simbólicos de `AFTER`, `EVERY`, `ON MOUSE` y `ON SQ` siempre usan el ámbito raíz, también si se registra `ON MOUSE` dentro de una subrutina. No capturan las etiquetas ni las variables locales de la rutina. Los manejadores simbólicos ya registrados siguen a la etiqueta si `MERGE` o `RENUM` la desplaza; los registros numéricos conservan su comportamiento numérico anterior. Se mantienen las restricciones existentes para registrar temporizadores y manejadores de sonido dentro de rutinas.
+- Las órdenes inmediatas usan etiquetas raíz. `CHAIN` y `CHAIN MERGE` resuelven la entrada simbólica en el ámbito raíz del programa resultante después de cargar o mezclar; el rango de `CHAIN MERGE ... DELETE` corresponde al programa original antes de incorporar el fichero.
+- Las formas numéricas especiales mantienen su significado: `ON ERROR GOTO 0`, `ON MOUSE ... GOSUB 0`, `ON SQ(...) GOSUB 0`, `RESUME`, `RESUME 0` y `RESUME NEXT`. El nuevo número inicial y el incremento de `RENUM` siguen siendo enteros positivos, porque crean números en lugar de identificar líneas existentes. `CONT`, `DEBUG` y `RETURN` siguen sin admitir argumentos.
+
+Ambigüedades de nombres
+- `RESTORE` acepta un número de línea o una expresión numérica, incluidas variables con su ámbito habitual. La línea numérica resultante debe contener `DATA`; no se busca una etiqueta ni una línea posterior. `RESTORE Nombre` evalúa la variable numérica aunque exista una etiqueta del mismo nombre. Sin argumento vuelve al primer valor; si la línea indicada no contiene datos, se produce el error 25.
+- `RUN Nombre` selecciona una etiqueta raíz; `RUN "Nombre"` selecciona un fichero. Una etiqueta inexistente produce un error de destino aunque exista `Nombre.bas`: los nombres de fichero requieren comillas. Los demás destinos de línea requieren un número o etiqueta completos, no una expresión como `Final+1`; las formas históricas de expresión numérica de `RESTORE` y `CHAIN` conservan su comportamiento.
 
 Se permiten referencias adelantadas: el destino puede declararse más abajo en el programa. Al preparar la ejecución se comprueban declaraciones, duplicados y referencias simbólicas, con mensajes que identifican la etiqueta y su ámbito. La propagación de errores no amplía su visibilidad: el manejador que captura el error utiliza sus propios destinos. `ERL` sigue devolviendo el número de la línea donde ocurrió el fallo.
 
@@ -238,7 +244,7 @@ Edición y presentación
 + RESUME línea                                                 o en la primera instrucción de la línea indicada
 
 Notas rápidas
-- THEN/ELSE admiten tanto números de línea como instrucciones completas.
+- THEN/ELSE admiten números de línea, etiquetas del ámbito actual e instrucciones completas.
 - La forma en bloque se activa cuando `IF ... THEN` está sola en su línea: termina en `END IF` y puede intercalar `ELSEIF`/`ELSE`.
 - `ON ... GOTO/GOSUB` usa índice 1-based; si el índice está fuera de rango no hay salto.
 - `RESUME` repite la instrucción con error; `RESUME NEXT` continúa en la siguiente.
@@ -271,7 +277,7 @@ Cambia `V=75` por `V=0` o `V=25` para probar las otras dos ramas.
 + LET var1[=var2...]=valor       LET es opcional
 + READ lista-variables           Lee valores de `DATA` en las variables
 + DATA lista-constantes          Almacena constantes para lecturas secuenciales con `READ`
-+ RESTORE [línea]                Sitúa el puntero `DATA` al principio o en la línea DATA indicada
++ RESTORE [línea]               Sitúa el puntero `DATA` al principio o en una línea numérica que contenga `DATA`
 + SWAP v1,v2                     Intercambia
 + CLEAR                          Borra todas las variables
 + NEW                            Borra todas las variables y el programa actual. Pone el intérprete en su estado inicial.
@@ -294,7 +300,7 @@ MID$(cad$,pos[,len]) = valor$   'pos empieza en 1
 ```
 
 Notas rápidas
-- `READ` consume secuencialmente las constantes de `DATA`. `RESTORE` sin argumento vuelve al primer valor; `RESTORE línea` pasa al primer valor de esa línea exacta, que debe contener `DATA` (en caso contrario, error 25).
+- `READ` consume secuencialmente las constantes de `DATA`. `RESTORE` sin argumento vuelve al primer valor. `RESTORE línea` evalúa un argumento o expresión numérica y exige `DATA` en esa línea exacta; en caso contrario se produce el error 25. Los nombres se evalúan como variables numéricas con su ámbito habitual, aunque exista una etiqueta del mismo nombre. Por ejemplo, `LineaDatos=110:RESTORE LineaDatos` selecciona los datos de la línea 110.
 - `CLEAR` borra variables, arrays y funciones, resetea el puntero de DATA y establece el modo angular a radianes (no borra el programa cargado).
   • `CLEAR INPUT` vacía el buffer de teclado/entrada sin modificar variables ni el programa cargado.
 
@@ -1305,6 +1311,7 @@ Notas
 - Los eventos solo se generan cuando el puntero está sobre la ventana gráfica y el programa está en ejecución. No existen hooks globales fuera de la ventana.
 - `MOUSE` solo cambia la visibilidad del cursor (no captura ni confina el ratón).
 - Las rutinas registradas mediante `ON MOUSE` se despachan como interrupciones: respetan `DI`/`EI`, se apilan como un `GOSUB` y deben finalizar con `RETURN`.
+- El destino admite un número de línea o etiqueta raíz. Aunque se registre dentro de una subrutina, usa el espacio de nombres raíz y no captura el estado local de esa llamada.
 - Puedes cambiar o desactivar un evento en cualquier momento. `ON MOUSE ... GOSUB 0` también elimina las activaciones pendientes del evento indicado.
 - Combina `LEFTDOWN` + `LEFTDRAG` + `LEFTUP` (o sus equivalentes de botón derecho) para implementar selecciones por arrastre. `MOVE` emite movimientos incluso sin botones pulsados.
 
@@ -1344,8 +1351,8 @@ Ejecuta estos dos programas por separado. El primero dibuja rectángulos entre u
 
 7. Interrupciones
 
-+ AFTER <retardo>[, <número de temporizador>] GOSUB <número de línea>  Programa una interrupción de temporizador de una sola ejecución
-+ EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <número de línea>  Programa una interrupción periódica de temporizador
++ AFTER <retardo>[, <número de temporizador>] GOSUB <línea-o-etiqueta>  Programa una interrupción de temporizador de una sola ejecución
++ EVERY <periodo de tiempo>[, <número de temporizador>] GOSUB <línea-o-etiqueta>  Programa una interrupción periódica de temporizador
 + EI              Habilita las interrupciones de temporizador, ratón y cola de sonido inhibidas previamente con `DI`.
 + DI              Inhibe las interrupciones de temporizador, ratón y cola de sonido; no inhibe `CTRL+C` ni detiene la reproducción.
 + CANCEL n        Desactiva permanentemente el temporizador n actual
@@ -1354,6 +1361,7 @@ Ejecuta estos dos programas por separado. El primero dibuja rectángulos entre u
 Unidades y control
 - Unidades de tiempo: los argumentos de `AFTER`/`EVERY` están en “ticks” de 1/50 s (0,02 s por tick).
 - Temporizadores: el número de temporizador va de 0 a 3. El valor por defecto es 0.
+- Los destinos de manejadores admiten líneas numéricas o etiquetas raíz; no usan etiquetas locales de procedimientos. Los retardos y números de temporizador siguen siendo expresiones numéricas y continúa prohibido registrar temporizadores dentro de `DEF FN` o `DEF SUB`.
 - `CANCEL n`: desactiva permanentemente el temporizador indicado.
 - `REMAIN(n)`: devuelve la cuenta restante del temporizador en ticks (no modifica el temporizador).
 
@@ -1424,6 +1432,7 @@ Consultas y eventos de cola
 - `SQ(canal)` acepta exactamente 1, 2 o 4. Los bits 0..2 indican el número de posiciones pendientes libres (0..4); los bits 3..5 describen una sincronización pendiente; el bit 6 indica una nota retenida a la cabeza; el bit 7 indica una nota en reproducción. Los estados de reproducción, retención y sincronización son excluyentes. Un canal vacío e inactivo devuelve 4.
 - `(SQ(1) AND 7)>0` comprueba si queda espacio en la cola del canal A. `SQ(1)=4` indica que todas sus notas han terminado.
 - `ON SQ(canal) GOSUB linea` activa un evento de un solo disparo cuando hay espacio en la cola, incluso si ya lo hay. Hay que volver a registrarlo para recibir otro evento; `ON SQ(canal) GOSUB 0` lo desactiva. El manejador debe terminar con `RETURN` y no puede interrumpirse a sí mismo: registrarlo de nuevo desde el propio manejador surte efecto tras el retorno.
+- Su destino admite una línea numérica o etiqueta raíz. El canal sigue siendo una expresión numérica; una etiqueta del mismo nombre dentro de un procedimiento no es un destino de evento de sonido.
 - `ON SQ` solo se admite en programas y no puede registrarse dentro de `DEF FN` ni `DEF SUB`. Respeta `DI`/`EI`; inhibir los manejadores no pausa el audio ni el avance de las colas. Los manejadores dejan de ejecutarse al terminar el programa; las notas ya encoladas siguen sonando.
 - Los eventos de cola se atienden entre instrucciones BASIC, con una cadencia ordinaria objetivo de 1 ms. Registrar o rearmar un manejador solicita atención en el siguiente punto elegible; desde el propio manejador, espera a `RETURN`. Los cambios explícitos de cola y habilitar las interrupciones también solicitan atención inmediata. Las instrucciones largas pueden retrasarla. La reproducción y las duraciones de las notas conservan su reloj de audio.
 
@@ -1522,10 +1531,11 @@ Salida esperada
 + STOP                  Detiene la ejecución manteniendo el estado (línea actual, pilas y variables) y muestra `Line n. Program stopped.` con el estilo de interrupciones/errores del intérprete. Es un aviso de estado, no un error: no modifica `ERR`/`ERL` ni activa `ON ERROR`. Permite reanudar con `CONT` desde el punto donde se detuvo o, con `GOTO n`, desde cualquier línea.
 + CONT                  Reanuda un programa detenido por `STOP` o `CTRL+C`. Mientras el programa está detenido puedes cambiar el valor de variables o ejecutar instrucciones en modo inmediato. Modificar el programa almacenado cancela el contexto detenido; usa `RUN` después de editar. Si la interrupción se produjo al cerrar una ventana gráfica, `CONT` no está disponible.
 + END                   Finaliza el programa, dejando sonar el audio pendiente. Tras `END`, o cuando el programa llega al final sin `END` explícito, `CONT` ya no es posible (produce error 46) porque no hay ejecución pendiente que continuar.
-+ RUN [numlin]          Si se incluye el número de línea, el programa se ejecuta desde esa línea.
++ RUN [línea-o-etiqueta] Ejecuta desde la línea numérica o etiqueta raíz indicada.
 
 Notas
 - RUN inicia la ejecución con arranque limpio (estado reiniciado). Usa `CONT` o `GOTO n` solo cuando hayas detenido con `STOP`/`CTRL+C` y quieras continuar sin reiniciar.
+- `RUN Nombre` usa una etiqueta raíz; `RUN "Nombre"` carga un fichero. Si falta la etiqueta, nunca se intenta abrir un fichero del mismo nombre. `CONT` no admite un destino y reanuda en la posición de ejecución guardada.
 - `END` y el final normal conservan el audio pendiente; los manejadores de eventos de sonido terminan con el programa. `STOP`, un error no capturado y una interrupción durante la ejecución de BASIC detienen el audio y vacían las notas pendientes. `CONT` reanuda BASIC sin recuperar esos sonidos; ver apartados 7.1 y 7.2.
 - Durante un programa numerado, `CTRL+C` interrumpe la ejecución de forma equivalente a `STOP`; se puede reanudar con `CONT` sin perder el estado, salvo que esa interrupción se haya producido al cerrar una ventana gráfica.
 - Mientras se ejecutan instrucciones o bucles introducidos en el prompt, `CTRL+C` cancela esa ejecución inmediata y vuelve a `Ready`, conservando las variables actuales y los canales de datos abiertos. El propio comando inmediato no se puede reanudar con `CONT`; si ya había un programa detenido antes, `CONT` sigue reanudando ese programa.
@@ -1706,14 +1716,16 @@ Formato de rangos
 3 `-m`       Desde el inicio hasta la línea m
 4 `n-`       Desde n hasta el final
 
+Cada extremo puede ser un número o etiqueta raíz, por ejemplo `LIST Inicio-Final`, `LIST -Final` o `DELETE Inicio-`. Los extremos se resuelven antes de que la orden modifique el código. Una etiqueta identifica la línea de su declaración, también en `LIST Nombre` y `EDIT Nombre`; no selecciona en su lugar la instrucción siguiente.
+
 9.2 Edición y depuración (`EDIT` · `DEBUG` · `RENUM` · `DELETE`)
 
 + EDIT                            Abre un editor a pantalla completa para el programa en memoria
-+ EDIT n                          Abre un editor de línea con el contenido prellenado de la línea n
++ EDIT línea-o-etiqueta           Abre un editor de línea con la declaración o línea de programa identificada
 + DEBUG                           Abre el depurador y se detiene antes de la primera instrucción
 + DELETE [rango]                  Borra líneas del programa. Admite los formatos de “Formato de rangos”.
 + LIST [rango]                    Muestra las líneas del programa. Admite los formatos de “Formato de rangos”.
-+ RENUM [inicio[, paso[, desde[, hasta]]]]  Renumera líneas usando valores enteros positivos: por defecto `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
++ RENUM [inicio[, paso[, desde[, hasta]]]]  Los nuevos `inicio`/`paso` son enteros positivos; los límites antiguos `desde`/`hasta` admiten números o etiquetas raíz. Por defecto: `inicio=10`, `paso=10`, `desde=0`, `hasta` sin límite.
 
 Notas sobre EDIT
 - `EDIT` sin número permite recorrer y modificar el programa completo. F12 aplica los cambios en memoria y sale; Esc los descarta. Para guardar en disco hay que usar `SAVE`.
@@ -1754,12 +1766,13 @@ Notas sobre DELETE
 - Sin argumentos: borra todo el programa en memoria.
 - Rango: admite los formatos indicados en “Formato de rangos”.
 - También elimina los elementos `DATA` definidos en las líneas afectadas y reindexa internamente el puntero `DATA`.
-- Parámetros no numéricos o rangos invertidos (`n>m`) provocan error.
+- Los extremos simbólicos inválidos o inexistentes y los rangos invertidos (`n>m` tras resolver las etiquetas) producen error antes de borrar código.
 
 Notas sobre RENUM
 - Actualiza las referencias a líneas en `GOTO`, `GOSUB`, `ON GOTO`, `ON GOSUB`, `IF … THEN n`, `ELSE n`, `RESUME n` y `RESTORE n`. Las referencias por etiqueta conservan su nombre; las listas mixtas conservan las etiquetas y renumeran sus destinos numéricos.
 - Con el tercer parámetro opcional, solo se renumeran las líneas cuyo número actual sea `>= desde`.
 - Con el cuarto parámetro opcional, la renumeración se limita a las líneas cuyo número actual esté entre `desde` y `hasta`, ambos incluidos.
+- Ambos límites admiten etiquetas raíz, por ejemplo `RENUM 100,10,Inicio,Final`. Se resuelven en el programa original; los nuevos valores `inicio` y `paso` siguen siendo numéricos.
 - La renumeración parcial solo se acepta si los nuevos números del bloque caben en un hueco libre, sin sobrescribir ni intercalarse con líneas no renumeradas; en caso contrario da `INVALID_ARGUMENT`.
 - Si alguna referencia apunta a una línea inexistente, se avisa y ese número se deja sin cambiar.
 - No borra variables ni funciones; limpia las pilas de control y ajusta los objetivos de temporizadores activos para que apunten a las nuevas líneas.
@@ -1776,7 +1789,7 @@ RENUM 295,1,190,215 'Mueve el bloque 190-215 al hueco 295-298.
 
 9.3 Otras utilidades inmediatas
 
-+ `RUN n`                              Ejecuta desde la línea `n` con arranque limpio (variables reiniciadas). Usa `CONT` para continuar tras `STOP` o `CTRL+C` cuando el contexto de ejecución siga siendo reanudable.
++ `RUN línea-o-etiqueta`               Ejecuta desde una línea numérica o etiqueta raíz con arranque limpio (variables reiniciadas). Usa `CONT` para reanudar un contexto detenido sin reiniciar.
 + `RUN "prog.bas"`                     Carga y ejecuta el programa indicado (arranque limpio).
 + `FILES "patrón"` | `CAT "patrón"`    Lista el contenido del directorio virtual actual.
 + `CD "ruta"`                          Cambia el directorio virtual actual dentro de la raíz del intérprete.
@@ -1817,12 +1830,13 @@ Notas sobre CD
 
 Notas
 - `CHAIN` y `CHAIN MERGE` arrancan el programa resultante, también desde el modo inmediato y sin necesitar un `STOP` previo. Empiezan en la línea indicada o en la primera línea del programa. Conservan variables, arrays y canales de fichero abiertos con sus posiciones, pero reinician las pilas de control, los manejadores de errores, los temporizadores y los manejadores de ratón, e invalidan la continuación anterior con `CONT`.
+- La entrada simbólica se resuelve en el ámbito raíz del programa resultante después de cargar o mezclar: `CHAIN "next.bas",Entry` usa `Entry:` de ese programa, no las etiquetas del llamador. Una etiqueta raíz existente en el resultado tiene prioridad sobre la variable numérica del mismo nombre; en caso contrario, se usa la expresión numérica evaluada en el llamador antes de cargar. Los paréntesis o `+0` fuerzan esa forma numérica. `CHAIN MERGE` admite también etiquetas raíz en su rango `DELETE`; estas corresponden al programa original antes de borrar y mezclar.
 - `MERGE` combina el código sin arrancarlo. Si se ejecuta dentro del programa, continúa tras la instrucción usando el número de línea BASIC, no su posición ordinal. Termina las instrucciones pendientes de la línea que ya estaba ejecutando (también si el fichero la sustituye o la borra) y sigue por la siguiente línea de número mayor del programa combinado. Las líneas nuevas anteriores no se ejecutan por el mero hecho de insertarlas; las posteriores sí se alcanzan en orden. Conserva el control activo, los manejadores y los canales abiertos. Una modificación correcta del código desde el modo inmediato invalida una continuación pendiente.
 - `MERGE` y `CHAIN MERGE` añaden las líneas con números nuevos, sustituyen las que tienen el mismo número y conservan las demás. No renumeran automáticamente. Por ejemplo, combinar las líneas 10, 20 y 30 con las líneas 40, 50 y 60 deja las seis disponibles en `LIST`; `CHAIN` sin `MERGE` sí sustituye todo el programa. Una línea del fichero que solo contiene su número borra esa línea del programa.
 - El puntero de `DATA` vuelve al comienzo de los datos del programa resultante. `CHAIN` sustituye los datos anteriores; `MERGE` y `CHAIN MERGE` usan los datos del código combinado. En `CHAIN MERGE`, `DELETE` se aplica antes de incorporar las líneas del fichero.
 - Las definiciones de rutinas pertenecen al programa almacenado actual: `CHAIN` las sustituye por las del nuevo programa, mientras que `MERGE` y `CHAIN MERGE` las reconstruyen a partir del código combinado. Se permite reemplazar una definición en la misma línea; dos definiciones de la misma rutina en líneas distintas producen el error 63.
 - Antes de modificar el texto almacenado, incluido un rango `DELETE`, se comprueba que el fichero existe, contiene UTF-8 válido y que sus líneas físicas no vacías tienen formato de línea de programa. Si falla esta lectura o validación, se conservan el programa y una continuación pendiente. Los errores semánticos del código resultante o una línea de entrada inexistente o protegida pueden dejar ese código cargado y editable; no implican restaurar automáticamente el programa anterior.
-- Nombres de fichero: comillas obligatorias; se admiten rutas relativas al directorio virtual actual y rutas absolutas virtuales con `/`.
+- Los nombres de fichero requieren comillas, también con `RUN`; un identificador sin comillas tras `RUN` selecciona una etiqueta raíz. Se admiten rutas relativas al directorio virtual actual y rutas absolutas virtuales con `/`.
 - Extensión: si falta en `SAVE/LOAD/CHAIN/MERGE`, se añade `.bas`; cualquier otra extensión da error.
 - Las rutas de programa usan el árbol virtual lógico descrito en 9.3: `..` se limita en su raíz y se rechazan las rutas absolutas del sistema y las UNC. OPEN de ficheros de datos produce el error 26 si `..` intenta subir por encima de la raíz virtual (sección 5.2).
 - Cuando cargas un programa con `LOAD`, `RUN "fichero"` o `CHAIN`, AVL BASIC recuerda el directorio de ese fichero como “directorio del programa”.

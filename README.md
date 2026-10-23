@@ -55,6 +55,15 @@ and 6.7.
 AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
 program, inspect it with `LIST`, and continue from the prompt.
 
+Line labels (`100 Entry:`) identify destinations for jumps, inline
+`THEN`/`ELSE`, event handlers, program entry, editing commands and range
+endpoints. For example, use `RUN Entry`, `LIST Entry-Finished`, or
+`RENUM 100,10,Entry,Finished`. Ordinary program references use the current
+routine's scope; global event handlers and immediate commands use root labels.
+`CHAIN` resolves its entry label in the program it loads. `RESTORE` uses a
+numeric expression identifying a line that contains `DATA`. Manual section 2.1
+explains label scopes and the quoted file syntax of `RUN`.
+
 `EDIT` opens the full-screen program editor. `DEBUG` opens the same source in a
 full-screen debugger and pauses before the first statement. It provides line
 breakpoints, step into/over/out, and a live view of variables, arrays, the call
@@ -267,7 +276,7 @@ adding a practical modern feature set:
 - plain `.bas` files and an interactive immediate mode,
 - a compact built-in `HELP topic` syntax and parameter reference,
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
-- routine-local line labels (`100 Name:`), including named error handlers and distinct highlighting,
+- scoped line labels (`100 Name:`) across line targets, event handlers, editing ranges, and named error handlers, with distinct highlighting,
 - procedure-local and root `ON ERROR`/`RESUME` with uniform caller recovery,
 - `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,

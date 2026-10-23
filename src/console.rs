@@ -3119,116 +3119,21 @@ fn infer_editor_renum_step(numbers: impl Iterator<Item = i32>) -> i32 {
 }
 
 fn renumber_editor_line_references(code: &str, mapping: &HashMap<i32, i32>) -> String {
-    let chars: Vec<char> = code.chars().collect();
-    let mut out = String::new();
-    let mut i = 0usize;
-    let mut in_string = false;
-
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == '"' {
-            in_string = !in_string;
-            out.push(ch);
-            i += 1;
-            continue;
-        }
-        if !in_string && ch == '\'' {
-            out.extend(chars[i..].iter());
-            break;
-        }
-        if !in_string && is_ident_start(ch) {
-            let start = i;
-            i += 1;
-            while i < chars.len() && is_ident_char(chars[i]) {
-                i += 1;
-            }
-            let ident: String = chars[start..i].iter().collect();
-            let upper = ident.to_ascii_uppercase();
-            out.push_str(&ident);
-            if upper == "REM" {
-                out.extend(chars[i..].iter());
-                break;
-            }
-            if upper == "DATA" {
-                let mut quoted = false;
-                while i < chars.len() {
-                    match chars[i] {
-                        ':' if !quoted => break,
-                        '"' => quoted = !quoted,
-                        _ => {}
-                    }
-                    out.push(chars[i]);
-                    i += 1;
+    let mut result = code.to_string();
+    for range in crate::labels::renumber_target_ranges(code)
+        .into_iter()
+        .rev()
+    {
+        let target = code[range.clone()].trim();
+        if !target.is_empty() && target.bytes().all(|ch| ch.is_ascii_digit()) {
+            if let Ok(old) = target.parse::<i32>() {
+                if let Some(new) = mapping.get(&old) {
+                    result.replace_range(range, &new.to_string());
                 }
-                continue;
             }
-            if matches!(
-                upper.as_str(),
-                "GOTO" | "GOSUB" | "THEN" | "ELSE" | "RESTORE" | "RESUME"
-            ) {
-                i = copy_renumbered_editor_line_list(&chars, i, &mut out, mapping);
-            }
-            continue;
         }
-        out.push(ch);
-        i += 1;
     }
-
-    out
-}
-
-fn copy_renumbered_editor_line_list(
-    chars: &[char],
-    mut i: usize,
-    out: &mut String,
-    mapping: &HashMap<i32, i32>,
-) -> usize {
-    loop {
-        while i < chars.len() && chars[i].is_whitespace() {
-            out.push(chars[i]);
-            i += 1;
-        }
-
-        let target_start = i;
-        if chars.get(i).is_some_and(|ch| is_ident_start(*ch)) {
-            while i < chars.len() && is_ident_char(chars[i]) {
-                i += 1;
-            }
-            let label: String = chars[target_start..i].iter().collect();
-            if !crate::labels::label_identifier(&label) {
-                return target_start;
-            }
-            out.push_str(&label);
-        } else {
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                i += 1;
-            }
-            if target_start == i {
-                return i;
-            }
-            let raw: String = chars[target_start..i].iter().collect();
-            if let Ok(old) = raw.parse::<i32>() {
-                if let Some(new_number) = mapping.get(&old) {
-                    out.push_str(&new_number.to_string());
-                } else {
-                    out.push_str(&raw);
-                }
-            } else {
-                out.push_str(&raw);
-            }
-        }
-
-        let mut probe = i;
-        while probe < chars.len() && chars[probe].is_whitespace() {
-            probe += 1;
-        }
-        if probe < chars.len() && chars[probe] == ',' {
-            out.extend(chars[i..=probe].iter());
-            i = probe + 1;
-            continue;
-        }
-        return i;
-    }
+    result
 }
 
 fn run_editor_replace<I>(
@@ -5940,134 +5845,101 @@ fn is_label_declaration(source: &str) -> bool {
 }
 
 fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
+    // Resolve the same operand ranges as the interpreter. Keep a map back to
+    // the editor's character coordinates: its invisible caret is not syntax.
+    let positions: Vec<_> = chars
+        .iter()
+        .enumerate()
+        .filter_map(|(index, ch)| (*ch != CURSOR_MARKER).then_some(index))
+        .collect();
+    let source: String = positions.iter().map(|index| chars[*index]).collect();
+    let (_, code) = split_line_number(&source).unwrap_or(("", &source));
+    let mut start = source.len() - code.len();
+    let mut shorthand = false;
     let mut spans = Vec::new();
-    let mut index = 0;
-    let mut statement_head = Vec::new();
-    while index < chars.len() {
-        match chars[index] {
-            '\'' => break,
-            '"' => {
+    let mut add_command = |start: usize, end: usize, shorthand: bool| {
+        let command = &source[start..end];
+        let trimmed = command.trim();
+        let ranges = if shorthand && crate::labels::label_identifier(trimmed) {
+            let left = command.len() - command.trim_start().len();
+            vec![left..left + trimmed.len()]
+        } else {
+            crate::labels::target_ranges(command)
+        };
+        for range in ranges {
+            if !crate::labels::label_identifier(&command[range.clone()]) {
+                continue;
+            }
+            let first = source[..start + range.start].chars().count();
+            let last = first + command[range].chars().count();
+            if let Some(&first) = positions.get(first) {
+                let last = positions.get(last).copied().unwrap_or(chars.len());
+                spans.push((first, last));
+            }
+        }
+    };
+    let bytes = source.as_bytes();
+    let mut index = start;
+    let mut depth = 0usize;
+    let mut data = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => break,
+            b'"' => {
                 index += 1;
-                while index < chars.len() {
-                    let ch = chars[index];
+                while index < bytes.len() {
+                    let ch = bytes[index];
                     index += 1;
-                    if ch == '"' {
+                    if ch == b'"' {
                         break;
                     }
                 }
             }
-            ch if is_ident_start(ch) => {
-                let start = index;
+            b':' if data || depth == 0 => {
+                add_command(start, index, shorthand);
                 index += 1;
-                while index < chars.len()
-                    && (is_ident_char(chars[index]) || chars[index] == CURSOR_MARKER)
+                start = index;
+                shorthand = false;
+                data = false;
+                depth = 0;
+            }
+            b'(' | b'[' if !data => {
+                depth += 1;
+                index += 1;
+            }
+            b')' | b']' if !data => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            ch if ch.is_ascii_alphabetic() || ch == b'_' => {
+                let word_start = index;
+                index += 1;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'$'))
                 {
                     index += 1;
                 }
-                let word: String = chars[start..index]
-                    .iter()
-                    .filter(|ch| **ch != CURSOR_MARKER)
-                    .map(char::to_ascii_uppercase)
-                    .collect();
-                if word == "REM" {
-                    break;
-                }
-                if matches!(word.as_str(), "THEN" | "ELSE") {
-                    statement_head.clear();
+                if data {
                     continue;
                 }
-                if statement_head.len() < 2 {
-                    statement_head.push(word.clone());
+                let word = source[word_start..index].to_ascii_uppercase();
+                if word == "REM" {
+                    index = word_start;
+                    break;
                 }
                 if word == "DATA" {
-                    let mut quoted = false;
-                    while index < chars.len() {
-                        match chars[index] {
-                            ':' if !quoted => break,
-                            '"' => quoted = !quoted,
-                            _ => {}
-                        }
-                        index += 1;
-                    }
-                } else if matches!(word.as_str(), "GOTO" | "GOSUB" | "RESUME") {
-                    // Event targets retain their numeric grammar. A following
-                    // ELSE/colon starts a new ordinary control statement.
-                    let event_target = statement_head.first().is_some_and(|head| {
-                        matches!(head.as_str(), "AFTER" | "EVERY")
-                            || (head == "ON"
-                                && statement_head
-                                    .get(1)
-                                    .is_some_and(|kind| matches!(kind.as_str(), "MOUSE" | "SQ")))
-                    });
-                    if !event_target {
-                        collect_control_label_targets(chars, index, &mut spans);
-                    }
+                    data = true;
+                } else if depth == 0 && matches!(word.as_str(), "THEN" | "ELSE") {
+                    add_command(start, word_start, shorthand);
+                    start = index;
+                    shorthand = true;
                 }
             }
-            _ => {
-                if chars[index] == ':' {
-                    statement_head.clear();
-                }
-                index += 1;
-            }
+            _ => index += 1,
         }
     }
+    add_command(start, index, shorthand);
     spans
-}
-
-fn collect_control_label_targets(
-    chars: &[char],
-    mut index: usize,
-    spans: &mut Vec<(usize, usize)>,
-) {
-    loop {
-        while index < chars.len() && (chars[index].is_whitespace() || chars[index] == CURSOR_MARKER)
-        {
-            index += 1;
-        }
-        let start = index;
-        let symbolic = chars.get(index).is_some_and(|ch| is_ident_start(*ch));
-        if symbolic {
-            while index < chars.len()
-                && (is_ident_char(chars[index]) || chars[index] == CURSOR_MARKER)
-            {
-                index += 1;
-            }
-            let name: String = chars[start..index]
-                .iter()
-                .filter(|ch| **ch != CURSOR_MARKER)
-                .collect();
-            if !crate::labels::label_identifier(&name) {
-                return;
-            }
-        } else {
-            while index < chars.len()
-                && (chars[index].is_ascii_digit() || chars[index] == CURSOR_MARKER)
-            {
-                index += 1;
-            }
-            if index == start {
-                return;
-            }
-        }
-        let mut next = index;
-        while next < chars.len() && (chars[next].is_whitespace() || chars[next] == CURSOR_MARKER) {
-            next += 1;
-        }
-        if next < chars.len()
-            && !matches!(chars[next], ',' | ':' | '\'')
-            && formatter_keyword_end(chars, next, "ELSE").is_none()
-        {
-            return;
-        }
-        if symbolic {
-            spans.push((start, index));
-        }
-        if chars.get(next) != Some(&',') {
-            return;
-        }
-        index = next + 1;
-    }
 }
 
 fn split_single_quote_comment(text: &str) -> (&str, Option<(usize, &str)>) {
@@ -6343,16 +6215,44 @@ mod tests {
             ("10 GOTO MiEtiqueta$", ""),
             ("10 GOTO MiEtiqueta+1", ""),
             ("10 RESUME NEXT", ""),
-            ("10 AFTER 1 GOSUB MiEtiqueta", ""),
-            ("10 EVERY 1 GOSUB MiEtiqueta", ""),
-            ("10 ON MOUSE LEFTDOWN GOSUB MiEtiqueta", ""),
-            ("10 ON SQ(1) GOSUB MiEtiqueta", ""),
+            ("10 AFTER 1 GOSUB MiEtiqueta", "MiEtiqueta"),
+            ("10 EVERY 1 GOSUB MiEtiqueta", "MiEtiqueta"),
+            ("10 ON MOUSE LEFTDOWN GOSUB MiEtiqueta", "MiEtiqueta"),
+            ("10 ON SQ(1) GOSUB MiEtiqueta", "MiEtiqueta"),
             ("10 ON SQValue GOTO MiEtiqueta", "MiEtiqueta"),
             (
                 "10 IF X THEN AFTER 1 GOSUB MiEtiqueta ELSE GOSUB Otra",
+                "MiEtiquetaOtra",
+            ),
+            ("10 AFTER 1 GOSUB MiEtiqueta:GOSUB Otra", "MiEtiquetaOtra"),
+            ("10 RESTORE MiEtiqueta", ""),
+            ("RUN MiEtiqueta", "MiEtiqueta"),
+            ("CHAIN \"next.bas\",MiEtiqueta", "MiEtiqueta"),
+            (
+                "CHAIN MERGE \"next.bas\",MiEtiqueta,DELETE Inicio-Final",
+                "MiEtiquetaInicioFinal",
+            ),
+            ("IF X THEN MiEtiqueta ELSE Otra", "MiEtiquetaOtra"),
+            ("IF X GOTO MiEtiqueta ELSE Otra", "MiEtiquetaOtra"),
+            ("IF X THEN PRINT MiEtiqueta ELSE Otra", "Otra"),
+            ("LIST Inicio-Final", "InicioFinal"),
+            ("DELETE -Final", "Final"),
+            ("EDIT MiEtiqueta", "MiEtiqueta"),
+            ("RENUM 10,10,Inicio,Final", "InicioFinal"),
+            ("RENUM MiEtiqueta,Otra,Inicio,Final", "InicioFinal"),
+            ("RENUM MiEtiqueta,Otra", ""),
+            ("RESTORE MiEtiqueta+1", ""),
+            ("CHAIN \"next.bas\",MiEtiqueta+1", ""),
+            ("IF X THEN MiEtiqueta+1 ELSE Otra=1", ""),
+            ("PRINT A(1:2):GOTO MiEtiqueta", "MiEtiqueta"),
+            ("PRINT \"ñ:THEN Otra\":RESTORE MiEtiqueta", ""),
+            (
+                "DATA RESTORE MiEtiqueta,\"LIST Inicio-Final\":RUN Otra",
                 "Otra",
             ),
-            ("10 AFTER 1 GOSUB MiEtiqueta:GOSUB Otra", "Otra"),
+            ("DATA one ' ignored:RUN MiEtiqueta", ""),
+            ("REM RUN MiEtiqueta:LIST Inicio-Final", ""),
+            ("DEBUG MiEtiqueta", ""),
         ];
         for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
             let palette = syntax_palette_for(theme);
@@ -6374,6 +6274,59 @@ mod tests {
     }
 
     #[test]
+    fn restore_numeric_names_use_variable_colours_in_both_themes() {
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            for source in [
+                "RESTORE MiEtiqueta",
+                "RESTORE (MiEtiqueta)",
+                "RESTORE MiEtiqueta+1",
+            ] {
+                let rendered = highlight_normalized_code(source.to_string(), true, None, palette);
+                let chars = rendered_character_styles(&rendered);
+                let start = source.find("MiEtiqueta").unwrap();
+                assert!(
+                    chars[start..start + "MiEtiqueta".len()]
+                        .iter()
+                        .all(|(_, style)| style == palette.variable),
+                    "{source}, {theme:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn line_argument_colours_follow_the_caret_without_changing_label_spelling() {
+        for (source, expected) in [
+            ("AFTER 1 GOSUB FNmeta", "FNmeta"),
+            ("RUN FNmeta", "FNmeta"),
+            ("RESTORE MiEtiqueta", ""),
+            ("IF X THEN Inicio ELSE Final", "InicioFinal"),
+            ("LIST Inicio-Final", "InicioFinal"),
+            ("RENUM 10,10,Inicio,Final", "InicioFinal"),
+            ("CHAIN \"ñ.bas\",FNmeta", "FNmeta"),
+        ] {
+            assert_eq!(normalize_main_code_inner(source, false), source);
+            let mut typed = Vec::new();
+            let mut cursor = 0;
+            type_prompt_text(&mut typed, &mut cursor, source);
+            assert_eq!(typed.iter().collect::<String>(), source);
+            let original: Vec<_> = source.chars().collect();
+            for position in 0..=original.len() {
+                let mut editing = original.clone();
+                editing.insert(position, CURSOR_MARKER);
+                let spans = control_label_spans(&editing);
+                let names: String = spans
+                    .into_iter()
+                    .flat_map(|(start, end)| editing[start..end].iter().copied())
+                    .filter(|ch| *ch != CURSOR_MARKER)
+                    .collect();
+                assert_eq!(names, expected, "{source}, caret {position}");
+            }
+        }
+    }
+
+    #[test]
     fn label_spelling_is_independent_of_same_named_variables() {
         let cases = HashMap::from([
             ("MIETIQUETA".to_string(), "mIetiqueta".to_string()),
@@ -6386,6 +6339,10 @@ mod tests {
         assert_eq!(
             apply_identifier_case_for_display("10 MiEtiqueta=1:GOTO MiEtiqueta", &cases),
             "10 mIetiqueta=1:GOTO MiEtiqueta"
+        );
+        assert_eq!(
+            apply_identifier_case_for_display("10 RESTORE MiEtiqueta", &cases),
+            "10 RESTORE mIetiqueta"
         );
         assert_eq!(normalize_code("10 goto FNmeta"), "10 GOTO FNmeta");
         assert_eq!(
@@ -6474,6 +6431,49 @@ mod tests {
                 "DATA GOTO Salida,200:ON X GOTO Salida,30",
             ),
             ("PRINT 1 ' GOTO Salida,200", "PRINT 1 ' GOTO Salida,200"),
+        ] {
+            assert_eq!(renumber_editor_line_references(source, &mapping), expected);
+        }
+    }
+
+    #[test]
+    fn editor_renum_uses_complete_shared_line_targets() {
+        let mapping = HashMap::from([(110, 1000), (120, 1010), (200, 1020)]);
+        for (source, expected) in [
+            ("RESTORE 110", "RESTORE 1000"),
+            ("RESTORE 00110 ' RESTORE 120", "RESTORE 1000 ' RESTORE 120"),
+            ("RESTORE", "RESTORE"),
+            (
+                "RESTORE Records:RESTORE (110)",
+                "RESTORE Records:RESTORE (110)",
+            ),
+            (
+                "RESTORE 110+N:RESTORE 110 + 0",
+                "RESTORE 110+N:RESTORE 110 + 0",
+            ),
+            ("RESTORE +110:RESTORE &H6E", "RESTORE +110:RESTORE &H6E"),
+            ("RESTORE 110.0:RESTORE 110E0", "RESTORE 110.0:RESTORE 110E0"),
+            (
+                "IF X THEN RESTORE 110 ELSE RESTORE 120",
+                "IF X THEN RESTORE 1000 ELSE RESTORE 1010",
+            ),
+            ("RESTORE 999", "RESTORE 999"),
+            (
+                "PRINT \"RESTORE 110\":REM RESTORE 120",
+                "PRINT \"RESTORE 110\":REM RESTORE 120",
+            ),
+            (
+                "DATA RESTORE 110,\"RESTORE 120\":RESTORE 200",
+                "DATA RESTORE 110,\"RESTORE 120\":RESTORE 1020",
+            ),
+            (
+                "CHAIN \"child\",110:CHAIN MERGE \"child\",120,DELETE 110-200",
+                "CHAIN \"child\",110:CHAIN MERGE \"child\",120,DELETE 1000-1020",
+            ),
+            (
+                "LIST 110-200:EDIT 120:DELETE -200:RENUM 10,10,110,200",
+                "LIST 1000-1020:EDIT 1010:DELETE -1020:RENUM 10,10,1000,1020",
+            ),
         ] {
             assert_eq!(renumber_editor_line_references(source, &mapping), expected);
         }

@@ -6,6 +6,8 @@ impl Interpreter {
     pub(super) fn reset_audio(&mut self) {
         self.audio.reset();
         self.sound_handlers = [None; 3];
+        self.symbolic_callbacks
+            .retain(|key, _| !matches!(key, CallbackId::Sound(_)));
         self.has_sound_handlers = false;
         self.next_sound_poll = Instant::now();
         self.sound_poll_forced = false;
@@ -207,14 +209,18 @@ impl Interpreter {
         }
         let value = self.eval_number(&body[1..close])?;
         let channel = self.sound_channel(value)?;
-        let target = parse_line_number_literal(tail[5..].trim())
-            .ok_or_else(|| self.err(ErrorCode::InvalidLineNumber))?;
+        let key = CallbackId::Sound(channel.trailing_zeros() as usize);
+        let (target, binding) = self.callback_reference(&key, tail[5..].trim())?;
         if target != 0 {
             let at = self
                 .cursor_for_line(target)
                 .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?;
             self.validate_function_jump(target, &at, true)?;
+            if binding.is_some() {
+                self.validate_callback_target(target)?;
+            }
         }
+        self.set_callback_binding(key, if target == 0 { None } else { binding });
         self.sound_handlers[channel.trailing_zeros() as usize] = (target != 0).then_some(target);
         self.has_sound_handlers = self.sound_handlers.iter().any(Option::is_some);
         if target != 0 {
@@ -245,6 +251,7 @@ impl Interpreter {
             if self.audio.sq(1 << index) & 7 == 0 {
                 continue;
             }
+            let target = self.callback_target(&CallbackId::Sound(index), target)?;
             let at = self
                 .cursor_for_line(target)
                 .ok_or_else(|| self.err(ErrorCode::TargetLineNotFound))?;
