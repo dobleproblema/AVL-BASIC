@@ -211,11 +211,15 @@ Use rustup so the repository selects the same compiler on Windows and Linux/WSL.
 If this directory has an older local override, remove it with
 `rustup override unset` and check the selected version with `rustc --version`.
 
-Build the release interpreter:
+Build the interpreter for development:
 
 ```bash
 cargo build --release
 ```
+
+Official prebuilt Windows and Linux releases use profile-guided optimization
+(PGO) with representative workloads. `cargo build --release` remains a normal
+optimized build for development and does not run the maintainer PGO pipeline.
 
 Audio uses Kira and CPAL, with built-in decoding for WAV PCM, MP3, Ogg Vorbis,
 and FLAC. On Linux, building also requires `pkg-config` and the ALSA development
@@ -335,17 +339,21 @@ connection.
 
 ## Release Packaging
 
-Maintainer documentation tools are kept outside the checkout. Set
-`AVL_BASIC_TOOLS_DIR` to the directory containing `render_manuals.py` and
-`render_readme.py`; the packagers pass the current checkout through
-`AVL_BASIC_REPO`. Install that directory's pinned `requirements-docs.txt`
+Maintainer build and documentation tools are kept outside the checkout. Use
+Python 3.11 or newer for packaging. Set
+`AVL_BASIC_TOOLS_DIR` to the directory containing `build_pgo_release.py`,
+`render_manuals.py` and `render_readme.py`; the packagers pass the current
+checkout through `AVL_BASIC_REPO`. Install that directory's pinned `requirements-docs.txt`
 dependency in the Python environment used for packaging. Both packagers
 regenerate the offline HTML from the current TXT manuals and Markdown README.
 
-After validation, run `python packaging/package_windows_release.py --skip-build`
-for Windows, or `python3 packaging/package_linux_release.py --skip-build` on
-Linux/WSL. Both packages include the HTML manuals, the complete sample tree and
-license notices. The Linux archive preserves executable permissions and records
+After validation, run `python packaging/package_windows_release.py` for Windows,
+or `python3 packaging/package_linux_release.py` on Linux/WSL. The packagers build
+and verify PGO executables by default. `--skip-build` reuses an installed PGO
+executable only with a valid local receipt matching its hash, version, target,
+source and core profile; an ordinary Cargo build does not qualify. Receipts and
+training profiles remain local build output. Both packages include the HTML
+manuals, the complete sample tree and license notices. The Linux archive preserves executable permissions and records
 the binary's minimum glibc version.
 
 Unpacked staging directories and raw executables are local build output.

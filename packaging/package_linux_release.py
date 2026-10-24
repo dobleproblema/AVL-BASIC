@@ -1,7 +1,8 @@
 """Package a Linux x86-64 release with manuals, samples and desktop integration.
 
-Run on Linux/WSL after copying the release binary to target/release/avl-basic,
-or omit --skip-build to build it there. The archive preserves executable modes.
+Run on Linux/WSL to build and verify the release PGO executable. --skip-build
+requires an installed PGO binary with a valid local receipt. The archive preserves
+executable modes.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from package_windows_release import (
     ROOT, RELEASE_DIR, build_html_manuals, build_html_readme, copy_tree,
     documentation_tools, language_version,
 )
+from release_build import copy_release_binary, prepare_release_binary
 
 
 def glibc_requirement(binary: Path) -> str:
@@ -38,14 +40,10 @@ def build_package(skip_build: bool) -> Path:
     package_name = f"avl-basic-{version}-linux-x64"
     stage = RELEASE_DIR / package_name
     archive = RELEASE_DIR / f"{package_name}.tar.gz"
-    binary = ROOT / "target" / "release" / "avl-basic"
-    if not skip_build:
-        subprocess.run(
-            ["cargo", "build", "--release", "--locked", "--target-dir", str(ROOT / "target")],
-            cwd=ROOT, check=True,
-        )
-    if not binary.is_file():
-        raise SystemExit(f"Missing release executable: {binary}")
+    executable = prepare_release_binary(
+        ROOT, "x86_64-unknown-linux-gnu", version, skip_build,
+    )
+    binary = executable.path
     header = binary.read_bytes()[:20]
     if header[:6] != b"\x7fELF\x02\x01" or header[18:20] != b"\x3e\x00":
         raise SystemExit("Expected a little-endian Linux x86-64 ELF executable")
@@ -56,7 +54,7 @@ def build_package(skip_build: bool) -> Path:
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
-    shutil.copy2(binary, stage / "avl-basic")
+    copy_release_binary(executable, stage / "avl-basic")
     (stage / "avl-basic").chmod(0o755)
     for name in ["COPYING", "LICENSES"]:
         shutil.copy2(ROOT / name, stage / name)
@@ -140,7 +138,10 @@ Included files
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument(
+        "--skip-build", action="store_true",
+        help="Reuse the installed PGO executable only after validating its local receipt.",
+    )
     args = parser.parse_args()
     print(build_package(args.skip_build))
     return 0

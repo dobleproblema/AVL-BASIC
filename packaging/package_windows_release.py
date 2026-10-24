@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from release_build import copy_release_binary, prepare_release_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_DIR = ROOT / "release"
@@ -28,10 +30,6 @@ def language_version() -> str:
     if not match:
         raise SystemExit("Could not read version from Cargo.toml")
     return match.group(1)
-
-
-def run(command: list[str], cwd: Path) -> None:
-    subprocess.run(command, cwd=str(cwd), check=True)
 
 
 def copy_tree(src: Path, dst: Path) -> None:
@@ -141,12 +139,9 @@ def build_package(skip_build: bool) -> Path:
     package_name = f"avl-basic-{version}-windows-x64"
     stage = RELEASE_DIR / package_name
     zip_path = RELEASE_DIR / f"{package_name}.zip"
-    exe = ROOT / "target" / "release" / "avl-basic.exe"
-
-    if not skip_build:
-        run(["cargo", "build", "--release", "--locked"], ROOT)
-    if not exe.exists():
-        raise SystemExit(f"Missing release executable: {exe}")
+    executable = prepare_release_binary(
+        ROOT, "x86_64-pc-windows-msvc", version, skip_build,
+    )
 
     if stage.resolve().parent != RELEASE_DIR.resolve() or stage.is_symlink():
         raise SystemExit(f"Unsafe staging directory: {stage}")
@@ -156,7 +151,7 @@ def build_package(skip_build: bool) -> Path:
         zip_path.unlink()
     stage.mkdir(parents=True)
 
-    shutil.copy2(exe, stage / "avl-basic.exe")
+    copy_release_binary(executable, stage / "avl-basic.exe")
     write_first_readme(stage / "README-FIRST.txt", version)
 
     for name in ["COPYING", "LICENSES"]:
@@ -174,7 +169,7 @@ def main() -> int:
     parser.add_argument(
         "--skip-build",
         action="store_true",
-        help="Reuse target/release/avl-basic.exe instead of running cargo build.",
+        help="Reuse the installed PGO executable only after validating its local receipt.",
     )
     args = parser.parse_args()
 
