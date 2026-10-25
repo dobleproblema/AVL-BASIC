@@ -140,7 +140,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 143-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 145-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -198,7 +198,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-143 sample programs and their visual gallery are optional companion material.
+145 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -330,7 +330,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 143 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 145 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source
