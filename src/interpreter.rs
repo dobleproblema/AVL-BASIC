@@ -4,11 +4,15 @@ mod audio_commands;
 mod color_lut;
 mod fused_leaves;
 mod gouraud_ops;
+mod local_array_pool;
 mod mat_compiled;
 #[cfg(test)]
 mod mat_compiled_tests;
 mod mat_stats;
 mod mat_subarrays;
+mod sub_bindings;
+#[cfg(test)]
+mod sub_call_cache_tests;
 #[cfg(test)]
 mod symbolic_jump_tests;
 mod texture_ops;
@@ -19,7 +23,9 @@ mod texture_transparency_tests;
 
 use alpha_ops::compile_alpha_clause;
 use gouraud_ops::CompiledGouraud;
+use local_array_pool::LocalArrayPool;
 use mat_compiled::CompiledMatAssignment;
+use sub_bindings::{SubBindingPlan, SubCallBindings};
 use texture_ops::{
     compile_textured_quad_statement, compile_textured_triangle_statement, CompiledTexturedQuad,
     CompiledTexturedTriangle,
@@ -105,6 +111,7 @@ const UNRESOLVED_NUMERIC_SLOT: usize = usize::MAX;
 static NEXT_NUMERIC_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 const UNRESOLVED_ARRAY_SLOT: usize = usize::MAX;
 static NEXT_ARRAY_TABLE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_SUB_CATALOG_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 struct CachedNumericSlot {
@@ -1331,11 +1338,26 @@ struct ActiveFunctionFrame {
     return_value: Option<Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+struct SubRuntimeState {
+    local_array_pool: LocalArrayPool,
+    sub_catalog_id: u64,
+}
+
+impl Default for SubRuntimeState {
+    fn default() -> Self {
+        Self {
+            local_array_pool: LocalArrayPool::default(),
+            sub_catalog_id: NEXT_SUB_CATALOG_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct UserSub {
     name: Rc<str>,
     params: Vec<String>,
-    local_specs: Vec<LocalSpec>,
+    binding_plan: SubBindingPlan,
     start: Cursor,
     end: Cursor,
     uses_error_handling: bool,
@@ -1454,55 +1476,6 @@ impl InterpreterDebugPause<'_> {
 enum SavedSubName {
     Numeric(Option<f64>),
     String(Option<String>),
-}
-
-#[derive(Debug)]
-struct SavedSubBindings<'a> {
-    name: &'a str,
-    name_value: SavedSubName,
-    numeric: Vec<(&'a str, Option<f64>)>,
-    string: Vec<(&'a str, Option<String>)>,
-    arrays: Vec<(&'a str, SavedArrayBinding)>,
-    aliases: Vec<(&'a str, Option<String>)>,
-}
-
-impl<'a> SavedSubBindings<'a> {
-    fn new(interpreter: &Interpreter, name: &'a str) -> Self {
-        let name_value = if name.ends_with('$') {
-            SavedSubName::String(interpreter.string_variables.get(name).cloned())
-        } else {
-            SavedSubName::Numeric(interpreter.numeric_variables.get(name).copied())
-        };
-        Self {
-            name,
-            name_value,
-            numeric: Vec::new(),
-            string: Vec::new(),
-            arrays: Vec::new(),
-            aliases: Vec::new(),
-        }
-    }
-
-    fn restore(self, interpreter: &mut Interpreter) {
-        restore_numeric_bindings_ref(&mut interpreter.numeric_variables, self.numeric);
-        restore_string_bindings_ref(&mut interpreter.string_variables, self.string);
-        interpreter.restore_array_alias_bindings(self.aliases);
-        interpreter.restore_array_bindings(self.arrays);
-        match self.name_value {
-            SavedSubName::Numeric(Some(value)) => {
-                set_numeric_binding_ref(&mut interpreter.numeric_variables, self.name, value);
-            }
-            SavedSubName::Numeric(None) => {
-                interpreter.numeric_variables.remove(self.name);
-            }
-            SavedSubName::String(Some(value)) => {
-                set_string_binding_ref(&mut interpreter.string_variables, self.name, value);
-            }
-            SavedSubName::String(None) => {
-                interpreter.string_variables.remove(self.name);
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -1682,6 +1655,7 @@ struct CompiledMove {
 struct CompiledCall {
     name: Rc<str>,
     args: Box<[CompiledSubCallArgument]>,
+    target: RefCell<Option<(u64, Rc<UserSub>)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2498,6 +2472,7 @@ pub struct Interpreter {
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
     arrays: ArrayVariables,
+    sub_runtime: Box<SubRuntimeState>,
     // Except for prepare_run after arrays.clear(), mutate through the binding helpers below.
     array_aliases: FastHashMap<String, String>,
     data: Vec<Value>,
@@ -2509,6 +2484,7 @@ pub struct Interpreter {
     routine_definition_skips: HashMap<Cursor, Cursor>,
     single_line_function_cache: FastHashMap<Rc<str>, Rc<CompiledSingleLineFunctionBody>>,
     subs: HashMap<String, Rc<UserSub>>,
+
     function_call_stack: Vec<Rc<str>>,
     sub_call_stack: Vec<Rc<str>>,
     active_functions: Vec<ActiveFunctionFrame>,
@@ -2625,6 +2601,7 @@ impl Interpreter {
             texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
             arrays: ArrayVariables::default(),
+            sub_runtime: Box::default(),
             array_aliases: FastHashMap::default(),
             data: Vec::new(),
             data_line_starts: HashMap::new(),
@@ -2635,6 +2612,7 @@ impl Interpreter {
             routine_definition_skips: HashMap::new(),
             single_line_function_cache: FastHashMap::default(),
             subs: HashMap::new(),
+
             function_call_stack: Vec::new(),
             sub_call_stack: Vec::new(),
             active_functions: Vec::new(),
@@ -3094,7 +3072,7 @@ impl Interpreter {
         // bindings have already been restored before the fresh run clears them.
         self.functions.clear();
         self.single_line_function_cache.clear();
-        self.subs.clear();
+        self.clear_sub_catalog();
         self.fn_line_owner.clear();
         self.sub_line_owner.clear();
         self.expression_cache.clear();
@@ -4111,6 +4089,7 @@ impl Interpreter {
         self.string_variables.clear();
         self.texture_cache.clear();
         self.arrays.clear();
+        self.sub_runtime.local_array_pool.clear();
         self.array_aliases.clear();
         self.data_pointer = 0;
         self.for_stack.clear();
@@ -4181,7 +4160,7 @@ impl Interpreter {
         self.routines_prepared = false;
         self.routine_definition_skips.clear();
         self.single_line_function_cache.clear();
-        self.subs.clear();
+        self.clear_sub_catalog();
         self.function_call_stack.clear();
         self.sub_call_stack.clear();
         self.active_functions.clear();
@@ -5728,6 +5707,7 @@ impl Interpreter {
                 self.string_variables.clear();
                 self.texture_cache.clear();
                 self.arrays.clear();
+                self.sub_runtime.local_array_pool.clear();
                 self.for_stack.clear();
                 self.while_stack.clear();
                 self.gosub_stack.clear();
@@ -8584,6 +8564,10 @@ impl Interpreter {
         if saved.iter().any(|(existing, _)| *existing == name) {
             return;
         }
+        saved.push((name, self.take_local_array_binding(name)));
+    }
+
+    fn take_local_array_binding(&mut self, name: &str) -> SavedArrayBinding {
         // A LOCAL name hides a binding, but existing reference parameters must
         // keep the original array, including any writes made through them.
         if self.array_aliases.values().any(|source| source == name) {
@@ -8603,32 +8587,36 @@ impl Interpreter {
                 }
             }
             self.arrays.invalidate_cached_slots();
-            saved.push((name, SavedArrayBinding::Referenced(storage_key)));
+            SavedArrayBinding::Referenced(storage_key)
         } else {
-            saved.push((name, SavedArrayBinding::Value(self.arrays.remove(name))));
+            SavedArrayBinding::Value(self.arrays.remove(name))
         }
     }
 
     fn restore_array_bindings(&mut self, saved: Vec<(&str, SavedArrayBinding)>) {
         for (name, binding) in saved {
-            let value = match binding {
-                SavedArrayBinding::Value(value) => value,
-                SavedArrayBinding::Referenced(storage_key) => {
-                    let value = self.arrays.remove(&storage_key);
-                    for source in self.array_aliases.values_mut() {
-                        if *source == storage_key {
-                            *source = name.to_string();
-                        }
+            self.restore_local_array_binding(name, binding);
+        }
+    }
+
+    fn restore_local_array_binding(&mut self, name: &str, binding: SavedArrayBinding) {
+        let value = match binding {
+            SavedArrayBinding::Value(value) => value,
+            SavedArrayBinding::Referenced(storage_key) => {
+                let value = self.arrays.remove(&storage_key);
+                for source in self.array_aliases.values_mut() {
+                    if *source == storage_key {
+                        *source = name.to_string();
                     }
-                    self.arrays.invalidate_cached_slots();
-                    value
                 }
-            };
-            if let Some(value) = value {
-                set_array_binding_ref(&mut self.arrays, name, value);
-            } else {
-                self.arrays.remove(name);
+                self.arrays.invalidate_cached_slots();
+                value
             }
+        };
+        if let Some(value) = value {
+            set_array_binding_ref(&mut self.arrays, name, value);
+        } else {
+            self.arrays.remove(name);
         }
     }
 
@@ -11117,6 +11105,11 @@ impl Interpreter {
         Ok((remaining.as_secs_f64() / 0.02).ceil())
     }
 
+    fn clear_sub_catalog(&mut self) {
+        self.subs.clear();
+        self.sub_runtime.sub_catalog_id = NEXT_SUB_CATALOG_ID.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn ensure_routine_catalog(&mut self) -> BasicResult<()> {
         if self.routines_prepared {
             return Ok(());
@@ -11126,7 +11119,7 @@ impl Interpreter {
         }
         self.functions = self.immediate_functions.clone();
         self.single_line_function_cache.clear();
-        self.subs.clear();
+        self.clear_sub_catalog();
         self.fn_line_owner.clear();
         self.sub_line_owner.clear();
         self.routine_definition_skips.clear();
@@ -11139,7 +11132,7 @@ impl Interpreter {
         if result.is_err() {
             // A failed preflight must not leave a partially usable catalog.
             self.functions = self.immediate_functions.clone();
-            self.subs.clear();
+            self.clear_sub_catalog();
             self.fn_line_owner.clear();
             self.sub_line_owner.clear();
             self.routine_definition_skips.clear();
@@ -11537,8 +11530,8 @@ impl Interpreter {
             name,
             Rc::new(UserSub {
                 name: sub_name,
+                binding_plan: SubBindingPlan::new(&params, &local_specs),
                 params,
-                local_specs,
                 start,
                 end: end.clone(),
                 uses_error_handling,
@@ -13563,7 +13556,7 @@ impl Interpreter {
         self.functions.clear();
         self.immediate_functions.clear();
         self.single_line_function_cache.clear();
-        self.subs.clear();
+        self.clear_sub_catalog();
         self.fn_line_owner.clear();
         self.sub_line_owner.clear();
         self.rebuild_data();
@@ -15599,37 +15592,36 @@ impl Interpreter {
         if self.inside_multiline_function() {
             return Err(self.err(ErrorCode::FunctionForbidden));
         }
-        let name = compiled.name.as_ref();
         match compiled.args.as_ref() {
-            [] => self.call_multiline_sub(name, &mut std::iter::empty()),
+            [] => self.call_compiled_sub(compiled, &mut std::iter::empty()),
             [arg0] => {
                 let value0 = self.eval_compiled_sub_call_argument(arg0)?;
-                self.call_multiline_sub(name, &mut [value0].into_iter())
+                self.call_compiled_sub(compiled, &mut [value0].into_iter())
             }
             [arg0, arg1] => {
                 let value0 = self.eval_compiled_sub_call_argument(arg0)?;
                 let value1 = self.eval_compiled_sub_call_argument(arg1)?;
-                self.call_multiline_sub(name, &mut [value0, value1].into_iter())
+                self.call_compiled_sub(compiled, &mut [value0, value1].into_iter())
             }
             [arg0, arg1, arg2] => {
                 let value0 = self.eval_compiled_sub_call_argument(arg0)?;
                 let value1 = self.eval_compiled_sub_call_argument(arg1)?;
                 let value2 = self.eval_compiled_sub_call_argument(arg2)?;
-                self.call_multiline_sub(name, &mut [value0, value1, value2].into_iter())
+                self.call_compiled_sub(compiled, &mut [value0, value1, value2].into_iter())
             }
             [arg0, arg1, arg2, arg3] => {
                 let value0 = self.eval_compiled_sub_call_argument(arg0)?;
                 let value1 = self.eval_compiled_sub_call_argument(arg1)?;
                 let value2 = self.eval_compiled_sub_call_argument(arg2)?;
                 let value3 = self.eval_compiled_sub_call_argument(arg3)?;
-                self.call_multiline_sub(name, &mut [value0, value1, value2, value3].into_iter())
+                self.call_compiled_sub(compiled, &mut [value0, value1, value2, value3].into_iter())
             }
             args => {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.eval_compiled_sub_call_argument(arg)?);
                 }
-                self.call_multiline_sub(name, &mut values.into_iter())
+                self.call_compiled_sub(compiled, &mut values.into_iter())
             }
         }
     }
@@ -15686,6 +15678,37 @@ impl Interpreter {
         let Some(sub) = self.subs.get(name).cloned() else {
             return Err(self.err(ErrorCode::Undefined));
         };
+        self.call_resolved_sub(sub, args)
+    }
+
+    fn call_compiled_sub(
+        &mut self,
+        compiled: &CompiledCall,
+        args: &mut dyn ExactSizeIterator<Item = Value>,
+    ) -> BasicResult<()> {
+        let cached = compiled.target.borrow();
+        let sub = cached
+            .as_ref()
+            .filter(|(catalog, _)| *catalog == self.sub_runtime.sub_catalog_id)
+            .map(|(_, sub)| sub.clone());
+        drop(cached);
+        let sub = if let Some(sub) = sub {
+            sub
+        } else {
+            let Some(sub) = self.subs.get(compiled.name.as_ref()).cloned() else {
+                return Err(self.err(ErrorCode::Undefined));
+            };
+            *compiled.target.borrow_mut() = Some((self.sub_runtime.sub_catalog_id, sub.clone()));
+            sub
+        };
+        self.call_resolved_sub(sub, args)
+    }
+
+    fn call_resolved_sub(
+        &mut self,
+        sub: Rc<UserSub>,
+        args: &mut dyn ExactSizeIterator<Item = Value>,
+    ) -> BasicResult<()> {
         if self
             .sub_call_stack
             .iter()
@@ -15697,52 +15720,11 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
 
-        let mut saved = SavedSubBindings::new(self, sub.name.as_ref());
-
-        for (param, value) in sub.params.iter().zip(args) {
-            match value {
-                Value::Number(n) => {
-                    if param.ends_with('$') {
-                        saved.restore(self);
-                        return Err(self.err(ErrorCode::TypeMismatch));
-                    }
-                    save_numeric_binding_ref(&self.numeric_variables, &mut saved.numeric, param);
-                    set_numeric_binding_ref(&mut self.numeric_variables, param, n);
-                }
-                Value::Str(s) => {
-                    if !param.ends_with('$') {
-                        saved.restore(self);
-                        return Err(self.err(ErrorCode::TypeMismatch));
-                    }
-                    save_string_binding_ref(&self.string_variables, &mut saved.string, param);
-                    set_string_binding_ref(&mut self.string_variables, param, s);
-                }
-                Value::ArrayRef(source) => {
-                    let Some(array) = self.arrays.get(&source) else {
-                        saved.restore(self);
-                        return Err(self.err(ErrorCode::Undefined));
-                    };
-                    if param.ends_with('$') != array.is_string() {
-                        saved.restore(self);
-                        return Err(self.err(ErrorCode::TypeMismatch));
-                    }
-                    save_numeric_binding_ref(&self.numeric_variables, &mut saved.numeric, param);
-                    save_string_binding_ref(&self.string_variables, &mut saved.string, param);
-                    save_array_alias_binding_ref(&self.array_aliases, &mut saved.aliases, param);
-                    self.numeric_variables.remove(param);
-                    self.string_variables.remove(param);
-                    self.set_array_alias_binding(param, source);
-                }
-            }
-        }
-
-        if let Err(err) = self.bind_local_specs_vec(
-            &sub.local_specs,
-            &mut saved.numeric,
-            &mut saved.string,
-            &mut saved.arrays,
-            &mut saved.aliases,
-        ) {
+        let mut saved = SubCallBindings::new(self, sub.as_ref());
+        if let Err(err) = saved
+            .bind_arguments(self, args)
+            .and_then(|_| saved.bind_locals(self))
+        {
             saved.restore(self);
             return Err(err);
         }
@@ -21999,6 +21981,7 @@ fn compile_call_statement(source: &str) -> BasicResult<CompiledCall> {
     Ok(CompiledCall {
         name: Rc::<str>::from(name.as_str()),
         args,
+        target: RefCell::new(None),
     })
 }
 
