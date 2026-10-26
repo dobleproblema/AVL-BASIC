@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **145 runnable programs**. They are not filler or API
+AVL BASIC ships with **144 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-145-program catalog. On GitHub, select any image or program name
+144-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -235,7 +235,7 @@ Every image above was captured from the real Rust runtime.
 - **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 
-## Full catalog — 145 programs
+## Full catalog — 144 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -264,14 +264,13 @@ demo.
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
-### Games, applications, and algorithmic scenes (10)
+### Games, applications, and algorithmic scenes (9)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
-| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) | Rescue a golden core from a destructible crystal cathedral, then use the remaining orbs for demolition. | DEF SUB, DEF FN, LOCAL, array references, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV |
-| <a id="sample-g-crystal-classic"></a>[`g-crystal-classic.bas`](g-crystal-classic.bas) | Classic GOSUB version of Crystal Siege with the same rescue and demolition objective. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV |
+| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) | Rescue a golden core from a destructible crystal cathedral, then use the remaining orbs for demolition. I shows technical information; M switches between 640, 800 and 1024. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV |
 | <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects. | DEF SUB, DEF FN, LOCAL, array references, block IF, DDA raycasting, TRECTANGLE, TQUAD, perspective correction, vertex lighting, light map, depth testing, ALPHA, AUDIO, WAV |
 | <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play the same maze with warm torch lighting, the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | DEF SUB, DEF FN, LOCAL, array references, block IF, SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting, TQUAD, perspective correction, vertex lighting, light map, ALPHA |
 | <a id="sample-g-dustline"></a>[`g-dustline.bas`](g-dustline.bas) [★](#highlight-g-dustline) | Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times. | DEF SUB, multiline DEF FN, LOCAL, array references, block IF, procedure error handling, BLOAD, TRECTANGLE, ALPHA, fixed-step physics, KEYDOWN, AUDIO, sequential files, spatial indexing |
