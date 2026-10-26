@@ -89,9 +89,9 @@ not mockups or engine screenshots:
 <table>
 <tr>
 <td width="33%" valign="top">
-  <a href="samples/README.md#highlight-g-zoomer"><img src="samples/showcase/g-zoomer.png" alt="BASIC texture zoomer" width="100%"></a><br>
-  <strong>BASIC Zoomer</strong><br>
-  Block-sampled texture mapping implemented directly in BASIC.
+  <a href="samples/README.md#highlight-g-crystal"><img src="samples/showcase/g-crystal.png" alt="Crystal Siege: a destructible crystal cathedral and its golden core" width="100%"></a><br>
+  <strong>Crystal Siege</strong><br>
+  Rescue the golden core, then bring down a crystal cathedral with ten shots.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-voxel"><img src="samples/showcase/g-voxel.png" alt="Flight over a procedural voxel landscape" width="100%"></a><br>

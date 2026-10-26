@@ -50,12 +50,12 @@ to inspect its BASIC source.
   <code>RUN "/samples/g-bigbang.bas"</code>
 </td>
 <td width="50%" valign="top">
-  <a id="highlight-g-zoomer"></a>
-  <a href="g-zoomer.bas"><img src="showcase/g-zoomer.png" alt="BASIC Zoomer running in AVL BASIC" width="100%"></a><br>
-  <strong>5. BASIC Zoomer</strong><br>
-  Block-sampled texture mapping powers a retro zoomer.<br>
-  <sub><strong>Shows:</strong> BLOAD · TEST · block rendering</sub><br>
-  <code>RUN "/samples/g-zoomer.bas"</code>
+  <a id="highlight-g-crystal"></a>
+  <a href="g-crystal.bas"><img src="showcase/g-crystal.png" alt="Crystal Siege running in AVL BASIC" width="100%"></a><br>
+  <strong>5. Crystal Siege</strong><br>
+  Rescue the golden core, then bring down a crystal cathedral with ten shots.<br>
+  <sub><strong>Shows:</strong> GOSUB · shared arrays · fixed-step Verlet/PBD · GTRIANGLE · depth buffer · AUDIO · WAV</sub><br>
+  <code>RUN "/samples/g-crystal.bas"</code>
 </td>
 </tr>
 <tr>
@@ -262,7 +262,7 @@ demo.
 | <a id="sample-g-tunnel-tquad"></a>[`g-tunnel-tquad.bas`](g-tunnel-tquad.bas) | Two boundary rings form a cylindrical tunnel with 48 native perspective-correct textured walls. | TQUAD, perspective correction, depth buffer, cylindrical geometry, texture animation |
 | <a id="sample-g-tunnel"></a>[`g-tunnel.bas`](g-tunnel.bas) | BASIC texture lookup creates a block-rendered tunnel. | BLOAD, TEST, texture mapping |
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
-| <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) [★](#highlight-g-zoomer) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
+| <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
 ### Games, applications, and algorithmic scenes (9)
 
@@ -270,7 +270,7 @@ demo.
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
-| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) | Rescue a golden core from a destructible crystal cathedral, then use the remaining orbs for demolition. I shows technical information; M switches between 640, 800 and 1024. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV |
+| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) [★](#highlight-g-crystal) | Rescue a golden core from a destructible crystal cathedral, then use the remaining orbs for demolition. I shows technical information; M switches between 640, 800 and 1024. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV |
 | <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects. | DEF SUB, DEF FN, LOCAL, array references, block IF, DDA raycasting, TRECTANGLE, TQUAD, perspective correction, vertex lighting, light map, depth testing, ALPHA, AUDIO, WAV |
 | <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play the same maze with warm torch lighting, the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | DEF SUB, DEF FN, LOCAL, array references, block IF, SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting, TQUAD, perspective correction, vertex lighting, light map, ALPHA |
 | <a id="sample-g-dustline"></a>[`g-dustline.bas`](g-dustline.bas) [★](#highlight-g-dustline) | Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times. | DEF SUB, multiline DEF FN, LOCAL, array references, block IF, procedure error handling, BLOAD, TRECTANGLE, ALPHA, fixed-step physics, KEYDOWN, AUDIO, sequential files, spatial indexing |
