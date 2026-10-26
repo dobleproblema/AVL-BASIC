@@ -3,8 +3,10 @@
 30     REM Rescue the golden core; use the remaining orbs for demolition.
 40     REM Arrows orbit, W/S zoom, click/Space fires. D demonstrates a siege.
 50     REM R rebuilds, T slows time, P pauses, Q changes solver accuracy.
-60     REM F toggles the frame cap, V sparks, B music, N mute, Esc exits.
+60     REM F toggles the frame cap, V sparks, B music, N mute, M mode, Esc exits.
 70     REM ================================================================
+
+75     ScreenMode=640 : REM Display width: 640, 800 or 1024; M cycles in game.
 
 80     ON ERROR GOTO RuntimeError
 90     CALL InitializeGame
@@ -28,12 +30,12 @@
 240        END
 
 250    DEF SUB InitializeGame()
-260        SCREEN : MODE 640 : RAD : MAT BASE 0 : PAPER RGB(5,7,17) : CLG
-270        DIM DepthBuffer(639,479),NodeScreenX(219),NodeScreenY(219),NodeInverseDepth(219),PaletteRed(6),PaletteGreen(6),PaletteBlue(6)
+260        SCREEN : RAD : MAT BASE 0 : CALL ConfigureDisplay : CLG
+270        DIM NodeScreenX(219),NodeScreenY(219),NodeInverseDepth(219),PaletteRed(6),PaletteGreen(6),PaletteBlue(6)
 280        DIM AutoTargetNode(5),AutoLaunchX(5),AutoLaunchZ(5),AutoCameraYaw(5),AutoCameraPitch(5),AutoCameraDistance(5)
 290        DIM StarX(89),StarY(89),StarColor(89)
 300        DIM SparkX(179),SparkY(179),SparkZ(179),SparkVelocityX(179),SparkVelocityY(179),SparkVelocityZ(179),SparkLifetime(179),SparkSize(179),SparkColor(179)
-310        SMALLFONT TRANSPARENT : INK RGB(145,230,243) : LOCATE 14,14
+310        SMALLFONT TRANSPARENT : INK RGB(145,230,243) : LOCATE ROUND(WIDTH/16-26),ROUND(14*ScreenScaleY)
 320        GPRINT "FAST STACKING - GROWING A CATHEDRAL..." : FRAME
 
 330        CALL LoadPaletteAndSky
@@ -48,10 +50,24 @@
 420        CALL UpdateMusic
 430    SUBEND
 
+431    DEF SUB ConfigureDisplay()
+432        IF ScreenMode<>640 AND ScreenMode<>800 AND ScreenMode<>1024 THEN ScreenMode=640
+433        MODE ScreenMode : SCALE 0,639,0,479 : PAPER RGB(5,7,17) : SMALLFONT TRANSPARENT
+434        DIM DepthBuffer(WIDTH-1,HEIGHT-1) : MAT DepthBuffer=0
+435        ScreenScaleX=(WIDTH-1)/639 : ScreenScaleY=(HEIGHT-1)/479
+436        PreviousMouseX=MOUSEX : PreviousMouseY=MOUSEY
+437    SUBEND
+
 440    DEF SUB CloseGame()
 450        AUDIO STOP : MOUSE 1 : SCREEN CLOSE
 460        ON ERROR GOTO 0
 470    SUBEND
+
+471    DEF SUB CycleDisplay()
+472        WHILE KEYDOWN(77) : FRAME : WEND
+473        ScreenMode=IIF(ScreenMode=640,800,IIF(ScreenMode=800,1024,640))
+474        CALL ConfigureDisplay : PreviousFrameTime=TIME
+475    SUBEND
 
 480    DEF SUB RebuildGame()
 490        CALL ResetStructure : CALL ResetPanels : CALL ResetBeams : CALL ResetRubble
@@ -83,6 +99,8 @@
 730            MusicEnabled=1-MusicEnabled : CALL UpdateMusic
 740        ELSEIF FrameKey$="N" THEN
 750            Muted=1-Muted : CALL UpdateMute
+752        ELSEIF FrameKey$="M" THEN
+754            CALL CycleDisplay
 760        ENDIF
 
 770        cameraInput=ABS(KEYDOWN(28))+ABS(KEYDOWN(29))+ABS(KEYDOWN(30))+ABS(KEYDOWN(31))+ABS(KEYDOWN(87))+ABS(KEYDOWN(83))
@@ -1434,19 +1452,19 @@
 13130      FRECTANGLE 0,432,639,479,RGB(8,12,23) : FRECTANGLE 0,0,639,39,RGB(8,12,23)
 13140      DRAW 0,431,639,431,RGB(42,111,132) : DRAW 0,40,639,40,RGB(42,111,132)
 13150      bestText$=IIF(BestRescueShots>0,STR$(BestRescueShots),"--")
-13160      SMALLFONT TRANSPARENT : INK RGB(177,237,247) : LOCATE 2,1
+13160      SMALLFONT TRANSPARENT : INK RGB(177,237,247) : LOCATE ROUND(2*ScreenScaleX),ROUND(1*ScreenScaleY)
 13170      GPRINT "AVL CRYSTAL SIEGE  ";USING "###.0";FramesPerSecond;" FPS  ORBS ";STR$(ShotsLeft);"/";STR$(MaxShots);"  RESCUE BEST ";bestText$
-13180      INK RGB(133,159,188) : LOCATE 2,2
+13180      INK RGB(133,159,188) : LOCATE ROUND(2*ScreenScaleX),ROUND(2*ScreenScaleY)
 13190      IF RescueAwarded THEN GPRINT "CORE RESCUED - KEEP DEMOLISHING WITH YOUR REMAINING ORBS" ELSE GPRINT "FREE THE GOLD CORE - ORBIT TO FIND GREEN BEARINGS"
-13200      INK RGB(152,184,202) : LOCATE 2,28
+13200      INK RGB(152,184,202) : LOCATE ROUND(2*ScreenScaleX),ROUND(28*ScreenScaleY)
 13210      GPRINT "CLICK/SPACE FIRE  ARROWS ORBIT  W/S ZOOM  T SLOW  P PAUSE  R REBUILD"
-13220      LOCATE 2,29 : GPRINT "D AUTO SIEGE  Q ACCURACY  F FPS  V SPARKS  B MUSIC  N MUTE  ESC EXIT"
+13220      LOCATE ROUND(2*ScreenScaleX),ROUND(29*ScreenScaleY) : GPRINT "D DEMO  Q SOLVER  F FPS  V SPARKS  B MUSIC  N MUTE  M MODE  ESC EXIT"
 
 13230      coreText$=IIF(RescueAwarded,"FREE","HELD")
 13240      progress=MIN(100,100*MIN(FallenFraction/0.68,HeightLossFraction/0.58))
-13250      INK RGB(196,201,161) : LOCATE 2,25
+13250      INK RGB(196,201,161) : LOCATE ROUND(2*ScreenScaleX),ROUND(25*ScreenScaleY)
 13260      GPRINT "CORE ";coreText$;"  EXTRA DEMOLITION ";USING "###";progress;"%  BEARINGS ";STR$(BearingsBroken);"/";STR$(BearingCount);"  USED ";STR$(MaxShots-ShotsLeft)
-13270      INK RGB(121,159,179) : LOCATE 2,26
+13270      INK RGB(121,159,179) : LOCATE ROUND(2*ScreenScaleX),ROUND(26*ScreenScaleY)
 13280      GPRINT NodeCount;" NODES ";LinkCount-BrokenLinkCount;" LINKS  Q";SolverIterations;"  PHYS ";USING "##.0";PhysicsMilliseconds;"ms DRAW ";USING "##.0";DrawingMilliseconds;"ms"
 13290      CALL DrawDestructionScore
 13300      IF FrameKey$="V" THEN
@@ -1459,23 +1477,23 @@
 13360      DRAW AimScreenX+4,AimScreenY,AimScreenX+9,AimScreenY,reticleColor
 13370      DRAW AimScreenX,AimScreenY-9,AimScreenX,AimScreenY-4,reticleColor
 13380      DRAW AimScreenX,AimScreenY+4,AimScreenX,AimScreenY+9,reticleColor
-13390      IF SlowMotion THEN INK RGB(119,221,243) : LOCATE 63,2 : GPRINT "BULLET TIME"
-13400      IF Paused THEN INK RGB(255,220,145) : LOCATE 31,14 : GPRINT "SIMULATION PAUSED"
-13410      IF Muted THEN INK RGB(168,164,187) : LOCATE 65,26 : GPRINT "MUTED"
-13420      IF AutoSiege THEN INK RGB(250,208,143) : LOCATE 65,2 : GPRINT "AUTO SIEGE"
+13390      IF SlowMotion THEN INK RGB(119,221,243) : LOCATE ROUND(63*ScreenScaleX),ROUND(2*ScreenScaleY) : GPRINT "BULLET TIME"
+13400      IF Paused THEN INK RGB(255,220,145) : LOCATE ROUND(WIDTH/16-9),ROUND(14*ScreenScaleY) : GPRINT "SIMULATION PAUSED"
+13410      IF Muted THEN INK RGB(168,164,187) : LOCATE ROUND(65*ScreenScaleX),ROUND(26*ScreenScaleY) : GPRINT "MUTED"
+13420      IF AutoSiege THEN INK RGB(250,208,143) : LOCATE ROUND(65*ScreenScaleX),ROUND(2*ScreenScaleY) : GPRINT "AUTO SIEGE"
 13430      IF RescueAwarded AND AnimationTime<=RescueBannerUntil THEN CALL DrawRescueBanner(bestText$) : EXIT SUB
-13440      IF ShotsLeft=0 AND ProjectileActive=0 THEN INK RGB(244,184,142) : LOCATE 8,24 : GPRINT "NO ORBS LEFT - LET THE PIECES SETTLE OR R TO REBUILD"
+13440      IF ShotsLeft=0 AND ProjectileActive=0 THEN INK RGB(244,184,142) : LOCATE ROUND(WIDTH/16-32),ROUND(24*ScreenScaleY) : GPRINT "NO ORBS LEFT - LET THE PIECES SETTLE OR R TO REBUILD"
 13450  SUBEND
 
 13460  DEF SUB DrawDestructionScore()
-13470      SMALLFONT TRANSPARENT : INK RGB(143,237,183) : LOCATE 2,27
+13470      SMALLFONT TRANSPARENT : INK RGB(143,237,183) : LOCATE ROUND(2*ScreenScaleX),ROUND(27*ScreenScaleY)
 13480      GPRINT "DESTRUCTION ";STR$(DestructionScore);" PTS  RECORD ";STR$(BestDestructionScore)
 13490  SUBEND
 
 13500  DEF SUB DrawRescueBanner(bestText$)
 13510      FRECTANGLE 123,365,517,432,RGB(10,24,34) : RECTANGLE 123,365,517,432,RGB(245,205,108)
-13520      BIGFONT TRANSPARENT : INK RGB(255,224,142) : LOCATE 13,4 : GPRINT "GOLD CORE FREE"
-13530      SMALLFONT TRANSPARENT : INK RGB(184,229,237) : LOCATE 20,6
+13520      BIGFONT TRANSPARENT : INK RGB(255,224,142) : LOCATE ROUND(WIDTH/32-7),ROUND(4*ScreenScaleY) : GPRINT "GOLD CORE FREE"
+13530      SMALLFONT TRANSPARENT : INK RGB(184,229,237) : LOCATE ROUND(WIDTH/16-20),ROUND(6*ScreenScaleY)
 13540      GPRINT "IN ";STR$(RescueShots);" SHOTS | BEST ";bestText$;" | KEEP DEMOLISHING"
 13550      CALL DrawDestructionScore
 13560  SUBEND
