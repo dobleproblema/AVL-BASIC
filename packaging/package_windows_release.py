@@ -38,6 +38,7 @@ def copy_tree(src: Path, dst: Path) -> None:
         "catalog.tsv",
         "f-scores.csv", "f-records.csv", "f-text.txt",
         "g-dustline-best.csv",
+        "g-crystal-scores.csv",
     )
 
     shutil.copytree(src, dst, ignore=ignore_patterns)
