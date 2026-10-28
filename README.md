@@ -91,7 +91,7 @@ not mockups or engine screenshots:
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-crystal"><img src="samples/showcase/g-crystal.png" alt="Crystal Siege: a destructible crystal cathedral and its golden core" width="100%"></a><br>
   <strong>Crystal Siege</strong><br>
-  Rescue the golden core, then bring down a crystal cathedral with ten shots.
+  Rescue the golden core, then demolish a cathedral, observatory or skyport with ten shots.
 </td>
 <td width="33%" valign="top">
   <a href="samples/README.md#highlight-g-voxel"><img src="samples/showcase/g-voxel.png" alt="Flight over a procedural voxel landscape" width="100%"></a><br>
