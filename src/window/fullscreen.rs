@@ -424,6 +424,9 @@ mod platform {
     use x11_dl::{xlib, xrandr};
 
     const TRANSITION_TIMEOUT: Duration = Duration::from_millis(500);
+    // ICCCM WM_STATE values (not provided by x11-dl's Xlib bindings).
+    const NORMAL_STATE: c_ulong = 1;
+    const ICONIC_STATE: c_ulong = 3;
 
     #[derive(Clone, Copy)]
     struct WindowedState {
@@ -731,6 +734,82 @@ mod platform {
         result
     }
 
+    fn managed_window_is_ready(
+        xlib: &xlib::Xlib,
+        display: *mut xlib::Display,
+        id: xlib::Window,
+        wm_state: xlib::Atom,
+    ) -> Result<bool, String> {
+        let mut actual_type = 0;
+        let mut format = 0;
+        let mut count = 0;
+        let mut bytes_after = 0;
+        let mut data: *mut c_uchar = ptr::null_mut();
+        let status = unsafe {
+            (xlib.XGetWindowProperty)(
+                display,
+                id,
+                wm_state,
+                0,
+                1,
+                xlib::False,
+                wm_state,
+                &mut actual_type,
+                &mut format,
+                &mut count,
+                &mut bytes_after,
+                &mut data,
+            )
+        };
+        // ICCCM WM_STATE has a state and an icon window. Only the first
+        // format-32 item is needed; Xlib exposes it as a native unsigned long.
+        let state = if status != xlib::Success as i32 {
+            Err(format!("Cannot read the X11 window's WM_STATE: {status}"))
+        } else if actual_type == 0 {
+            Ok(None)
+        } else if actual_type != wm_state || format != 32 || count != 1 || data.is_null() {
+            Err("Unexpected X11 WM_STATE property".into())
+        } else {
+            Ok(Some(unsafe { *data.cast::<c_ulong>() }))
+        };
+        if !data.is_null() {
+            unsafe { (xlib.XFree)(data.cast()) };
+        }
+        match state? {
+            // An existing minimized window is already managed. Do not wait
+            // for it to become visible or change the user's minimized state.
+            Some(ICONIC_STATE) => Ok(true),
+            Some(NORMAL_STATE) => {
+                let mut attrs: xlib::XWindowAttributes = unsafe { std::mem::zeroed() };
+                if unsafe { (xlib.XGetWindowAttributes)(display, id, &mut attrs) } == 0 {
+                    return Err("Cannot verify the X11 window's mapping".into());
+                }
+                Ok(attrs.map_state == xlib::IsViewable)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn wait_until_managed(
+        xlib: &xlib::Xlib,
+        display: *mut xlib::Display,
+        id: xlib::Window,
+    ) -> Result<(), String> {
+        let wm_state = unsafe { (xlib.XInternAtom)(display, c"WM_STATE".as_ptr(), xlib::False) };
+        let deadline = Instant::now() + TRANSITION_TIMEOUT;
+        loop {
+            if managed_window_is_ready(xlib, display, id, wm_state)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    "The X11 window manager did not manage the window within 500 ms".into(),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn request(
         xlib: &xlib::Xlib,
         display: *mut xlib::Display,
@@ -932,6 +1011,13 @@ mod platform {
             if !supported_atoms.contains(&state) || !supported_atoms.contains(&fullscreen) {
                 return Err("The X11 window manager does not support EWMH fullscreen".into());
             }
+            if enabled {
+                // minifb maps asynchronously. A new MODE window may exist
+                // before the WM manages it; its placement and fullscreen
+                // requests can otherwise race the WM's initial setup. Root
+                // EWMH support alone does not acknowledge this client window.
+                wait_until_managed(&xlib, display, id)?;
+            }
             let previous = atoms_property(&xlib, display, id, state)?.contains(&fullscreen);
             // Keep the snapshot unchanged until OFF succeeds: after a failed
             // transition and rollback, retries must not add the monitor delta
@@ -1074,6 +1160,78 @@ mod platform {
             assert!(fixed_size_hints((0, 600)).is_err());
             assert!(fixed_size_hints((800, 0)).is_err());
             assert!(fixed_size_hints((i32::MAX as usize + 1, 600)).is_err());
+        }
+
+        #[test]
+        #[ignore = "opens native X11 windows; run explicitly with an EWMH window manager"]
+        fn native_immediate_fullscreen_waits_for_each_fresh_window_to_be_managed() {
+            struct RestoringWindow {
+                window: minifb::Window,
+                controller: Controller,
+            }
+
+            impl Drop for RestoringWindow {
+                fn drop(&mut self) {
+                    let _ = self.controller.set(&self.window, false);
+                }
+            }
+
+            let xlib = xlib::Xlib::open().unwrap();
+            // Recreate promptly at each MODE size, without a preliminary
+            // update/present or delay that could hide asynchronous WM setup.
+            for cycle in 0..4 {
+                for logical in [(640, 360), (960, 540), (1280, 720)] {
+                    let window = minifb::Window::new(
+                        "AVL immediate fullscreen management verification",
+                        logical.0,
+                        logical.1,
+                        minifb::WindowOptions {
+                            resize: false,
+                            scale_mode: minifb::ScaleMode::AspectRatioStretch,
+                            ..minifb::WindowOptions::default()
+                        },
+                    )
+                    .expect("X11 test window must open");
+                    let mut owned = RestoringWindow {
+                        window,
+                        controller: Controller::default(),
+                    };
+                    owned.window.set_target_fps(0);
+                    owned
+                        .controller
+                        .set(&owned.window, true)
+                        .unwrap_or_else(|error| panic!("cycle {cycle}, MODE {logical:?}: {error}"));
+                    assert!(owned.controller.is_fullscreen());
+                    let saved = owned.controller.saved.unwrap();
+                    assert_eq!((saved.width as usize, saved.height as usize), logical);
+                    let (display, _, id) = native_window(&owned.window).unwrap();
+                    let state = unsafe {
+                        (xlib.XInternAtom)(display, c"_NET_WM_STATE".as_ptr(), xlib::True)
+                    };
+                    let fullscreen = unsafe {
+                        (xlib.XInternAtom)(
+                            display,
+                            c"_NET_WM_STATE_FULLSCREEN".as_ptr(),
+                            xlib::True,
+                        )
+                    };
+                    assert!(atoms_property(&xlib, display, id, state)
+                        .unwrap()
+                        .contains(&fullscreen));
+                    owned.controller.set(&owned.window, false).unwrap();
+                    assert!(!owned.controller.is_fullscreen());
+                    assert!(owned.controller.saved.is_none());
+                    let mut restored: xlib::XSizeHints = unsafe { std::mem::zeroed() };
+                    let mut supplied = 0;
+                    assert_ne!(
+                        unsafe {
+                            (xlib.XGetWMNormalHints)(display, id, &mut restored, &mut supplied)
+                        },
+                        0
+                    );
+                    assert_eq!(restored, saved.hints);
+                }
+            }
         }
 
         #[test]

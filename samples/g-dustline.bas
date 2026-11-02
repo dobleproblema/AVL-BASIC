@@ -940,16 +940,23 @@
 12420             ' Untouched clods hold for 25 s, then fade over 45-65 s of driving.
 12430             IF SoilPass=0 THEN MFade(Mi)=MAX(0,MIN(1,1-(MudClock-MTouch(Mi)-25)/MFadeDuration(Mi)))
 12460             IF MFade(Mi)>0 THEN
-12470               Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
-12490               Dx=M2x(Mi) : Dy=M2y(Mi)
-12510               Ex=M3x(Mi) : Ey=M3y(Mi)
-12530               IF SoilPass=0 THEN FRECTANGLE Mx-2,My-1,Mx+Dx-3,My+Dy-2,MCol(Mi) ALPHA MFade(Mi)
-12560               IF SoilPass=1 AND (MGx(Mi)+MGy(Mi)) MOD 3=0 THEN
-12570                 FRECTANGLE Mx+Ex-1,My+Ey-1,Mx+Ex+1,My+Ey+1,MBase(Mi) ALPHA MFade(Mi)
-12580               ENDIF
-12590               IF SoilPass=2 AND (MGx(Mi)*3+MGy(Mi)) MOD 5=0 THEN
-12600                 FRECTANGLE Mx+Ex,My+Ey,Mx+Ex+2,My+Ey+1,MEdge(Mi) ALPHA MFade(Mi)
-12610               ENDIF
+12470               IF SoilPass=0 THEN
+12480                 Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12490                 Dx=M2x(Mi) : Dy=M2y(Mi)
+12500                 FRECTANGLE Mx-2,My-1,Mx+Dx-3,My+Dy-2,MCol(Mi) ALPHA MFade(Mi)
+12510               ELSEIF SoilPass=1 THEN
+12520                 IF (MGx(Mi)+MGy(Mi)) MOD 3=0 THEN
+12530                   Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12540                   Ex=M3x(Mi) : Ey=M3y(Mi)
+12550                   FRECTANGLE Mx+Ex-1,My+Ey-1,Mx+Ex+1,My+Ey+1,MBase(Mi) ALPHA MFade(Mi)
+12560                 ENDIF
+12570               ELSE
+12580                 IF (MGx(Mi)*3+MGy(Mi)) MOD 5=0 THEN
+12590                   Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12600                   Ex=M3x(Mi) : Ey=M3y(Mi)
+12610                   FRECTANGLE Mx+Ex,My+Ey,Mx+Ex+2,My+Ey+1,MEdge(Mi) ALPHA MFade(Mi)
+12612                 ENDIF
+12614               ENDIF
 12620             ENDIF
 12630           ENDIF
 12640           Mi=MNext(Mi)

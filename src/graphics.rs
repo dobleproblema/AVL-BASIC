@@ -1414,7 +1414,169 @@ impl Graphics {
         }))
     }
 
+    fn perspective_values_are_bounded<const MODULATE: bool>(r: &PerspectiveTextureRaster) -> bool {
+        let components = if MODULATE { 6 } else { 3 };
+        // At most 2^20 ordered additions per axis; bounded initial values and
+        // deltas keep generated values below 1e110, including rounding error.
+        r.right - r.left < (1 << 20)
+            && r.top - r.bottom < (1 << 20)
+            && [&r.row_attributes, &r.attribute_dx, &r.attribute_dy]
+                .iter()
+                .all(|values| values[..components].iter().all(|value| value.abs() < 1e100))
+    }
+
     fn raster_perspective_texture<const MODULATE: bool, const TRANSPARENT: bool>(
+        &mut self,
+        texture: &Texture,
+        raster: PerspectiveTextureRaster,
+        depth: &mut [f64],
+        depth_height: usize,
+        transparent: u32,
+    ) {
+        if Self::perspective_values_are_bounded::<MODULATE>(&raster) {
+            self.raster_perspective_texture_checked::<MODULATE, TRANSPARENT, true>(
+                texture,
+                raster,
+                depth,
+                depth_height,
+                transparent,
+            );
+        } else {
+            self.raster_perspective_texture_checked::<MODULATE, TRANSPARENT, false>(
+                texture,
+                raster,
+                depth,
+                depth_height,
+                transparent,
+            );
+        }
+    }
+
+    fn raster_perspective_texture_checked<
+        const MODULATE: bool,
+        const TRANSPARENT: bool,
+        const FINITE_VALUES: bool,
+    >(
+        &mut self,
+        texture: &Texture,
+        raster: PerspectiveTextureRaster,
+        depth: &mut [f64],
+        depth_height: usize,
+        transparent: u32,
+    ) {
+        let PerspectiveTextureRaster {
+            left,
+            right,
+            bottom,
+            top,
+            weight_dx,
+            weight_dy,
+            mut row_weights,
+            attribute_dx,
+            attribute_dy,
+            mut row_attributes,
+        } = raster;
+        // Monomorphization removes RGB interpolation and color arithmetic
+        // entirely from the unmodulated inner loop; q/UV and depth stay shared.
+        let components = if MODULATE { 6 } else { 3 };
+        let interpolated_components = if MODULATE { 5 } else { 2 };
+        let mut wrote_pixel = false;
+        for y in bottom..=top {
+            let mut span_left = left as f64;
+            let mut span_right = right as f64;
+            for edge in 0..3 {
+                let slope = weight_dx[edge];
+                if slope.abs() < 1e-12 {
+                    if row_weights[edge] < -1e-9 {
+                        span_left = 1.0;
+                        span_right = 0.0;
+                        break;
+                    }
+                } else {
+                    let boundary = left as f64 + (-1e-9 - row_weights[edge]) / slope;
+                    if slope > 0.0 {
+                        span_left = span_left.max(boundary);
+                    } else {
+                        span_right = span_right.min(boundary);
+                    }
+                }
+            }
+            let span_left = span_left.ceil();
+            let span_right = span_right.floor();
+            if span_left <= span_right
+                && span_left.is_finite()
+                && span_right.is_finite()
+                && row_weights.iter().all(|value| value.is_finite())
+            {
+                let start_x = span_left as usize;
+                let end_x = span_right as usize;
+                let skipped = (start_x - left) as f64;
+                let mut values: [f64; 6] = std::array::from_fn(|component| {
+                    row_attributes[component] + skipped * attribute_dx[component]
+                });
+                let canvas_row = (self.height - 1 - y) * self.width;
+                for x in start_x..=end_x {
+                    let depth_index = x * depth_height + y;
+                    let old_q = depth[depth_index];
+                    let tolerance = 1e-9 * values[0].abs().max(old_q.abs()).max(1e-12);
+                    if (FINITE_VALUES || values[..components].iter().all(|value| value.is_finite()))
+                        && values[0] > 0.0
+                        && !(values[0] <= old_q + tolerance)
+                    {
+                        let inverse_q = 1.0 / values[0];
+                        let interpolated = [
+                            values[1] * inverse_q,
+                            values[2] * inverse_q,
+                            values[3] * inverse_q,
+                            values[4] * inverse_q,
+                            values[5] * inverse_q,
+                        ];
+                        // Bounded values times an inverse <=1e100 stay below
+                        // 1e210. Otherwise retain the original finite checks.
+                        if (FINITE_VALUES && inverse_q <= 1e100)
+                            || interpolated[..interpolated_components]
+                                .iter()
+                                .all(|value| value.is_finite())
+                        {
+                            let texel = texture.sample_wrapped(interpolated[0], interpolated[1]);
+                            // Test the original texel, before lighting changes
+                            // its RGB. Opaque instantiations remove this branch.
+                            if !TRANSPARENT || texel != transparent {
+                                let color = if MODULATE {
+                                    let channels: [u32; 3] = std::array::from_fn(|channel| {
+                                        let sample = ((texel >> (16 - 8 * channel)) & 255) as f64;
+                                        let light = interpolated[channel + 2].clamp(0.0, 255.0);
+                                        (sample * light / 255.0 + 0.5) as u32
+                                    });
+                                    (channels[0] << 16) | (channels[1] << 8) | channels[2]
+                                } else {
+                                    texel
+                                };
+                                depth[depth_index] = values[0];
+                                self.buffer[canvas_row + x] = color;
+                                wrote_pixel = true;
+                            }
+                        }
+                    }
+                    for component in 0..components {
+                        values[component] += attribute_dx[component];
+                    }
+                }
+            }
+            for edge in 0..3 {
+                row_weights[edge] += weight_dy[edge];
+            }
+            for component in 0..components {
+                row_attributes[component] += attribute_dy[component];
+            }
+        }
+        if wrote_pixel {
+            self.buffer_dirty = true;
+        }
+    }
+
+    #[cfg(test)]
+    fn raster_perspective_texture_original_oracle<const MODULATE: bool, const TRANSPARENT: bool>(
         &mut self,
         texture: &Texture,
         raster: PerspectiveTextureRaster,
@@ -3118,28 +3280,109 @@ impl Graphics {
         let bottom = (y0.max(y1) - 1)
             .min(self.height as i32 - 1)
             .min(self.w_bottom);
+        if left > right || top > bottom {
+            return;
+        }
+        // Thin wall strips have long vertical spans. Each destination pixel
+        // is independent, so choosing columns preserves the original image
+        // while making the selected triangle invariant in the inner loop.
+        if right - left < 8 {
+            for x in left..=right {
+                let px = x as f64 + 0.5;
+                let second_at = |y: i32| {
+                    let py = y as f64 + 0.5;
+                    let diagonal = edge_function(vertices[0], vertices[2], px, py);
+                    if area > 0.0 {
+                        diagonal >= 0.0
+                    } else {
+                        diagonal <= 0.0
+                    }
+                };
+                let first_second = second_at(top);
+                let mut boundary = bottom + 1;
+                if top < bottom && second_at(bottom) != first_second {
+                    let mut low = top + 1;
+                    let mut high = bottom;
+                    while low < high {
+                        let middle = low + (high - low) / 2;
+                        if second_at(middle) == first_second {
+                            low = middle + 1;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    boundary = low;
+                }
+                for (span_top, span_end, second) in [
+                    (top, boundary, first_second),
+                    (boundary, bottom + 1, !first_second),
+                ] {
+                    let v = &triangles[usize::from(second)];
+                    for y in span_top..span_end {
+                        let py = y as f64 + 0.5;
+                        let row = y as usize * self.width;
+                        let l0 = edge_function(v[1], v[2], px, py) / area;
+                        let l1 = edge_function(v[2], v[0], px, py) / area;
+                        let l2 = edge_function(v[0], v[1], px, py) / area;
+                        let u = v[0].u * l0 + v[1].u * l1 + v[2].u * l2;
+                        let tv = v[0].v * l0 + v[1].v * l1 + v[2].v * l2;
+                        let texel = texture.sample_wrapped(u, tv);
+                        if !TRANSPARENT || texel != transparent {
+                            self.buffer[row + x as usize] = texel;
+                        }
+                    }
+                }
+            }
+            return;
+        }
         for y in top..=bottom {
             let py = y as f64 + 0.5;
             let row = y as usize * self.width;
-            for x in left..=right {
+            // The diagonal predicate is monotone across this integer rectangle.
+            // Locate its change with the original edge calculation, preserving
+            // which triangle owns every pixel, including the diagonal itself.
+            let second_at = |x: i32| {
                 let px = x as f64 + 0.5;
                 let diagonal = edge_function(vertices[0], vertices[2], px, py);
                 // The second triangle owns the diagonal, matching the last
                 // write of TQUAD. Its UVs equal the first triangle's there.
-                let second = if area > 0.0 {
+                if area > 0.0 {
                     diagonal >= 0.0
                 } else {
                     diagonal <= 0.0
-                };
+                }
+            };
+            let first_second = second_at(left);
+            let mut boundary = right + 1;
+            if left < right && second_at(right) != first_second {
+                let mut low = left + 1;
+                let mut high = right;
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    if second_at(middle) == first_second {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                boundary = low;
+            }
+            for (span_left, span_end, second) in [
+                (left, boundary, first_second),
+                (boundary, right + 1, !first_second),
+            ] {
                 let v = &triangles[usize::from(second)];
-                let l0 = edge_function(v[1], v[2], px, py) / area;
-                let l1 = edge_function(v[2], v[0], px, py) / area;
-                let l2 = edge_function(v[0], v[1], px, py) / area;
-                let u = v[0].u * l0 + v[1].u * l1 + v[2].u * l2;
-                let tv = v[0].v * l0 + v[1].v * l1 + v[2].v * l2;
-                let texel = texture.sample_wrapped(u, tv);
-                if !TRANSPARENT || texel != transparent {
-                    self.buffer[row + x as usize] = texel;
+                for x in span_left..span_end {
+                    let px = x as f64 + 0.5;
+                    let l0 = edge_function(v[1], v[2], px, py) / area;
+                    let l1 = edge_function(v[2], v[0], px, py) / area;
+                    let l2 = edge_function(v[0], v[1], px, py) / area;
+                    let u = v[0].u * l0 + v[1].u * l1 + v[2].u * l2;
+                    let tv = v[0].v * l0 + v[1].v * l1 + v[2].v * l2;
+                    let texel = texture.sample_wrapped(u, tv);
+                    if !TRANSPARENT || texel != transparent {
+                        self.buffer[row + x as usize] = texel;
+                    }
                 }
             }
         }
@@ -5556,3 +5799,233 @@ mod tests {
         assert_eq!(Graphics::load_png_to_gscr(&path).unwrap(), screen);
     }
 }
+
+#[cfg(test)]
+mod textured_rect_span_oracle_tests {
+    use super::*;
+
+    fn reference_textured_rect_canvas<const TRANSPARENT: bool>(
+        graphics: &mut Graphics,
+        texture: &Texture,
+        points: [(i32, i32); 2],
+        uv: (f64, f64, f64, f64),
+        transparent: u32,
+    ) {
+        let [(x0, y0), (x1, y1)] = points;
+        if x0 == x1 || y0 == y1 {
+            return;
+        }
+        let (u0, v0, u1, v1) = uv;
+        let vertices = [
+            TexturedVertex {
+                x: x0,
+                y: y0,
+                u: u0,
+                v: v0,
+            },
+            TexturedVertex {
+                x: x1,
+                y: y0,
+                u: u1,
+                v: v0,
+            },
+            TexturedVertex {
+                x: x1,
+                y: y1,
+                u: u1,
+                v: v1,
+            },
+            TexturedVertex {
+                x: x0,
+                y: y1,
+                u: u0,
+                v: v1,
+            },
+        ];
+        let triangles = [
+            [vertices[0], vertices[1], vertices[2]],
+            [vertices[0], vertices[2], vertices[3]],
+        ];
+        let area = edge_function(vertices[0], vertices[1], x1 as f64, y1 as f64);
+        let left = x0.min(x1).max(0).max(graphics.w_left);
+        let right = (x0.max(x1) - 1)
+            .min(graphics.width as i32 - 1)
+            .min(graphics.w_right);
+        let top = y0.min(y1).max(0).max(graphics.w_top);
+        let bottom = (y0.max(y1) - 1)
+            .min(graphics.height as i32 - 1)
+            .min(graphics.w_bottom);
+        for y in top..=bottom {
+            let py = y as f64 + 0.5;
+            let row = y as usize * graphics.width;
+            for x in left..=right {
+                let px = x as f64 + 0.5;
+                let diagonal = edge_function(vertices[0], vertices[2], px, py);
+                // The second triangle owns the diagonal, matching the last
+                // write of TQUAD. Its UVs equal the first triangle's there.
+                let second = if area > 0.0 {
+                    diagonal >= 0.0
+                } else {
+                    diagonal <= 0.0
+                };
+                let v = &triangles[usize::from(second)];
+                let l0 = edge_function(v[1], v[2], px, py) / area;
+                let l1 = edge_function(v[2], v[0], px, py) / area;
+                let l2 = edge_function(v[0], v[1], px, py) / area;
+                let u = v[0].u * l0 + v[1].u * l1 + v[2].u * l2;
+                let tv = v[0].v * l0 + v[1].v * l1 + v[2].v * l2;
+                let texel = texture.sample_wrapped(u, tv);
+                if !TRANSPARENT || texel != transparent {
+                    graphics.buffer[row + x as usize] = texel;
+                }
+            }
+        }
+    }
+
+    fn check<const TRANSPARENT: bool>(
+        texture: &Texture,
+        points: [(i32, i32); 2],
+        uv: (f64, f64, f64, f64),
+        viewport: (i32, i32, i32, i32),
+        case: usize,
+    ) {
+        let mut actual = Graphics::new_canvas(67, 53);
+        actual.buffer.fill(0x123456);
+        actual.owner.fill(17);
+        actual.current_color = 0xa173c5;
+        actual.mask = 0x5a;
+        actual.pen_width = 7;
+        (actual.w_left, actual.w_right, actual.w_top, actual.w_bottom) = viewport;
+        let mut expected = actual.clone();
+        actual.textured_rect_canvas::<TRANSPARENT>(texture, points, uv, 0xff00ff);
+        reference_textured_rect_canvas::<TRANSPARENT>(&mut expected, texture, points, uv, 0xff00ff);
+        assert_eq!(actual.buffer, expected.buffer,
+            "case {case}, points {points:?}, UV {uv:?}, viewport {viewport:?}, transparent {TRANSPARENT}");
+        assert_eq!(actual.owner, expected.owner);
+        assert_eq!(actual.buffer_dirty, expected.buffer_dirty);
+        assert_eq!(actual.current_color, expected.current_color);
+        assert_eq!(actual.mask, expected.mask);
+        assert_eq!(actual.pen_width, expected.pen_width);
+    }
+
+    #[test]
+    fn narrow_columns_and_horizontal_spans_match_original_at_width_thresholds() {
+        let texture = Texture {
+            width: 7,
+            height: 5,
+            pixels: (0..35)
+                .map(|i| if i % 7 == 0 { 0xff00ff } else { i * 0x020503 })
+                .collect(),
+        };
+        let mut case = 0;
+        for width in 1..=12 {
+            for height in [1, 2, 8, 9, 51, 1000] {
+                for flips in 0..4 {
+                    let (x0, x1) = if flips & 1 == 0 {
+                        (2, 2 + width)
+                    } else {
+                        (2 + width, 2)
+                    };
+                    let (y0, y1) = if flips & 2 == 0 {
+                        (3, 3 + height)
+                    } else {
+                        (3 + height, 3)
+                    };
+                    // Tall clipped rectangles also exercise spans for which
+                    // the diagonal never changes triangle within the viewport.
+                    for viewport in [(0, 66, 0, 52), (5, 58, 7, 45), (0, 8, 0, 52)] {
+                        let points = [(x0, y0), (x1, y1)];
+                        let uv = (-35.25, -6.75, 95.5, 11.0);
+                        check::<false>(&texture, points, uv, viewport, case);
+                        check::<true>(&texture, points, uv, viewport, case);
+                        case += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(case, 864);
+    }
+
+    #[test]
+    fn seeded_rect_spans_match_original_pixels_including_clipped_extremes() {
+        let mut rectangles = vec![
+            [(2, 3), (3, 40)],
+            [(2, 3), (4, 40)],
+            [(2, 3), (10, 40)],
+            [(2, 3), (11, 40)],
+            [(2, 3), (12, 40)],
+            [(2, 3), (50, 40)],
+            [(50, 3), (2, 40)],
+            [(2, 40), (50, 3)],
+            [(50, 40), (2, 3)],
+            [(-17, -11), (89, 66)],
+            [(-1_048_576, -1_048_576), (1_048_576, 1_048_576)],
+            [(1_048_576, -1_048_576), (-1_048_576, 1_048_576)],
+            [(-1_048_576, 1_048_576), (1_048_576, -1_048_576)],
+            [(1_048_576, 1_048_576), (-1_048_576, -1_048_576)],
+            [(-1_048_576, 17), (1_048_576, 18)],
+            [(17, -1_048_576), (18, 1_048_576)],
+            [(5, 3), (5, 40)],
+            [(5, 3), (40, 3)],
+            [(-30, -30), (-1, -1)],
+            [(70, 56), (99, 80)],
+        ];
+        let mut state = 0x4d59_5df4_d0f3_3173u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 32) as u32
+        };
+        for _ in 0..128 {
+            rectangles.push([
+                ((next() % 131) as i32 - 32, (next() % 115) as i32 - 32),
+                ((next() % 131) as i32 - 32, (next() % 115) as i32 - 32),
+            ]);
+        }
+        let uv_cases = [
+            (0.0, 0.0, 32.0, 3.0),
+            (-35.25, -6.75, 95.5, 11.0),
+            (11.5, 0.125, 11.5, 3.0),
+            (0.5, 0.5, 67.5, 53.5),
+            (
+                f64::from_bits(1.0f64.to_bits() - 1),
+                -0.5,
+                f64::from_bits(32.0f64.to_bits() + 1),
+                7.5,
+            ),
+            (f64::MAX, -f64::MAX, -f64::MAX, f64::MAX),
+        ];
+        for (width, height) in [(32, 3), (7, 5)] {
+            let texture = Texture {
+                width,
+                height,
+                pixels: (0..width * height)
+                    .map(|i| {
+                        if i % 7 == 0 {
+                            0xff00ff
+                        } else {
+                            (i as u32 * 0x020503) & 0xffffff
+                        }
+                    })
+                    .collect(),
+            };
+            for viewport in [
+                (0, 66, 0, 52),
+                (5, 58, 7, 45),
+                (0, 8, 0, 52),
+                (70, 80, 4, 9),
+            ] {
+                for (case, points) in rectangles.iter().enumerate() {
+                    let uv = uv_cases[case % uv_cases.len()];
+                    check::<false>(&texture, *points, uv, viewport, case);
+                    check::<true>(&texture, *points, uv, viewport, case);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "graphics/perspective_texture_finite_tests.rs"]
+mod perspective_texture_finite_tests;
