@@ -14,6 +14,15 @@ type Bool = i32;
 type Dword = u32;
 type Lparam = isize;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DesktopRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
 const INPUT_KEYBOARD: u32 = 1;
 const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KEYEVENTF_SCANCODE: u32 = 0x0008;
@@ -52,12 +61,30 @@ extern "system" {
     fn AttachThreadInput(id_attach: Dword, id_attach_to: Dword, attach: Bool) -> Bool;
     fn BringWindowToTop(hwnd: Hwnd) -> Bool;
     fn EnumWindows(callback: extern "system" fn(Hwnd, Lparam) -> Bool, lparam: Lparam) -> Bool;
+    fn EnumDisplayMonitors(
+        dc: Hwnd,
+        clip: *const DesktopRect,
+        callback: extern "system" fn(Hwnd, Hwnd, *mut DesktopRect, Lparam) -> Bool,
+        lparam: Lparam,
+    ) -> Bool;
     fn GetForegroundWindow() -> Hwnd;
     fn GetClassNameW(hwnd: Hwnd, class_name: *mut u16, max_count: i32) -> i32;
     fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
     fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut Dword) -> Dword;
     fn IsWindowVisible(hwnd: Hwnd) -> Bool;
+    fn GetWindowRect(hwnd: Hwnd, rect: *mut DesktopRect) -> Bool;
+    fn GetWindowLongPtrW(hwnd: Hwnd, index: i32) -> isize;
+    fn SetThreadDpiAwarenessContext(context: Hwnd) -> Hwnd;
+    fn SetWindowPos(
+        hwnd: Hwnd,
+        after: Hwnd,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> Bool;
     fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> Bool;
     fn SetActiveWindow(hwnd: Hwnd) -> Hwnd;
     fn SetFocus(hwnd: Hwnd) -> Hwnd;
@@ -507,6 +534,482 @@ RUN\n",
     let _ = stdin.write_all(b"QUIT\n");
     let _ = child.child.wait();
     child.finished = true;
+}
+
+#[test]
+#[ignore = "opens its own console and graphics window and tests fullscreen console transitions"]
+fn fullscreen_console_transitions_on_same_monitor() {
+    fullscreen_console_transitions(false);
+}
+
+#[test]
+#[ignore = "requires two real monitors and opens its own console and graphics window"]
+fn fullscreen_console_transitions_on_separate_monitors() {
+    fullscreen_console_transitions(true);
+}
+
+#[test]
+#[ignore = "opens its own console and exercises native fullscreen while stepping the debugger"]
+fn fullscreen_debugger_steps_on_same_monitor() {
+    fullscreen_debugger_steps(false, false);
+}
+
+#[test]
+#[ignore = "requires two real monitors and exercises native fullscreen while stepping the debugger"]
+fn fullscreen_debugger_steps_on_separate_monitors() {
+    fullscreen_debugger_steps(true, false);
+}
+
+#[test]
+#[ignore = "requires two real monitors and moves graphics before MODE to verify placement"]
+fn fullscreen_debugger_preserves_secondary_monitor_position() {
+    fullscreen_debugger_steps(true, true);
+}
+
+// Run the real debugger execution hooks in a child with a separate native
+// console. A synchronous callback replaces only the terminal UI, allowing each
+// actual debugger pause to be inspected deterministically by the parent.
+#[test]
+#[ignore = "helper process for fullscreen_debugger_steps; requires its parent harness"]
+fn fullscreen_debugger_child() {
+    assert_eq!(
+        std::env::var("AVL_BASIC_DEBUGGER_GUI_CHILD").as_deref(),
+        Ok("1")
+    );
+    // The test executable does not carry the interpreter's DPI-aware manifest.
+    // Use physical monitor coordinates in the child as well as in the parent.
+    assert!(!unsafe { SetThreadDpiAwarenessContext(-4isize as Hwnd) }.is_null());
+    use avl_basic::{DebugAction, Debugger, Interpreter};
+    let mut interpreter = Interpreter::new();
+    let position_case = std::env::var("AVL_BASIC_DEBUGGER_POSITION_CHILD").as_deref() == Ok("1");
+    interpreter
+        .process_immediate(if position_case { "SCREEN" } else { "MODE 960" })
+        .unwrap();
+    interpreter
+        .program
+        .load_text(if position_case {
+            "10 MODE 960\n20 SCREEN FULL ON\n30 GPRINT \"SECOND MONITOR\"\n\
+40 SCREEN FULL OFF\n50 SCREEN FULL ON\n60 MODE 1280\n70 SCREEN FULL OFF\n80 END"
+        } else {
+            "10 SCREEN FULL ON\n20 GPRINT \"DEBUG STEP\"\n30 SCREEN FULL OFF\n\
+40 SCREEN FULL ON\n50 MODE 1280\n60 SCREEN FULL OFF\n70 END"
+        })
+        .unwrap();
+    let mut debugger = Debugger::interactive(|snapshot, _, idle| {
+        println!("DEBUG-PAUSE={}", snapshot.location.line);
+        std::io::stdout().flush()?;
+        // Keep native repaint/event processing alive while the parent examines
+        // fullscreen geometry and focus, just like the interactive debugger.
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut command = String::new();
+            let result = std::io::stdin().read_line(&mut command).map(|_| command);
+            let _ = tx.send(result);
+        });
+        loop {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(command) => {
+                    assert_eq!(command?.trim(), "STEP");
+                    return Ok(DebugAction::StepInto);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => idle()?,
+                Err(error) => return Err(std::io::Error::other(error)),
+            }
+        }
+    });
+    debugger.request_pause();
+    interpreter.set_debugger(debugger);
+    interpreter.run_loaded().unwrap();
+    interpreter.process_immediate("SCREEN CLOSE").unwrap();
+}
+
+fn fullscreen_debugger_steps(separate: bool, position_case: bool) {
+    struct DpiGuard(Hwnd);
+    impl Drop for DpiGuard {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
+    let old_dpi = unsafe { SetThreadDpiAwarenessContext(-4isize as Hwnd) };
+    assert!(!old_dpi.is_null());
+    let _dpi = DpiGuard(old_dpi);
+    let monitors = desktop_monitors();
+    assert!(!monitors.is_empty());
+    assert!(
+        !separate || monitors.len() >= 2,
+        "two real monitors required"
+    );
+    let (graphics_monitor, console_monitor) = if position_case {
+        let primary = monitors
+            .iter()
+            .position(|monitor| monitor.left == 0 && monitor.top == 0)
+            .expect("the primary monitor must include desktop origin");
+        let secondary = (0..monitors.len()).find(|index| *index != primary).unwrap();
+        (monitors[secondary], monitors[primary])
+    } else {
+        (monitors[0], monitors[usize::from(separate)])
+    };
+    let previous_windows = visible_window_handles();
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "fullscreen_debugger_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("AVL_BASIC_WINDOW", "1")
+        .env("AVL_BASIC_DEBUGGER_GUI_CHILD", "1")
+        .env(
+            "AVL_BASIC_DEBUGGER_POSITION_CHILD",
+            if position_case { "1" } else { "0" },
+        )
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn native debugger helper");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().unwrap();
+    wait_for_line(&rx, "DEBUG-PAUSE=10", Duration::from_secs(10));
+    let console = foreground_console();
+    assert!(
+        !previous_windows.contains(&console),
+        "refusing to move an existing console"
+    );
+    place_test_window(console, console_monitor, 60, 700, 400);
+    let mut graphics = wait_for_graphics_window(child.child.id(), Duration::from_secs(10));
+    let original = desktop_window_rect(graphics);
+    place_test_window(
+        graphics,
+        graphics_monitor,
+        20,
+        original.right - original.left,
+        original.bottom - original.top,
+    );
+    let placed = desktop_window_rect(graphics);
+    wait_for_console_focus(console);
+    let phases: &[(i32, bool, &str)] = if position_case {
+        &[
+            (20, false, "debugger changed MODE after moving SCREEN"),
+            (
+                30,
+                true,
+                "debugger entered fullscreen on the second monitor",
+            ),
+            (40, true, "debugger drew on the second monitor"),
+            (50, false, "debugger restored the previous normal position"),
+            (60, true, "debugger entered fullscreen again"),
+            (70, true, "debugger changed MODE while fullscreen"),
+            (
+                80,
+                false,
+                "debugger restored MODE 1280 on the second monitor",
+            ),
+        ]
+    } else {
+        &[
+            (20, separate, "debugger stepped SCREEN FULL ON"),
+            (30, separate, "debugger stepped drawing"),
+            (40, false, "debugger stepped SCREEN FULL OFF"),
+            (50, separate, "debugger stepped SCREEN FULL ON again"),
+            (60, separate, "debugger recreated window with MODE"),
+            (70, false, "debugger stepped SCREEN FULL OFF after MODE"),
+        ]
+    };
+    for &(next_line, expected, phase) in phases {
+        stdin.write_all(b"STEP\n").unwrap();
+        wait_for_line(
+            &rx,
+            &format!("DEBUG-PAUSE={next_line}"),
+            Duration::from_secs(10),
+        );
+        graphics = wait_for_graphics_window(child.child.id(), Duration::from_secs(10));
+        assert_window_presentation(graphics, graphics_monitor, expected, phase);
+        if position_case {
+            let rect = desktop_window_rect(graphics);
+            let center_x = (rect.left + rect.right) / 2;
+            let center_y = (rect.top + rect.bottom) / 2;
+            assert!(
+                center_x >= graphics_monitor.left
+                    && center_x < graphics_monitor.right
+                    && center_y >= graphics_monitor.top
+                    && center_y < graphics_monitor.bottom,
+                "graphics changed monitor at {phase}: {rect:?}"
+            );
+            if !expected && matches!(next_line, 20 | 50) {
+                assert!(
+                    (rect.left - placed.left).abs() <= 2 && (rect.top - placed.top).abs() <= 2,
+                    "normal position changed at {phase}: before={placed:?}, after={rect:?}"
+                );
+            }
+        }
+        wait_for_console_focus(console);
+    }
+    stdin.write_all(b"STEP\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "debugger child did not exit");
+        thread::sleep(Duration::from_millis(20));
+    }
+    child.finished = true;
+}
+
+fn fullscreen_console_transitions(separate: bool) {
+    // Match the interpreter's physical desktop coordinates even with mixed DPI.
+    struct DpiGuard(Hwnd);
+    impl Drop for DpiGuard {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
+    let old_dpi = unsafe { SetThreadDpiAwarenessContext(-4isize as Hwnd) };
+    assert!(
+        !old_dpi.is_null(),
+        "could not enable physical desktop coordinates"
+    );
+    let _dpi = DpiGuard(old_dpi);
+    let monitors = desktop_monitors();
+    assert!(!monitors.is_empty(), "no desktop monitor available");
+    assert!(
+        !separate || monitors.len() >= 2,
+        "two-monitor verification requires two real monitors; this is not a passing skip"
+    );
+    let graphics_monitor = monitors[0];
+    let console_monitor = monitors[usize::from(separate)];
+    // The same compiled test can verify an installed PGO executable without a
+    // release-profile test build replacing that executable with a non-PGO one.
+    let binary = std::env::var_os("AVL_BASIC_TEST_BINARY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_avl-basic").into());
+    assert!(
+        binary.is_absolute(),
+        "test binary must have an absolute local path"
+    );
+    assert!(
+        binary.is_file(),
+        "test binary does not exist: {}",
+        binary.display()
+    );
+    let binary = binary.canonicalize().expect("resolve test binary path");
+    assert!(
+        matches!(binary.components().next(), Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))),
+        "test binary must be on a local drive: {}",
+        binary.display()
+    );
+    let previous_windows = visible_window_handles();
+    let child = Command::new(binary)
+        .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn avl-basic with a separate console");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+    wait_for_line(&rx, "Ready", Duration::from_secs(10));
+    let console = foreground_console();
+    assert!(
+        !previous_windows.contains(&console),
+        "the new process did not expose its own console; refusing to move an existing window"
+    );
+    place_test_window(console, console_monitor, 60, 700, 400);
+    stdin
+        .write_all(
+            b"10 MODE 960:SCREEN:FRAME\n\
+20 PRINT \"MONITOR-WINDOW-READY\"\n\
+30 IF INKEY$=\"\" THEN GOTO 30\n\
+40 SCREEN FULL ON:FRAME\n\
+50 PRINT \"MONITOR-FULL-BEFORE-INPUT\"\n\
+60 IF INKEY$=\"\" THEN GOTO 60\n\
+70 INPUT \"VALUE\";A$\n\
+80 PRINT \"MONITOR-INPUT-DONE\"\n\
+90 SCREEN FULL ON:FRAME\n\
+100 PRINT \"MONITOR-FULL-BEFORE-STOP\"\n\
+110 IF INKEY$=\"\" THEN GOTO 110\n\
+120 STOP\n\
+130 FRAME\n\
+140 PRINT \"MONITOR-FULL-BEFORE-END\"\n\
+150 IF INKEY$=\"\" THEN GOTO 150\n\
+160 END\n\
+RUN\n",
+        )
+        .unwrap();
+    let graphics = wait_for_graphics_window(child.child.id(), Duration::from_secs(10));
+    wait_for_line(&rx, "MONITOR-WINDOW-READY", Duration::from_secs(10));
+    // Preserve the fixed client size; only its position changes.
+    let original = desktop_window_rect(graphics);
+    place_test_window(
+        graphics,
+        graphics_monitor,
+        20,
+        original.right - original.left,
+        original.bottom - original.top,
+    );
+    focus_graphics_window(graphics);
+    tap_key(SCAN_N);
+    wait_for_line(&rx, "MONITOR-FULL-BEFORE-INPUT", Duration::from_secs(10));
+    assert_window_presentation(graphics, graphics_monitor, true, "before INPUT");
+    focus_graphics_window(graphics);
+    tap_key(SCAN_N);
+    wait_for_console_focus(console);
+    assert_window_presentation(graphics, graphics_monitor, separate, "during INPUT");
+    stdin.write_all(b"monitor-answer\n").unwrap();
+    wait_for_line(&rx, "MONITOR-INPUT-DONE", Duration::from_secs(10));
+    wait_for_line(&rx, "MONITOR-FULL-BEFORE-STOP", Duration::from_secs(10));
+    assert_window_presentation(graphics, graphics_monitor, true, "before STOP");
+    focus_graphics_window(graphics);
+    tap_key(SCAN_N);
+    wait_for_line(&rx, "Ready", Duration::from_secs(10));
+    wait_for_console_focus(console);
+    assert_window_presentation(graphics, graphics_monitor, separate, "at STOP");
+    stdin.write_all(b"CONT\n").unwrap();
+    wait_for_line(&rx, "MONITOR-FULL-BEFORE-END", Duration::from_secs(10));
+    assert_window_presentation(graphics, graphics_monitor, true, "after CONT and FRAME");
+    focus_graphics_window(graphics);
+    tap_key(SCAN_N);
+    wait_for_line(&rx, "Ready", Duration::from_secs(10));
+    wait_for_console_focus(console);
+    assert_window_presentation(graphics, graphics_monitor, separate, "after END");
+    stdin.write_all(b"SCREEN CLOSE\n").unwrap();
+    wait_for_line(&rx, "Ready", Duration::from_secs(10));
+    assert_no_graphics_window(child.child.id(), Duration::from_millis(300), graphics);
+    wait_for_console_focus(console);
+    stdin.write_all(b"QUIT\n").unwrap();
+    assert!(child.child.wait().unwrap().success());
+    child.finished = true;
+}
+
+fn desktop_monitors() -> Vec<DesktopRect> {
+    extern "system" fn collect(_: Hwnd, _: Hwnd, rect: *mut DesktopRect, data: Lparam) -> Bool {
+        unsafe { (&mut *(data as *mut Vec<DesktopRect>)).push(*rect) };
+        1
+    }
+    let mut monitors = Vec::new();
+    assert_ne!(
+        unsafe {
+            EnumDisplayMonitors(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                collect,
+                &mut monitors as *mut Vec<DesktopRect> as Lparam,
+            )
+        },
+        0
+    );
+    monitors
+}
+
+fn visible_window_handles() -> Vec<Hwnd> {
+    extern "system" fn collect(hwnd: Hwnd, data: Lparam) -> Bool {
+        if unsafe { IsWindowVisible(hwnd) } != 0 {
+            unsafe { (&mut *(data as *mut Vec<Hwnd>)).push(hwnd) };
+        }
+        1
+    }
+    let mut windows = Vec::new();
+    unsafe { EnumWindows(collect, &mut windows as *mut Vec<Hwnd> as Lparam) };
+    windows
+}
+
+fn desktop_window_rect(hwnd: Hwnd) -> DesktopRect {
+    let mut rect = DesktopRect::default();
+    assert_ne!(
+        unsafe { GetWindowRect(hwnd, &mut rect) },
+        0,
+        "GetWindowRect failed"
+    );
+    rect
+}
+
+fn place_test_window(hwnd: Hwnd, monitor: DesktopRect, offset: i32, width: i32, height: i32) {
+    assert!(
+        monitor.right - monitor.left > width + offset,
+        "test window {width}x{height} at offset {offset} does not fit {monitor:?}"
+    );
+    assert!(
+        monitor.bottom - monitor.top > height + offset,
+        "test window {width}x{height} at offset {offset} does not fit {monitor:?}"
+    );
+    const SWP_NOZORDER: u32 = 4;
+    const SWP_NOACTIVATE: u32 = 16;
+    unsafe { ShowWindow(hwnd, 9) }; // Restore only the console created by this test.
+    assert_ne!(
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                monitor.left + offset,
+                monitor.top + offset,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        },
+        0
+    );
+}
+
+fn wait_for_console_focus(console: Hwnd) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { GetForegroundWindow() } != console && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        console,
+        "terminal did not regain focus"
+    );
+}
+
+fn assert_window_presentation(hwnd: Hwnd, monitor: DesktopRect, fullscreen: bool, phase: &str) {
+    const GWL_STYLE: i32 = -16;
+    const WS_CAPTION: isize = 0x00c0_0000;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+        let rect = desktop_window_rect(hwnd);
+        let correct = if fullscreen {
+            style & WS_CAPTION == 0 && rect == monitor
+        } else {
+            style & WS_CAPTION != 0 && rect != monitor
+        };
+        if correct {
+            return;
+        }
+        assert!(Instant::now() < deadline,
+            "wrong presentation {phase}: fullscreen={fullscreen}, style={style:#x}, rect={rect:?}, monitor={monitor:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 struct ChildGuard {

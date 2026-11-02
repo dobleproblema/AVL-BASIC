@@ -2645,7 +2645,7 @@ fn g_origin_scale_sample_runs_in_every_registered_mode() {
 
 #[test]
 fn mode_requires_a_registered_integer_width() {
-    for program in ["10 MODE 640.5", "10 MODE 1280", "10 MODE 1920"] {
+    for program in ["10 MODE 640.5", "10 MODE 1281", "10 MODE 1920"] {
         assert_eq!(run_rust_error_code(program), ErrorCode::InvalidArgument);
     }
 }

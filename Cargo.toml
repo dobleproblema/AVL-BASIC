@@ -1,6 +1,6 @@
 [package]
 name = "avl-basic"
-version = "1.6.26"
+version = "1.6.27"
 edition = "2021"
 license = "MIT"
 build = "build.rs"
@@ -16,7 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 crossterm = "0.27"
 ctrlc = "3"
-minifb = { version = "0.28", default-features = false, features = ["x11"] }
+minifb = { version = "0.29", default-features = false, features = ["x11"] }
 png = "0.17"
 kira = { version = "=0.12.4", default-features = false, features = ["wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
 cpal = { version = "=0.18.2", default-features = false }
@@ -24,6 +24,9 @@ cpal = { version = "=0.18.2", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "=0.18.2", default-features = false, features = ["pulseaudio"] }
 pulseaudio = "=0.3.1"
+raw-window-handle = "0.6"
+x11-dl = "2.21"
+x11rb = { version = "=0.13.2", features = ["present", "dri3", "render"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

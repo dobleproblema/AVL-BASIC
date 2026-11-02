@@ -7,8 +7,10 @@ use crate::keyboard::{
 };
 #[cfg(target_os = "linux")]
 use minifb::Icon;
-use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
-use std::cell::RefCell;
+use minifb::{
+    InputCallback, Key, KeyRepeat, MouseButton, MouseMode, ScaleMode, Window, WindowOptions,
+};
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 #[cfg(any(windows, test))]
 use std::ffi::c_void;
@@ -17,7 +19,80 @@ use std::fmt;
 use std::io::Cursor;
 use std::rc::Rc;
 
+mod fullscreen;
+use fullscreen::FullscreenController;
+#[cfg(target_os = "linux")]
+mod confinement_linux;
+#[cfg(all(windows, test))]
+mod confinement_tests;
+#[cfg(target_os = "linux")]
+mod console_monitor_linux;
+#[cfg(windows)]
+mod console_monitor_windows;
+#[cfg(windows)]
+mod cursor_windows;
+#[cfg(target_os = "linux")]
+mod linux_present;
+#[cfg(windows)]
+mod sync_windows;
+
 const INPUT_EVENT_QUEUE_LIMIT: usize = 4096;
+
+/// Physical destination used by minifb's proportional presentation. This is
+/// deliberately independent of Graphics::SCALE, which maps BASIC coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentationViewport {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl PresentationViewport {
+    pub fn fit(logical: (usize, usize), physical: (usize, usize)) -> Option<Self> {
+        let (lw, lh) = logical;
+        let (pw, ph) = physical;
+        if lw == 0 || lh == 0 || pw == 0 || ph == 0 {
+            return None;
+        }
+        // Match minifb's float arithmetic and integer truncation on both
+        // Win32 and X11; a different rounding rule can displace the mouse.
+        let aspect = lw as f32 / lh as f32;
+        let (width, height) = if aspect > pw as f32 / ph as f32 {
+            (pw, ((pw as f32 / aspect) as usize).max(1).min(ph))
+        } else {
+            (((ph as f32 * aspect) as usize).max(1).min(pw), ph)
+        };
+        Some(Self {
+            x: (pw - width) / 2,
+            y: (ph - height) / 2,
+            width,
+            height,
+        })
+    }
+
+    /// Returns a physical graphics-buffer pixel, with a top-left origin.
+    /// Margins and points outside the window are not canvas pixels.
+    pub fn canvas_pixel(self, point: (f32, f32), logical: (usize, usize)) -> Option<(i32, i32)> {
+        let (x, y) = (
+            point.0 as f64 - self.x as f64,
+            point.1 as f64 - self.y as f64,
+        );
+        if !x.is_finite()
+            || !y.is_finite()
+            || x < 0.0
+            || y < 0.0
+            || x >= self.width as f64
+            || y >= self.height as f64
+        {
+            return None;
+        }
+        Some((
+            (x * logical.0 as f64 / self.width as f64).floor() as i32,
+            (y * logical.1 as f64 / self.height as f64).floor() as i32,
+        ))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphicsInputEvent {
@@ -41,8 +116,33 @@ fn has_pending_pause_key(
     !key_queue.is_empty() || !input_events.is_empty()
 }
 
+#[derive(Default)]
+struct FullscreenShortcut {
+    alt_keys: Cell<u8>,
+    enter_down: Cell<bool>,
+    requested: Cell<bool>,
+}
+
 struct GraphicsInputCallback {
     events: InputEventQueue,
+    shortcut: Rc<FullscreenShortcut>,
+}
+
+// minifb's Win32 scancode table does not report LeftAlt/RightAlt.
+// GetKeyState, unlike GetAsyncKeyState, observes the keyboard state at the
+// message currently being dispatched, including a complete queued chord.
+#[cfg(all(windows, not(test)))]
+fn callback_native_alt_down() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetKeyState(key: i32) -> i16;
+    }
+    unsafe { (GetKeyState(0x12) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(any(not(windows), test))]
+fn callback_native_alt_down() -> bool {
+    false
 }
 
 impl GraphicsInputCallback {
@@ -59,6 +159,9 @@ impl InputCallback for GraphicsInputCallback {
     fn add_char(&mut self, codepoint: u32) {
         if let Some(ch) = char::from_u32(codepoint) {
             if matches!(ch, '\r' | '\n') {
+                if self.shortcut.alt_keys.get() != 0 || callback_native_alt_down() {
+                    return;
+                }
                 self.push(GraphicsInputEvent::Enter);
                 return;
             }
@@ -69,11 +172,41 @@ impl InputCallback for GraphicsInputCallback {
     }
 
     fn set_key_state(&mut self, key: Key, pressed: bool) {
+        let alt_bit = match key {
+            Key::LeftAlt => 1,
+            Key::RightAlt => 2,
+            _ => 0,
+        };
+        if alt_bit != 0 {
+            if pressed {
+                self.shortcut
+                    .alt_keys
+                    .set(self.shortcut.alt_keys.get() | alt_bit);
+            } else {
+                self.shortcut
+                    .alt_keys
+                    .set(self.shortcut.alt_keys.get() & !alt_bit);
+            }
+            return;
+        }
+        if matches!(key, Key::Enter | Key::NumPadEnter) {
+            if pressed
+                && !self.shortcut.enter_down.get()
+                && (self.shortcut.alt_keys.get() != 0 || callback_native_alt_down())
+            {
+                self.shortcut.requested.set(true);
+            }
+            self.shortcut.enter_down.set(pressed);
+        }
         if !pressed {
             return;
         }
         let event = match key {
-            Key::Enter | Key::NumPadEnter => GraphicsInputEvent::Enter,
+            Key::Enter | Key::NumPadEnter
+                if self.shortcut.alt_keys.get() == 0 && !callback_native_alt_down() =>
+            {
+                GraphicsInputEvent::Enter
+            }
             Key::Escape => GraphicsInputEvent::Escape,
             Key::Backspace => GraphicsInputEvent::Backspace,
             Key::Delete => GraphicsInputEvent::Delete,
@@ -88,13 +221,33 @@ impl InputCallback for GraphicsInputCallback {
 }
 
 pub struct GraphicsWindow {
+    // Cursor callback removal/restoration must happen while the HWND is alive.
+    #[cfg(windows)]
+    cursor: cursor_windows::CursorController,
+    // The presenter's separate connection must be dropped before the window.
+    #[cfg(target_os = "linux")]
+    linux_presenter: Option<linux_present::LinuxPresenter>,
+    #[cfg(target_os = "linux")]
+    linux_blit_pending: bool,
+    #[cfg(target_os = "linux")]
+    pointer_confinement: confinement_linux::State,
     window: Window,
     width: usize,
     height: usize,
     mouse: MouseSnapshot,
+    mouse_cursor_visible: bool,
+    pointer_confinement_suspended: bool,
+    // Whether the optional native request is armed, including a refused grab.
+    pointer_confinement_requested: bool,
+    pointer_confinement_failed: bool,
     key_queue: VecDeque<u8>,
     input_events: InputEventQueue,
     ctrl_c_down: bool,
+    fullscreen: FullscreenController,
+    fullscreen_requested: bool,
+    presentation_dirty: bool,
+    last_physical_size: (usize, usize),
+    fullscreen_shortcut: Rc<FullscreenShortcut>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -128,7 +281,13 @@ impl GraphicsWindow {
             "AVL BASIC Graphics",
             graphics.width,
             graphics.height,
-            WindowOptions::default(),
+            WindowOptions {
+                // Windowed presentation stays at its MODE size. Native
+                // fullscreen transitions may still resize it programmatically.
+                resize: false,
+                scale_mode: ScaleMode::AspectRatioStretch,
+                ..WindowOptions::default()
+            },
         )
         .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
         set_embedded_window_icon(&mut window);
@@ -137,17 +296,37 @@ impl GraphicsWindow {
         // event/buffer update and make PLOT-heavy programs unusably slow.
         window.set_target_fps(0);
         let input_events = InputEventQueue::default();
+        let fullscreen_shortcut = Rc::new(FullscreenShortcut::default());
         window.set_input_callback(Box::new(GraphicsInputCallback {
             events: input_events.clone(),
+            shortcut: fullscreen_shortcut.clone(),
         }));
         let mut graphics_window = Self {
+            #[cfg(windows)]
+            cursor: cursor_windows::CursorController::new(&window)
+                .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?,
+            #[cfg(target_os = "linux")]
+            linux_presenter: None,
+            #[cfg(target_os = "linux")]
+            linux_blit_pending: true,
+            #[cfg(target_os = "linux")]
+            pointer_confinement: confinement_linux::State::default(),
             window,
             width: graphics.width,
             height: graphics.height,
             mouse: MouseSnapshot::default(),
+            mouse_cursor_visible: true,
+            pointer_confinement_suspended: false,
+            pointer_confinement_requested: false,
+            pointer_confinement_failed: false,
             key_queue: VecDeque::new(),
             input_events,
             ctrl_c_down: false,
+            fullscreen: FullscreenController::default(),
+            fullscreen_requested: false,
+            presentation_dirty: true,
+            last_physical_size: (graphics.width, graphics.height),
+            fullscreen_shortcut,
         };
         graphics_window
             .window
@@ -161,21 +340,223 @@ impl GraphicsWindow {
         self.width == graphics.width && self.height == graphics.height
     }
 
+    /// Preserve the normal placement when MODE replaces the native window.
+    pub(crate) fn position_for_recreation(&self) -> Option<(isize, isize)> {
+        if !self.window.is_open() {
+            return None;
+        }
+        self.fullscreen.windowed_position(&self.window)
+    }
+
+    pub(crate) fn restore_position(&mut self, position: (isize, isize)) -> BasicResult<()> {
+        FullscreenController::set_position(&self.window, position)
+            .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
+        self.window.update();
+        Ok(())
+    }
+
+    /// Select presentation without changing the logical drawing surface.
+    pub fn set_fullscreen(&mut self, enabled: bool) -> BasicResult<()> {
+        self.apply_fullscreen_transition(enabled)?;
+        self.fullscreen_requested = enabled;
+        Ok(())
+    }
+
+    pub fn fullscreen_requested(&self) -> bool {
+        self.fullscreen_requested
+    }
+
+    /// Inherit a presentation preference without covering a debugger or console.
+    pub(crate) fn set_fullscreen_request(&mut self, enabled: bool) {
+        self.fullscreen_requested = enabled;
+    }
+
+    /// Resume the selected presentation after temporarily revealing the console.
+    pub fn resume_fullscreen(&mut self) -> BasicResult<()> {
+        if self.is_fullscreen() != self.fullscreen_requested {
+            self.apply_fullscreen_transition(self.fullscreen_requested)?;
+        }
+        Ok(())
+    }
+
+    fn apply_fullscreen_transition(&mut self, enabled: bool) -> BasicResult<()> {
+        self.release_pointer_confinement();
+        // Process pending native events before changing window styles or size.
+        self.window.update();
+        self.fullscreen
+            .set(&self.window, enabled)
+            .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
+        self.presentation_dirty = true;
+        self.window.update();
+        self.last_physical_size = self.window.get_size();
+        #[cfg(windows)]
+        self.cursor.refresh();
+        self.update_pointer_confinement();
+        Ok(())
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen.is_fullscreen()
+    }
+
+    pub fn physical_size(&self) -> (usize, usize) {
+        self.window.get_size()
+    }
+
+    pub(crate) fn presentation_needs_refresh(&self) -> bool {
+        self.presentation_dirty || self.physical_size() != self.last_physical_size
+    }
+
+    pub fn is_active(&mut self) -> bool {
+        self.window.is_active()
+    }
+
+    pub fn set_title(&mut self, title: &str) {
+        self.window.update();
+        self.window.set_title(title);
+    }
+
+    pub fn presentation_viewport(&self) -> Option<PresentationViewport> {
+        PresentationViewport::fit((self.width, self.height), self.physical_size())
+    }
+
+    pub fn suspend_fullscreen_for_console(&mut self) {
+        self.suspend_pointer_confinement_for_console();
+        if self.is_fullscreen() {
+            // Keep the requested presentation so the next explicit graphics
+            // operation can restore it; passive event pumping must not do so.
+            if let Err(error) = self.apply_fullscreen_transition(false) {
+                eprintln!("Fullscreen: {error}");
+            }
+        }
+    }
+
+    /// Apply a debugger's pending selection without requesting keyboard focus.
+    fn resume_fullscreen_for_console(&mut self) {
+        if let Err(error) = self.resume_fullscreen() {
+            eprintln!("Fullscreen: {error}");
+        }
+    }
+
     pub fn present(&mut self, graphics: &Graphics) -> BasicResult<MouseSnapshot> {
         if !self.window.is_open() {
             return Ok(self.mouse.clone());
         }
-        if graphics.buffer_dirty() {
+        let physical_size = self.window.get_size();
+        self.presentation_dirty |= physical_size != self.last_physical_size;
+        if graphics.buffer_dirty() || self.presentation_dirty {
             self.window
                 .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
                 .map_err(|err| {
                     BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
                 })?;
+            #[cfg(target_os = "linux")]
+            {
+                self.linux_blit_pending = true;
+            }
+            // X11 processes ConfigureNotify after blitting. A resize during
+            // that update replaces its image, so the next pump must repaint.
+            self.presentation_dirty = self.window.get_size() != physical_size;
+            self.last_physical_size = physical_size;
         } else {
             self.window.update();
         }
         self.update_keyboard();
         Ok(self.update_mouse())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn prepare_sync(&mut self) -> BasicResult<()> {
+        if self.linux_blit_pending {
+            // The old XPutImage and new Present use different connections.
+            // Drain the former only after a real blit, never on steady frames.
+            linux_present::sync_minifb(&self.window)
+                .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
+            self.linux_blit_pending = false;
+        }
+        if self.linux_presenter.is_none() {
+            self.linux_presenter = Some(
+                linux_present::LinuxPresenter::new(&self.window).map_err(|message| {
+                    BasicError::new(ErrorCode::Unsupported).with_detail(message)
+                })?,
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn disable_sync(&mut self) {
+        self.linux_presenter = None;
+        self.presentation_dirty = true;
+    }
+
+    /// Deliver the framebuffer through synchronized X11 Present.
+    /// Only an explicit FRAME uses this path. Polling input never waits here.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn present_synchronized(
+        &mut self,
+        graphics: &Graphics,
+    ) -> BasicResult<MouseSnapshot> {
+        self.window.update();
+        if !self.window.is_open() {
+            return Ok(self.mouse.clone());
+        }
+        self.prepare_sync()?;
+        let physical_size = self.window.get_size();
+        let result = self.linux_presenter.as_mut().unwrap().present(
+            graphics.buffer(),
+            (graphics.width, graphics.height),
+            physical_size,
+        );
+        match result {
+            Ok(()) => (),
+            Err(message) => {
+                // An outstanding pixmap may still belong to the server. Close
+                // our connection rather than ever reusing it after a timeout.
+                self.disable_sync();
+                return Err(BasicError::new(ErrorCode::Unsupported).with_detail(message));
+            }
+        }
+        self.window.update();
+        self.presentation_dirty = self.window.get_size() != physical_size;
+        self.last_physical_size = physical_size;
+        self.update_keyboard();
+        Ok(self.update_mouse())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn prepare_sync(&mut self) -> BasicResult<()> {
+        sync_windows::prepare()
+            .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn disable_sync(&mut self) {}
+
+    #[cfg(windows)]
+    pub(crate) fn present_synchronized(
+        &mut self,
+        graphics: &Graphics,
+    ) -> BasicResult<MouseSnapshot> {
+        let mouse = self.present(graphics)?;
+        sync_windows::wait(&self.window)
+            .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
+        Ok(mouse)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    pub(crate) fn prepare_sync(&mut self) -> BasicResult<()> {
+        Err(BasicError::new(ErrorCode::Unsupported)
+            .with_detail("SCREEN SYNC is unavailable on this platform"))
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    pub(crate) fn present_synchronized(
+        &mut self,
+        _graphics: &Graphics,
+    ) -> BasicResult<MouseSnapshot> {
+        self.prepare_sync()?;
+        unreachable!()
     }
 
     pub fn pump_events(&mut self) -> MouseSnapshot {
@@ -186,21 +567,131 @@ impl GraphicsWindow {
         self.update_mouse()
     }
 
-    pub fn pump_lifecycle(&mut self, _graphics: &Graphics) -> BasicResult<bool> {
+    pub fn pump_lifecycle(&mut self, graphics: &Graphics) -> BasicResult<bool> {
         if self.window.is_open() {
             self.window.update();
+            self.update_fullscreen_shortcut();
+            self.update_pointer_confinement();
+            let physical_size = self.window.get_size();
+            if self.presentation_dirty || physical_size != self.last_physical_size {
+                self.window
+                    .update_with_buffer(graphics.buffer(), self.width, self.height)
+                    .map_err(|err| {
+                        BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
+                    })?;
+                #[cfg(target_os = "linux")]
+                {
+                    self.linux_blit_pending = true;
+                }
+                self.presentation_dirty = self.window.get_size() != physical_size;
+                self.last_physical_size = physical_size;
+            }
             self.clear_transient_input();
             self.mouse.event.clear();
         }
         Ok(self.window.is_open())
     }
 
-    pub fn set_mouse_cursor_visible(&mut self, visible: bool) {
-        self.window.set_cursor_visibility(visible);
+    pub fn set_mouse_cursor_visible(&mut self, visible: bool) -> BasicResult<()> {
+        #[cfg(windows)]
+        self.cursor
+            .set_visible(visible)
+            .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
+        #[cfg(not(windows))]
+        if self.mouse_cursor_visible != visible {
+            self.window.set_cursor_visibility(visible);
+        }
+        self.mouse_cursor_visible = visible;
+        self.update_pointer_confinement();
+        Ok(())
+    }
+
+    pub fn mouse_cursor_visible(&self) -> bool {
+        self.mouse_cursor_visible
+    }
+
+    /// A console/debugger can own interaction even if the graphics window
+    /// remains fullscreen on another monitor. Passive event pumps must not
+    /// reacquire the pointer until an explicit graphics operation resumes it.
+    pub(crate) fn suspend_pointer_confinement_for_console(&mut self) {
+        self.pointer_confinement_suspended = true;
+        self.release_pointer_confinement();
+    }
+
+    pub(crate) fn resume_pointer_confinement_for_graphics(&mut self) {
+        if !self.pointer_confinement_suspended {
+            return;
+        }
+        self.pointer_confinement_suspended = false;
+        self.update_pointer_confinement();
+    }
+
+    fn release_pointer_confinement(&mut self) {
+        if !self.pointer_confinement_requested && !self.pointer_confinement_failed {
+            return;
+        }
+        #[cfg(windows)]
+        let result = self.cursor.release_confinement();
+        #[cfg(target_os = "linux")]
+        let result = self.pointer_confinement.release(&self.window);
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let result: Result<(), String> = Ok(());
+        if let Err(message) = result {
+            self.report_pointer_confinement_failure(message);
+        }
+        self.pointer_confinement_requested = false;
+    }
+
+    fn report_pointer_confinement_failure(&mut self, message: String) {
+        if !self.pointer_confinement_failed {
+            eprintln!("Pointer confinement: {message}");
+        }
+        self.pointer_confinement_failed = true;
+    }
+
+    fn update_pointer_confinement(&mut self) {
+        let enabled = self.window.is_open()
+            && self.is_fullscreen()
+            && !self.mouse_cursor_visible
+            && !self.pointer_confinement_suspended
+            && self.window.is_active();
+        if !enabled {
+            self.release_pointer_confinement();
+            self.pointer_confinement_failed = false;
+            return;
+        }
+        if self.pointer_confinement_failed {
+            return;
+        }
+        // Win32 messages maintain geometry and release/reacquire on focus
+        // changes. Do not reinstall that request for every drawing command.
+        #[cfg(windows)]
+        if self.pointer_confinement_requested {
+            return;
+        }
+        #[cfg(windows)]
+        let result = self.cursor.set_confinement((self.width, self.height), true);
+        #[cfg(target_os = "linux")]
+        let result = {
+            let viewport = self.presentation_viewport();
+            self.pointer_confinement
+                .update(&self.window, viewport, true)
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let result: Result<(), String> = Ok(());
+        if let Err(message) = result {
+            self.report_pointer_confinement_failure(message);
+            self.release_pointer_confinement();
+        } else {
+            self.pointer_confinement_requested = true;
+        }
     }
 
     pub fn focus(&mut self) {
+        // Process pending native events before activation and paint messages.
+        self.window.update();
         focus_window_handle(self.window.get_window_handle());
+        self.update_pointer_confinement();
     }
 
     pub fn clear_key_queue(&mut self) {
@@ -223,6 +714,9 @@ impl GraphicsWindow {
     pub fn clear_transient_input(&mut self) {
         self.key_queue.clear();
         self.input_events.borrow_mut().clear();
+        self.fullscreen_shortcut.alt_keys.set(0);
+        self.fullscreen_shortcut.enter_down.set(false);
+        self.fullscreen_shortcut.requested.set(false);
         if self.window.is_open() {
             self.window.update();
             let _ = self.window.get_keys_pressed(KeyRepeat::No);
@@ -231,7 +725,7 @@ impl GraphicsWindow {
         self.input_events.borrow_mut().clear();
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn settle_keyboard_before_console_focus(&mut self) {
         while self.window.is_open() {
             // Keep dispatching messages while the graphics window still owns
@@ -239,7 +733,10 @@ impl GraphicsWindow {
             self.window.update();
             self.clear_key_queue();
 
+            #[cfg(windows)]
             let foreground = self.window.is_open() && self.ctrl_c_state().foreground;
+            #[cfg(target_os = "linux")]
+            let foreground = self.window.is_open() && self.window.is_active();
             if !foreground || self.window.get_keys().is_empty() {
                 break;
             }
@@ -272,12 +769,32 @@ impl GraphicsWindow {
 
     fn update_mouse(&mut self) -> MouseSnapshot {
         let previous = self.mouse.clone();
-        if let Some((x, y)) = self.window.get_mouse_pos(MouseMode::Pass) {
-            self.mouse.x = x.round() as i32;
-            self.mouse.y = self.height as i32 - 1 - y.round() as i32;
+        let point =
+            self.window
+                .get_unscaled_mouse_pos(MouseMode::Pass)
+                .and_then(|point| {
+                    let viewport = self.presentation_viewport()?;
+                    let pixel = viewport.canvas_pixel(point, (self.width, self.height));
+                    #[cfg(windows)]
+                    if pixel.is_none() {
+                        // A relative packet at a DPI-scaled clip boundary can
+                        // virtualize to -1/width. Retry from the physical pointer;
+                        // keep the ordinary mapping and real margins unchanged.
+                        return self.cursor.canonical_client_pointer().and_then(|point| {
+                            viewport.canvas_pixel(point, (self.width, self.height))
+                        });
+                    }
+                    pixel
+                });
+        if let Some((x, y)) = point {
+            self.mouse.x = x;
+            self.mouse.y = self.height as i32 - 1 - y;
+        } else {
+            self.mouse.x = -1;
+            self.mouse.y = -1;
         }
-        self.mouse.left = self.window.get_mouse_down(MouseButton::Left);
-        self.mouse.right = self.window.get_mouse_down(MouseButton::Right);
+        self.mouse.left = point.is_some() && self.window.get_mouse_down(MouseButton::Left);
+        self.mouse.right = point.is_some() && self.window.get_mouse_down(MouseButton::Right);
         let moved = self.mouse.x != previous.x || self.mouse.y != previous.y;
         self.mouse.event = if self.mouse.left && !previous.left {
             "LEFTDOWN".to_string()
@@ -299,7 +816,37 @@ impl GraphicsWindow {
         self.mouse.clone()
     }
 
+    fn update_fullscreen_shortcut(&mut self) -> bool {
+        // Capture the edge in InputCallback, rather than polling the final key
+        // state: a complete press/release can arrive in one minifb update.
+        let requested = self.fullscreen_shortcut.requested.replace(false);
+        #[cfg(windows)]
+        let maximize_requested = self.cursor.take_maximize_request();
+        #[cfg(not(windows))]
+        let maximize_requested = false;
+        let active = self.window.is_active();
+        if !active {
+            // Alt-up may have gone to another app after Alt+Tab. Do not keep
+            // suppressing ordinary Enter when this window becomes active again.
+            self.fullscreen_shortcut.alt_keys.set(0);
+            self.fullscreen_shortcut.enter_down.set(false);
+        }
+        if maximize_requested || (requested && active) {
+            // A native maximize command explicitly requests ON, including when
+            // activation is still queued. It wins over a coincident toggle.
+            let enabled = maximize_requested || !self.is_fullscreen();
+            if let Err(error) = self.set_fullscreen(enabled) {
+                eprintln!("Fullscreen: {error}");
+            }
+        }
+        // Only Alt+Enter consumes Enter. A title-bar action must not swallow a
+        // normal Enter key that happens to arrive during the same update.
+        requested && active
+    }
+
     fn update_keyboard(&mut self) {
+        let fullscreen_key = self.update_fullscreen_shortcut();
+        self.update_pointer_confinement();
         if self.update_ctrl_c_state() {
             self.key_queue.clear();
             self.input_events.borrow_mut().clear();
@@ -307,6 +854,9 @@ impl GraphicsWindow {
         }
         let ctrl_down = self.ctrl_down();
         for key in self.window.get_keys_pressed(KeyRepeat::No) {
+            if fullscreen_key && matches!(key, Key::Enter | Key::NumPadEnter) {
+                continue;
+            }
             if key == Key::C && ctrl_down {
                 console::request_interrupt();
                 continue;
@@ -371,6 +921,23 @@ impl GraphicsWindow {
 
     fn ctrl_down(&self) -> bool {
         self.window.is_key_down(Key::LeftCtrl) || self.window.is_key_down(Key::RightCtrl)
+    }
+}
+
+impl Drop for GraphicsWindow {
+    fn drop(&mut self) {
+        self.release_pointer_confinement();
+        #[cfg(windows)]
+        self.cursor.release();
+        // Restore native decorations/placement while the HWND/XID is alive.
+        if self.window.is_open() && self.fullscreen.is_fullscreen() {
+            self.window.update();
+            let _ = self.fullscreen.set(&self.window, false);
+        }
+        #[cfg(target_os = "linux")]
+        if let Err(error) = self.fullscreen.release_emulation(&self.window) {
+            eprintln!("Fullscreen emulation cleanup: {error}");
+        }
     }
 }
 
@@ -675,6 +1242,11 @@ fn code_to_key(code: u8) -> Option<Key> {
 
 #[cfg(windows)]
 pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
+    focus_console_window_impl(graphics_window, false);
+}
+
+#[cfg(windows)]
+fn focus_console_window_impl(graphics_window: Option<&mut GraphicsWindow>, for_debugger: bool) {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetConsoleWindow() -> *mut c_void;
@@ -689,14 +1261,6 @@ pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
     }
 
     let console_window = unsafe { GetConsoleWindow() };
-    if console_window.is_null() {
-        return;
-    }
-    // Preserve key-release handling even when the terminal is already active.
-    if let Some(window) = graphics_window {
-        window.settle_keyboard_before_console_focus();
-    }
-
     let mut class_name = [0u16; 64];
     let class_len = unsafe {
         GetClassNameW(
@@ -711,17 +1275,38 @@ pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
     let visible_owner = (!owner.is_null()
         && unsafe { IsWindow(owner) != 0 && IsWindowVisible(owner) != 0 })
     .then_some(owner);
-    let foreground = unsafe { GetForegroundWindow() };
-    if let Some(target) =
-        console_activation_target(console_window, class_name, visible_owner, foreground)
-    {
-        focus_window_handle(target);
+    // Resolve the visible host even if it already owns focus: skipping
+    // activation must not make us lose its monitor identity.
+    let target = console_activation_target(
+        console_window,
+        class_name,
+        visible_owner,
+        std::ptr::null_mut(),
+    );
+    if let Some(window) = graphics_window {
+        window.suspend_pointer_confinement_for_console();
+        // Settle keys before changing presentation or focus. Then read the
+        // current monitor positions, since waiting for key-up can take time.
+        window.settle_keyboard_before_console_focus();
+        let keep_fullscreen = target.is_some_and(|target| {
+            console_monitor_windows::console_is_separate(window.window.get_window_handle(), target)
+        });
+        if !keep_fullscreen {
+            window.suspend_fullscreen_for_console();
+        } else if for_debugger {
+            window.resume_fullscreen_for_console();
+        }
+    }
+    if let Some(target) = target {
+        if target != unsafe { GetForegroundWindow() } {
+            focus_window_handle(target);
+        }
     }
 }
 
 #[cfg(windows)]
 pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWindow>) {
-    focus_console_window(graphics_window);
+    focus_console_window_impl(graphics_window, true);
 }
 
 #[cfg(any(windows, test))]
@@ -798,10 +1383,26 @@ fn focus_window_handle(hwnd: *mut c_void) {
 }
 
 #[cfg(not(windows))]
-pub fn focus_console_window(_graphics_window: Option<&mut GraphicsWindow>) {}
+pub fn focus_console_window(graphics_window: Option<&mut GraphicsWindow>) {
+    if let Some(window) = graphics_window {
+        window.suspend_pointer_confinement_for_console();
+        #[cfg(target_os = "linux")]
+        console_monitor_linux::focus_console(window, false);
+        #[cfg(not(target_os = "linux"))]
+        window.suspend_fullscreen_for_console();
+    }
+}
 
 #[cfg(not(windows))]
-pub fn focus_console_window_for_debugger(_graphics_window: Option<&mut GraphicsWindow>) {}
+pub fn focus_console_window_for_debugger(graphics_window: Option<&mut GraphicsWindow>) {
+    #[cfg(target_os = "linux")]
+    if let Some(window) = graphics_window {
+        window.suspend_pointer_confinement_for_console();
+        console_monitor_linux::focus_console(window, true);
+    }
+    #[cfg(not(target_os = "linux"))]
+    focus_console_window(graphics_window);
+}
 
 #[cfg(not(windows))]
 fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
@@ -810,11 +1411,301 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 mod tests {
     use super::{
         code_to_key, console_activation_target, has_pending_pause_key, key_to_code,
-        GraphicsInputCallback, GraphicsInputEvent, InputEventQueue,
+        GraphicsInputCallback, GraphicsInputEvent, InputEventQueue, PresentationViewport,
     };
     use minifb::{InputCallback, Key};
     use std::collections::VecDeque;
     use std::ffi::c_void;
+
+    #[test]
+    fn fullscreen_viewport_preserves_aspect_and_maps_only_the_canvas() {
+        let old = PresentationViewport::fit((640, 480), (1920, 1080)).unwrap();
+        assert_eq!(
+            old,
+            PresentationViewport {
+                x: 240,
+                y: 0,
+                width: 1440,
+                height: 1080
+            }
+        );
+        assert_eq!(old.canvas_pixel((239.0, 540.0), (640, 480)), None);
+        assert_eq!(old.canvas_pixel((1680.0, 540.0), (640, 480)), None);
+        assert_eq!(old.canvas_pixel((240.0, 0.0), (640, 480)), Some((0, 0)));
+        assert_eq!(
+            old.canvas_pixel((960.0, 540.0), (640, 480)),
+            Some((320, 240))
+        );
+        assert_eq!(
+            old.canvas_pixel((1679.0, 1079.0), (640, 480)),
+            Some((639, 479))
+        );
+        let wide = PresentationViewport::fit((960, 540), (1920, 1080)).unwrap();
+        assert_eq!(
+            wide,
+            PresentationViewport {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            }
+        );
+        assert_eq!(wide.canvas_pixel((1.0, 1.0), (960, 540)), Some((0, 0)));
+        assert_eq!(wide.canvas_pixel((2.0, 2.0), (960, 540)), Some((1, 1)));
+        assert_eq!(
+            wide.canvas_pixel((1919.0, 1079.0), (960, 540)),
+            Some((959, 539))
+        );
+    }
+
+    #[test]
+    fn presentation_viewport_handles_minimization_odd_sizes_and_letterboxing() {
+        assert_eq!(PresentationViewport::fit((960, 540), (0, 0)), None);
+        let wide = PresentationViewport::fit((960, 540), (800, 600)).unwrap();
+        assert_eq!(
+            wide,
+            PresentationViewport {
+                x: 0,
+                y: 75,
+                width: 800,
+                height: 450
+            }
+        );
+        assert_eq!(wide.canvas_pixel((400.0, 74.0), (960, 540)), None);
+        assert_eq!(wide.canvas_pixel((400.0, 525.0), (960, 540)), None);
+        assert_eq!(
+            wide.canvas_pixel((400.0, 300.0), (960, 540)),
+            Some((480, 270))
+        );
+        let odd = PresentationViewport::fit((640, 480), (1001, 701)).unwrap();
+        assert!(odd.x * 2 + odd.width <= 1001);
+        assert!(odd.y * 2 + odd.height <= 701);
+        assert_eq!(odd.canvas_pixel((f32::NAN, 1.0), (640, 480)), None);
+        assert_eq!(odd.canvas_pixel((-1.0, 1.0), (640, 480)), None);
+    }
+
+    /// Exercises the real Win32 window contract. Run explicitly on an unlocked
+    /// desktop; ordinary unit-test runs must not open or minimize windows.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "opens a Windows graphics window and changes its presentation"]
+    fn fixed_window_policy_survives_fullscreen_and_minimize() {
+        use super::GraphicsWindow;
+        use crate::graphics::Graphics;
+        use std::mem::size_of;
+        use std::time::{Duration, Instant};
+
+        #[repr(C)]
+        #[derive(Default)]
+        struct Rect {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+        }
+
+        #[repr(C)]
+        #[derive(Default)]
+        struct MonitorInfo {
+            size: u32,
+            monitor: Rect,
+            work: Rect,
+            flags: u32,
+        }
+
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
+            fn ShowWindow(window: *mut c_void, command: i32) -> i32;
+            fn IsIconic(window: *mut c_void) -> i32;
+            fn IsZoomed(window: *mut c_void) -> i32;
+            fn SendMessageW(
+                window: *mut c_void,
+                message: u32,
+                wparam: usize,
+                lparam: isize,
+            ) -> isize;
+            fn MonitorFromWindow(window: *mut c_void, flags: u32) -> *mut c_void;
+            fn GetMonitorInfoW(monitor: *mut c_void, info: *mut MonitorInfo) -> i32;
+        }
+
+        const GWL_STYLE: i32 = -16;
+        const WS_THICKFRAME: isize = 0x0004_0000;
+        const WS_MINIMIZEBOX: isize = 0x0002_0000;
+        const WS_MAXIMIZEBOX: isize = 0x0001_0000;
+        const SW_MINIMIZE: i32 = 6;
+        const SW_RESTORE: i32 = 9;
+        const MONITOR_DEFAULTTONEAREST: u32 = 2;
+
+        fn wait_until(window: &mut GraphicsWindow, condition: impl Fn(&GraphicsWindow) -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                window.window.update();
+                if condition(window) {
+                    return;
+                }
+                assert!(window.window.is_open(), "the test window was closed");
+                assert!(Instant::now() < deadline, "window transition timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let mut graphics = Graphics::default();
+        graphics.set_mode(960).unwrap();
+        graphics.set_paper_rgb(11, 23, 47).unwrap();
+        graphics.clg();
+        graphics
+            .circle(480.0, 270.0, 100.0, Some(0xff8040), false)
+            .unwrap();
+        let original_pixels = graphics.buffer().to_vec();
+        let original_capture = graphics.capture_screen();
+        let mut window = GraphicsWindow::new(&graphics).unwrap();
+        assert!(!window.fullscreen_requested());
+        window.set_fullscreen_request(true);
+        assert!(window.fullscreen_requested());
+        assert!(
+            !window.is_fullscreen(),
+            "inheriting a preference changed presentation"
+        );
+        window.set_fullscreen_request(false);
+        window.set_title("AVL fixed-window policy verification");
+        window.present(&graphics).unwrap();
+        let handle = window.window.get_window_handle();
+        let original_size = window.physical_size();
+        let original_style = unsafe { GetWindowLongPtrW(handle, GWL_STYLE) };
+        assert_eq!(original_style & WS_THICKFRAME, 0, "manual resize enabled");
+        assert_ne!(
+            original_style & WS_MAXIMIZEBOX,
+            0,
+            "fullscreen button unavailable"
+        );
+        assert_ne!(original_style & WS_MINIMIZEBOX, 0, "minimize unavailable");
+
+        let mut monitor_info = MonitorInfo {
+            size: size_of::<MonitorInfo>() as u32,
+            ..MonitorInfo::default()
+        };
+        let monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST) };
+        assert!(!monitor.is_null());
+        assert_ne!(unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }, 0);
+        let fullscreen_size = (
+            (monitor_info.monitor.right - monitor_info.monitor.left) as usize,
+            (monitor_info.monitor.bottom - monitor_info.monitor.top) as usize,
+        );
+
+        let original_position = window.position_for_recreation();
+        for _ in 0..2 {
+            // Exercise the native title-bar command, including its reserved
+            // low bits and duplicate delivery. It must queue ON without letting
+            // Windows maximize first or re-entering fullscreen from WNDPROC.
+            unsafe {
+                SendMessageW(handle, 0x0112, 0xf033, 0);
+                SendMessageW(handle, 0x0112, 0xf030, 0);
+            }
+            assert!(
+                !window.is_fullscreen(),
+                "native callback changed presentation"
+            );
+            assert_eq!(unsafe { IsZoomed(handle) }, 0);
+            assert_eq!(window.physical_size(), original_size);
+            assert_eq!(window.position_for_recreation(), original_position);
+            assert!(window.matches_size(&graphics));
+            assert!(window
+                .input_events
+                .borrow()
+                .iter()
+                .all(|event| !matches!(event, GraphicsInputEvent::Enter)));
+            assert!(
+                !window.update_fullscreen_shortcut(),
+                "a maximize command consumed an ordinary Enter key"
+            );
+            wait_until(&mut window, |w| w.physical_size() == fullscreen_size);
+            assert!(window.is_fullscreen());
+            assert!(window.fullscreen_requested());
+            window.present(&graphics).unwrap();
+            assert_eq!(graphics.buffer(), original_pixels.as_slice());
+            assert_eq!(graphics.capture_screen(), original_capture);
+
+            // Maximize is an explicit ON request, not a toggle. A duplicate
+            // arriving while fullscreen wins over a simultaneous Alt+Enter.
+            window.fullscreen_shortcut.requested.set(true);
+            unsafe { SendMessageW(handle, 0x0112, 0xf030, 0) };
+            let active = window.window.is_active();
+            assert_eq!(window.update_fullscreen_shortcut(), active);
+            assert!(window.is_fullscreen());
+            assert!(window.fullscreen_requested());
+
+            window.suspend_fullscreen_for_console();
+            wait_until(&mut window, |w| w.physical_size() == original_size);
+            assert!(!window.is_fullscreen());
+            assert!(window.fullscreen_requested());
+            window.pump_events();
+            assert!(
+                !window.is_fullscreen(),
+                "passive pumping resumed fullscreen"
+            );
+            window.resume_fullscreen().unwrap();
+            wait_until(&mut window, |w| w.physical_size() == fullscreen_size);
+            assert!(window.is_fullscreen());
+            assert!(window.fullscreen_requested());
+
+            window.set_fullscreen(false).unwrap();
+            wait_until(&mut window, |w| w.physical_size() == original_size);
+            assert!(!window.is_fullscreen());
+            assert!(!window.fullscreen_requested());
+            assert_eq!(window.position_for_recreation(), original_position);
+            window.resume_fullscreen().unwrap();
+            assert!(!window.is_fullscreen(), "explicit OFF was not retained");
+            assert_eq!(
+                unsafe { GetWindowLongPtrW(handle, GWL_STYLE) },
+                original_style,
+                "fullscreen did not restore the fixed-size window style"
+            );
+            assert_eq!(graphics.buffer(), original_pixels.as_slice());
+            assert_eq!(graphics.capture_screen(), original_capture);
+        }
+
+        // Read actual native state, rather than assuming the minimize style bit
+        // alone guarantees that minimizing and restoring still work.
+        window.window.update();
+        unsafe { ShowWindow(handle, SW_MINIMIZE) };
+        wait_until(&mut window, |_| unsafe { IsIconic(handle) != 0 });
+        unsafe { ShowWindow(handle, SW_RESTORE) };
+        wait_until(&mut window, |w| unsafe {
+            IsIconic(handle) == 0 && w.physical_size() == original_size
+        });
+        window.present(&graphics).unwrap();
+        assert_eq!(
+            unsafe { GetWindowLongPtrW(handle, GWL_STYLE) },
+            original_style
+        );
+        assert_eq!(graphics.buffer(), original_pixels.as_slice());
+        assert_eq!(graphics.capture_screen(), original_capture);
+    }
+
+    #[test]
+    fn fullscreen_shortcut_does_not_leak_enter_into_graphical_input() {
+        let events = InputEventQueue::default();
+        let mut callback = GraphicsInputCallback {
+            events: events.clone(),
+            shortcut: Default::default(),
+        };
+        callback.set_key_state(Key::LeftAlt, true);
+        callback.set_key_state(Key::Enter, true);
+        callback.add_char('\r' as u32);
+        callback.set_key_state(Key::Enter, false);
+        callback.set_key_state(Key::LeftAlt, false);
+        assert!(events.borrow().is_empty());
+        assert!(callback.shortcut.requested.get());
+        assert!(!callback.shortcut.enter_down.get());
+        callback.set_key_state(Key::Enter, true);
+        assert_eq!(
+            events.borrow().iter().copied().collect::<Vec<_>>(),
+            vec![GraphicsInputEvent::Enter]
+        );
+        assert_eq!(key_to_code(Key::Escape, false), Some(27));
+        assert_eq!(key_to_code(Key::F11, false), Some(138));
+    }
 
     #[cfg(target_os = "linux")]
     use super::embedded_linux_window_icon_argb;
@@ -890,6 +1781,7 @@ mod tests {
         let events = InputEventQueue::default();
         let mut callback = GraphicsInputCallback {
             events: events.clone(),
+            shortcut: Default::default(),
         };
 
         callback.add_char('ñ' as u32);

@@ -1,14 +1,14 @@
-10 ' A first-person maze with textured walls, music and sound effects.
+10 ' A widescreen first-person maze with textured walls, music and sound effects.
 20 ' Find the key, open the gate and reach the escape portal.
 30 ' W/S or UP/DOWN walks; LEFT/RIGHT turns; A/D strafes; SPACE runs; E opens the gate.
-40 ' M map; Q quality; F FPS limit; R restart; H HUD; B music; N mute; ESC exit.
-50 SCREEN : MODE 640 : RAD : PAPER 0 : CLG : MAT BASE 0
-60 N=19 : Cols=640 : Cap=1 : MapOn=0 : Hud=1 : Radius=0.18
-70 Plane=0.66 : Proj=320/Plane : Far=18 : Nt=12 : No=14
+40 ' V resolution; U fullscreen; J window; M map; Q quality; F VSYNC; R restart; B music; N mute; ESC exit.
+50 SCREEN : ScreenMode=960 : MODE ScreenMode : SCREEN FULL OFF : MOUSE OFF : RAD : PAPER 0 : CLG : MAT BASE 0
+60 N=19 : Quality=2 : SyncEnabled=1 : SCREEN SYNC ON : MapOn=0 : Radius=0.18
+70 Far=18 : Nt=12 : No=14
 80 DIM W(N-1,N-1),Seen(N-1,N-1),Light(N-1,N-1),Rows$(N-1)
-90 DIM Ox(No-1),Oy(No-1),Wnx(Nt-1),Wny(Nt-1),Kind(No-1),Order(No-1),Od(No-1),ZBuf(639)
+90 DIM Ox(No-1),Oy(No-1),Wnx(Nt-1),Wny(Nt-1),Kind(No-1),Order(No-1),Od(No-1),ZBuf(1279)
 100 DIM Art(2,31,15),Pal(10),Br(3071),Bg(3071),Bb(3071)
-110 DIM D(639,479),CamX(N,N),CamZ(N,N),Glow(N,N)
+110 DIM CamX(N,N),CamZ(N,N),Glow(N,N) : CALL configureDisplay
 120 DIM Ax(3),Az(3),Au(3),Av(3),Al(3),Bx(3),Bz(3),Bu(3),Bv(3),Bl(3)
 130 ' Shared state: maze/player/audio, immutable textures and reusable clipping buffers.
 140 DIM Fx(3),Fy(3),Fq(3),Fr(3),Fg(3),Fb(3)
@@ -23,14 +23,18 @@
 220   K$=UPPER$(INKEY$)
 230   IF K$=CHR$(27) OR KEYDOWN(27) THEN EXIT WHILE
 240   IF K$="M" THEN MapOn=1-MapOn
-250   IF K$="H" THEN Hud=1-Hud
-260   IF K$="F" THEN Cap=1-Cap
-270   IF K$="Q" THEN Cols=Cols*2:IF Cols>640 THEN Cols=160
+250   IF K$="V" THEN CALL nextResolution
+260   IF K$="F" THEN
+261     IF SyncEnabled THEN SCREEN SYNC OFF ELSE SCREEN SYNC ON
+262     SyncEnabled=1-SyncEnabled
+263   ENDIF
+265   CALL displayInput
+270   IF K$="Q" THEN Quality=(Quality+1) MOD 3:Cols=CanvasW/(2^(2-Quality))
 280   IF K$="R" THEN
 290     CALL resetPlay : Last=TIME
 300   ELSE
 310     CALL handleAudioKeys
-320     Cw=640/Cols
+320     Cw=CanvasW/Cols
 330     Turn=ABS(KEYDOWN(29))-ABS(KEYDOWN(28))
 340     Walk=MAX(ABS(KEYDOWN(87)),ABS(KEYDOWN(30)))-MAX(ABS(KEYDOWN(83)),ABS(KEYDOWN(31)))
 350     Strafe=ABS(KEYDOWN(68))-ABS(KEYDOWN(65)) : Running=ABS(KEYDOWN(32))
@@ -38,12 +42,12 @@
 370     Ang=Ang+Turn*Dt*1.9 : Ang=Ang-2*PI*INT(Ang/(2*PI))
 380     Dx=COS(Ang) : Dy=SIN(Ang) : Plx=-Dy*Plane : Ply=Dx*Plane
 390     CALL movePlayer : CALL tryGate
-400     Hor=240+SIN(Pace)*2 : Tr=TIME : CLG OFFSCREEN
+400     Hor=CanvasH/2+SIN(Pace)*2*UiScale : Tr=TIME : CLG OFFSCREEN
 410     CALL drawPlanes : CALL drawWalls : CALL drawObjects : CALL drawLantern
 420     IF MapOn THEN CALL drawMinimap
 430     RenderMs=0.85*RenderMs+150*(TIME-Tr)
 440     CALL drawHud
-450     IF Cap THEN FRAME 60 ELSE FRAME
+450     FRAME
 460     Count=Count+1 : Frames=Frames+1
 470     IF TIME-TLast>=0.5 THEN Fps=Count/(TIME-TLast):Count=0:TLast=TIME
 480   ENDIF
@@ -230,7 +234,7 @@
 2280 DEF SUB drawPlanes
 2290   LOCAL Y, X, Cx, Cz, Near, Pad, Edge, Flicker
 2300   LOCAL Half
-2310   FRECTANGLE 0,40,639,439,RGB(9,13,19) : MAT D=0
+2310   FRECTANGLE 0,ViewBottom,CanvasW-1,ViewTop,RGB(9,13,19) : MAT D=0
 2320   Near=0.1 : Pad=SQR(0.5) : Edge=Pad*SQR(1+Plane^2) : Flicker=1+0.045*SIN(T*10)+0.025*SIN(T*17)
 2330   FOR Y=0 TO N : FOR X=0 TO N
 2340       CamX(Y,X)=-(X-Px)*Dy+(Y-Py)*Dx : CamZ(Y,X)=(X-Px)*Dx+(Y-Py)*Dy
@@ -274,7 +278,7 @@
 2720   LOCAL J, Gl
 2730   IF Bn<3 THEN EXIT SUB
 2740   FOR J=0 TO Bn-1
-2750     Fq(J)=1/Bz(J) : Fx(J)=320+Proj*Bx(J)*Fq(J) : Fy(J)=Hor-0.5*Proj*Fq(J) : Gl=Bl(J)*Flicker
+2750     Fq(J)=1/Bz(J) : Fx(J)=CanvasW/2+Proj*Bx(J)*Fq(J) : Fy(J)=Hor-0.5*Proj*Fq(J) : Gl=Bl(J)*Flicker
 2760     Fr(J)=255*(0.12+1.8*Gl) : Fg(J)=255*(0.14+1.2*Gl) : Fb(J)=255*(0.18+0.55*Gl)
 2770   NEXT J
 2780   IF Bn=4 THEN
@@ -289,7 +293,7 @@
 2870 DEF SUB drawWalls
 2880   LOCAL C, Camera, Rx, Ry, Gx, Gy, DelX, DelY
 2890   LOCAL Sx, Sy, Sdx, Sdy, Dstep, Dist, Matl
-2900   LOCAL Side, WallX, TexX, Gl, Shade, Sh, Tile, U
+2900   LOCAL Side, WallX, TexX, Gl, Shade, SpriteH, Tile, U
 2910   LOCAL V, Lh, WLow, WHigh, Yb, Yt, Vb, Vt
 2915   ' The maze keeps a solid border; every ray hits before N*2 steps.
 2920   FOR C=0 TO Cols-1
@@ -312,9 +316,9 @@
 3150     IF (Side=0 AND Rx>0) OR (Side=1 AND Ry<0) THEN TexX=31-TexX
 3160     Gl=Light(Gy,Gx)
 3170     Shade=(0.1+0.82/(1+Dist*0.2)+Gl*0.13) : IF Side=1 THEN Shade=Shade*0.82
-3180     Sh=MAX(0,MIN(31,INT(Shade*31))) : Tile=(Matl-1)*32+Sh
+3180     SpriteH=MAX(0,MIN(31,INT(Shade*31))) : Tile=(Matl-1)*32+SpriteH
 3190     U=(Tile MOD 8)*32+TexX+0.5 : V=(Tile\8)*32 : Lh=Proj/Dist
-3200     WLow=Hor-Lh*0.5 : WHigh=Hor+Lh*0.5 : Yb=MAX(40,WLow) : Yt=MIN(440,WHigh)
+3200     WLow=Hor-Lh*0.5 : WHigh=Hor+Lh*0.5 : Yb=MAX(ViewBottom,WLow) : Yt=MIN(ViewTop,WHigh)
 3210     Vb=V+(Yb-WLow)*32/Lh : Vt=V+(Yt-WLow)*32/Lh
 3220     TRECTANGLE Atlas$,C*Cw,Yb,(C+1)*Cw,Yt,U,Vb,U,Vt
 3230   NEXT C
@@ -334,21 +338,21 @@
 3370 ' Key and portal billboards; reject invisible objects before scanning their masks.
 3379 ' Precalculated immutable mask runs preserve color order and transparent gaps.
 3380 DEF SUB drawBillboard(Sk,Depth,Across)
-3390   LOCAL Center,Sw,Sh,Z0,SLeft,Bottom,XLo,XHi, RunIndex
+3390   LOCAL Center,SpriteW,SpriteH,Z0,SLeft,Bottom,XLo,XHi, RunIndex
 3400   LOCAL Sc,Tx,LastCol,StartY,Ty,Yb,Yt
 3410   IF Depth<0.12 OR Depth>Far THEN EXIT SUB
-3420   Center=320+Proj*Across/Depth
-3430   IF Sk=1 THEN Sw=Proj*0.46/Depth:Sh=Proj*0.46/Depth:Z0=0.25+0.035*SIN(T*3) ELSE Sw=Proj*0.75/Depth:Sh=Proj*0.91/Depth:Z0=0.02
-3440   SLeft=Center-Sw*0.5 : Bottom=Hor+(Z0-0.5)*Proj/Depth
-3450   IF SLeft>639 OR SLeft+Sw<0 THEN EXIT SUB
-3460   XLo=MAX(0,INT(SLeft/Cw)) : XHi=MIN(Cols-1,INT((SLeft+Sw)/Cw))
+3420   Center=CanvasW/2+Proj*Across/Depth
+3430   IF Sk=1 THEN SpriteW=Proj*0.46/Depth:SpriteH=Proj*0.46/Depth:Z0=0.25+0.035*SIN(T*3) ELSE SpriteW=Proj*0.75/Depth:SpriteH=Proj*0.91/Depth:Z0=0.02
+3440   SLeft=Center-SpriteW*0.5 : Bottom=Hor+(Z0-0.5)*Proj/Depth
+3450   IF SLeft>CanvasW-1 OR SLeft+SpriteW<0 THEN EXIT SUB
+3460   XLo=MAX(0,INT(SLeft/Cw)) : XHi=MIN(Cols-1,INT((SLeft+SpriteW)/Cw))
 3470   FOR Sc=XLo TO XHi
-3480     Tx=INT(((Sc+0.5)*Cw-SLeft)*16/Sw)
+3480     Tx=INT(((Sc+0.5)*Cw-SLeft)*16/SpriteW)
 3490     IF Depth<ZBuf(Sc) AND Tx>=0 AND Tx<=15 THEN
 3510       FOR RunIndex=0 TO MaskRuns(Sk,Tx)-1
 3520         StartY=MaskRunStart(Sk,Tx,RunIndex) : Ty=MaskRunEnd(Sk,Tx,RunIndex) : LastCol=MaskRunColor(Sk,Tx,RunIndex)
-3530         Yb=Bottom+StartY*Sh/32 : Yt=Bottom+Ty*Sh/32
-3540         Yb=MAX(40,INT(Yb)) : Yt=MIN(439,INT(Yt))
+3530         Yb=Bottom+StartY*SpriteH/32 : Yt=Bottom+Ty*SpriteH/32
+3540         Yb=MAX(ViewBottom,INT(Yb)) : Yt=MIN(ViewTop,INT(Yt))
 3550         IF Yt>=Yb THEN FRECTANGLE Sc*Cw,Yb,(Sc+1)*Cw-1,Yt,Pal(LastCol)
 3560       NEXT RunIndex
 3620     ENDIF
@@ -359,7 +363,7 @@
 3660 DEF SUB drawWallTorch(I,Ddx,Ddy,Depth,Across)
 3670   LOCAL Pn, Vx, Vy, Tpd, Tpa, Td1, Tc1, Td2, RunIndex
 3680   LOCAL Tc2, X1, X2, XLo, XHi, Flicker, Sc, Camera
-3690   LOCAL Rx, Ry, Den, Td, Tx, Sh, Bottom, LastCol
+3690   LOCAL Rx, Ry, Den, Td, Tx, SpriteH, Bottom, LastCol
 3700   LOCAL StartY, Ty, Yb, Yt
 3710   Pn=Ddx*Wnx(I)+Ddy*Wny(I) : IF Pn>=-0.015 THEN EXIT SUB
 3720   Vx=-Wny(I) : Vy=Wnx(I) : Tpd=Vx*Dx+Vy*Dy : Tpa=-Vx*Dy+Vy*Dx
@@ -367,7 +371,7 @@
 3740   IF Td1<=0.08 AND Td2<=0.08 THEN EXIT SUB
 3750   IF Td1<0.08 THEN Tc1=Tc1+(Tc2-Tc1)*(0.08-Td1)/(Td2-Td1):Td1=0.08
 3760   IF Td2<0.08 THEN Tc2=Tc2+(Tc1-Tc2)*(0.08-Td2)/(Td1-Td2):Td2=0.08
-3770   X1=320+Proj*Tc1/Td1 : X2=320+Proj*Tc2/Td2
+3770   X1=CanvasW/2+Proj*Tc1/Td1 : X2=CanvasW/2+Proj*Tc2/Td2
 3780   XLo=MAX(0,INT(MIN(X1,X2)/Cw)) : XHi=MIN(Cols-1,INT(MAX(X1,X2)/Cw))
 3790   IF XLo>XHi THEN EXIT SUB
 3800   Flicker=1+0.025*SIN(T*10+I*2.7)+0.018*SIN(T*17+I)
@@ -378,12 +382,12 @@
 3850       IF Td>=0.08 AND Td<ZBuf(Sc) AND Td<=Far THEN
 3860         Tx=INT((0.5+((Px+Rx*Td-Ox(I))*Vx+(Py+Ry*Td-Oy(I))*Vy)/0.24)*16)
 3870         IF Tx>=0 AND Tx<=15 THEN
-3880           Sh=Proj*0.52/Td : Bottom=Hor-0.1*Proj/Td
+3880           SpriteH=Proj*0.52/Td : Bottom=Hor-0.1*Proj/Td
 3890           FOR RunIndex=0 TO MaskRuns(0,Tx)-1
 3900             StartY=MaskRunStart(0,Tx,RunIndex) : Ty=MaskRunEnd(0,Tx,RunIndex) : LastCol=MaskRunColor(0,Tx,RunIndex)
-3910             Yb=Bottom+StartY*Sh/32 : Yt=Bottom+Ty*Sh/32
+3910             Yb=Bottom+StartY*SpriteH/32 : Yt=Bottom+Ty*SpriteH/32
 3920             IF StartY>=17 THEN Yb=Bottom+(Yb-Bottom)*Flicker:Yt=Bottom+(Yt-Bottom)*Flicker
-3930             Yb=MAX(40,INT(Yb)) : Yt=MIN(439,INT(Yt))
+3930         Yb=MAX(ViewBottom,INT(Yb)) : Yt=MIN(ViewTop,INT(Yt))
 3940             IF Yt>=Yb THEN FRECTANGLE Sc*Cw,Yb,(Sc+1)*Cw-1,Yt,Pal(LastCol)
 3950           NEXT RunIndex
 4010         ENDIF
@@ -393,25 +397,27 @@
 4050 SUBEND
 4060 ' Explored minimap; unseen rooms stay hidden until rays visit them
 4070 DEF SUB drawMinimap
-4080   LOCAL Y, X, Mc, Ax, Ay
-4090   FRECTANGLE 508,310,635,437,RGB(7,14,20)
-4100   RECTANGLE 508,310,635,437,RGB(105,127,120)
+4080   LOCAL Y, X, Mc, Ax, Ay, MapX, MapY, Cell
+4090   Cell=6*UiScale : MapX=CanvasW-125*UiScale : MapY=ViewTop-8*UiScale
+4100   FRECTANGLE MapX-7*UiScale,MapY-122*UiScale,CanvasW-5*UiScale,ViewTop-3*UiScale,RGB(7,14,20) : RECTANGLE MapX-7*UiScale,MapY-122*UiScale,CanvasW-5*UiScale,ViewTop-3*UiScale,RGB(105,127,120)
 4110   FOR Y=0 TO N-1 : FOR X=0 TO N-1
 4120       IF Seen(Y,X) THEN
 4130         Mc=RGB(46,56,57) : IF W(Y,X)>0 THEN Mc=RGB(116,126,124)
 4140         IF W(Y,X)=3 THEN Mc=RGB(155,101,42)
-4150         FRECTANGLE 515+X*6,431-Y*6,519+X*6,427-Y*6,Mc
+4150       FRECTANGLE MapX+X*Cell,MapY-Y*Cell,MapX+X*Cell+4*UiScale,MapY-Y*Cell-4*UiScale,Mc
 4160       ENDIF
 4170   NEXT X : NEXT Y
-4180   IF Have=0 AND Seen(INT(Oy(12)),INT(Ox(12))) THEN FCIRCLE 515+Ox(12)*6,432-Oy(12)*6,2,Pal(7)
-4190   IF Seen(16,17) THEN FCIRCLE 518+17*6,429-16*6,2,Pal(9)
-4200   Ax=515+Px*6 : Ay=432-Py*6 : FCIRCLE Ax,Ay,2,RGB(244,225,155)
-4210   DRAW Ax,Ay,Ax+Dx*6,Ay-Dy*6,RGB(244,225,155)
+4180   IF Have=0 AND Seen(INT(Oy(12)),INT(Ox(12))) THEN FCIRCLE MapX+Ox(12)*Cell,MapY+UiScale-Oy(12)*Cell,2*UiScale,Pal(7)
+4190   IF Seen(16,17) THEN FCIRCLE MapX+3*UiScale+17*Cell,MapY-2*UiScale-16*Cell,2*UiScale,Pal(9)
+4200   Ax=MapX+Px*Cell : Ay=MapY+UiScale-Py*Cell : FCIRCLE Ax,Ay,2*UiScale,RGB(244,225,155)
+4210   DRAW Ax,Ay,Ax+Dx*Cell,Ay-Dy*Cell,RGB(244,225,155)
 4220 SUBEND
 4230 ' Opaque brass, alpha glass and flame glow; the handle stays open
 4240 DEF SUB drawLantern
 4250   LOCAL Lx, Ly, Fh
-4260   Lx=548+SIN(Pace)*2 : Ly=42+COS(Pace)*3
+4255   ' Scale the brass and glow uniformly; this never stretches the 3D world.
+4256   SCALE 0,(CanvasW-1)/UiScale,0,(CanvasH-1)/UiScale
+4260   Lx=CanvasW/UiScale-92+SIN(Pace)*2 : Ly=ViewBottom/UiScale+2+COS(Pace)*3
 4270   FRECTANGLE Lx+5,Ly+10,Lx+38,Ly+60,RGB(85,139,144) ALPHA 0.18
 4280   CIRCLE Lx+22,Ly+81,11,RGB(152,112,51) : CIRCLE Lx+22,Ly+81,10,RGB(213,163,75)
 4290   FRECTANGLE Lx,Ly,Lx+43,Ly+9,RGB(182,134,60) : FRECTANGLE Lx,Ly+60,Lx+43,Ly+68,RGB(182,134,60)
@@ -423,27 +429,27 @@
 4350   FRECTANGLE Lx+3,Ly+4,Lx+40,Ly+8,RGB(240,190,103)
 4360   FRECTANGLE Lx-4,Ly+61,Lx+47,Ly+67,RGB(213,163,75)
 4370   FRECTANGLE Lx+18,Ly+10,Lx+20,Ly+59,RGB(181,138,61)
+4375   SCALE 0,CanvasW-1,0,CanvasH-1
 4380 SUBEND
 4390 ' HUD and the win overlay are deliberately drawn after the world
 4400 DEF SUB drawHud
-4410   LOCAL Ks$, Fs$, As$
-4420   FRECTANGLE 0,0,639,39,RGB(10,17,23) : FRECTANGLE 0,440,639,479,RGB(10,17,23)
-4430   DRAW 0,439,639,439,RGB(124,105,63) : DRAW 0,40,639,40,RGB(124,105,63)
-4440   IF Hud=0 AND Won=0 THEN EXIT SUB
+4410   LOCAL Ks$, SyncText$, As$, Info$
+4420   FRECTANGLE 0,0,CanvasW-1,35,RGB(10,17,23) : FRECTANGLE 0,CanvasH-40,CanvasW-1,CanvasH-1,RGB(10,17,23)
+4430   DRAW 0,35,CanvasW-1,35,RGB(124,105,63) : DRAW 0,CanvasH-40,CanvasW-1,CanvasH-40,RGB(124,105,63)
 4450   SMALLFONT TRANSPARENT : INK RGB(233,214,173)
 4460   Ks$="--" : IF Have THEN Ks$="GOLD"
-4470   Fs$="FREE" : IF Cap THEN Fs$="CAP60"
+4470   SyncText$="OFF" : IF SyncEnabled THEN SyncText$="ON"
 4480   As$="OFF" : IF Music AND Won=0 THEN As$="ON"
 4490   IF Muted THEN As$="MUTE"
-4500   LOCATE 2,0 : GPRINT "AVL DUNGEON  ";Cols;" COLS  KEY:";Ks$;"  ";USING "###.0";Fps;" FPS ";Fs$;"  AUDIO:";As$
-4510   INK RGB(143,174,182) : LOCATE 2,1
-4520   IF T<MsgT THEN GPRINT Msg$ ELSE GPRINT "RENDER ";USING "##.0";RenderMs;" ms  |  FIND THE KEY - OPEN THE GATE - ESCAPE"
-4530   LOCATE 2,28 : GPRINT "W/S OR UP/DOWN WALK  LEFT/RIGHT TURN  A/D STRAFE  SPACE RUN  E GATE"
-4540   LOCATE 2,29 : GPRINT "M MAP  Q QUALITY  F FPS  R RESTART  H HUD  B MUSIC  N MUTE  ESC EXIT"
+4500   LOCATE 2,0 : GPRINT "AVL DUNGEON  ";CanvasW;"x";CanvasH;"  KEY:";Ks$
+4510   Info$=STR$(INT(Fps+0.5))+" FPS  VSYNC:"+SyncText$+"  Q:"+STR$(Cols)+"  AUDIO:"+As$ : INK RGB(143,174,182) : LOCATE 2,1 : GPRINT Info$
+4520   IF T<MsgT THEN MOVE 16,55:LABEL LEFT$(Msg$,CanvasW\8-4)
+4530   MOVE 16,31 : LABEL "W/S WALK  ARROWS TURN/WALK  A/D STRAFE  SPACE RUN  E GATE  B MUSIC"
+4540   MOVE 16,15 : LABEL "M MAP  Q QUALITY  F VSYNC  R RESTART  V RES  U FULL  J WINDOW  N MUTE  ESC"
 4550   IF Won=0 THEN EXIT SUB
-4560   FRECTANGLE 115,183,525,292,RGB(10,22,29) : RECTANGLE 115,183,525,292,Pal(9)
-4570   BIGFONT TRANSPARENT : INK Pal(10) : LOCATE 14,13 : GPRINT "YOU ESCAPED!"
-4580   SMALLFONT TRANSPARENT : INK RGB(232,208,147) : LOCATE 27,17 : GPRINT "R - RETURN TO THE DUNGEON"
+4560   FRECTANGLE CanvasW/2-205,CanvasH/2-55,CanvasW/2+205,CanvasH/2+55,RGB(10,22,29) : RECTANGLE CanvasW/2-205,CanvasH/2-55,CanvasW/2+205,CanvasH/2+55,Pal(9)
+4570   BIGFONT TRANSPARENT : INK Pal(10) : LOCATE CanvasW/32-6,CanvasH/32-1 : GPRINT "YOU ESCAPED!"
+4580   SMALLFONT TRANSPARENT : INK RGB(232,208,147) : LOCATE CanvasW/16-13,CanvasH/32+1 : GPRINT "R - RETURN TO THE DUNGEON"
 4590 SUBEND
 4600 ' Original PCM assets, loaded once; channel 1 music, 2 steps, 3-5 events
 4610 DEF SUB loadAudio
@@ -532,3 +538,22 @@
 20140       Counts(Sk,Tx)=RunIndex
 20150   NEXT Tx : NEXT Sk
 20160 SUBEND
+21000 ' MODE replaces only display state; maze, player, textures and audio survive.
+21010 DEF SUB configureDisplay
+21020   CanvasW=WIDTH : CanvasH=HEIGHT : UiScale=(CanvasH-1)/479
+21025   Quality=2 : IF CanvasW=1280 THEN Quality=1
+21030   Proj=(320/0.66)*(CanvasH/480) : Plane=CanvasW/(2*Proj) : ViewBottom=36 : ViewTop=CanvasH-40
+21040   Cols=CanvasW/(2^(2-Quality)) : Cw=CanvasW/Cols : DIM D(CanvasW-1,CanvasH-1) : MAT D=0
+21050   RAD : PAPER 0 : SMALLFONT TRANSPARENT : MOUSE OFF : SCALE 0,CanvasW-1,0,CanvasH-1
+21055   IF SyncEnabled THEN SCREEN SYNC ON ELSE SCREEN SYNC OFF
+21060   Last=TIME : TLast=Last : Count=0 : Dt=0
+21070 SUBEND
+21080 DEF SUB nextResolution
+21090   IF ScreenMode=640 THEN ScreenMode=960 ELSE IF ScreenMode=960 THEN ScreenMode=1280 ELSE ScreenMode=640
+21100   MODE ScreenMode,ScreenMode*9/16 : CALL configureDisplay
+21110 SUBEND
+21120 ' Explicit presentation keys remain correct after Alt+Enter changes state.
+21130 DEF SUB displayInput
+21140   IF K$="U" THEN SCREEN FULL ON
+21150   IF K$="J" THEN SCREEN FULL OFF
+21210 SUBEND

@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **144 runnable programs**. They are not filler or API
+AVL BASIC ships with **146 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-144-program catalog. On GitHub, select any image or program name
+146-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -16,8 +16,8 @@ to inspect its BASIC source.
 </p>
 <p align="center">
   <strong>1. Dustline</strong><br>
-  Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times.<br>
-  <sub><strong>Shows:</strong> DEF SUB · multiline DEF FN · LOCAL · array references · block IF · procedure error handling · BLOAD · TRECTANGLE · ALPHA · fixed-step physics · KEYDOWN · AUDIO · sequential files · spatial indexing</sub><br>
+  Race a banked dirt circuit at 960x540 with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost and colored sector times; V toggles display synchronization.<br>
+  <sub><strong>Shows:</strong> DEF SUB · multiline DEF FN · LOCAL · array references · block IF · procedure error handling · BLOAD · TRECTANGLE · ALPHA · fixed-step physics · KEYDOWN · AUDIO · sequential files · spatial indexing · SCREEN FULL · SCREEN SYNC</sub><br>
   <code>RUN "/samples/g-dustline.bas"</code>
 </p>
 
@@ -53,8 +53,8 @@ to inspect its BASIC source.
   <a id="highlight-g-crystal"></a>
   <a href="g-crystal.bas"><img src="showcase/g-crystal.png" alt="Crystal Siege running in AVL BASIC" width="100%"></a><br>
   <strong>5. Crystal Siege</strong><br>
-  Rescue the golden core, then demolish one of three crystal constructions with ten shots.<br>
-  <sub><strong>Shows:</strong> GOSUB · shared arrays · fixed-step Verlet/PBD · GTRIANGLE · depth buffer · AUDIO · WAV</sub><br>
+  Rescue the golden core, then demolish one of three crystal constructions with ten shots; switch between three 4:3 resolutions, fullscreen and windowed presentation. Starts in a window with the mouse pointer hidden.<br>
+  <sub><strong>Shows:</strong> GOSUB · shared arrays · fixed-step Verlet/PBD · GTRIANGLE · depth buffer · AUDIO · WAV · CSV</sub><br>
   <code>RUN "/samples/g-crystal.bas"</code>
 </td>
 </tr>
@@ -63,8 +63,8 @@ to inspect its BASIC source.
   <a id="highlight-g-dungeon"></a>
   <a href="g-dungeon.bas"><img src="showcase/g-dungeon.png" alt="AVL Dungeon running in AVL BASIC" width="100%"></a><br>
   <strong>6. AVL Dungeon</strong><br>
-  Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects.<br>
-  <sub><strong>Shows:</strong> DEF SUB · DEF FN · LOCAL · array references · block IF · DDA raycasting · TRECTANGLE · TQUAD · perspective correction · vertex lighting · light map · depth testing · ALPHA · AUDIO · WAV</sub><br>
+  Explore a 16:9 textured maze at 640x360, 960x540 or 1280x720, with warm torch lighting, a lantern with transparent glass, original music and sound effects. Find the gold key, unlock the gate and escape.<br>
+  <sub><strong>Shows:</strong> DEF SUB · DEF FN · LOCAL · array references · block IF · MODE · SCREEN FULL · SCREEN SYNC · FRAME · DDA raycasting · TRECTANGLE · TQUAD · perspective correction · vertex lighting · light map · depth testing · ALPHA · AUDIO · WAV</sub><br>
   <code>RUN "/samples/g-dungeon.bas"</code>
 </td>
 <td width="50%" valign="top">
@@ -201,41 +201,47 @@ Every image above was captured from the real Rust runtime.
 
 ## Suggested learning routes
 
-- **From wireframes to perspective texture mapping:** `g-cube2.bas` → `g-cube-tquad.bas`; DATA defines the eight vertices and six face connections, and one native TQUAD per face supplies inverse depth for perspective correction and depth testing.
-- **Interpolate colors and hide faces with depth:** `g-cube.bas` → `g-cube-gouraud.bas`.
-- **Move a diffuse light with the mouse:** `g-cube-gouraud.bas` → `g-cube-light.bas`.
-- **Combine perspective textures, lighting, and shared depth:** `g-cube-tquad.bas` + `g-cube-light.bas` → `g-cube-textured-light.bas`; a paused cube and nearby point light expose four vertex brightness values. Move the mouse; F compares nearby/broad light, V toggles vertex markers, SPACE resumes rotation, 1/2 compare texture and lighting, T switches quads/triangles, G toggles the Gouraud fin, M animates the light, C toggles the frame-rate cap, and ESC exits. The four light samples are interpolated across two triangles; a small spot within a face needs explicit subdivision or per-pixel lighting.
+- **From wireframes to perspective texture mapping:** `g-cube2.bas` â†’ `g-cube-tquad.bas`; DATA defines the eight vertices and six face connections, and one native TQUAD per face supplies inverse depth for perspective correction and depth testing.
+- **Interpolate colors and hide faces with depth:** `g-cube.bas` â†’ `g-cube-gouraud.bas`.
+- **Move a diffuse light with the mouse:** `g-cube-gouraud.bas` â†’ `g-cube-light.bas`.
+- **Combine perspective textures, lighting, and shared depth:** `g-cube-tquad.bas` + `g-cube-light.bas` â†’ `g-cube-textured-light.bas`; a paused cube and nearby point light expose four vertex brightness values. Move the mouse; F compares nearby/broad light, V toggles vertex markers, SPACE resumes rotation, 1/2 compare texture and lighting, T switches quads/triangles, G toggles the Gouraud fin, M animates the light, C toggles the frame-rate cap, and ESC exits. The four light samples are interpolated across two triangles; a small spot within a face needs explicit subdivision or per-pixel lighting.
 - **Cut holes in 2D textured shapes:** `g-texture-transparent.bas`; compare opaque and transparent rows over a checkerboard. Four columns show TRECTANGLE with automatic UVs, TRECTANGLE with repeating UVs, TTRIANGLE, and TQUAD. Adding final color 6 (magenta) opens the grille holes, just as in SPRITE; ESC exits.
 - **Fade a flying fairy over a picture:** `g-sprite-alpha.bas` combines `SPRITE MOVE ... ALPHA` with the existing anime background and a large, multicolored anime fairy; the area outside the character remains transparent while its colors fade between 0% and 100%.
-- **Give parts of a sprite different opacity:** `g-sprite-alpha.bas` → `g-sprite-layers.bas`; capture the body and wings from a two-frame sheet, move both sprites together, and draw the 50%-opaque wings before the fully opaque body. Change WINGALPHA to adjust only the wings.
-- **See through a rotating textured cube:** `g-texture-transparent.bas` → `g-cube-transparent.bas`; six perspective-correct grille faces share depth with a four-corner Gouraud background, so each hole reveals the farther faces or the interpolated background colors.
-- **Explore light on curves and overlapping surfaces:** `g-cube-light.bas` → `g-knot-light.bas`.
-- **Light a first-person scene with textured quads:** `g-cube-textured-light.bas` → `g-dungeon.bas` / `g-dungeon-cpc.bas`; one texture per plane and a fixed world mesh keep the precalculated torch lighting anchored to the floor and ceiling while the camera moves. Near-plane clipping preserves each tile's original triangles and interpolated light. The foreground lantern keeps its brass opaque and uses ALPHA for glass and flame glow. Q changes wall resolution.
-- **Cast shadows from a movable light:** `g-cube-light.bas` → `g-shadow.bas`.
-- **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` → `g-shadow-adaptive.bas`.
-- **Animate the camera, then move the light:** `g-animation.bas` → `g-animation2.bas`.
+- **Give parts of a sprite different opacity:** `g-sprite-alpha.bas` â†’ `g-sprite-layers.bas`; capture the body and wings from a two-frame sheet, move both sprites together, and draw the 50%-opaque wings before the fully opaque body. Change WINGALPHA to adjust only the wings.
+- **See through a rotating textured cube:** `g-texture-transparent.bas` â†’ `g-cube-transparent.bas`; six perspective-correct grille faces share depth with a four-corner Gouraud background, so each hole reveals the farther faces or the interpolated background colors.
+- **Explore light on curves and overlapping surfaces:** `g-cube-light.bas` â†’ `g-knot-light.bas`.
+- **Light a first-person scene with textured quads:** `g-cube-textured-light.bas` â†’ `g-dungeon.bas` / `g-dungeon-cpc.bas`; one texture per plane and a fixed world mesh keep the precalculated torch lighting anchored to the floor and ceiling while the camera moves. Near-plane clipping preserves each tile's original triangles and interpolated light. The foreground lantern keeps its brass opaque and uses ALPHA for glass and flame glow. Q changes wall resolution.
+- **Explore a first-person maze in widescreen:** [`g-dungeon.bas`](g-dungeon.bas) uses the original WAV music and sound effects; [`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) arranges them for three synthesized CPC voices without WAV files. Both start in a 960x540 window. **V** cycles through 640x360, 960x540 and 1280x720; **U** selects fullscreen, **J** returns to a window and **Alt+Enter** toggles. **M** shows the map, **Q** changes wall quality (1280x720 defaults to 640 columns; the other modes default to full width), **F** toggles VSYNC, **R** restarts, **B** toggles music, **N** mutes and **ESC** exits. VSYNC starts on; rendering has no explicit FPS cap and the HUD shows measured FPS and the VSYNC state. The maze, movement, key, lighting, resolution controls and hidden operating-system pointer are shared by both versions.
+  Dungeon, Arkanoid, Dustline and Crystal hide the operating-system pointer during play. Mouse controls and Crystal's aiming reticle remain available. Crystal starts in a window; U selects fullscreen, J selects a window and Alt+Enter toggles.
+- **Cast shadows from a movable light:** `g-cube-light.bas` â†’ `g-shadow.bas`.
+- **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` â†’ `g-shadow-adaptive.bas`.
+- **Animate the camera, then move the light:** `g-animation.bas` â†’ `g-animation2.bas`.
 - **Watch and interact with falling cloth:** `g-cloth.bas`; pause the simulation, restart the fall, or pull the fabric with the mouse.
-- **Use array arithmetic in a simulation:** `g-cloth.bas` uses `MAT` for particle velocities and light-space coordinates. Its default 128×128 shadow map and 3×3 filter preserve the original penumbra width; set `ShadowSize=256` and `ShadowPcf=5` to restore the original shadow quality. Physical resolution and solver passes stay unchanged.
+- **Use array arithmetic in a simulation:** `g-cloth.bas` uses `MAT` for particle velocities and light-space coordinates. Its default 128Ã—128 shadow map and 3Ã—3 filter preserve the original penumbra width; set `ShadowSize=256` and `ShadowPcf=5` to restore the original shadow quality. Physical resolution and solver passes stay unchanged.
 - **Organize larger BASIC programs:** `g-cloth.bas`, `g-dungeon.bas` and `g-dungeon-cpc.bas` use named procedures and functions, local variables, array reference parameters, mixed-case names and indented blocks. Short conditions stay inline and closely related statements can share a line with colons. Cloth keeps its solver operations together to avoid extra calls per particle; a few forward skips to loop ends preserve fast rejection in its hottest solver loops, since AVL BASIC has no `CONTINUE FOR`. Its lighting calculation remains a subroutine, while a function validates checkpoint headers. The CPC dungeon retains top-level audio handlers and interrupt-control bridges: `ON SQ`, `DI` and `EI` have procedure restrictions, and a queue callback can interrupt a function, where `CALL` is forbidden. Those handlers keep their legacy `GOSUB`/`RETURN` form.
-- **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` →
+- **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` â†’
   `g-zoomer-tquad.bas`.
-- **From flat to interpolated light:** `g-lambert.bas` → `g-gouraud.bas`.
-- **Build a demoscene effect:** `g-starfield.bas` + `g-sine-scroll.bas` →
+- **From flat to interpolated light:** `g-lambert.bas` â†’ `g-gouraud.bas`.
+- **Build a demoscene effect:** `g-starfield.bas` + `g-sine-scroll.bas` â†’
   `g-old-school.bas`.
-- **Compare two tunnel engines:** `g-tunnel.bas` → `g-tunnel-tquad.bas`; two boundary rings and 48 native perspective-correct TQUAD walls replace depth subdivisions. Angular segments still describe the cylindrical geometry.
-- **Learn collisions, then build a game:** `g-balls.bas` + `g-sprite5.bas` →
+- **Compare two tunnel engines:** `g-tunnel.bas` â†’ `g-tunnel-tquad.bas`; two boundary rings and 48 native perspective-correct TQUAD walls replace depth subdivisions. Angular segments still describe the cylindrical geometry.
+- **Learn collisions, then build a game:** `g-balls.bas` + `g-sprite5.bas` â†’
   `g-arkanoid.bas`.
+- **Compare canvas size and display presentation:** [`g-widescreen.bas`](g-widescreen.bas) starts at 960×540 with `SCREEN FULL ON` and `SCREEN SYNC ON`. Keys **1–4** select the canvas, **F** selects fullscreen and **W** returns to a window; **Alt+Enter** toggles presentation. **V** toggles synchronization and **C** toggles the independent 60 FPS cap. The moving bars use elapsed time, so their speed stays the same. **S** resets graphics state while preserving the presentation and synchronization settings. Try the 4:3 canvas to check mouse coordinates at the black margins; **Esc** closes the window and resets the settings.
 - **Drive a scrolling time trial:** [`g-dustline.bas`](g-dustline.bas) combines controllable drifts, banked corners, spectators, persistent pixel mud, a session-best ghost and a saved lap record; [see the running sample](showcase/g-dustline.png). Mud is thrown only while sliding and covers track arrows, wooden planks and kerbs. Run `RUN "/samples/g-dustline.bas"`. Use arrows or WASD to drive, SPACE for the handbrake, P to pause, R to restart, G to show or hide the ghost, M to mute, and ESC to exit. The ghost appears after the first valid lap and is replaced when you improve the session best, accompanied by a brighter lap sound. Colored splits compare each sector with its best time from completed valid session laps; the minimap highlights the latest completed sector until the next split or the finish. Restarting preserves session records and the ghost, and recording continues while the ghost is hidden. Invalid laps and demo laps cannot improve session records. At the title screen, ENTER starts and D runs the demo.
-  Repeated passes reshape and recolor the existing mud clods. Untouched patches stay fully visible for 30 seconds of driving, then gradually fade over another 60-90 seconds, so old trails clear without a sudden reset at the finish. Pausing also pauses soil aging. The split display and minimap share vivid green and red highlights.
+  Dustline starts with a 960×540 canvas in fullscreen. Press **U** for fullscreen or **J** for a window; **Alt+Enter** also switches between them.
+  For a wider view at 1280×720, run [`g-dustline-720.bas`](g-dustline-720.bas); it uses the same controls, physics, assets and saved personal record. Both versions start with `SCREEN FULL ON` and the operating-system pointer hidden. Use **U** for fullscreen, **J** for a window or **Alt+Enter** to change presentation. On supported Linux XWayland desktops, fullscreen automatically presents through a 1280×720 surface scaled to the monitor, without changing the physical display mode or the drawing canvas. Windows and Linux desktops without that capability use ordinary fullscreen.
+  Both versions start with **SYNC ON** and **UNLIMITED** rendering: there is no explicit FPS cap, but synchronization can wait for display refresh. Press **V** to compare `SCREEN SYNC ON/OFF`; press **F** independently to enable the optional 60 FPS cap or return to **UNLIMITED**. They show measured **FPS** and **MAX**, the longest complete frame interval in the last measurement window (about one second), in milliseconds. These intervals include drawing, presentation, synchronization and any frame-limit wait; they are measured before the physics time clamp, so a long stall remains visible. Switching the FPS cap resets the statistics. Synchronization improves presentation regularity but may add input latency; it cannot ensure 60 FPS if drawing is slower. Physics keeps its fixed 120 Hz timestep in all settings.
+  Repeated passes reshape and recolor the existing mud clods. Untouched patches stay fully visible for 25 seconds of driving, then gradually fade over another 45-65 seconds (70-90 seconds in total), so old trails clear without a sudden reset at the finish. Driving over a patch renews it, and pausing also pauses soil aging. Fully faded patches leave the drawing lists while retaining their soil state for later tyre passes. The split display and minimap share vivid green and red highlights.
   The softer tyre-on-dirt sound is audible only while the rear tyres slide fast enough to leave mud marks; it fades out when grip returns or the car becomes airborne.
   Five automatic audio-only gears let the engine pitch rise and fall at shifts, with separate upshift and downshift speeds to prevent hunting. They shape the sound independently of the car physics.
   Curb impacts and hard landings share a short, low thump.
   The prerendered surroundings use faceted lighting and fixed grass color patterns with a limited palette on a two-pixel grid; the dirt track retains its finer granular material. Scenery silhouettes clear the projected track and raised kerbs; directional shadows follow the terrain and remain attached to their objects. The complete finish is baked into the background, adding no drawing work per frame.
-  The source also demonstrates modern BASIC: 51 named procedures, multiline functions, local variables, whole-array reference parameters for initialization and sector records, indentation and apostrophe comments. Compound variable names use mixed case, such as `CarScale`. Block IF statements organize longer branches; short conditions remain inline, with or without ELSE, and closely related statements can share a line with colons. Record loading and saving handle their own file errors with procedure-local `ON ERROR` and `RESUME`; the main program retains a global handler for unexpected errors. This organization preserves the approved driving, mud and scenery.
-- **Modernize a classic algorithm:** `pimachin.bas` → `pimachin-modern.bas`.
-- **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
+  The source also demonstrates modern BASIC: named procedures, multiline functions, local variables, whole-array reference parameters for initialization and sector records, indentation and apostrophe comments. Compound variable names use mixed case, such as `CarScale`. Block IF statements organize longer branches; short conditions remain inline, with or without ELSE, and closely related statements can share a line with colons. Record loading and saving handle their own file errors with procedure-local `ON ERROR` and `RESUME`; the main program retains a global handler for unexpected errors. This organization preserves the approved driving, mud and scenery.
+- **Modernize a classic algorithm:** `pimachin.bas` â†’ `pimachin-modern.bas`.
+- **Save and recover data:** `f-scores.bas` â†’ `f-text.bas` â†’ `f-records.bas`.
 
-## Full catalog — 144 programs
+## Full catalog — 146 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -264,16 +270,17 @@ demo.
 | <a id="sample-g-zoomer-tquad"></a>[`g-zoomer-tquad.bas`](g-zoomer-tquad.bas) | One textured quad produces rotating zoom feedback. | TQUAD, rotation, zoom |
 | <a id="sample-g-zoomer"></a>[`g-zoomer.bas`](g-zoomer.bas) | Block-sampled texture mapping powers a retro zoomer. | BLOAD, TEST, block rendering |
 
-### Games, applications, and algorithmic scenes (9)
+### Games, applications, and algorithmic scenes (10)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-arkanoid"></a>[`g-arkanoid.bas`](g-arkanoid.bas) [★](#highlight-g-arkanoid) | A playable brick-breaker with stereo sound effects and sprite/color collisions. | sprite collisions, color collisions, mouse input, AUDIO, WAV |
 | <a id="sample-g-chess960"></a>[`g-chess960.bas`](g-chess960.bas) [★](#highlight-g-chess960) | Generate legal Chess960 back ranks, rendered with real pieces and one-key rerolls. | DEF SUB, constrained randomization, sprites |
-| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) [★](#highlight-g-crystal) | Rescue a golden core from the Crystal Cathedral, Starfall Observatory or asymmetric Skyport Terminal, then use the remaining orbs for demolition. C opens the [external construction catalog](assets/crystal/README.md). H shows the selected construction's top five destruction scores; all records share `g-crystal-scores.csv` beside the sample. Qualifying names use up to three A-Z letters, automatically capitalized. I shows technical information; M switches between 640, 800 and 1024. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV, CSV |
-| <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a textured maze with warm torch lighting and a lantern with transparent glass, find the gold key and escape through the locked gate, with original music and sound effects. | DEF SUB, DEF FN, LOCAL, array references, block IF, DDA raycasting, TRECTANGLE, TQUAD, perspective correction, vertex lighting, light map, depth testing, ALPHA, AUDIO, WAV |
-| <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play the same maze with warm torch lighting, the original melody and bass arranged for three CPC voices, percussion yielding to game effects, and a three-part victory fanfare; no WAV files required. | DEF SUB, DEF FN, LOCAL, array references, block IF, SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting, TQUAD, perspective correction, vertex lighting, light map, ALPHA |
-| <a id="sample-g-dustline"></a>[`g-dustline.bas`](g-dustline.bas) [★](#highlight-g-dustline) | Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost, and colored sector times. | DEF SUB, multiline DEF FN, LOCAL, array references, block IF, procedure error handling, BLOAD, TRECTANGLE, ALPHA, fixed-step physics, KEYDOWN, AUDIO, sequential files, spatial indexing |
+| <a id="sample-g-crystal"></a>[`g-crystal.bas`](g-crystal.bas) [★](#highlight-g-crystal) | Rescue the golden core, then demolish one of three crystal constructions with ten shots; switch between three 4:3 resolutions, fullscreen and windowed presentation. Starts in a window with the mouse pointer hidden. | GOSUB, shared arrays, fixed-step Verlet/PBD, GTRIANGLE, depth buffer, AUDIO, WAV, CSV |
+| <a id="sample-g-dungeon"></a>[`g-dungeon.bas`](g-dungeon.bas) [★](#highlight-g-dungeon) | Explore a 16:9 textured maze at 640x360, 960x540 or 1280x720, with warm torch lighting, a lantern with transparent glass, original music and sound effects. Find the gold key, unlock the gate and escape. | DEF SUB, DEF FN, LOCAL, array references, block IF, MODE, SCREEN FULL, SCREEN SYNC, FRAME, DDA raycasting, TRECTANGLE, TQUAD, perspective correction, vertex lighting, light map, depth testing, ALPHA, AUDIO, WAV |
+| <a id="sample-g-dungeon-cpc"></a>[`g-dungeon-cpc.bas`](g-dungeon-cpc.bas) | Play the same 16:9 maze at 640x360, 960x540 or 1280x720 with the original melody and bass arranged for three CPC voices, percussion yielding to game effects and a three-part victory fanfare; no WAV files required. Shares the resolution, fullscreen and VSYNC controls with Dungeon. | DEF SUB, DEF FN, LOCAL, array references, block IF, MODE, SCREEN FULL, SCREEN SYNC, FRAME, SOUND, ENV, ENT, DATA, ON SQ, channel rendezvous, DDA raycasting, TQUAD, perspective correction, vertex lighting, light map, ALPHA |
+| <a id="sample-g-dustline"></a>[`g-dustline.bas`](g-dustline.bas) [★](#highlight-g-dustline) | Race a banked dirt circuit at 960x540 with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost and colored sector times; V toggles display synchronization. | DEF SUB, multiline DEF FN, LOCAL, array references, block IF, procedure error handling, BLOAD, TRECTANGLE, ALPHA, fixed-step physics, KEYDOWN, AUDIO, sequential files, spatial indexing, SCREEN FULL, SCREEN SYNC |
+| <a id="sample-g-dustline-720"></a>[`g-dustline-720.bas`](g-dustline-720.bas) | Drive the same Dustline circuit at 1280x720; V toggles display synchronization and F toggles the optional 60 FPS cap. | MODE, SCREEN FULL, SCREEN SYNC, FRAME, fixed-step physics, KEYDOWN, AUDIO |
 | <a id="sample-g-loan"></a>[`g-loan.bas`](g-loan.bas) | Graphical loan calculator with optional amortization table. | GINPUT, DEF FN, formatted output |
 | <a id="sample-g-maze"></a>[`g-maze.bas`](g-maze.bas) [★](#highlight-g-maze) | A fresh maze appears with its solution stitched through it in a dashed path. | DFS/Prim, bit masks, path reconstruction |
 | <a id="sample-g-random"></a>[`g-random.bas`](g-random.bas) | Random walk runs until it reaches the border. | RND, DRAW, boundary detection |
@@ -399,7 +406,7 @@ demo.
 | <a id="sample-g-sprite5"></a>[`g-sprite5.bas`](g-sprite5.bas) | Demonstrates both color and sprite collision modes. | COLMODE, HITTEST, HITID |
 | <a id="sample-g-swap"></a>[`g-swap.bas`](g-swap.bas) | Benchmarks swapping two full-screen graphics buffers. | BLOAD, SCREEN, SWAP |
 
-### Input, events, and timing (6)
+### Input, events, and timing (7)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -407,6 +414,7 @@ demo.
 | <a id="sample-g-input"></a>[`g-input.bas`](g-input.bas) | Collects name and age through graphical input fields. | GINPUT, GPRINT, PAUSE |
 | <a id="sample-g-mouse"></a>[`g-mouse.bas`](g-mouse.bas) | Draws rectangles from mouse press-and-release events. | ON MOUSE, event callbacks, FRECTANGLE |
 | <a id="sample-g-mouse2"></a>[`g-mouse2.bas`](g-mouse2.bas) | Freehand drawing follows mouse drag events. | LEFTDRAG, MASK, DRAW |
+| <a id="sample-g-widescreen"></a>[`g-widescreen.bas`](g-widescreen.bas) | Compare 16:9 modes, fullscreen presentation, Alt+Enter, scaled mouse coordinates and synchronization on moving bars. | MODE, SCREEN FULL, SCREEN SYNC, FRAME, TIME, WIDTH, HEIGHT, MOUSEX, MOUSEY |
 | <a id="sample-inkey"></a>[`inkey.bas`](inkey.bas) | Displays console key input and numeric codes. | INKEY$, ASC, console input |
 | <a id="sample-interrupts"></a>[`interrupts.bas`](interrupts.bas) | Scheduled callbacks race to guess a random letter. | EVERY, AFTER, callbacks |
 

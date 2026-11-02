@@ -50,6 +50,59 @@ The [sprite layers example](samples/g-sprite-layers.bas) moves two aligned
 sprites together: half-transparent wings behind a fully opaque fairy body.
 Depth-buffer primitives keep their existing behavior. See manual sections 6.3
 and 6.7.
+
+`MODE 640` keeps its classic 640×480 canvas. `MODE 640,360` and `MODE 960`
+and `MODE 1280` provide 16:9 canvases at 640×360, 960×540 and 1280×720, alongside 800×600 (`MODE 800`)
+and 1024×768 (`MODE 1024`). Every supported mode accepts its height explicitly,
+for example `MODE 1024,768`. `SCREEN FULL ON` and `SCREEN FULL OFF` switch
+between proportional fullscreen and the normal fixed-size window; Alt+Enter
+provides the same control from the keyboard. On Windows, the title-bar Maximize
+button also enters fullscreen; Alt+Enter or `SCREEN FULL OFF` returns to a window.
+The normal window can be moved
+and minimized. Changing `MODE` preserves the fullscreen selection and normal
+window position; `SCREEN FULL OFF` restores that position and the current mode's
+normal window size. The desktop may adjust placement when the window does not
+fit. `WIDTH` and `HEIGHT` always describe the drawing canvas. Console input,
+debugger pauses and program termination keep graphics fullscreen only when the
+terminal is reliably located on another monitor outside the graphics window.
+On the same monitor, or when the terminal cannot be located, graphics temporarily
+return to a normal window so the console remains accessible. The next explicit
+graphics operation resumes the selected presentation. This fallback also covers
+native Wayland terminals and Windows terminals hosting WSL that cannot be
+identified through X11. During `DEBUG`, stepping through `SCREEN FULL ON` or a
+`MODE` change applies fullscreen at the next pause only when the terminal is
+confirmed on another monitor, without requesting graphics focus. `SCREEN CLOSE`
+closes the window and discards its remembered position. See
+[manual section 6.1](MANUAL.txt) for the complete syntax and console behavior.
+
+On Linux desktops with compatible XWayland resolution emulation in a Wayland
+session, fullscreen automatically uses a 1280×720 presentation surface that the
+desktop scales to the monitor. A pure X11 session keeps ordinary fullscreen;
+`SCREEN SYNC` remains available when X11 Present is supported. This reduces presentation work on high-resolution desktops without
+changing the physical display mode, other applications' desktop resolution or
+the BASIC drawing canvas. Linux uses ordinary fullscreen when that capability
+or a compatible mode is unavailable; Windows keeps its usual fullscreen path.
+`SCREEN FULL ON` and Alt+Enter use the same automatic selection.
+
+With `MOUSE OFF`, a running fullscreen program confines the pointer to the
+displayed canvas while its graphics window has keyboard focus, excluding black
+margins. `MOUSE ON`, leaving fullscreen, Alt+Tab or returning to the console
+releases it, including input, debugger pauses, `STOP` and program end. In a normal
+window, `MOUSE OFF` only hides the pointer. Coordinates, buttons and events remain
+available; if the desktop cannot confine the pointer, it stays free and BASIC
+continues. See [manual section 6.8](MANUAL.txt).
+
+`SCREEN SYNC ON` synchronizes explicit `FRAME` calls with display refresh in
+windows or fullscreen, using the Windows compositor or X11 Present on Linux.
+`SCREEN SYNC OFF` is the default. Both bare `FRAME` and `FRAME fps` support it:
+synchronization can wait even without an FPS cap, and slower drawing can miss
+refreshes. It reduces tearing and irregular presentation but may add input
+latency. `MODE` and `SCREEN` preserve this setting; `SCREEN CLOSE` resets it.
+The [widescreen example](samples/g-widescreen.bas) compares these options with
+moving bars, Alt+Enter and mouse coordinates. Both Dustline versions start with
+synchronization enabled and no explicit FPS cap;
+V toggles synchronization and F toggles the optional 60 FPS cap.
+
 ## Interactive by design
 
 AVL BASIC keeps the classic immediate-mode workflow: change directory, load a
@@ -140,7 +193,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 144-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 146-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -198,7 +251,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-144 sample programs and their visual gallery are optional companion material.
+146 sample programs and their visual gallery are optional companion material.
 
 ## Build From Source
 
@@ -330,7 +383,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 144 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 146 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

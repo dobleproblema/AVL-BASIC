@@ -1,9 +1,9 @@
 10 ' Dustline - a dirt-track time trial with scrolling prerendered scenery.
-20 ' Arrows/WASD: drive. Space: handbrake. G: ghost. P: pause. R: restart. M: sound. D: demo.
+20 ' Arrows/WASD: drive. Space: handbrake. G: ghost. P: pause. R: restart. M: sound. D: demo. F: FPS cap. V: VSYNC. U: fullscreen. J: window.
 30 ' World: 10 pixels/metre; oblique orthographic projection, Y compressed to 65%.
 40 ' Physics, banked terrain contacts, mutable pixel mud, timing and audio are BASIC.
 50 SCREEN
-60 MODE 800
+60 MODE 960 : SCREEN FULL ON : MOUSE OFF
 70 RAD
 80 MAT BASE 0
 90 PAPER RGB(22,32,31)
@@ -26,16 +26,18 @@
 390 ON ERROR GOTO 1470
 400 CALL loadAudio
 410 CALL loadPersonalBest
-420 Fps=0 : FpsCount=0 : FpsT=TIME
+420 FrameLimit=0 : SyncEnabled=1 : SCREEN SYNC ON : CALL resetPerformance
 450 PrevT=TIME : Accum=0
-470 Cx=MAX(0,MIN(MapW-800,Px-400)) : Cy=MAX(0,MIN(MapH-600,Py*Iso-300))
-490 ' Render at 60 Hz; integrate the car at a fixed 120 Hz.
+470 Cx=MAX(0,MIN(MapW-960,Px-480)) : Cy=MAX(0,MIN(MapH-540,Py*Iso-270))
+490 ' VSYNC starts ON; V toggles it, F toggles the optional 60 FPS cap. Physics stays at 120 Hz.
 500 WHILE 1
 510   Now=TIME
+515   CALL samplePerformance
 520   Elapsed=MAX(0,MIN(0.12,Now-PrevT))
 530   PrevT=Now
 540   K$=UPPER$(INKEY$)
 550   IF K$=CHR$(27) OR KEYDOWN(27) THEN EXIT WHILE
+575   CALL displayInput
 580   CALL handleCommands
 590   Throttle=0 : Brake=0 : Handbrake=0 : Turn=0
 630   IF Phase=2 AND Paused=0 THEN CALL readControls
@@ -44,6 +46,7 @@
 690     WHILE Accum>=H
 700       RaceNow=TIME-PauseTotal
 710       IF Demo THEN CALL driveDemo
+730       CALL snapshotRenderPose
 740       CALL stepCar
 750       CALL updateMud
 760       CALL updateDust
@@ -55,22 +58,19 @@
 820   ENDIF
 830   RaceNow=TIME-PauseTotal
 840   IF Started AND Paused=0 THEN LapTime=MAX(0,RaceNow-LapStart)
+860   CALL interpolateCar
 870   CamDt=MAX(0.001,Elapsed)
 880   IF Paused THEN CamDt=0
-910   Tx=MAX(0,MIN(MapW-800,Px+Vx*0.28-400)) : Ty=MAX(0,MIN(MapH-600,Py*Iso+Vy*Iso*0.28-330))
+910   Tx=MAX(0,MIN(MapW-960,RenderX+RenderVx*0.28-480)) : Ty=MAX(0,MIN(MapH-540,RenderY*Iso+RenderVy*Iso*0.28-300))
 930   Cx=Cx+(Tx-Cx)*MIN(1,5*CamDt) : Cy=Cy+(Ty-Cy)*MIN(1,5*CamDt)
 950   CALL drawWorld
 960   CALL drawHud
 970   IF Phase=0 THEN CALL drawTitle
 1000   IF Paused THEN CALL drawPause
 1030   IF Phase=1 THEN CALL drawCountdown
+1040   CALL drawPerformance
 1060   CALL updateAudio
-1070   FRAME 60
-1080   FpsCount=FpsCount+1
-1090   IF TIME-FpsT>=0.5 THEN
-1100     Fps=FpsCount/(TIME-FpsT)
-1110     FpsCount=0 : FpsT=TIME
-1130   ENDIF
+1070   IF FrameLimit THEN FRAME 60 ELSE FRAME
 1140 WEND
 1150 AUDIO STOP : SCREEN CLOSE
 1170 END
@@ -138,11 +138,11 @@
 1920   MaxMark=30000 : MudStep=6
 1940   MudW=INT(MapW/MudStep)+1 : MudH=INT(MapH/MudStep)+1
 1960   TileCols=INT(MapW/256)+1 : TileRows=INT(MapH/256)+1
-1980   DIM Head(TileCols*TileRows),MNext(MaxMark),MPrev(MaxMark),MCell(MaxMark)
+1980   DIM Head(TileCols*TileRows),TileExpiry(TileCols*TileRows),MNext(MaxMark),MPrev(MaxMark),MCell(MaxMark),MListed(MaxMark)
 1990   DIM M1x(MaxMark),M1y(MaxMark),M2x(MaxMark),M2y(MaxMark),M3x(MaxMark),M3y(MaxMark),MGx(MaxMark),MGy(MaxMark)
 2000   DIM MXMin(MaxMark),MXMax(MaxMark),MYMin(MaxMark),MYMax(MaxMark),MCol(MaxMark),MEdge(MaxMark),MBase(MaxMark)
 2010   DIM MGrid(MudW-1,MudH-1),MDepth(MaxMark),MDirX(MaxMark),MDirY(MaxMark),MChurn(MaxMark),MStamp(MaxMark)
-2020   DIM MTouch(MaxMark),MVar(MaxMark),MFade(MaxMark)
+2020   DIM MTouch(MaxMark),MVar(MaxMark),MFade(MaxMark),MFadeDuration(MaxMark),MExpires(MaxMark)
 2030   MaxDust=60
 2040   DIM DustX(MaxDust-1),DustY(MaxDust-1),DustZ(MaxDust-1),DustVx(MaxDust-1),DustVy(MaxDust-1),DustL(MaxDust-1),DustAge(MaxDust-1)
 2050   INK RGB(230,205,155) : MOVE 34,557 : LABEL "DUSTLINE  /  LOADING LA CANTERA..."
@@ -182,13 +182,14 @@
 2550   Paused=0 : Accum=0
 2570   MarkValid=0 : MarkT=0 : DustT=0
 2600   HitCool=0 : Rumble=0 : CamDt=0
-2630   Cx=MAX(0,MIN(MapW-800,Px-400)) : Cy=MAX(0,MIN(MapH-600,Py*Iso-330))
+2630   Cx=MAX(0,MIN(MapW-960,Px-480)) : Cy=MAX(0,MIN(MapH-540,Py*Iso-300))
 2650   Msg$="" : MsgT=0
 2670   LastLap=0 : LastDelta=0 : Laps=0
 2700   Collisions=0 : Jumps=0 : MaxHeight=0
 2730   RecN=0 : RecFull=0 : GhostPlay=0
 2760   SectorDone=0 : MiniView=0 : SplitDelta=0 : SectorInvalid=0
 2790   MAT DustL=0
+2795   CALL snapshotRenderPose : CALL interpolateCar
 2800   IF AudioReady THEN CALL resetAudio
 2830 SUBEND
 2840 ' ----------------------------------------------------------------------
@@ -255,6 +256,7 @@
 3130 ' ----------------------------------------------------------------------
 3140 DEF SUB togglePause
 3150   LOCAL PauseGap
+3155   CALL snapshotRenderPose
 3160   IF Paused=0 THEN
 3170     Paused=1 : PauseStart=TIME
 3190     EXIT SUB
@@ -313,6 +315,11 @@
 3870     CALL resetAudio
 3880   ENDIF
 3890   IF K$="G" THEN GhostShow=1-GhostShow
+3910   IF K$="F" THEN FrameLimit=1-FrameLimit:CALL resetPerformance
+3912   IF K$="V" THEN
+3914     IF SyncEnabled THEN SCREEN SYNC OFF ELSE SCREEN SYNC ON
+3916     SyncEnabled=1-SyncEnabled
+3918   ENDIF
 3920   IF K$="P" AND Phase>0 THEN CALL togglePause
 3950   IF K$="R" THEN
 3960     Demo=0
@@ -659,8 +666,8 @@
 8730 SUBEND
 8740 ' ----------------------------------------------------------------------
 8750 DEF SUB unlinkPatch
-8760   IF MPrev(Mi)>0 THEN MNext(MPrev(Mi))=MNext(Mi) ELSE Head(OldMC)=MNext(Mi)
-8810   IF MNext(Mi)>0 THEN MPrev(MNext(Mi))=MPrev(Mi)
+8760   ' Ring reuse releases ownership; fading alone only removes the draw-list entry.
+8810   CALL unlistPatch
 8840   MGrid(MGx(Mi),MGy(Mi))=0
 8850 SUBEND
 8860 ' ----------------------------------------------------------------------
@@ -697,12 +704,10 @@
 9280   CellX=INT(M1x(Mi)/256) : CellY=INT(M1y(Mi)/256)
 9300   Cell=CellY*TileCols+CellX+1
 9310   MCell(Mi)=Cell
-9320   MPrev(Mi)=0
-9330   MNext(Mi)=Head(Cell)
-9340   IF Head(Cell)>0 THEN MPrev(Head(Cell))=Mi
-9370   Head(Cell)=Mi
 9380   MDepth(Mi)=0 : MChurn(Mi)=0
-9400   MStamp(Mi)=-1 : MTouch(Mi)=MudClock : MVar(Mi)=0 : MFade(Mi)=1
+9390   MFadeDuration(Mi)=45+(MGx(Mi)*13+MGy(Mi)*7) MOD 21
+9400   MStamp(Mi)=-1 : MTouch(Mi)=MudClock : MVar(Mi)=0 : MFade(Mi)=1 : MExpires(Mi)=MudClock+25+MFadeDuration(Mi)
+9402   CALL listPatch
 9440   MDirX(Mi)=RutUx : MDirY(Mi)=RutUy
 9460   MXMin(Mi)=M1x(Mi)-7 : MXMax(Mi)=M1x(Mi)+7
 9480   MYMin(Mi)=M1y(Mi)-7 : MYMax(Mi)=M1y(Mi)+7
@@ -717,6 +722,8 @@
 9580   ' Reshape only on a new visit, never at every tyre sample or render frame.
 9590   IF MudAge>0.4 THEN CALL renewPatch
 9620   MTouch(Mi)=MudClock : MFade(Mi)=1
+9622   MExpires(Mi)=MudClock+25+MFadeDuration(Mi)
+9630   IF MListed(Mi)=0 THEN CALL listPatch
 9640   DotRut=MDirX(Mi)*RutUx+MDirY(Mi)*RutUy
 9650   CrossRut=1-ABS(DotRut)
 9660   MDepth(Mi)=MDepth(Mi)*(1-0.55*CrossRut)
@@ -882,7 +889,7 @@
 11840   MapX(Np)=MapX(0) : MapY(Np)=MapY(0)
 11860   SMALLFONT TRANSPARENT
 11870   FOR Mv=0 TO 6
-11880     MBx=(Mv MOD 4)*160 : MBy=600-(INT(Mv/4)+1)*112
+11880     MBx=(Mv MOD 4)*160 : MBy=540-(INT(Mv/4)+1)*112
 11900     TRECTANGLE MiniMap$,MBx,MBy,MBx+160,MBy+112
 11910     PENWIDTH 2
 11920     FOR Ms=1 TO 3
@@ -914,22 +921,26 @@
 12260   LOCAL Ey, DustParticle, Dir, U, V, Sx
 12270   LOCAL Sy, Shade, GroundY, Pose, ForwardSlope, Cv
 12280   LOCAL Bounce
-12290   ' One camera-sized UV window on the immutable, cached prerendered map.
+12290   ' Keep camera fractions until drawing; integer offsets only select visible tiles.
 12300   Ix=INT(Cx) : Iy=INT(Cy)
-12320   TRECTANGLE Track$,0,0,800,600,Ix,MapH-Iy-600,Ix+800,MapH-Iy
-12330   ORIGIN 0,0,0,799,535,34
+12320   TRECTANGLE Track$,0,0,960,540,Cx,MapH-Cy-540,Cx+960,MapH-Cy
+12330   ORIGIN 0,0,0,959,475,34
 12340   ' Opaque coarse pixels cover painted arrows, wooden planks and kerb colours.
+12342   ' A conservative expiry per tile keeps pruning out of the normal per-patch loop.
 12350   FOR SoilPass=0 TO 2
-12360     FOR Ty=MAX(0,INT((Iy-30)/256)) TO MIN(TileRows-1,INT((Iy+630)/256))
-12370       FOR Tx=MAX(0,INT((Ix-30)/256)) TO MIN(TileCols-1,INT((Ix+830)/256))
+12360     FOR Ty=MAX(0,INT((Iy-30)/256)) TO MIN(TileRows-1,INT((Iy+570)/256))
+12370       FOR Tx=MAX(0,INT((Ix-30)/256)) TO MIN(TileCols-1,INT((Ix+990)/256))
 12380         Cell=Ty*TileCols+Tx+1
+12382         IF SoilPass=0 THEN
+12384           IF TileExpiry(Cell)>0 AND MudClock>=TileExpiry(Cell) THEN CALL pruneMudTile
+12386         ENDIF
 12390         Mi=Head(Cell)
 12400         WHILE Mi>0
-12410           IF MXMax(Mi)>=Ix AND MXMin(Mi)<=Ix+800 AND MYMax(Mi)>=Iy AND MYMin(Mi)<=Iy+600 THEN
-12420             ' Untouched clods hold for 30 s, then fade over 60-90 s of driving.
-12430             IF SoilPass=0 THEN MFade(Mi)=MAX(0,MIN(1,1-(MudClock-MTouch(Mi)-30)/(60+(MGx(Mi)*13+MGy(Mi)*7) MOD 31)))
+12410           IF MXMax(Mi)>=Ix AND MXMin(Mi)<=Ix+960 AND MYMax(Mi)>=Iy AND MYMin(Mi)<=Iy+540 THEN
+12420             ' Untouched clods hold for 25 s, then fade over 45-65 s of driving.
+12430             IF SoilPass=0 THEN MFade(Mi)=MAX(0,MIN(1,1-(MudClock-MTouch(Mi)-25)/MFadeDuration(Mi)))
 12460             IF MFade(Mi)>0 THEN
-12470               Mx=INT(M1x(Mi)-Ix) : My=INT(599-M1y(Mi)+Iy)
+12470               Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
 12490               Dx=M2x(Mi) : Dy=M2y(Mi)
 12510               Ex=M3x(Mi) : Ey=M3y(Mi)
 12530               IF SoilPass=0 THEN FRECTANGLE Mx-2,My-1,Mx+Dx-3,My+Dy-2,MCol(Mi) ALPHA MFade(Mi)
@@ -949,19 +960,20 @@
 12690   PENWIDTH 1
 12700   FOR DustParticle=0 TO MaxDust-1
 12710     IF DustL(DustParticle)>0 THEN
-12720       Dx=DustX(DustParticle)-Ix : Dy=599-DustY(DustParticle)*Iso+Iy+DustZ(DustParticle)*ZProj+DustAge(DustParticle)*8
-12740       IF Dx>=-20 AND Dx<=820 AND Dy>=20 AND Dy<=550 THEN
+12720       Dx=DustX(DustParticle)-Cx : Dy=539-DustY(DustParticle)*Iso+Cy+DustZ(DustParticle)*ZProj+DustAge(DustParticle)*8
+12740       IF Dx>=-20 AND Dx<=980 AND Dy>=20 AND Dy<=490 THEN
 12750         FCIRCLE Dx,Dy,3+DustAge(DustParticle)*12,RGB(199,164,110),0.65 ALPHA MIN(0.22,DustL(DustParticle)*0.2)
 12760       ENDIF
 12770     ENDIF
 12780   NEXT DustParticle
 12790   CALL drawGhost
 12800   ' The car pivots in true 3D sprite views; its shadow remains on the ground.
+12805   ' Smooth the position, but show the current heading without angular interpolation.
 12810   Dir=INT(Ang*64/(2*PI)+0.5) MOD 64
 12820   U=(Dir MOD 16)*64 : V=256-(Dir\16+1)*64
-12840   Sx=Px-Ix : Sy=599-Py*Iso+Iy
-12860   Shade=MAX(0.13,0.37-MAX(0,Z-FloorZ)*0.002)
-12870   GroundY=Sy+FloorZ*ZProj
+12840   Sx=RenderX-Cx : Sy=539-RenderY*Iso+Cy
+12860   Shade=MAX(0.13,0.37-MAX(0,RenderZ-RenderFloor)*0.002)
+12870   GroundY=Sy+RenderFloor*ZProj
 12880   TRECTANGLE Shadow$,Sx-32,GroundY-21,Sx+32,GroundY+43,U,V,U+64,V+64,RGB(255,0,255) ALPHA Shade
 12890   Pose=0
 12900   IF Air AND Vz>10 THEN Pose=1
@@ -971,7 +983,7 @@
 13000   IF Air=0 AND ForwardSlope<-0.035 THEN Pose=2
 13030   Cv=768-(Pose*4+Dir\16+1)*64
 13040   Bounce=Rumble*SIN(TIME*45)*1.5
-13050   TRECTANGLE Car$,Sx-32,Sy-21+Z*ZProj+Bounce,Sx+32,Sy+43+Z*ZProj+Bounce,U,Cv,U+64,Cv+64,RGB(255,0,255)
+13050   TRECTANGLE Car$,Sx-32,Sy-21+RenderZ*ZProj+Bounce,Sx+32,Sy+43+RenderZ*ZProj+Bounce,U,Cv,U+64,Cv+64,RGB(255,0,255)
 13060   ORIGIN
 13070 SUBEND
 13080 ' ----------------------------------------------------------------------
@@ -979,8 +991,8 @@
 13100   LOCAL GScreenX, GScreenY, GDir, Gu, Gv, GShadowY
 13110   CALL sampleGhost
 13120   IF GhostVisible=0 THEN EXIT SUB
-13150   GScreenX=GhostX-Ix : GScreenY=599-GhostY*Iso+Iy
-13170   IF GScreenX<-40 OR GScreenX>840 OR GScreenY+GhostZ*ZProj<-40 OR GScreenY+GhostZ*ZProj>640 THEN EXIT SUB
+13150   GScreenX=GhostX-Cx : GScreenY=539-GhostY*Iso+Cy
+13170   IF GScreenX<-40 OR GScreenX>1000 OR GScreenY+GhostZ*ZProj<-40 OR GScreenY+GhostZ*ZProj>580 THEN EXIT SUB
 13200   GDir=INT(GhostAngle*64/(2*PI)+0.5) MOD 64
 13210   IF GDir<0 THEN GDir=GDir+64
 13240   Gu=(GDir MOD 16)*64 : Gv=256-(GDir\16+1)*64
@@ -994,6 +1006,7 @@
 13330 DEF SUB drawHud
 13340   LOCAL State$, GhostState$, Progress
 13350   ' Current lap, session best, saved record, last lap, speed and small map.
+13355   ORIGIN 80,-60
 13360   FRECTANGLE 0,536,799,599,RGB(18,29,29) ALPHA 0.6
 13370   FRECTANGLE 0,535,799,536,RGB(189,146,70)
 13380   SMALLFONT TRANSPARENT
@@ -1009,7 +1022,8 @@
 13620   INK RGB(231,207,150) : MOVE 528,565 : LABEL FNCLOCK$(Best)
 13650   INK RGB(139,155,139) : MOVE 684,587 : LABEL "LAST LAP"
 13680   INK RGB(216,217,185) : MOVE 684,565 : LABEL FNCLOCK$(LastLap)
-13710   FRECTANGLE 0,0,799,33,RGB(18,29,29) ALPHA 0.6
+13705   ORIGIN 80,0
+13710   FRECTANGLE -80,0,879,33,RGB(18,29,29) ALPHA 0.6
 13720   INK RGB(173,184,162)
 13730   MOVE 18,22 : LABEL "ARROWS/WASD  SPACE: HANDBRAKE  G: GHOST  P: PAUSE  R: RESTART  M: SOUND  ESC: QUIT"
 13750   FRECTANGLE 20,48,178,114,RGB(18,29,29) ALPHA 0.6
@@ -1041,11 +1055,13 @@
 14300   IF TIME<MsgT AND Phase=2 THEN CALL drawMessage
 14330   IF WrongTime>0.7 AND Paused=0 THEN MsgDisplay$="WRONG WAY":CALL drawCenteredMessage
 14370   IF Demo THEN
-14380     INK RGB(240,190,99) : MOVE 22,511 : LABEL "DEMO  /  PRESS D TO PLAY"
+14380     INK RGB(240,190,99) : MOVE 22,451 : LABEL "DEMO  /  PRESS D TO PLAY"
 14410   ENDIF
 14420   IF Invalid THEN
 14430     INK RGB(246,151,102) : MOVE 225,115 : LABEL "INVALID LAP - PRESS R TO RESTART"
 14460   ENDIF
+14465   ORIGIN
+14466   CALL drawDisplayControls
 14470 SUBEND
 14480 ' ----------------------------------------------------------------------
 14490 DEF SUB drawSplit
@@ -1061,20 +1077,31 @@
 14602   ENDIF
 14605   MOVE 580-8*LEN(SplitText$),89 : LABEL SplitText$
 14610 SUBEND
-14620 ' ----------------------------------------------------------------------
+14611 DEF SUB displayInput
+14612   IF K$="U" THEN SCREEN FULL ON
+14613   IF K$="J" THEN SCREEN FULL OFF
+14617 SUBEND
+14618 DEF SUB drawDisplayControls
+14623   SMALLFONT TRANSPARENT : INK RGB(231,207,150)
+14624   MOVE 810,22 : LABEL "U FULL  J WINDOW"
+14626 SUBEND
+14627 ' ----------------------------------------------------------------------
 14630 DEF SUB drawMessage
 14640   MsgDisplay$=Msg$ : CALL drawCenteredMessage
 14660 SUBEND
 14670 ' ----------------------------------------------------------------------
 14680 DEF SUB drawCenteredMessage
+14685   ORIGIN 80,-60
 14690   FRECTANGLE 158,465,641,500,RGB(18,29,29) ALPHA 0.6
 14700   ' SMALLFONT is 8 by 16 pixels; centre the text inside the message panel.
 14710   SMALLFONT TRANSPARENT
 14720   INK RGB(241,211,147) : MOVE 400-4*LEN(MsgDisplay$),490 : LABEL MsgDisplay$
+14745   ORIGIN 80,0
 14750 SUBEND
 14760 ' ----------------------------------------------------------------------
 14770 DEF SUB drawTitle
 14775   ' Centre headings and prompts; keep both key-table columns left-aligned.
+14777   ORIGIN 80,-30
 14780   FRECTANGLE 166,173,634,449,RGB(14,25,25) ALPHA 0.9
 14790   FRECTANGLE 166,447,634,450,RGB(221,166,76)
 14800   INK RGB(242,217,162)
@@ -1089,22 +1116,27 @@
 14970   MOVE 240,246 : LABEL "G" : MOVE 368,246 : LABEL "Show / hide ghost"
 14990   INK RGB(241,211,147) : MOVE 324,226 : LABEL "PRESS ENTER TO RACE"
 15020   INK RGB(139,160,137) : MOVE 288,201 : LABEL "D: watch a demonstration lap"
+15045   ORIGIN
 15050 SUBEND
 15060 ' ----------------------------------------------------------------------
 15070 DEF SUB drawPause
+15075   ORIGIN 80,-30
 15080   FRECTANGLE 248,258,552,352,RGB(14,25,25) ALPHA 0.6
 15090   BIGFONT TRANSPARENT
 15100   INK RGB(242,217,162) : MOVE 352,329 : LABEL "PAUSED"
 15130   SMALLFONT TRANSPARENT
 15140   MOVE 324,289 : LABEL "PRESS P TO CONTINUE"
+15155   ORIGIN
 15160 SUBEND
 15170 ' ----------------------------------------------------------------------
 15180 DEF SUB drawCountdown
+15185   ORIGIN 80,-30
 15190   FRECTANGLE 332,273,468,367,RGB(14,25,25) ALPHA 0.6
 15200   BIGFONT TRANSPARENT
 15210   INK RGB(242,217,162) : MOVE 392,338 : LABEL DEC$(MAX(1,INT(ReadyUntil-TIME)+1),"0")
 15240   SMALLFONT TRANSPARENT
 15250   MOVE 380,297 : LABEL "READY"
+15265   ORIGIN
 15270 SUBEND
 15280 ' ----------------------------------------------------------------------
 15290 DEF SUB emitMud
@@ -1175,3 +1207,80 @@
 16170   T=INT((S-M*60)*1000)
 16180   FNCLOCK$=DEC$(M,"00")+":"+DEC$(INT(T/1000),"00")+"."+DEC$(T MOD 1000,"000")
 16190 FNEND
+16200 ' Render-only snapshots never feed steering, contacts, timing or ghost recording.
+16210 DEF SUB snapshotRenderPose
+16220   RenderPrevX=Px : RenderPrevY=Py : RenderPrevZ=Z
+16230   RenderPrevVx=Vx : RenderPrevVy=Vy : RenderPrevFloor=FloorZ
+16240 SUBEND
+16250 DEF SUB interpolateCar
+16260   LOCAL Blend
+16270   Blend=MAX(0,MIN(1,Accum/H))
+16280   IF Paused OR Phase<>2 THEN Blend=1
+16290   RenderX=RenderPrevX+(Px-RenderPrevX)*Blend : RenderY=RenderPrevY+(Py-RenderPrevY)*Blend
+16300   RenderZ=RenderPrevZ+(Z-RenderPrevZ)*Blend : RenderFloor=RenderPrevFloor+(FloorZ-RenderPrevFloor)*Blend
+16310   RenderVx=RenderPrevVx+(Vx-RenderPrevVx)*Blend : RenderVy=RenderPrevVy+(Vy-RenderPrevVy)*Blend
+16340 SUBEND
+16350 ' Complete frame intervals include drawing, presentation and the optional wait.
+16360 DEF SUB resetPerformance
+16370   Fps=0 : FpsCount=0 : FpsElapsed=0 : FpsReady=0
+16380   PerfPrev=0 : RawFrameDt=0 : FramePeak=0 : FramePeakMs=0
+16390 SUBEND
+16400 DEF SUB samplePerformance
+16410   IF PerfPrev>0 THEN
+16420     RawFrameDt=MAX(0,Now-PerfPrev)
+16430     FpsCount=FpsCount+1 : FpsElapsed=FpsElapsed+RawFrameDt
+16440     FramePeak=MAX(FramePeak,RawFrameDt)
+16450     IF FpsElapsed>=1 THEN
+16460       Fps=FpsCount/FpsElapsed : FramePeakMs=1000*FramePeak : FpsReady=1
+16470       FpsCount=0 : FpsElapsed=0 : FramePeak=0
+16480     ENDIF
+16490   ENDIF
+16500   PerfPrev=Now
+16510 SUBEND
+16520 DEF SUB drawPerformance
+16530   LOCAL PerfText$, CapText$, SyncText$
+16540   CapText$="60" : IF FrameLimit=0 THEN CapText$="UNLIMITED"
+16550   PerfText$="FPS --  MAX -- ms"
+16560   IF FpsReady THEN PerfText$="FPS "+DEC$(Fps,"0.0")+"  MAX "+DEC$(FramePeakMs,"0.0")+" ms"
+16570   SyncText$="OFF" : IF SyncEnabled THEN SyncText$="ON"
+16572   CapText$="F: "+CapText$+"  V: SYNC "+SyncText$
+16580   ORIGIN 80,-60
+16590   FRECTANGLE 450,490,799,533,RGB(18,29,29) ALPHA 0.8
+16600   SMALLFONT TRANSPARENT : INK RGB(231,207,150)
+16610   MOVE 458,526 : LABEL PerfText$
+16612   MOVE 458,510 : LABEL CapText$
+16620   ORIGIN
+16630 SUBEND
+16640 ' Draw-list membership is independent of the persistent soil owner in MGrid.
+16650 DEF SUB listPatch
+16660   LOCAL ListCell
+16670   IF MListed(Mi) THEN EXIT SUB
+16680   ListCell=MCell(Mi)
+16690   MPrev(Mi)=0 : MNext(Mi)=Head(ListCell)
+16700   IF Head(ListCell)>0 THEN MPrev(Head(ListCell))=Mi
+16710   Head(ListCell)=Mi : MListed(Mi)=1
+16712   IF TileExpiry(ListCell)=0 OR MExpires(Mi)<TileExpiry(ListCell) THEN TileExpiry(ListCell)=MExpires(Mi)
+16720 SUBEND
+16730 DEF SUB unlistPatch
+16740   LOCAL ListCell
+16750   IF MListed(Mi)=0 THEN EXIT SUB
+16760   ListCell=MCell(Mi)
+16770   IF MPrev(Mi)>0 THEN MNext(MPrev(Mi))=MNext(Mi) ELSE Head(ListCell)=MNext(Mi)
+16780   IF MNext(Mi)>0 THEN MPrev(MNext(Mi))=MPrev(Mi)
+16790   MPrev(Mi)=0 : MNext(Mi)=0 : MListed(Mi)=0
+16792   IF Head(ListCell)=0 THEN TileExpiry(ListCell)=0
+16800 SUBEND
+16810 DEF SUB pruneMudTile
+16820   LOCAL Mi, NextMi, NextExpiry
+16830   Mi=Head(Cell) : NextExpiry=0
+16840   WHILE Mi>0
+16850     NextMi=MNext(Mi)
+16860     IF MudClock>=MExpires(Mi) THEN
+16870       MFade(Mi)=0 : CALL unlistPatch
+16880     ELSE
+16890       IF NextExpiry=0 OR MExpires(Mi)<NextExpiry THEN NextExpiry=MExpires(Mi)
+16900     ENDIF
+16910     Mi=NextMi
+16920   WEND
+16930   TileExpiry(Cell)=NextExpiry
+16940 SUBEND

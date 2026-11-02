@@ -141,17 +141,23 @@ impl Default for Graphics {
 }
 
 impl Graphics {
-    fn mode_dimensions(mode_width: usize) -> Option<(usize, usize)> {
+    pub(crate) fn mode_dimensions(mode_width: usize) -> Option<(usize, usize)> {
         match mode_width {
             640 => Some((640, 480)),
             800 => Some((800, 600)),
+            960 => Some((960, 540)),
             1024 => Some((1024, 768)),
+            1280 => Some((1280, 720)),
             _ => None,
         }
     }
 
     pub fn new(mode_width: usize) -> Self {
         let (width, height) = Self::mode_dimensions(mode_width).unwrap_or((640, 480));
+        Self::new_canvas(width, height)
+    }
+
+    fn new_canvas(width: usize, height: usize) -> Self {
         let background_color = 0x000000;
         Self {
             width,
@@ -198,9 +204,9 @@ impl Graphics {
     }
 
     pub fn reset_state(&mut self) {
-        let mode = self.width;
+        let (width, height) = (self.width, self.height);
         let mut buffer = std::mem::take(&mut self.buffer);
-        *self = Graphics::new(mode);
+        *self = Self::new_canvas(width, height);
         debug_assert_eq!(buffer.len(), self.buffer.len());
         buffer.fill(self.background_color);
         self.buffer = buffer;
@@ -244,6 +250,20 @@ impl Graphics {
         let Some((new_width, new_height)) = Self::mode_dimensions(mode_width) else {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         };
+        self.set_mode_dimensions(new_width, new_height)
+    }
+
+    pub(crate) fn validate_mode_dimensions(
+        &self,
+        new_width: usize,
+        new_height: usize,
+    ) -> BasicResult<()> {
+        if !matches!(
+            (new_width, new_height),
+            (640, 480) | (640, 360) | (800, 600) | (960, 540) | (1024, 768) | (1280, 720)
+        ) {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
         if let Some(scale) = self.scale {
             let double_border = scale.border.saturating_mul(2);
             let viewport_width = new_width as i32 - 1;
@@ -252,14 +272,19 @@ impl Graphics {
                 return Err(BasicError::new(ErrorCode::InvalidArgument));
             }
         }
-        let mut reusable_buffer =
-            (mode_width == self.width).then(|| std::mem::take(&mut self.buffer));
+        Ok(())
+    }
+
+    pub fn set_mode_dimensions(&mut self, new_width: usize, new_height: usize) -> BasicResult<()> {
+        self.validate_mode_dimensions(new_width, new_height)?;
+        let mut reusable_buffer = (new_width == self.width && new_height == self.height)
+            .then(|| std::mem::take(&mut self.buffer));
         let current_color = self.current_color;
         let background_color = self.background_color;
         let font = self.font;
         let ldir = self.ldir;
         let scale = self.scale;
-        *self = Graphics::new(mode_width);
+        *self = Self::new_canvas(new_width, new_height);
         self.current_color = current_color;
         self.background_color = background_color;
         self.font = font;

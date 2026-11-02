@@ -685,7 +685,7 @@ Cada uno crea o reemplaza su propio fichero de demostración junto al programa.
 
 6.1 Ventana y coordenadas
 
-+ MODE 640|800|1024          640×480 (def), 800×600, 1024×768
++ MODE ancho[,alto]         640×480 (def), 640×360, 800×600, 960×540, 1024×768, 1280×720
 + ORIGIN                     Restablece (0,0) y el viewport físico a pantalla completa
 + ORIGIN x,y                 Reubica el origen físico almacenado (parámetros siempre físicos)
 + ORIGIN x,y,l,r,t,b         Ventana física + clipping (parámetros siempre físicos)
@@ -693,18 +693,29 @@ Cada uno crea o reemplaza su propio fichero de demostración junto al programa.
 + SCALE                     Desactiva la escala de usuario y vuelve a coordenadas físicas
 + SCREEN                     Restaura estado (ver abajo)
 + SCREEN CLOSE               Cierra la ventana gráfica y restaura estado
++ SCREEN FULL ON             Muestra la ventana gráfica a pantalla completa con escalado proporcional
++ SCREEN FULL OFF            Vuelve al tamaño normal fijo de la ventana
++ SCREEN SYNC ON|OFF         Activa/desactiva la sincronización de las llamadas explícitas a FRAME
 + SCREEN gscr$               Restaura una imagen opaca en el búfer gráfico; FRAME la muestra en programas
 + CLG                        Borra el viewport activo con el PAPER actual
 + CLG OFFSCREEN              Borra el viewport activo en el buffer gráfico; se muestra en el próximo FRAME
-+ FRAME [fps]                Refresco inmediato; limitador FPS opcional
++ FRAME [fps]                Presenta un fotograma; limitador FPS opcional y SCREEN SYNC
 
 Notas rápidas
 - SCREEN sin argumentos restaura el estado gráfico por defecto:
   • Desactiva ORIGIN · escala física (`SCALE`) · (0,0) en la esquina inferior-izquierda · cursores a 0,0 · `MASK 255` · `PENWIDTH 1` · `LDIR 0` · `SMALLFONT OPAQUE` · `PAPER 0` · `INK 1`.
 - `SCREEN` no borra por sí solo el contenido gráfico existente.
-- SCREEN CLOSE cierra la ventana y además restaura el estado gráfico por defecto como SCREEN.
+- `SCREEN CLOSE` cierra la ventana, desactiva la presentación a pantalla completa y `SCREEN SYNC`, y restaura el estado gráfico por defecto como `SCREEN`.
 - Por defecto, (0,0) está en la esquina inferior izquierda.
-- `MODE` cambia la resolución física, borra la pantalla con el `PAPER` actual, restablece el origen físico y el viewport a pantalla completa y sitúa los cursores en 0,0. Un `SCALE` explícito y su `BORDER` se conservan y remapean dentro del nuevo viewport completo; sin escala explícita, `XMAX=WIDTH-1` e `YMAX=HEIGHT-1`.
+- `MODE` cambia la resolución del lienzo gráfico, borra la pantalla con el `PAPER` actual, restablece el origen físico y el viewport a pantalla completa y sitúa los cursores en 0,0. Un `SCALE` explícito y su `BORDER` se conservan y remapean dentro del nuevo viewport completo; sin escala explícita, `XMAX=WIDTH-1` e `YMAX=HEIGHT-1`.
+- Al cambiar de `MODE`, se conserva la posición normal de la ventana gráfica aunque se recree su ventana nativa. `SCREEN FULL OFF` restaura esa posición normal y el tamaño de ventana del modo actual. El escritorio puede ajustar la posición si la nueva ventana no cabe. `SCREEN CLOSE` descarta la posición recordada; el escritorio sitúa la siguiente ventana que se abra.
+- `MODE 640,360` selecciona un lienzo de 640×360 (16:9); `MODE 960` selecciona 960×540 (16:9) y `MODE 1280` selecciona 1280×720 (16:9). Sin el alto, `MODE 640`, `MODE 800` y `MODE 1024` conservan sus dimensiones originales de 640×480, 800×600 y 1024×768. También se admite el alto explícito para esas parejas existentes y para `MODE 960,540` y `MODE 1280,720`; las demás parejas de ancho y alto se rechazan. `WIDTH` y `HEIGHT` describen el lienzo de dibujo, no el monitor físico ni el tamaño usado para presentar una imagen ampliada. Los píxeles del lienzo siguen siendo las coordenadas físicas que utilizan `ORIGIN` y `SCALE`.
+- La ventana gráfica tiene un tamaño fijo correspondiente al `MODE` activo. Se puede minimizar; Alt+Enter alterna entre pantalla completa proporcional y el tamaño normal de la ventana. En Windows, el botón Maximizar de la barra de título también activa la pantalla completa; Alt+Enter o `SCREEN FULL OFF` recupera la ventana normal. Linux conserva sus controles de ventana habituales. Arrastrar los bordes no permite elegir un tamaño de presentación arbitrario.
+- `SCREEN FULL ON` y `SCREEN FULL OFF` seleccionan la presentación a pantalla completa o en ventana normal desde un programa o en modo inmediato; `ON` u `OFF` es obligatorio. Comparten el estado de pantalla completa con Alt+Enter. El escalado conserva las proporciones del lienzo, con márgenes negros si el monitor tiene otra relación de aspecto; no modifica `WIDTH`, `HEIGHT`, las coordenadas de dibujo ni el contenido gráfico.
+- En escritorios Linux que admitan la emulación de resolución compatible de XWayland dentro de una sesión Wayland, la pantalla completa utiliza automáticamente una superficie de presentación de 1280x720. Una sesión X11 pura mantiene la pantalla completa habitual; `SCREEN SYNC` sigue disponible si se admite X11 Present. El escritorio escala esa superficie al monitor, reduciendo el trabajo de presentación en escritorios de alta resolución. Nunca cambia el modo físico del monitor ni la resolución del escritorio de otras aplicaciones, y es independiente del `MODE` de dibujo. Linux utiliza la pantalla completa habitual si no está disponible la capacidad o un modo compatible; Windows mantiene su presentación habitual. Los errores nativos inesperados sí se notifican. `SCREEN FULL ON` y Alt+Enter utilizan la misma selección automática; no hay ningún parámetro adicional de resolución.
+- `MODE` y `SCREEN` sin argumentos conservan la pantalla completa y `SCREEN SYNC`; `SCREEN CLOSE` restablece ambos. En Linux, sitúa la ventana en el monitor deseado antes de entrar en pantalla completa; sal de ella antes de moverla a otro monitor. Cualquier modo de presentación emulado se libera al salir de pantalla completa o cerrar la ventana.
+- `INPUT`, `LINE INPUT` y `MAT INPUT` de consola, el fin del programa, `STOP`, los errores y las pausas del depurador devuelven el control a la consola. Los gráficos permanecen a pantalla completa solo cuando se puede identificar el terminal en otro monitor sin solaparse con la ventana gráfica a pantalla completa. En el mismo monitor, o cuando no se puede situar el terminal con fiabilidad, los gráficos vuelven temporalmente al tamaño normal de ventana para poder usar la consola; la siguiente operación gráfica explícita reanuda la presentación a pantalla completa solicitada. El simple procesamiento de eventos de la ventana no la reanuda. En las pausas del depurador, la selección de pantalla completa pendiente se aplica solo cuando se confirma que el terminal está en otro monitor, sin solicitar el foco gráfico. `SCREEN CLOSE` siempre cierra la ventana gráfica.
+- La detección de monitores utiliza la consola visible o su terminal anfitrión en Windows y la información de ventanas X11 en Linux. Una ventana gráfica X11/XWayland no siempre puede identificar un terminal Wayland nativo, un terminal remoto o el terminal de Windows que aloja WSL. Si no se puede situar el terminal con fiabilidad, tanto Windows como Linux devuelven temporalmente los gráficos a una ventana normal. Ejecutar el terminal mediante X11 puede hacerlo identificable en Linux sin cambiar la sesión del escritorio. Cuando se confirma un terminal visible fuera del monitor gráfico, que el escritorio rechace o retrase el foco del teclado no cancela por sí solo la pantalla completa; se puede activar el terminal manualmente. Ejecutar una ventana gráfica X11 no implica que el terminal o la sesión del escritorio utilicen X11. Las comprobaciones en WSL no sustituyen las pruebas en un escritorio Linux nativo con dos monitores.
 - Si un `BORDER` conservado no cabe en un modo menor (deben cumplirse `2*BORDER < WIDTH-1` y `2*BORDER < HEIGHT-1`), `MODE` da `Invalid argument` y deja intactos el modo y el estado gráfico anteriores. Usa antes `SCALE` o `SCREEN` cuando quieras restablecerlos.
 - `ORIGIN` sin argumentos equivale exactamente a `ORIGIN 0,0,0,WIDTH-1,HEIGHT-1,0`: restablece el origen físico y el viewport a pantalla completa sin modificar un `SCALE` activo, `PAPER`, `INK`, fuente, `PENWIDTH`, `MASK` ni `LDIR`.
 - Todos los argumentos de `ORIGIN` son siempre coordenadas físicas de pantalla, incluso mientras haya un `SCALE` de usuario activo. `ORIGIN x,y` traslada el origen físico almacenado; con 6 argumentos define además un viewport físico y clipping.
@@ -724,9 +735,9 @@ Notas rápidas
   • `SCREEN : CLG` restablece primero todo el estado gráfico, incluido `PAPER 0`.
   • `ORIGIN : CLG` conserva los demás ajustes gráficos y cualquier `SCALE` activo, y restablece únicamente el origen y el viewport antes de borrar. Usa `SCALE : ORIGIN : CLG` si además quieres volver a coordenadas físicas.
   • `SCREEN : ORIGIN : CLG` también es válido; tras `SCREEN`, el `ORIGIN` sin argumentos es idempotente.
-- En un programa en ejecución, las órdenes de dibujo habituales y `SCREEN graphics$` modifican el búfer gráfico; `FRAME` presenta inmediatamente la imagen terminada. El búfer también se presenta al acabar el programa y con órdenes de actualización visible explícita, como `CLG`. En modo inmediato, el dibujo se muestra directamente.
+- En un programa en ejecución, las órdenes de dibujo habituales y `SCREEN graphics$` modifican el búfer gráfico; `FRAME` presenta la imagen terminada. El búfer también se presenta al acabar el programa y con órdenes de actualización visible explícita, como `CLG`. En modo inmediato, el dibujo se muestra directamente.
   • Usa `FRAME` después de completar el dibujo de cada fotograma de una animación.
-  • Durante `DEBUG`, el búfer gráfico también se presenta en cada pausa del depurador (véanse las «Notas sobre DEBUG»). Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS.
+  • Durante `DEBUG`, el búfer gráfico también se presenta en cada pausa del depurador (véanse las «Notas sobre DEBUG»). Esta actualización de inspección no ejecuta `FRAME`, no aplica su limitador FPS ni espera por `SCREEN SYNC`.
 - `CLG` borra y presenta inmediatamente el viewport activo. En bucles de
   animación que dibujan un frame completo antes de `FRAME`, esto puede mostrar
   un borrado a mitad de frame (parpadeo/tearing en Rust). Usa `CLG OFFSCREEN`
@@ -737,10 +748,78 @@ Notas rápidas
   columna/fila 0 salvo que se use `LOCATE`.
 - `FRAME fps` conserva la semántica de `FRAME` sin argumentos, pero limita las
   siguientes llamadas explícitas a `FRAME` al máximo de FPS indicado. El primer
-  `FRAME fps` se muestra inmediatamente; las llamadas posteriores solo esperan
+  `FRAME fps` no espera por el limitador FPS; las llamadas posteriores solo esperan
   si el programa va más rápido que el objetivo. `fps` debe ser un número
   positivo. Ejemplo: usa `FRAME 60` en bucles de animación para limitar el
-  dibujado a unos 60 FPS.
+  dibujado a unos 60 FPS. `FRAME` sin argumentos elimina ese límite.
+- `SCREEN SYNC ON` sincroniza la presentación de las llamadas explícitas a `FRAME` con el refresco de pantalla, tanto en ventana como a pantalla completa; `SCREEN SYNC OFF` desactiva la petición y es el valor predeterminado. `ON` u `OFF` es obligatorio. La sincronización reduce el tearing y la irregularidad de presentación, pero puede añadir retardo entre la entrada y su imagen en pantalla. Utiliza el compositor del escritorio de Windows o X11 Present en Linux; al activarla con una ventana nativa se produce un error si falta el soporte necesario. Con las ventanas nativas desactivadas para ejecución sin pantalla, se acepta el ajuste sin esperar a un monitor físico. Si falla la presentación sincronizada, se notifica el error y se desactiva la sincronización; un `SCREEN SYNC ON` posterior permite solicitarla de nuevo.
+- La sincronización y el límite FPS son independientes: tanto `FRAME` sin argumentos como `FRAME fps` respetan `SCREEN SYNC ON`. Sin límite, la sincronización puede seguir esperando al refresco; con `FRAME 60` se aplican ambas restricciones. Ninguna garantiza 60 FPS: si el dibujo no llega a un refresco, la imagen anterior permanece visible durante otro refresco y el movimiento puede ser menos regular. Un límite adicional inferior a la frecuencia del monitor también puede dejar imágenes repetidas. `SCREEN SYNC` no sincroniza `CLG`, el dibujo inmediato, las actualizaciones de inspección del depurador ni la actualización final al terminar el programa.
+
+Elección entre límite FPS y sincronización
+
+`FRAME 60` fija un máximo aproximado de fotogramas por segundo mediante un temporizador. Reduce el trabajo y puede reducir el consumo cuando el programa puede dibujar más deprisa, y permite elegir un límite independiente de la frecuencia del monitor. Con `SCREEN SYNC OFF`, ese temporizador no alinea la presentación con el refresco: puede haber tearing (una imagen formada por partes de dos fotogramas) o movimiento irregular aunque el contador indique unos 60 FPS. El límite es un máximo, no una garantía de rendimiento.
+
+`SCREEN SYNC ON` coordina la presentación con el refresco que ofrece el sistema gráfico. Con `FRAME` sin argumento suele ser la primera elección para juegos y scroll donde importa la suavidad; así arranca Dustline. Puede añadir retardo entre la entrada y su imagen. No fija por sí solo 60 FPS: si el refresco disponible y el programa lo permiten, puede presentar más fotogramas en una pantalla de mayor frecuencia. También puede consumir más recursos que un límite explícito menor.
+
+Combinar `SCREEN SYNC ON` con `FRAME 60` mantiene la sincronización y un máximo de 60 FPS. Es útil para limitar el trabajo en un monitor rápido, pero no añade por sí mismo más suavidad que la sincronización. En un refresco estable de 120 Hz, 60 FPS permite repartir una imagen cada dos refrescos; en 144 Hz, 60 no es un divisor y las repeticiones pueden distribuirse de forma desigual. En un monitor de 60 Hz, empieza por SYNC ON y `FRAME` sin límite adicional; añade un límite solo si lo necesitas.
+
+Ningún enfoque hace que un programa lento alcance 60 FPS. Si el dibujo tarda demasiado, se repite la imagen anterior y pueden aparecer saltos. La sincronización tampoco obliga a que cualquier bajada se convierta exactamente en 30 FPS: el resultado depende de los tiempos de dibujo y del sistema gráfico. Si el programa consulta el teclado o el ratón una sola vez por fotograma, un límite menor también reduce la frecuencia de esas consultas y puede empeorar la respuesta.
+
+Los siguientes ejemplos dibujan la misma barra durante tres segundos. Su posición depende de `TIME`, de modo que cambiar la presentación no cambia su velocidad. En general, calcula el movimiento mediante tiempo transcurrido o pasos de simulación independientes; contar un desplazamiento fijo por fotograma hace que la velocidad dependa de los FPS. Dustline conserva pasos de física de 1/120 de segundo.
+
+Ejemplo: animación limitada a unos 60 FPS, sin solicitar sincronización. Útil para limitar trabajo o cuando falta soporte nativo de SYNC; no evita por sí mismo el tearing.
+```basic
+10 SCREEN : MODE 640,360 : SCREEN SYNC OFF
+20 Started=TIME
+30 WHILE TIME-Started<3
+40   CLG OFFSCREEN : X=INT((TIME-Started)*120) MOD (WIDTH-24)
+50   FRECTANGLE X,120,X+24,240,7
+60   FRAME 60
+70 WEND
+80 SCREEN CLOSE
+90 END
+```
+
+Ejemplo: presentación sincronizada sin límite FPS adicional. Es el punto de partida recomendado para juegos y scroll suave.
+```basic
+10 SCREEN : MODE 640,360 : SCREEN SYNC ON
+20 Started=TIME
+30 WHILE TIME-Started<3
+40   CLG OFFSCREEN : X=INT((TIME-Started)*120) MOD (WIDTH-24)
+50   FRECTANGLE X,120,X+24,240,7
+60   FRAME
+70 WEND
+80 SCREEN CLOSE
+90 END
+```
+
+Ejemplo: sincronización con un máximo de 30 FPS para una animación sencilla donde interesa reducir el trabajo. Puedes usar `FRAME 60` si prefieres ese máximo; un límite menor sacrifica fluidez frente a un refresco más rápido.
+```basic
+10 SCREEN : MODE 640,360 : SCREEN SYNC ON
+20 Started=TIME
+30 WHILE TIME-Started<3
+40   CLG OFFSCREEN : X=INT((TIME-Started)*120) MOD (WIDTH-24)
+50   FRECTANGLE X,120,X+24,240,7
+60   FRAME 30
+70 WEND
+80 SCREEN CLOSE
+90 END
+```
+
+Ejemplo: presentación sin sincronización ni límite FPS solicitado. Útil para medir esa configuración o comparar cambios de dibujo; puede producir tearing y consumir más recursos.
+```basic
+10 SCREEN : MODE 640,360 : SCREEN SYNC OFF
+20 Started=TIME
+30 WHILE TIME-Started<3
+40   CLG OFFSCREEN : X=INT((TIME-Started)*120) MOD (WIDTH-24)
+50   FRECTANGLE X,120,X+24,240,7
+60   FRAME
+70 WEND
+80 SCREEN CLOSE
+90 END
+```
+
+El ejemplo interactivo breve `samples/g-widescreen.bas` permite comparar estos enfoques durante la misma ejecución: V alterna `SCREEN SYNC ON/OFF` y C alterna `FRAME`/`FRAME 60`. También permite probar los modos de dibujo, Alt+Enter y las coordenadas del ratón con escalado, incluidos los márgenes negros.
 
 Ejemplo (SCALE con borde y ejes en unidades de usuario)
 ```basic
@@ -1300,6 +1379,8 @@ Comandos
 + MOUSE 1|ON                        Muestra el puntero del sistema en la ventana gráfica.
 + MOUSE 0|OFF                       Oculta el puntero del sistema en la ventana gráfica.
 
+Repetir `MOUSE ON` o `MOUSE OFF` mantiene el estado elegido. La visibilidad se conserva al cambiar de `MODE`, ejecutar `SCREEN` o alternar pantalla completa con Alt+Enter. `SCREEN CLOSE` restablece el puntero visible para la siguiente ventana. Ocultar el puntero no desactiva las coordenadas, los botones ni los eventos del ratón.
+
 Eventos disponibles: `MOVE`, `LEFTDOWN`, `LEFTUP`, `LEFTDRAG`, `RIGHTDOWN`, `RIGHTUP`, `RIGHTDRAG`. Los eventos `DRAG` corresponden a los movimientos del ratón mientras el botón está pulsado (`<B1-Motion>` y `<B3-Motion>`).
 
 Funciones auxiliares
@@ -1309,7 +1390,10 @@ Funciones auxiliares
 
 Notas
 - Los eventos solo se generan cuando el puntero está sobre la ventana gráfica y el programa está en ejecución. No existen hooks globales fuera de la ventana.
-- `MOUSE` solo cambia la visibilidad del cursor (no captura ni confina el ratón).
+- Mientras un programa se ejecuta a pantalla completa con `MOUSE OFF` y la ventana gráfica tiene el foco del teclado, el puntero queda limitado al lienzo mostrado, excluidos los márgenes negros. En una ventana normal, `MOUSE OFF` solo oculta el puntero.
+- El puntero se libera con `MOUSE ON`, al salir de pantalla completa (también con Alt+Enter), perder el foco (por ejemplo, Alt+Tab), pedir entrada por consola, pausar en el depurador, ejecutar `STOP`, terminar el programa o cerrar la ventana. Permanece libre mientras la consola tiene el control, aunque los gráficos sigan a pantalla completa en otro monitor. La limitación se reanuda cuando el programa y el foco gráfico vuelven a estar activos.
+- La limitación depende del soporte del escritorio. Si no puede aplicarse, el puntero queda libre y BASIC continúa. No modifica `MODE`, `SCREEN SYNC` ni el sistema de coordenadas; las coordenadas, los botones y los eventos del ratón siguen disponibles.
+- Con presentación escalada, el puntero se transforma a coordenadas del lienzo antes de aplicar `ORIGIN` o `SCALE`. Los márgenes negros quedan fuera del lienzo: no se consideran pulsados los botones y, al salir de él con un botón pulsado, puede generarse su evento de liberación. La posición física fuera del lienzo se representa como (-1,-1) antes de convertirla al sistema de coordenadas del usuario; con `ORIGIN` o `SCALE` activos, `MOUSEX` y `MOUSEY` no tienen por qué valer -1.
 - Las rutinas registradas mediante `ON MOUSE` se despachan como interrupciones: respetan `DI`/`EI`, se apilan como un `GOSUB` y deben finalizar con `RETURN`.
 - El destino admite un número de línea o etiqueta raíz. Aunque se registre dentro de una subrutina, usa el espacio de nombres raíz y no captura el estado local de esa llamada.
 - Puedes cambiar o desactivar un evento en cualquier momento. `ON MOUSE ... GOSUB 0` también elimina las activaciones pendientes del evento indicado.
@@ -1753,8 +1837,9 @@ Notas sobre DEBUG
 - Desde el panel de código, F4 muestra la pantalla de salida existente mientras el programa sigue detenido, sin añadir ningún aviso. Pulsa F4 de nuevo o Esc para volver a la misma pausa con el foco en el código, conservando la línea mostrada y el estado del inspector sin ejecutar ninguna instrucción. Durante la consulta, Ctrl+C sigue abortando; las demás teclas se ignoran. Vuelve al panel de código antes de usar F5/F6/F7/F8.
 - Con F6/F7/F8, la pantalla del depurador se conserva durante los pasos que no necesitan la consola. La pantalla normal de salida se recupera justo antes de producir salida de consola (por ejemplo, `PRINT` o `CLS`) o de solicitar entrada con `INPUT`, `LINE INPUT` o `MAT INPUT`. `INKEY$`, `KEYDOWN` y `PAUSE` también recuperan esa pantalla antes de consultar o esperar entrada. La siguiente pausa vuelve a mostrar el depurador. F5 sigue abandonando inmediatamente la pantalla del depurador.
 - La preparación de la ventana gráfica, el dibujo, la presentación y las lecturas del búfer gráfico (por ejemplo, `TEST`, `TESTCHR$`, `SCREEN$` o `SPRITE$`) no cambian la pantalla de la consola. `GINPUT` usa sólo la ventana gráfica y tampoco muestra la consola de salida. La E/S de archivos por sí sola no cambia de pantalla.
-- Cuando el programa está usando la ventana gráfica, el contenido actual del búfer gráfico se presenta automáticamente al entrar en cada pausa del depurador. Por tanto, tras F6, la siguiente pausa muestra los cambios gráficos realizados por el paso anterior sin necesidad de añadir `FRAME`. Con F7/F8, el resultado acumulado se presenta en el siguiente alto del depurador. Esta actualización de inspección no ejecuta `FRAME` ni aplica su limitador FPS; las llamadas explícitas a `FRAME` y `FRAME fps` conservan su comportamiento normal.
+- Cuando el programa está usando la ventana gráfica, el contenido actual del búfer gráfico se presenta automáticamente al entrar en cada pausa del depurador. Por tanto, tras F6, la siguiente pausa muestra los cambios gráficos realizados por el paso anterior sin necesidad de añadir `FRAME`. Con F7/F8, el resultado acumulado se presenta en el siguiente alto del depurador. Esta actualización de inspección no ejecuta `FRAME`, no aplica su limitador FPS ni espera por `SCREEN SYNC`; las llamadas explícitas a `FRAME` y `FRAME fps` conservan su comportamiento normal.
 - El foco de ventana es independiente de la pantalla mostrada en la consola. Con F6/F7/F8, configurar, dibujar o presentar una ventana gráfica existente no la activa; el reenfoque queda reservado a la entrada. Tampoco la activa el refresco automático en cada parada. `GINPUT` solicita el foco explícitamente; `INKEY$`, `KEYDOWN` y `PAUSE` recuperan el foco gráfico cuando usan la entrada gráfica. F5 restablece la política normal de foco; fuera de `DEBUG` no hay cambios. Al crear o recrear una ventana, el sistema operativo puede activarla momentáneamente.
+- Después de ejecutar `SCREEN FULL ON` con un paso, la siguiente pausa del depurador muestra la presentación a pantalla completa solicitada solo cuando se confirma que el terminal está en otro monitor. Un cambio de `MODE` conserva la selección de presentación y la posición de la ventana gráfica. Si el terminal está en el mismo monitor o no se conoce su ubicación, la pantalla completa sigue suspendida durante la pausa para poder usar el depurador. `SCREEN FULL OFF` restaura la posición y el tamaño normales de la ventana; `SCREEN CLOSE` la cierra y descarta su posición recordada. El marcador de ejecución señala la próxima instrucción: llegar a una línea no significa que ya se haya ejecutado.
 - El inspector muestra las variables numéricas y literales visibles, las dimensiones y tamaños de las matrices (incluidos sus alias como parámetros), la pila activa de `GOSUB`/`SUB`/funciones/temporizadores/ratón, `ERR`, `ERL`, el estado de los temporizadores y el próximo elemento `DATA`, con su línea de origen, posición dentro de ella (contada desde 1) y valor.
 - `VARIABLES` incluye como máximo el último elemento escalar escrito de cada array. Una escritura posterior en el mismo array sustituye esa entrada; las operaciones `MAT` sobre el array completo, `REDIM` y `CLEAR` la eliminan. Un `*` marca las variables y estados inspeccionados que han cambiado desde la pausa anterior; la cuenta atrás natural de un temporizador no se considera un cambio. No muestra los valores de ámbitos exteriores que estén ocultos por el ámbito actual.
 - Los breakpoints pertenecen a líneas y detienen la ejecución antes de su primera instrucción. Se conservan durante la sesión actual del intérprete, pero no se guardan en el archivo `.bas`; `RENUM` y F9 en `EDIT` los remapean. Las instrucciones de nivel superior separadas por dos puntos, la condición de un `IF` en línea y cada instrucción de su rama `THEN` o `ELSE` seleccionada se recorren individualmente; las expresiones de `DEF FN` de una línea siguen siendo atómicas.
@@ -1924,7 +2009,7 @@ Notas aclaratorias para algunas funciones
 Color & pantalla
 + RGB(n|r,g,b|"r,g,b"|"colortk")  Devuelve un color RGB numérico
 + RGB$(n|r,g,b|"r,g,b"|"colortk")  Devuelve un color como cadena `"r,g,b"`
-+ WIDTH | HEIGHT  Ancho y alto de la pantalla en píxeles
++ WIDTH | HEIGHT  Ancho y alto del lienzo gráfico en píxeles
 + XMIN | XMAX | YMIN | YMAX | BORDER  Parámetros de escala actuales
 + XPOS | YPOS | HPOS | VPOS  Coordenadas del cursor gráfico y del cursor de texto
 + TEST(x,y)  Devuelve el color del píxel en las coordenadas `(x,y)`

@@ -4995,6 +4995,49 @@ fn uppercase_leading_help(line: &mut String) {
         .collect();
 }
 
+fn is_contextual_screen_keyword(word: &str, chars: &[char], start: usize) -> bool {
+    if !word.eq_ignore_ascii_case("FULL") && !word.eq_ignore_ascii_case("SYNC") {
+        return false;
+    }
+    let skip_space = |mut end: usize| {
+        while end > 0 && (chars[end - 1].is_whitespace() || chars[end - 1] == CURSOR_MARKER) {
+            end -= 1;
+        }
+        end
+    };
+    let word_start = |mut end: usize| {
+        while end > 0 && (is_ident_char(chars[end - 1]) || chars[end - 1] == CURSOR_MARKER) {
+            end -= 1;
+        }
+        end
+    };
+    let word = |start: usize, end: usize| {
+        chars[start..end]
+            .iter()
+            .filter(|ch| **ch != CURSOR_MARKER)
+            .collect::<String>()
+    };
+    let screen_end = skip_space(start);
+    let screen_start = word_start(screen_end);
+    if !word(screen_start, screen_end).eq_ignore_ascii_case("SCREEN") {
+        return false;
+    }
+    let before = skip_space(screen_start);
+    if before == 0 || chars[before - 1] == ':' {
+        return true;
+    }
+    let previous = word(word_start(before), before);
+    if previous.eq_ignore_ascii_case("THEN") || previous.eq_ignore_ascii_case("ELSE") {
+        return true;
+    }
+    // A line number is also a statement boundary. The caller already excludes
+    // strings, DATA and comments; FULL and SYNC remain identifiers elsewhere.
+    chars[..before]
+        .iter()
+        .filter(|ch| **ch != CURSOR_MARKER)
+        .all(|ch| ch.is_ascii_digit() || ch.is_whitespace())
+}
+
 fn normalize_main_code_inner(code: &str, editing: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
@@ -5076,7 +5119,9 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                     out.push(ch);
                     i += 1;
                 }
-            } else if is_known_word(&upper) && token_boundary(&chars, start, i) {
+            } else if (is_known_word(&upper) || is_contextual_screen_keyword(&upper, &chars, start))
+                && token_boundary(&chars, start, i)
+            {
                 out.push_str(displayed_word);
                 if matches!(
                     upper.as_str(),
@@ -5660,7 +5705,9 @@ fn highlight_main(
                     }
                 }
                 after_def = false;
-            } else if language::is_keyword(&upper) {
+            } else if language::is_keyword(&upper)
+                || is_contextual_screen_keyword(&upper, &chars, start)
+            {
                 push_styled(&mut out, palette.keyword, &upper);
                 if upper == "DEF" {
                     after_def = true;
@@ -6017,6 +6064,8 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
                 out.push_str(&word);
                 in_data = true;
             } else if label_spans.contains(&(start, i)) {
+                out.push_str(&word);
+            } else if is_contextual_screen_keyword(&word, &chars, start) {
                 out.push_str(&word);
             } else if let Some(display) = cases.get(&word.to_ascii_uppercase()) {
                 out.push_str(display);
@@ -6533,6 +6582,8 @@ mod tests {
             "10 MiEtiqueta=1:GOTO MiEtiqueta",
             "10 ON X GOTO MiEtiqueta,200,Otra",
             "10 IF X THEN GOTO MiEtiqueta ELSE GOSUB Otra",
+            "10 SCREEN SYNC ON:sync$=\"SCREEN SYNC OFF\":PRINT sync",
+            "10 DATA screen sync on:SCREEN SYNC OFF ' SCREEN SYNC ON",
         ] {
             for ansi in [false, true] {
                 for cases in [None, Some(&cases)] {
@@ -6593,6 +6644,10 @@ mod tests {
             (
                 "10 IF X THEN GOTO MiEtiqueta ELSE GOSUB Otra",
                 "GOTO MiEtiqueta",
+            ),
+            (
+                "10 IF sync THEN SCREEN SYNC ON ELSE SCREEN SYNC OFF",
+                "SCREEN SYNC ON",
             ),
         ] {
             let line = source.chars().collect::<Vec<_>>();
@@ -7301,6 +7356,147 @@ mod tests {
         assert_eq!(normalize_code("help=1"), "help=1");
         assert_eq!(normalize_code("help = 1"), "help = 1");
         assert_eq!(normalize_code("10 help"), "10 help");
+    }
+
+    #[test]
+    fn screen_subcommands_are_contextual_keywords_in_both_syntax_themes() {
+        for name in ["full", "sync"] {
+            let keyword = name.to_ascii_uppercase();
+            for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+                let palette = syntax_palette_for(theme);
+                for source in [
+                    format!("screen {name} on"),
+                    format!("10 screen {name} off"),
+                    format!("10 MODE 640,360:screen {name} on"),
+                    format!("10 IF {name}=1 THEN screen {name} on ELSE screen {name} off"),
+                    format!("10 DATA screen {name} on:screen {name} off"),
+                ] {
+                    let rendered = syntax_highlight_with_theme_for_test(&source, theme);
+                    assert!(
+                        rendered.contains(&format!("{}{keyword}{RESET}", palette.keyword)),
+                        "{theme:?}: {source}: {rendered:?}"
+                    );
+                    let raw = highlight_main(&source, palette, None);
+                    assert!(raw.contains(&format!("{}{keyword}{RESET}", palette.keyword)));
+                }
+                for source in [
+                    format!("{name}=1:PRINT {name}"),
+                    format!("10 SCREEN {name}$"),
+                    format!("10 SCREEN {name}Image$"),
+                    format!("10 PRINT \"SCREEN {name} on\""),
+                    format!("10 DATA screen {name} on,\"SCREEN {keyword} OFF\""),
+                    format!("10 REM screen {name} on"),
+                    format!("10 PRINT 1 ' SCREEN {name} on"),
+                    format!("10 PRINT SCREEN {keyword} ON"),
+                ] {
+                    let rendered = syntax_highlight_with_theme_for_test(&source, theme);
+                    assert!(
+                        !rendered.contains(&format!("{}{keyword}{RESET}", palette.keyword)),
+                        "{theme:?}: {source}: {rendered:?}"
+                    );
+                }
+                let variable = syntax_highlight_with_theme_for_test(
+                    &format!("{name}=1:SCREEN {name}$"),
+                    theme,
+                );
+                assert!(variable.contains(&format!("{}{name}{RESET}", palette.variable)));
+                assert!(variable.contains(&format!("{}{name}${RESET}", palette.variable)));
+            }
+            assert!(!is_known_basic_word(&keyword));
+            assert!(!language::is_reserved_base_name(&keyword));
+            assert_eq!(
+                normalize_code(&format!("screen {name} on")),
+                format!("SCREEN {keyword} ON")
+            );
+            assert_eq!(
+                normalize_code(&format!("{name}=1:SCREEN {name}$")),
+                format!("{name}=1 : SCREEN {name}$")
+            );
+            for prefix in ["DATA", "REM"] {
+                let source = format!("{prefix} screen {name} on");
+                assert_eq!(normalize_code(&source), source);
+            }
+        }
+    }
+
+    #[test]
+    fn screen_subcommands_ignore_variable_case_preferences_and_keep_editor_carets() {
+        for (name, display) in [("full", "FuLl"), ("sync", "SyNc")] {
+            let keyword = name.to_ascii_uppercase();
+            let cases = HashMap::from([
+                (keyword.clone(), display.to_string()),
+                (format!("{keyword}$"), format!("{display}$")),
+            ]);
+            let source = format!(
+                "10 IF {name}=1 THEN screen {name} on ELSE screen {name} off:SCREEN {name}$"
+            );
+            let displayed = syntax_highlight_with_cases(&source, false, Some(&cases));
+            assert!(displayed.contains(&format!(
+                "IF {display}=1 THEN SCREEN {keyword} ON ELSE SCREEN {keyword} OFF"
+            )));
+            assert!(displayed.ends_with(&format!("SCREEN {display}$")));
+            for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+                let palette = syntax_palette_for(theme);
+                let rendered =
+                    highlight_normalized_code(normalize_code(&source), true, Some(&cases), palette);
+                assert_eq!(
+                    rendered
+                        .matches(&format!("{}{keyword}{RESET}", palette.keyword))
+                        .count(),
+                    2
+                );
+                assert!(rendered.contains(&format!("{}{display}{RESET}", palette.variable)));
+                assert!(rendered.contains(&format!("{}{display}${RESET}", palette.variable)));
+            }
+            let editing = format!("10 screen {name} off");
+            for cursor in 0..=editing.chars().count() {
+                assert_eq!(normalize_code_for_editing(&editing, cursor), editing);
+                let rendered =
+                    syntax_highlight_editing_with_cases(&editing, cursor, true, Some(&cases));
+                assert!(rendered.contains(&format!("{KEYWORD_STYLE}{keyword}{RESET}")));
+                assert!(!rendered.contains(&format!("{VARIABLE_STYLE}{display}{RESET}")));
+            }
+            let raw =
+                syntax_highlight_raw_with_cases(&format!("screen {name} off"), true, Some(&cases));
+            assert!(raw.contains(&format!("{KEYWORD_STYLE}{keyword}{RESET}")));
+        }
+    }
+
+    #[test]
+    fn screen_sync_typing_preserves_case_and_becomes_a_variable_with_a_suffix() {
+        let mut buffer = Vec::new();
+        let mut cursor = 0;
+        type_prompt_text(&mut buffer, &mut cursor, "screen sYnC");
+        let source = buffer.iter().collect::<String>();
+        assert_eq!(source, "screen sYnC");
+        assert!(syntax_highlight_raw_with_cases(&source, true, None)
+            .contains(&format!("{KEYWORD_STYLE}SYNC{RESET}")));
+        type_prompt_text(&mut buffer, &mut cursor, "$");
+        let source = buffer.iter().collect::<String>();
+        assert_eq!(source, "screen sYnC$");
+        assert_eq!(cursor, source.chars().count());
+        assert!(syntax_highlight_raw_with_cases(&source, true, None)
+            .contains(&format!("{VARIABLE_STYLE}sYnC${RESET}")));
+        for cursor in 0..=source.chars().count() {
+            assert_eq!(normalize_code_for_editing(&source, cursor), source);
+        }
+    }
+
+    #[test]
+    fn clipped_screen_sync_keeps_context_in_both_syntax_themes() {
+        let source = "10 SCREEN SYNC ON:sync$=\"SYNC\":sync=1";
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let rendered = highlight_normalized_code(source.to_string(), true, None, palette);
+            assert_eq!(
+                rendered_line_window(&rendered, source.find("SYNC").unwrap() + 1, 2),
+                format!("{}YN{RESET}", palette.keyword)
+            );
+            assert_eq!(
+                rendered_line_window(&rendered, source.find("sync$").unwrap(), 4),
+                format!("{}sync{RESET}", palette.variable)
+            );
+        }
     }
 
     #[test]

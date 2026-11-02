@@ -10,6 +10,8 @@ mod mat_compiled;
 mod mat_compiled_tests;
 mod mat_stats;
 mod mat_subarrays;
+#[cfg(test)]
+mod presentation_tests;
 mod sub_bindings;
 #[cfg(test)]
 mod sub_call_cache_tests;
@@ -2532,6 +2534,10 @@ pub struct Interpreter {
     ansi_output: bool,
     pub graphics: Graphics,
     graphics_window: Option<GraphicsWindow>,
+    graphics_fullscreen_requested: bool,
+    graphics_sync_enabled: bool,
+    graphics_mouse_cursor_visible: bool,
+    graphics_window_position: Option<(isize, isize)>,
     graphics_window_enabled: bool,
     graphics_window_suppressed: bool,
     graphics_window_dirty: bool,
@@ -2657,6 +2663,10 @@ impl Interpreter {
             ansi_output: console::ansi_enabled(),
             graphics: Graphics::default(),
             graphics_window: None,
+            graphics_fullscreen_requested: false,
+            graphics_sync_enabled: false,
+            graphics_mouse_cursor_visible: true,
+            graphics_window_position: None,
             graphics_window_enabled: graphics_window_enabled(),
             graphics_window_suppressed: false,
             graphics_window_dirty: false,
@@ -3100,7 +3110,14 @@ impl Interpreter {
             self.audio.stop_all();
             self.pending_sounds.clear();
         }
-        if self.current_line.is_none() && self.graphics_window_used_by_immediate {
+        if self.current_line.is_none()
+            && (self.graphics_window_used_by_immediate || result.is_err())
+            && (result.is_err()
+                || !self
+                    .graphics_window
+                    .as_ref()
+                    .is_some_and(|window| window.is_fullscreen()))
+        {
             focus_console_window(self.graphics_window.as_mut());
         }
         self.graphics_window_used_by_immediate = false;
@@ -5785,20 +5802,7 @@ impl Interpreter {
                 Ok(())
             }
             "SCREEN" => self.execute_screen(command[6..].trim()),
-            "MODE" => {
-                let width = self.eval_number(command[4..].trim())?;
-                if !width.is_finite() || width < 0.0 || width.fract() != 0.0 {
-                    return Err(self.err(ErrorCode::InvalidArgument));
-                }
-                let width = width as usize;
-                let previous_width = self.graphics.width;
-                self.graphics.set_mode(width)?;
-                self.graphics_window_suppressed = false;
-                if width != previous_width {
-                    self.graphics_window = None;
-                }
-                self.present_graphics_window()
-            }
+            "MODE" => self.execute_mode(command[4..].trim()),
             "CLG" => {
                 self.ensure_graphics_window()?;
                 let mode = command[3..].trim();
@@ -8023,7 +8027,7 @@ impl Interpreter {
 
         let line = match destination {
             InputDestination::Console => {
-                self.prepare_debug_console_io();
+                self.prepare_console_io();
                 self.write(&prompt);
                 print!("{}", self.take_output());
                 let _ = io::stdout().flush();
@@ -8084,6 +8088,7 @@ impl Interpreter {
         self.graphics_window_dirty = true;
         self.present_graphics_window()?;
 
+        self.resume_graphics_presentation()?;
         if let Some(window) = self.graphics_window.as_mut() {
             window.focus();
             window.clear_transient_input();
@@ -8185,7 +8190,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
 
-        self.prepare_debug_console_io();
+        self.prepare_console_io();
         if let Some(prompt) = prompt {
             self.write(prompt);
         }
@@ -9840,7 +9845,7 @@ impl Interpreter {
             let position = entries[entry_idx].position;
             let indexes = entries[entry_idx].positions[position].clone();
             if queue.is_empty() {
-                self.prepare_debug_console_io();
+                self.prepare_console_io();
                 self.write(&self.mat_input_prompt(&name, &indexes));
                 print!("{}", self.take_output());
                 let _ = io::stdout().flush();
@@ -10926,6 +10931,7 @@ impl Interpreter {
 
     fn pause_user_input_ready(&mut self) -> BasicResult<bool> {
         if self.pause_uses_graphics_input() {
+            self.resume_graphics_presentation()?;
             self.refocus_graphics_after_debug_if_needed();
             self.pump_graphics_window_now()?;
             let key_ready = self
@@ -11934,6 +11940,61 @@ impl Interpreter {
         }
     }
 
+    fn requested_graphics_fullscreen(&self) -> bool {
+        self.graphics_window
+            .as_ref()
+            .map_or(self.graphics_fullscreen_requested, |window| {
+                window.fullscreen_requested()
+            })
+    }
+
+    fn discard_graphics_window_preserving_presentation(&mut self) {
+        self.graphics_fullscreen_requested = self.requested_graphics_fullscreen();
+        if let Some(window) = self.graphics_window.as_ref() {
+            self.graphics_window_position = window.position_for_recreation();
+        }
+        // Drop the old native window before creating its replacement.
+        self.graphics_window = None;
+    }
+
+    fn create_graphics_window(&mut self) -> BasicResult<()> {
+        self.discard_graphics_window_preserving_presentation();
+        let mut window = GraphicsWindow::new(&self.graphics)?;
+        window.set_mouse_cursor_visible(self.graphics_mouse_cursor_visible)?;
+        if let Some(position) = self.graphics_window_position {
+            window.restore_position(position)?;
+        }
+        window.set_fullscreen_request(self.graphics_fullscreen_requested);
+        if self.current_line.is_some() && self.graphics_drawing_may_focus() {
+            window.focus();
+        }
+        window.clear_transient_input();
+        self.graphics_window = Some(window);
+        self.graphics_window_position = None;
+        if self.graphics_drawing_may_focus() {
+            self.resume_graphics_presentation()?;
+        }
+        self.graphics.clear_buffer_dirty();
+        self.graphics_window_dirty = false;
+        self.graphics_window_pump_check_skip = 0;
+        self.last_graphics_window_pump = Instant::now();
+        self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
+        Ok(())
+    }
+
+    fn resume_graphics_presentation(&mut self) -> BasicResult<()> {
+        if let Some(window) = self.graphics_window.as_mut() {
+            let returning_to_fullscreen = window.fullscreen_requested() && !window.is_fullscreen();
+            window.resume_fullscreen()?;
+            if returning_to_fullscreen {
+                window.present(&self.graphics)?;
+                window.focus();
+            }
+            window.resume_pointer_confinement_for_graphics();
+        }
+        Ok(())
+    }
+
     fn ensure_graphics_window(&mut self) -> BasicResult<()> {
         if self.graphics_window_blocked() {
             return Ok(());
@@ -11951,17 +12012,7 @@ impl Interpreter {
             .as_ref()
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
-            let mut window = GraphicsWindow::new(&self.graphics)?;
-            if self.current_line.is_some() && self.graphics_drawing_may_focus() {
-                window.focus();
-            }
-            window.clear_transient_input();
-            self.graphics_window = Some(window);
-            self.graphics.clear_buffer_dirty();
-            self.graphics_window_dirty = false;
-            self.graphics_window_pump_check_skip = 0;
-            self.last_graphics_window_pump = Instant::now();
-            self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
+            self.create_graphics_window()?;
             self.process_mouse_event()?;
         }
         Ok(())
@@ -11993,6 +12044,10 @@ impl Interpreter {
     }
 
     fn present_graphics_window(&mut self) -> BasicResult<()> {
+        self.present_graphics_window_impl(false)
+    }
+
+    fn present_graphics_window_impl(&mut self, synchronized: bool) -> BasicResult<()> {
         if self.graphics_window_blocked() {
             return Ok(());
         }
@@ -12005,25 +12060,31 @@ impl Interpreter {
             .as_ref()
             .is_none_or(|window| !window.matches_size(&self.graphics));
         if recreate {
-            let mut window = GraphicsWindow::new(&self.graphics)?;
-            if self.current_line.is_some() && self.graphics_drawing_may_focus() {
-                window.focus();
+            self.create_graphics_window()?;
+            if !synchronized {
+                return Ok(());
             }
-            window.clear_transient_input();
-            self.graphics_window = Some(window);
-            self.graphics.clear_buffer_dirty();
-            self.graphics_window_dirty = false;
-            self.graphics_window_pump_check_skip = 0;
-            self.last_graphics_window_pump = Instant::now();
-            self.last_graphics_window_present = Instant::now() - Duration::from_millis(16);
-            return Ok(());
         }
         let mut user_closed = false;
         if let Some(window) = self.graphics_window.as_mut() {
             if !window.is_open() {
                 user_closed = true;
             } else {
-                let mouse_state = window.present(&self.graphics)?;
+                let presentation = if synchronized {
+                    window.present_synchronized(&self.graphics)
+                } else {
+                    window.present(&self.graphics)
+                };
+                let mouse_state = match presentation {
+                    Ok(mouse) => mouse,
+                    Err(error) => {
+                        if synchronized {
+                            self.graphics_sync_enabled = false;
+                            window.disable_sync();
+                        }
+                        return Err(error);
+                    }
+                };
                 self.graphics.clear_buffer_dirty();
                 user_closed = !window.is_open();
                 self.update_mouse_state(mouse_state);
@@ -12046,7 +12107,7 @@ impl Interpreter {
         if arg.is_empty() {
             self.graphics_window_dirty = true;
             self.record_frame_command_present_at(Instant::now());
-            self.present_graphics_window()?;
+            self.present_graphics_window_impl(self.graphics_sync_enabled)?;
             return Ok(());
         }
 
@@ -12064,7 +12125,7 @@ impl Interpreter {
 
         self.graphics_window_dirty = true;
         self.record_frame_command_present_at(frame_time);
-        self.present_graphics_window()?;
+        self.present_graphics_window_impl(self.graphics_sync_enabled)?;
         Ok(())
     }
 
@@ -12179,6 +12240,11 @@ impl Interpreter {
         let mut mouse_state = None;
         if let Some(window) = self.graphics_window.as_mut() {
             mouse_state = Some(window.pump_events());
+            if window.is_open() && window.presentation_needs_refresh() {
+                // A fullscreen transition can invalidate the native scaled
+                // image even while BASIC is waiting without executing FRAME.
+                mouse_state = Some(window.present(&self.graphics)?);
+            }
             if !window.is_open() {
                 user_closed = true;
             }
@@ -12236,6 +12302,9 @@ impl Interpreter {
     }
 
     fn pump_graphics_window_for_console(&mut self) -> io::Result<()> {
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.suspend_pointer_confinement_for_console();
+        }
         self.audio.poll_after_program();
         self.pump_graphics_window_if_due()
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.display_for_basic()))?;
@@ -12246,6 +12315,9 @@ impl Interpreter {
     }
 
     fn pump_graphics_window_for_editor(&mut self) -> io::Result<()> {
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.suspend_pointer_confinement_for_console();
+        }
         if !self.graphics_window_enabled
             || self.graphics_window_suppressed
             || self.graphics_window.is_none()
@@ -12277,6 +12349,7 @@ impl Interpreter {
         }
         self.mark_graphics_window_used_by_current_run();
         if self.graphics_drawing_may_focus() {
+            self.resume_graphics_presentation()?;
             let refocus_after_debug = self.take_graphics_refocus_after_debug();
             if first_graphics_use_by_run || refocus_after_debug {
                 if let Some(window) = self.graphics_window.as_mut() {
@@ -12314,6 +12387,9 @@ impl Interpreter {
             && self.graphics_window.is_some()
         {
             self.prepare_graphics_window_use_by_current_run()?;
+            // Reading graphics input may activate the window even while the
+            // debugger keeps ordinary drawing passive.
+            self.resume_graphics_presentation()?;
             self.refocus_graphics_after_debug_if_needed();
         }
         Ok(())
@@ -12349,6 +12425,10 @@ impl Interpreter {
     fn mark_graphics_window_user_closed(&mut self) {
         let interrupt_current_run = self.current_run_uses_graphics_window();
         self.graphics_window = None;
+        self.graphics_fullscreen_requested = false;
+        self.graphics_sync_enabled = false;
+        self.graphics_mouse_cursor_visible = true;
+        self.graphics_window_position = None;
         self.graphics_window_suppressed = interrupt_current_run;
         if !interrupt_current_run {
             self.graphics.reset_state();
@@ -12369,6 +12449,10 @@ impl Interpreter {
             focus_console_window(Some(window));
         }
         self.graphics_window = None;
+        self.graphics_fullscreen_requested = false;
+        self.graphics_sync_enabled = false;
+        self.graphics_mouse_cursor_visible = true;
+        self.graphics_window_position = None;
         self.graphics_window_suppressed = false;
         self.graphics_window_dirty = false;
         self.graphics_window_pump_check_skip = 0;
@@ -12418,8 +12502,100 @@ impl Interpreter {
         color_number_from_value(value).map(Some)
     }
 
+    fn execute_mode(&mut self, arg: &str) -> BasicResult<()> {
+        let parts = split_arguments(arg);
+        if !(1..=2).contains(&parts.len()) {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        let mut dimensions = Vec::with_capacity(parts.len());
+        for part in &parts {
+            let value = self.eval_number(part)?;
+            if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 {
+                return Err(self.err(ErrorCode::InvalidArgument));
+            }
+            dimensions.push(value as usize);
+        }
+        let (width, height) = match dimensions.as_slice() {
+            [width] => Graphics::mode_dimensions(*width)
+                .ok_or_else(|| self.err(ErrorCode::InvalidArgument))?,
+            [width, height] => (*width, *height),
+            _ => unreachable!(),
+        };
+        self.graphics.validate_mode_dimensions(width, height)?;
+        if (self.graphics.width, self.graphics.height) != (width, height) {
+            // minifb can retain a pointer to the last presented framebuffer.
+            // Destroy its native window while that old allocation is alive.
+            self.discard_graphics_window_preserving_presentation();
+        }
+        self.graphics.set_mode_dimensions(width, height)?;
+        self.graphics_window_suppressed = false;
+        self.present_graphics_window()
+    }
+
+    fn execute_screen_full(&mut self, arg: &str) -> BasicResult<()> {
+        let mut words = arg.split_whitespace();
+        let enabled = match words.next() {
+            Some(word) if word.eq_ignore_ascii_case("ON") => true,
+            Some(word) if word.eq_ignore_ascii_case("OFF") => false,
+            _ => return Err(self.err(ErrorCode::ArgumentMismatch)),
+        };
+        if words.next().is_some() {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        if enabled {
+            self.ensure_graphics_window()?;
+        }
+        let may_focus = self.graphics_drawing_may_focus();
+        if let Some(window) = self.graphics_window.as_mut() {
+            if enabled && !may_focus {
+                // Stepping can select fullscreen without covering the debugger.
+                window.set_fullscreen_request(true);
+            } else {
+                window.set_fullscreen(enabled)?;
+                window.present(&self.graphics)?;
+                if enabled {
+                    window.focus();
+                }
+            }
+            self.mark_graphics_window_used_by_current_run();
+        }
+        self.graphics_fullscreen_requested = enabled;
+        Ok(())
+    }
+
+    fn execute_screen_sync(&mut self, arg: &str) -> BasicResult<()> {
+        let enabled = if arg.eq_ignore_ascii_case("ON") {
+            true
+        } else if arg.eq_ignore_ascii_case("OFF") {
+            false
+        } else {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        };
+        if enabled {
+            self.ensure_graphics_window()?;
+            if let Some(window) = self.graphics_window.as_mut() {
+                if let Err(error) = window.prepare_sync() {
+                    self.graphics_sync_enabled = false;
+                    window.disable_sync();
+                    return Err(error);
+                }
+            }
+        } else if let Some(window) = self.graphics_window.as_mut() {
+            window.disable_sync();
+        }
+        self.graphics_sync_enabled = enabled;
+        self.last_frame_command_present = None;
+        Ok(())
+    }
+
     fn execute_screen(&mut self, arg: &str) -> BasicResult<()> {
         let arg = arg.trim();
+        if first_word_is(arg, "SYNC") {
+            return self.execute_screen_sync(arg[4..].trim());
+        }
+        if first_word_is(arg, "FULL") {
+            return self.execute_screen_full(arg[4..].trim());
+        }
         if arg.is_empty() {
             self.ensure_graphics_window()?;
             self.graphics.reset_window_state_preserving_buffer();
@@ -12474,7 +12650,6 @@ impl Interpreter {
     }
 
     fn execute_mouse(&mut self, args: &str) -> BasicResult<()> {
-        self.ensure_graphics_window()?;
         let parts = split_arguments(args);
         if parts.len() != 1 || parts[0].trim().is_empty() {
             return Err(self.err(ErrorCode::ArgumentMismatch));
@@ -12491,9 +12666,11 @@ impl Interpreter {
             }
             value as i32 == 1
         };
+        self.ensure_graphics_window()?;
         if let Some(window) = self.graphics_window.as_mut() {
-            window.set_mouse_cursor_visible(visible);
+            window.set_mouse_cursor_visible(visible)?;
         }
+        self.graphics_mouse_cursor_visible = visible;
         Ok(())
     }
 
@@ -14695,6 +14872,24 @@ impl Interpreter {
         out
     }
 
+    fn prepare_console_io(&mut self) {
+        if let Some(window) = self.graphics_window.as_mut() {
+            window.suspend_pointer_confinement_for_console();
+        }
+        // Terminal input must remain reachable when the graphics window has
+        // covered the desktop. Keep graphical INPUT and ordinary PRINT on
+        // their existing paths; explicit terminal reads reveal the console,
+        // retaining fullscreen when it cannot cover the terminal's monitor.
+        if self
+            .graphics_window
+            .as_ref()
+            .is_some_and(|window| window.is_fullscreen())
+        {
+            focus_console_window(self.graphics_window.as_mut());
+        }
+        self.prepare_debug_console_io();
+    }
+
     fn prepare_debug_console_io(&mut self) {
         let terminal = self
             .debugger_state
@@ -14810,6 +15005,7 @@ impl Interpreter {
         self.prepare_debug_console_io();
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
+            let _ = self.resume_graphics_presentation();
             self.refocus_graphics_after_debug_if_needed();
             if let Some(window) = self.graphics_window.as_mut() {
                 if let Some(code) = window.take_key_code() {
@@ -14841,6 +15037,7 @@ impl Interpreter {
         self.prepare_debug_console_io();
         let use_graphics_keyboard = self.current_run_uses_graphics_window();
         if use_graphics_keyboard {
+            let _ = self.resume_graphics_presentation();
             self.refocus_graphics_after_debug_if_needed();
             let _ = self.pump_graphics_window_now();
             return self

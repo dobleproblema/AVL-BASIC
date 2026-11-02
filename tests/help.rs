@@ -1,6 +1,49 @@
 use avl_basic::{ErrorCode, Interpreter};
 
 #[test]
+fn help_describes_canvas_fullscreen_and_sync_separately() {
+    let mut interpreter = Interpreter::new();
+    interpreter.process_immediate("HELP MODE").unwrap();
+    let mode = interpreter.take_output();
+    assert!(mode.contains("MODE width[,height]"));
+    assert!(mode.contains("640x360"));
+    interpreter.process_immediate("HELP SCREEN FULL").unwrap();
+    let full = interpreter
+        .take_output()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(full.starts_with("SCREEN FULL ON SCREEN FULL OFF"));
+    assert!(full.contains("SCREEN FULL OFF"));
+    assert!(full.contains("Alt+Enter"));
+    assert!(full.contains("XWayland"));
+    assert!(full.contains("physical display mode"));
+
+    interpreter.process_immediate("HELP SCREEN SYNC").unwrap();
+    let sync = interpreter
+        .take_output()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(sync.contains("SCREEN SYNC ON"));
+    assert!(sync.contains("SCREEN SYNC OFF"));
+    assert!(sync.contains("default"));
+    assert!(sync.contains("FRAME fps"));
+    assert!(sync.contains("latency"));
+    assert!(sync.contains("SCREEN CLOSE resets it"));
+
+    interpreter.process_immediate("HELP FRAME").unwrap();
+    let frame = interpreter
+        .take_output()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(frame.contains("FRAME [fps]"));
+    assert!(frame.contains("SCREEN SYNC"));
+    assert!(frame.contains("removes the explicit FPS cap"));
+}
+
+#[test]
 fn help_right_dollar_is_brief_and_complete() {
     let mut interpreter = Interpreter::new();
 

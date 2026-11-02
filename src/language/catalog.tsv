@@ -237,12 +237,14 @@ statement	both	BIGFONT		BIGFONT [TRANSPARENT|OPAQUE]	mode: Optional transparent 
 statement	both	SMALLFONT		SMALLFONT [TRANSPARENT|OPAQUE]	mode: Optional transparent or opaque background mode	Selects the 8 by 16 graphics font.	BIGFONT,GPRINT,LABEL	-
 
 # Graphics window, coordinates, and drawing
-statement	both	MODE		MODE width	width: Screen width 640, 800, or 1024	Selects a supported graphics resolution.	SCREEN,SCALE,ORIGIN	-
-statement	both	SCREEN		SCREEN || SCREEN graphics$	graphics$: Encoded opaque full-screen graphics string matching the active MODE	Resets graphics state or restores the screen buffer; use FRAME to present restored images during programs.	SCREEN CLOSE,SCREEN$,BLOAD,FRAME	-
-statement	both	SCREEN CLOSE		SCREEN CLOSE	-	Closes the graphics window and resets its state.	SCREEN	-
+statement	both	MODE		MODE width[,height]	width: Canvas width 640, 800, 960, 1024, or 1280; height: Optional height; supported pairs are 640x480, 640x360, 800x600, 960x540, 1024x768 and 1280x720; omitted height selects the default height for each width	Selects a supported graphics canvas resolution while preserving fullscreen and SCREEN SYNC.	SCREEN,SCREEN FULL,SCREEN SYNC,SCALE,ORIGIN	-
+statement	both	SCREEN		SCREEN || SCREEN graphics$	graphics$: Encoded opaque full-screen graphics string matching the active MODE	Resets graphics state or restores the screen buffer; fullscreen and SCREEN SYNC are preserved. Use FRAME to present restored images during programs.	SCREEN CLOSE,SCREEN FULL,SCREEN SYNC,SCREEN$,BLOAD,FRAME	-
+statement	both	SCREEN CLOSE		SCREEN CLOSE	-	Closes the graphics window, resets its state and disables fullscreen and SCREEN SYNC.	SCREEN,SCREEN FULL,SCREEN SYNC	-
+statement	both	SCREEN FULL		SCREEN FULL ON || SCREEN FULL OFF	ON: Proportional fullscreen; OFF: Fixed normal window size	Shares fullscreen state with Alt+Enter; MODE and SCREEN preserve it. Linux automatically optimizes presentation on supported XWayland desktops. Never changes the physical display mode, canvas size or contents.	MODE,SCREEN,SCREEN CLOSE,SCREEN SYNC	-
+statement	both	SCREEN SYNC		SCREEN SYNC ON || SCREEN SYNC OFF	ON: Synchronize explicit FRAME presentation with display refresh; OFF: No requested synchronization (default)	Works with FRAME or FRAME fps, in windows or fullscreen. May add latency; cannot guarantee the refresh rate if drawing is slower. MODE and SCREEN preserve it; SCREEN CLOSE resets it. Native support is required when a graphics window is enabled.	FRAME,SCREEN FULL,SCREEN CLOSE	-
 statement	both	CLG		CLG	-	Clears and immediately presents the active viewport.	CLG OFFSCREEN,FRAME,PAPER	-
 statement	both	CLG OFFSCREEN		CLG OFFSCREEN	-	Clears the active viewport without presenting it.	CLG,FRAME	-
-statement	program	FRAME		FRAME [fps]	fps: Optional maximum frames per second	Presents the graphics buffer and optionally limits frame rate.	CLG OFFSCREEN	-
+statement	program	FRAME		FRAME [fps]	fps: Optional maximum frames per second, independent of SCREEN SYNC	Presents the graphics buffer, optionally limits frame rate and honors SCREEN SYNC. Bare FRAME removes the explicit FPS cap, but synchronization can still wait for display refresh.	CLG OFFSCREEN,SCREEN SYNC	-
 statement	both	ORIGIN		ORIGIN || ORIGIN x,y || ORIGIN x,y,left,right,top,bottom	x,y: Physical origin; left,right,top,bottom: Physical viewport limits	Sets or resets the physical graphics origin and viewport.	SCALE	-
 statement	both	SCALE		SCALE || SCALE xmin,xmax,ymin,ymax[,border]	xmin: Minimum logical X; xmax: Maximum logical X; ymin: Minimum logical Y; ymax: Maximum logical Y; border: Optional physical margin	Enables a logical coordinate scale or returns to physical coordinates.	ORIGIN,GRAPHRANGE	-
 statement	both	MOVE		MOVE x,y	x: Absolute X coordinate; y: Absolute Y coordinate	Moves the graphics cursor without drawing.	MOVER,DRAW,LABEL	-
@@ -282,7 +284,7 @@ statement	both	SPRITE DEL		SPRITE DEL id	id: Registered sprite identifier	Remove
 statement	both	COLMODE		COLMODE mode	mode: Collision mode from 0 to 3	Selects color and sprite collision detection modes.	COLCOLOR,COLRESET,SPRITE	-
 statement	both	COLCOLOR		COLCOLOR [color]	color: Optional color to detect	Selects a collision color or any non-background color.	COLMODE,SPRITE HITTEST	-
 statement	both	COLRESET		COLRESET	-	Clears collision results and the sprite ownership map.	COLMODE,SPRITE DEL	-
-statement	both	MOUSE		MOUSE ON|OFF|1|0	state: ON or 1 to show and OFF or 0 to hide	Shows or hides the pointer in the graphics window.	ON MOUSE,MOUSEX,MOUSEY	-
+statement	both	MOUSE		MOUSE ON|OFF|1|0	state: ON or 1 to show and OFF or 0 to hide	Shows or hides the graphics-window pointer. OFF also confines it to the canvas during fullscreen execution with graphics focus, if supported. ON, windowed mode, focus loss or console control releases it. Mouse coordinates, buttons and events remain active. MODE, SCREEN and fullscreen preserve visibility; SCREEN CLOSE resets it.	ON MOUSE,MOUSEX,MOUSEY,SCREEN FULL,SCREEN CLOSE	-
 statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: Mouse event name; line: Handler line number or root label	Registers a global mouse-event subroutine, or disables it with 0; labels always use the root scope, including registration inside a subroutine.	MOUSE,RETURN,DI,EI	-
 
 # Sound and audio files
@@ -409,8 +411,8 @@ function	expression	TRN		MAT target = TRN(array)	target: destination array; arra
 function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix or matrix expression	Assigns the matrix inverse.	DET,TRN,MAT	builtin
 
 # Graphics, screen, and sprite functions
-function	expression	WIDTH		WIDTH	-	Returns the graphics window width in pixels.	HEIGHT	builtin,zero-arg
-function	expression	HEIGHT		HEIGHT	-	Returns the graphics window height in pixels.	WIDTH	builtin,zero-arg
+function	expression	WIDTH		WIDTH	-	Returns the graphics canvas width in pixels, independent of presentation scaling.	HEIGHT	builtin,zero-arg
+function	expression	HEIGHT		HEIGHT	-	Returns the graphics canvas height in pixels, independent of presentation scaling.	WIDTH	builtin,zero-arg
 function	expression	XMIN		XMIN	-	Returns the active scale's minimum X coordinate.	XMAX,YMIN,YMAX,BORDER	builtin,zero-arg
 function	expression	XMAX		XMAX	-	Returns the active scale's maximum X coordinate.	XMIN,YMIN,YMAX,BORDER	builtin,zero-arg
 function	expression	YMIN		YMIN	-	Returns the active scale's minimum Y coordinate.	YMAX,XMIN,XMAX,BORDER	builtin,zero-arg
