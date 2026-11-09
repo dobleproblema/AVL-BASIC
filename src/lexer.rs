@@ -220,7 +220,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token::RBracket)
             }
             '<' | '>' | '=' => self.compare(),
-            '+' | '-' | '*' | '/' | '\\' | '^' => {
+            '+' | '-' | '*' | '/' | '\\' | '^' | '@' => {
                 self.bump();
                 Ok(Token::Op(ch.to_string()))
             }

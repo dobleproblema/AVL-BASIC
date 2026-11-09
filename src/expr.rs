@@ -50,6 +50,7 @@ pub enum BinaryOp {
     Add,
     Sub,
     Mul,
+    Hadamard,
     Div,
     IntDiv,
     Mod,
@@ -90,8 +91,23 @@ pub trait EvalContext {
 }
 
 pub fn compile_expression(source: &str) -> BasicResult<Expr> {
+    compile_expression_with_mat_operators(source, false)
+}
+
+pub(crate) fn compile_mat_expression(source: &str) -> BasicResult<Expr> {
+    compile_expression_with_mat_operators(source, true)
+}
+
+fn compile_expression_with_mat_operators(
+    source: &str,
+    allow_mat_operators: bool,
+) -> BasicResult<Expr> {
     let tokens = Lexer::new(source).tokenize()?;
-    let mut parser = Parser { tokens, pos: 0 };
+    let mut parser = Parser {
+        tokens,
+        pos: 0,
+        allow_mat_operators,
+    };
     let expr = parser.parse_or()?;
     if !matches!(parser.peek(), Token::Eof) {
         return Err(BasicError::new(ErrorCode::Syntax));
@@ -163,6 +179,7 @@ impl Expr {
                 BinaryOp::Add => checked_number(left.eval_number(ctx)? + right.eval_number(ctx)?),
                 BinaryOp::Sub => checked_number(left.eval_number(ctx)? - right.eval_number(ctx)?),
                 BinaryOp::Mul => checked_number(left.eval_number(ctx)? * right.eval_number(ctx)?),
+                BinaryOp::Hadamard => Err(BasicError::new(ErrorCode::ForbiddenExpression)),
                 BinaryOp::Div => {
                     let l = left.eval_number(ctx)?;
                     let r = right.eval_number(ctx)?;
@@ -256,6 +273,7 @@ impl Expr {
             }
             Expr::Unary { expr, .. } => expr.is_statically_numeric(),
             Expr::Binary { op, left, right } => match op {
+                BinaryOp::Hadamard => false,
                 BinaryOp::Add => left.is_statically_numeric() && right.is_statically_numeric(),
                 BinaryOp::Sub
                 | BinaryOp::Mul
@@ -379,6 +397,7 @@ impl Expr {
                 BinaryOp::Mul => Ok(Value::number(checked_number(
                     left.eval(ctx)?.as_number()? * right.eval(ctx)?.as_number()?,
                 )?)),
+                BinaryOp::Hadamard => Err(BasicError::new(ErrorCode::ForbiddenExpression)),
                 BinaryOp::Div => {
                     let l = left.eval(ctx)?.as_number()?;
                     let r = right.eval(ctx)?.as_number()?;
@@ -454,6 +473,7 @@ impl Expr {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    allow_mat_operators: bool,
 }
 
 impl Parser {
@@ -639,6 +659,12 @@ impl Parser {
             } else if self.consume_ident("MOD") {
                 left = Expr::Binary {
                     op: BinaryOp::Mod,
+                    left: Box::new(left),
+                    right: Box::new(self.parse_unary()?),
+                };
+            } else if self.allow_mat_operators && self.consume_op("@") {
+                left = Expr::Binary {
+                    op: BinaryOp::Hadamard,
                     left: Box::new(left),
                     right: Box::new(self.parse_unary()?),
                 };

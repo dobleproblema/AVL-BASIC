@@ -60,6 +60,7 @@ fn cached_mat_compiles_expression_syntax_without_running_effectful_calls() {
         "MAT C=(2*A/3)",
         "MAT C=A/2",
         "MAT C=A^2",
+        "MAT C=A @ B",
         "MAT C=TRN(A)",
         "MAT C=INV(A)",
         "MAT C$=A$+\"x\"",
@@ -867,6 +868,8 @@ fn cached_and_raw_text_mat_reject_invalid_operators_with_err37() {
         "A$-B$",
         "A$*B$",
         "A$/B$",
+        "A$/N",
+        "N/A$",
         "A$^B$",
         "A$\\B$",
         "A$ MOD B$",
@@ -1117,5 +1120,283 @@ fn square_transpose_keeps_argument_snapshot_and_following_function_effects() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn hadamard_borrowed_rhs_matches_snapshot_path_after_rebinding_and_failures() {
+    let source = "C=A @ B";
+    let compiled = CompiledMatAssignment::compile(source).unwrap();
+    let mut borrowed = Interpreter::new();
+    let mut snapshots = Interpreter::new();
+    for initialization in [
+        "DIM A(2),B(2):MAT A=2:MAT B=3",
+        "REDIM A(4):REDIM B(4):MAT A=5:MAT B=7",
+        "CLEAR:MAT BASE 1:DIM A(2,1),B(2):MAT A=5:MAT B=7",
+        "CLEAR:MAT BASE 1:DIM A(0,0),B(2,0):MAT A=11:MAT B=13",
+        "CLEAR:MAT BASE 1:DIM A(2,0),B(0):MAT A=17:MAT B=19:MAT C=77",
+        "CLEAR:DIM A(1),B(2):MAT A=2:MAT B=3:MAT C=77",
+        "CLEAR:DIM A(1):MAT A=2:B=3",
+        "CLEAR:A=2:B=3",
+        "CLEAR:DIM A(1,1,1),B(1,1,1):MAT A=2:MAT B=3",
+        "CLEAR:MAT BASE 0:DIM A(3),B(3):MAT A=5:MAT B=7",
+    ] {
+        setup(&mut borrowed, initialization);
+        setup(&mut snapshots, initialization);
+        // Unary plus preserves every numeric bit, but prevents the bare-name
+        // optimization and forces the original owned RHS evaluation.
+        replay_pair(&mut borrowed, &mut snapshots, &compiled, "C=A @ +B");
+        for name in ["A", "B", "C"] {
+            assert_eq!(borrowed.array_exists(name), snapshots.array_exists(name));
+            if borrowed.array_exists(name) {
+                assert_same_array(&borrowed, &snapshots, name);
+            }
+        }
+        assert_eq!(
+            borrowed.numeric_variables.get("B"),
+            snapshots.numeric_variables.get("B")
+        );
+    }
+}
+
+#[test]
+fn hadamard_borrowed_rhs_keeps_aliases_and_special_numeric_values() {
+    for target in ["A", "B", "C"] {
+        let mut borrowed = Interpreter::new();
+        let mut snapshots = Interpreter::new();
+        for interpreter in [&mut borrowed, &mut snapshots] {
+            setup(interpreter, "DIM A(5),B(5),C(5)");
+            interpreter.array_mut("A").unwrap().data = ArrayData::Number(vec![
+                -0.0,
+                0.0,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                1.0e308,
+                f64::NAN,
+            ]);
+            interpreter.array_mut("B").unwrap().data =
+                ArrayData::Number(vec![2.0, -2.0, 0.0, -2.0, 2.0, 3.0]);
+        }
+        let source = format!("{target}=A @ B");
+        let compiled = CompiledMatAssignment::compile(&source).unwrap();
+        replay_pair(
+            &mut borrowed,
+            &mut snapshots,
+            &compiled,
+            &format!("{target}=A @ +B"),
+        );
+        for name in ["A", "B", "C"] {
+            assert_same_array(&borrowed, &snapshots, name);
+        }
+    }
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .program
+        .load_text(
+            "10 DIM A(1),B(1):MAT A=2:MAT B=3\n\
+         20 DEF SUB PRODUCT(P,Q)\n30 MAT Q=P @ Q\n40 SUBEND\n\
+         50 CALL PRODUCT(A,B):CALL PRODUCT(B,B)\n\
+         60 MAT C=FNPRODUCT(A,B)\n70 END\n\
+         100 DEF FNPRODUCT(P,Q)\n110 MAT FNPRODUCT=P @ Q\n120 FNEND",
+        )
+        .unwrap();
+    interpreter.run_loaded().unwrap();
+    assert_eq!(
+        interpreter
+            .array_ref("A")
+            .unwrap()
+            .get_number_direct_1d(0)
+            .unwrap(),
+        2.0
+    );
+    assert_eq!(
+        interpreter
+            .array_ref("B")
+            .unwrap()
+            .get_number_direct_1d(0)
+            .unwrap(),
+        36.0
+    );
+    assert_eq!(
+        interpreter
+            .array_ref("C")
+            .unwrap()
+            .get_number_direct_1d(0)
+            .unwrap(),
+        72.0
+    );
+}
+
+#[test]
+fn hadamard_borrows_after_left_effects_and_snapshots_effectful_rhs_returns() {
+    for cached in [false, true] {
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text(
+                "10 DIM A(1),B(1):MAT A=2:MAT B=3:CALLS=0:END\n\
+             100 DEF FNLEFT()\n110 CALLS=CALLS+1:MAT B=5\n120 MAT FNLEFT=A\n130 FNEND\n\
+             200 DEF FNRIGHT()\n210 CALLS=CALLS+1:MAT A=9\n220 MAT FNRIGHT=B\n230 FNEND\n\
+             300 DEF FNRETURN(N)\n310 CALLS=CALLS+1\n\
+             320 IF N=1 THEN MAT FNRETURN=A ELSE MAT FNRETURN=B\n330 FNEND",
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        interpreter.end_requested = false;
+        for (source, expected) in [
+            ("C=FNLEFT() @ B", 10.0),
+            ("C=A @ FNRIGHT()", 10.0),
+            ("C=FNRETURN(1) @ FNRETURN(2)", 45.0),
+        ] {
+            if cached {
+                let compiled = CompiledMatAssignment::compile(source).unwrap();
+                interpreter
+                    .execute_compiled_mat_assignment(&compiled)
+                    .unwrap();
+            } else {
+                interpreter.execute_mat_assignment(source).unwrap();
+            }
+            assert_eq!(
+                interpreter
+                    .array_ref("C")
+                    .unwrap()
+                    .get_number_direct_1d(0)
+                    .unwrap(),
+                expected,
+                "{source}, cached={cached}"
+            );
+        }
+        assert_eq!(interpreter.numeric_variables.get("CALLS"), Some(&4.0));
+    }
+}
+
+#[test]
+fn hadamard_operand_errors_keep_evaluation_order_and_implicit_destination() {
+    for (left, expected_error, calls) in [
+        ("T", ErrorCode::InvalidDimensions, 1.0),
+        ("S$", ErrorCode::ForbiddenExpression, 0.0),
+        ("2", ErrorCode::ForbiddenExpression, 0.0),
+    ] {
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text(
+                "10 DIM T(1,1,1),S$(1):CALLS=0:END\n\
+             100 DEF FNCOUNT()\n110 CALLS=CALLS+1\n120 MAT FNCOUNT=T\n130 FNEND",
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        interpreter.end_requested = false;
+        let compiled = CompiledMatAssignment::compile(&format!("C={left} @ FNCOUNT()")).unwrap();
+        assert_eq!(
+            interpreter
+                .execute_compiled_mat_assignment(&compiled)
+                .unwrap_err()
+                .code,
+            expected_error,
+        );
+        assert_eq!(interpreter.numeric_variables.get("CALLS"), Some(&calls));
+        let destination = interpreter.array_ref("C").unwrap();
+        assert_eq!(destination.dims, vec![10]);
+        assert!(
+            matches!(&destination.data, ArrayData::Number(values) if values.iter().all(|v| *v == 0.0))
+        );
+    }
+}
+
+#[test]
+fn division_borrowed_rhs_matches_owned_path_across_bindings_and_bases() {
+    let compiled = CompiledMatAssignment::compile("C=A/B").unwrap();
+    let mut borrowed = Interpreter::new();
+    let mut owned = Interpreter::new();
+    for initialization in [
+        "DIM A(2),B(2):MAT A=8:MAT B=2",
+        "REDIM A(4):REDIM B(4):MAT A=20:MAT B=4",
+        "MAT BASE 1:A(0)=19:B(0)=0",
+        "B(4)=-0:MAT C=77",
+        "CLEAR:MAT BASE 0:DIM A(2,0),B(2):MAT A=20:MAT B=4",
+        "CLEAR:MAT BASE 1:DIM A(2,1),B(2):MAT A=20:MAT B=4:B(0)=0",
+        "CLEAR:MAT BASE 1:DIM A(2),B(2,1):MAT A=20:B(1,1)=4:B(2,1)=5",
+        "CLEAR:MAT BASE 1:DIM A(2,0),B(0,0):MAT A=17",
+        "CLEAR:DIM A(1),B(2):MAT A=20:MAT B=4:MAT C=77",
+        "CLEAR:DIM A(1):MAT A=20:B=4",
+        "CLEAR:MAT BASE 1:A=20:DIM B(1):B(1)=4",
+        "CLEAR:A=20:B=4",
+        "CLEAR:MAT BASE 0:DIM A(3),B(3):MAT A=20:MAT B=4",
+    ] {
+        setup(&mut borrowed, initialization);
+        setup(&mut owned, initialization);
+        // Unary plus keeps numeric values and bypasses the bare-name path.
+        replay_pair(&mut borrowed, &mut owned, &compiled, "C=A/+B");
+        for name in ["A", "B", "C"] {
+            assert_eq!(borrowed.array_exists(name), owned.array_exists(name));
+            if borrowed.array_exists(name) {
+                assert_same_array(&borrowed, &owned, name);
+            }
+        }
+    }
+}
+
+#[test]
+fn division_borrowed_rhs_resolves_rebound_sub_aliases_and_self_assignment() {
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .program
+        .load_text(
+            "10 DIM A(1),B(1),X(1),Y(1):MAT A=12:MAT B=3:MAT X=10:MAT Y=2\n\
+         20 DEF SUB DIVIDE(P,Q)\n30 MAT Q=P/Q\n40 SUBEND\n\
+         50 CALL DIVIDE(A,B):FIRST=B(0)\n\
+         60 MAT BASE 1:CALL DIVIDE(X,Y):CALL DIVIDE(B,B)\n70 END",
+        )
+        .unwrap();
+    interpreter.run_loaded().unwrap();
+    assert_eq!(interpreter.numeric_variables.get("FIRST"), Some(&4.0));
+    for (name, index, expected) in [
+        ("A", 0, 12.0),
+        ("B", 0, 4.0),
+        ("B", 1, 1.0),
+        ("Y", 0, 10.0),
+        ("Y", 1, 5.0),
+    ] {
+        assert_eq!(
+            interpreter
+                .array_ref(name)
+                .unwrap()
+                .get_number_direct_1d(index)
+                .unwrap(),
+            expected,
+            "{name}({index})"
+        );
+    }
+}
+
+#[test]
+fn division_borrows_after_numerator_effects_and_keeps_compound_rhs_snapshots() {
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .program
+        .load_text(
+            "10 DIM A(1),B(2):MAT A=12:MAT B=3:CALLS=0\n\
+         20 MAT C=FNLEFT()/B:PREVIOUS=C(0)\n\
+         30 MAT C=A/(FNRIGHT()+B)\n40 END\n\
+         100 DEF FNLEFT()\n110 CALLS=CALLS+1:REDIM B(1):MAT B=6\n\
+         120 MAT FNLEFT=A\n130 FNEND\n\
+         200 DEF FNRIGHT()\n210 CALLS=CALLS+1:MAT A=18\n\
+         220 MAT FNRIGHT=B\n230 FNEND",
+        )
+        .unwrap();
+    interpreter.run_loaded().unwrap();
+    assert_eq!(interpreter.numeric_variables.get("CALLS"), Some(&2.0));
+    assert_eq!(interpreter.numeric_variables.get("PREVIOUS"), Some(&2.0));
+    for (name, expected) in [("A", 18.0), ("B", 6.0), ("C", 1.0)] {
+        assert_eq!(
+            interpreter
+                .array_ref(name)
+                .unwrap()
+                .get_number_direct_1d(0)
+                .unwrap(),
+            expected,
+            "{name}(0)"
+        );
     }
 }

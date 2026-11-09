@@ -2312,6 +2312,26 @@ fn print_using_leading_comma_uses_european_separators() {
 }
 
 #[test]
+fn print_color_stays_plain_when_stdout_is_redirected_even_with_ansi_enabled() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        file,
+        r#"10 PRINT "a";COLOR(RGB(255,95,0),4);TAB(4);"b";COLOR();USING "0#";8"#
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .arg(file.path())
+        .env_remove("NO_COLOR")
+        .env("AVL_BASIC_COLOR", "always")
+        .env("COLORTERM", "truecolor")
+        .env("TERM", "xterm-256color")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, b"a  b08\n");
+}
+
+#[test]
 fn print_using_clause_can_follow_regular_print_items() {
     let output = run_rust(
         r#"10 PRINT "Precio";USING "0#";8;" EUR"

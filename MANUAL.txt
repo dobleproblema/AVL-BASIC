@@ -310,7 +310,7 @@ Quick notes
 Commands
 + MAT name = expression           Assignment and expressions with matrices and vectors
 + MAT BASE 0|1                    Starting index for `MAT PRINT/INPUT/READ` and structural operations (default 0)
-+ MAT PRINT [USING f$;] list      Prints arrays by rows or columns (accepts `ROW`/`COL`)
++ MAT PRINT list                  Prints array rows/columns with USING, COLOR, and side-by-side blocks
 + MAT INPUT list                  Requests the array elements in the console
 + MAT READ list                   Consumes `DATA` and fills the arrays
 
@@ -339,16 +339,20 @@ Detailed notes (`MAT name = ...`)
 - Unindexed array names denote whole arrays in MAT, even when a scalar with the same name exists. Scalar function arguments retain ordinary BASIC rules; for example, `MAT C=A+ABS(A)` uses the array on the left and the scalar A inside ABS when both exist.
 - Scalars can contain expressions and functions. Each function is evaluated once per occurrence, from left to right, rather than once per element. Both `MAT C=A+ABS(-1)` and `MAT C=ABS(-1)+A` are valid.
 - Purely scalar calculations retain BASIC's type, domain and overflow checks. An operand error prevents evaluating later operands that ordinary BASIC would not reach.
-- Each array operand is copied when reached during left-to-right evaluation. If a function modifies an array, earlier occurrences keep their copy and later occurrences read the modified values.
+- Each array operand uses its values at the point it is reached during left-to-right evaluation. If a function modifies an array, earlier occurrences keep their previous values and later occurrences read the modified values.
 - The complete result is assigned when evaluation finishes; `MAT A=A+B*A` uses the previous values of A. An error does not write a partial result, but preserves implicit destination creation and effects of functions already evaluated.
-- Individual indices, such as `A(2)` or `A(1,2)`, read a scalar element and can appear in the expression. Ranges and omitted axes remain restricted to subarray copies.
+- Individual indices, such as `A(2)` or `A(1,2)`, read a scalar element and can appear in the expression. Ranges and omitted axes select subarrays in copies and `MAT PRINT`.
 - `MAT A = B` copies another matrix or vector. It also accepts scalars (`MAT A = 5`), which fill every position in the array.
   * The keywords `CON`, `ZER` and `IDN` fill with 1, 0, or the identity matrix (square matrices only); `IDN` uses `MAT BASE` to place the diagonal.
-- `MAT A = TRN(B)` computes the transpose of a two-dimensional numeric array; its argument can be a matrix expression such as `TRN(B+C)`.
-- `MAT A = INV(B)` inverts a square matrix and also accepts expressions such as `INV(B+C)`. A singular matrix reports "Invalid value"; an array that is not two-dimensional or a non-square matrix reports "Invalid number of dimensions".
-- Arithmetic operations: `+` and `-` add/subtract compatible arrays or combine them with scalars; `*` performs matrix multiplication or scalar multiplication element by element; `/` supports an array divided by a scalar or a scalar divided by each element of an array; `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
-- Element-wise operations preserve the array dimensions and visit all stored elements, including index 0 with `MAT BASE 1`. Matrix multiplication, `TRN`, and `INV` use the active `MAT BASE` block and produce two-dimensional matrices. With base 1, multiplication and `TRN` leave the border at index 0 zero; `INV` preserves that border from its argument. A full copy `MAT A=B` preserves all source values.
-- A vector `DIM A(5)` is treated as a column in matrix multiplication. It can also be combined with a single-column matrix, `DIM B(5,0)` (or `DIM B(5,1)` with `MAT BASE 1`), in addition/subtraction with compatible active shapes, `DOT`, and statistical functions. This does not change its number of dimensions: `TRN` and `INV` require two-dimensional arrays, and a full copy preserves the source dimensions.
+- `MAT A = TRN(B)` computes the transpose of a numeric matrix or vector. A vector with `n` active elements is treated as a column and yields a two-dimensional row matrix of shape `1×n`. The argument can be a matrix expression such as `TRN(B+C)`.
+- `MAT A = INV(B)` inverts a square numeric matrix and also accepts expressions such as `INV(B+C)`. A vector with exactly one active element is treated as a `1×1` matrix and yields a two-dimensional `1×1` result. A singular matrix reports "Invalid value". A non-square active block reports "Invalid number of dimensions".
+- `+` and `-` add or subtract compatible arrays or combine them with scalars. `*` performs matrix multiplication or scalar multiplication element by element. `/` divides an array by a scalar, a scalar by an array, or two compatible arrays element by element. `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
+- `MAT C = A @ B` multiplies corresponding elements of two numeric arrays with the same effective shape. `@` has the same precedence as `*` and `/` and associates from left to right. The operator is available only in MAT expressions.
+- Except for division by an array, element-wise operations on equally dimensioned arrays or between an array and a scalar visit all stored elements, including index 0 with `MAT BASE 1`. Matrix multiplication, `TRN`, and `INV` use the active `MAT BASE` block. With base 1, the result's border is deterministic. Matrix multiplication and `TRN` set row and column 0 to zero. `INV` preserves row and column 0 of its matrix argument.
+- For `TRN` and `INV`, with `MAT BASE b` (`0` or `1`), a vector `DIM V(n)` is equivalent to `DIM M(n,b)` with `M(i,b)=V(i)` for every stored index, including 0. With base 1, column 0 of `M` is filled with zeros. Each operation, when defined, produces the same stored result for the vector and its equivalent column matrix. Thus, with base 1, `INV(V)` preserves `V(0)` at `(0,1)` in the result and leaves column 0 at zero.
+- A vector `DIM A(5)` is treated as a column in matrix multiplication. If the right operand is a vector, the product is a vector. A vector can also be combined with a single-column matrix, `DIM B(5,0)` (or `DIM B(5,1)` with `MAT BASE 1`), in addition, subtraction, `@`, `DOT`, and statistical functions. A full copy `MAT A=B` preserves the source dimensions and all stored values.
+- `@` keeps the left operand's stored dimensions. With `MAT BASE 1`, if the left operand is a vector it reads column 1 of a right-hand matrix, including row 0. If the left operand is a matrix and the right operand is a vector, each stored column uses the vector value from the corresponding row. When both active blocks are empty, the operation still needs a right-hand value for each stored left-hand element, just like `+` and `-`.
+- With a numeric array divisor, `s/B` and `A/B` divide directly element by element in the active block. `A/B` follows the same effective shape rules as `@`, including compatibility between vectors and single-column matrices. The result takes its stored dimensions from `B` in `s/B` or from `A` in `A/B`. `MAT BASE 0` uses all stored cells. With `MAT BASE 1`, the result keeps element 0 of a vector or row and column 0 of a matrix from that same operand. If the compatible active block is empty, the result keeps every value of that operand. A zero divisor in the active block raises a division-by-zero error. `A/s` divides every stored element of `A`, including index 0.
 - Unary `-` changes the sign of the whole matrix (`MAT A = -B`).
 - With text arrays (`$`), only addition is allowed: `MAT A$ = B$ + "suffix"` concatenates element by element; other operations raise "Expression not allowed".
 - Numeric array operations retain IEEE matrix arithmetic: results can contain infinities or NaN. `INV` requires a finite matrix and rejects cases whose result cannot be calculated as a finite inverse.
@@ -363,17 +367,46 @@ Detailed notes (copying subarrays)
 - Copying uses the original source values even when source and destination overlap. Invalid bounds, incompatible shapes or types leave the destination unchanged.
 - Ranges follow the HP-85 convention: `first:last` includes both limits when `first<=last`; `first=last+1` selects no elements. If `first>last+1`, it selects `first-1` down to `last+1`. For example, `V(4:-1)` selects indices 3,2,1,0 in that order. The selected indices, rather than those outer limits, must exist.
 - An empty copy into an existing selection does nothing. A whole-array destination can acquire an empty active dimension with `MAT BASE 1` (upper bound 0); with `MAT BASE 0`, an empty whole-array result is invalid.
-- Selections are supported in copies only, not as operands within matrix arithmetic. Copy a block to a temporary array before operating on it. Ordinary `MAT A=B` keeps its existing full-array-copy behavior. With a whole-array destination, a right-hand reference with only individual indices keeps the existing scalar-expression rules; it does not request a subarray copy. Use a range such as `MAT A=B(2:2)` to copy a one-element subarray.
+- Selections are supported in copies and `MAT PRINT`. To use a selected block in matrix arithmetic, first copy it to a temporary array. Ordinary `MAT A=B` keeps its existing full-array-copy behavior. With a whole-array destination, a right-hand reference with only individual indices keeps the existing scalar-expression rules; it does not request a subarray copy. Use a range such as `MAT A=B(2:2)` to copy a one-element subarray.
 
 Detailed notes (`MAT BASE`)
-- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, matrix multiplication (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV`, `DET`, and omitted axes/rebased destinations in subarray copies.
+- It only accepts 0 or 1. It changes the starting index used by `MAT PRINT`, `MAT INPUT`, `MAT READ`, matrix multiplication (`MAT C=A*B`), division by an array, `MAT IDN`, `MAT TRN`, `MAT INV`, `DET`, omitted axes in subarray copies and print selections, and rebased destinations in subarray copies.
 - It does not modify the stored data: it only determines which rows/columns are traversed and where the main diagonal is drawn in `IDN`. With `MAT BASE 1`, matrix multiplication leaves row and column 0 out of the calculation.
 
 Detailed notes (`MAT PRINT`)
-- Each entry may be written as `A`, `ROW A` or `COL A`; `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
-- `MAT PRINT` only accepts array references in those forms; it does not accept expressions such as `TRN(A)` or `A+B`. To print a computed result first assign it with `MAT B = ...` and then print `B`.
-- `USING` uses the same masks as `PRINT USING`. With `;`, spaces are inserted between columns; with `,`, each field occupies 22 characters.
+- Each array entry may be written as `A`, `ROW A` or `COL A`. `ROW` displays the matrix by rows normally (the implicit default), while `COL` transposes the matrix so columns are shown as rows and vice versa.
+- A print entry can also select a subarray directly, for example `A(2,)` for a row, `A(,1:2)` for a block of columns or `A(2,3)` for a single cell. The selectors follow the same rules as subarray copies, including inclusive, descending and empty ranges. Omitted axes start at `MAT BASE`. Explicit indices can select index 0 even with `MAT BASE 1`. The `ROW` or `COL` orientation applies to the selection, as in `COL A(,1:2)`.
+- The list accepts those array references and the modifiers `USING format$;`, `COLOR(fg[,bg])`, and `COLOR()`. To print a calculated array such as `TRN(A)` or `A+B`, first assign it with `MAT B = ...` and then print `B`.
+- Modifiers may appear anywhere in the list. Each mask or color applies to subsequent arrays until another modifier of the same kind or the end of the statement. Modifiers do not count as arrays or produce output. A modifier after `|` applies to the following arrays, including those in the same group.
+- `USING` employs the same masks as `PRINT USING` and requires `;` after its format expression. The existing MAT forms `USING "##";`, `USING"##";`, and `USING("##");` remain valid.
+- After an array, `;` separates columns with spaces and `,` selects fields at least 22 characters wide for that array. After `COLOR`, either separator only separates list items, without advancing a print zone or selecting wide fields for an array.
+- Use `|` between arrays to print them side by side, one line per displayed row. Chain separators as in `A | B | C` to join more arrays. Only a `|` outside quoted strings and parentheses acts as a separator.
+- Joined entries must have the same number of displayed rows after applying `MAT BASE`, any selectors, and the `ROW` or `COL` orientation. A mismatch raises "Invalid number of dimensions". The blocks are joined independently on each row.
+- The implicit separator in `A | B` follows the spacing of adjacent columns in a single array. It adds two spaces for narrow fields and joins wide fields directly. The right-hand array determines the spacing when the field modes differ. Empty slices with zero columns add no implicit gaps.
+- Place a string literal directly between two bars to replace the implicit separator. Use `A | "  /  " | B` for a slash with spaces or `A | "    " | B` for four spaces. An empty string joins the already formatted rows directly and keeps the spaces within their fields.
+- Put string variables and expressions in parentheses to distinguish them from array references, as in `A | (sep$) | B` and `A | (SPACE$(n)) | B`. The separator expression is evaluated once in list order. The separator uses the default colors.
+- Joined groups require single-line cells and separators. A control character in a formatted cell or separator, such as a newline, tab, or escape inserted with `CHR$`, raises "Invalid value" before any rows of that group are printed.
+- Use `A, | B` to select wide fields for `A` within a joined group. Commas and semicolons otherwise keep their usual meaning. Separate blocks are printed one below the other with a blank line between them.
+- `COLOR` uses the values, default colors, and statement scope described for `PRINT` below. It also colors column padding. Output stays plain when ANSI is disabled or stdout is redirected.
+- Example `MAT PRINT A;USING "0.00";COLOR("cyan");B;COLOR();COL C` prints A normally, then B in cyan and C with default colors, using the new mask for B and C.
 - With no arguments, `MAT PRINT` produces no output. Use `PRINT` to insert a blank line.
+
+This example colors rows directly, then joins colored column slices after transposing the matrix of reciprocals. The last two print statements apply a numeric mask to the joined slices.
+
+```basic
+10 MAT BASE 1
+20 DIM a(3,3)
+30 MAT READ a
+40 MAT PRINT COLOR(3);a(1,)
+50 MAT PRINT COLOR(2);a(2:UBOUND(a,1),)
+60 PRINT
+70 MAT a=TRN(1/a)
+80 MAT PRINT COLOR(2);a(,1:2), | COLOR(3);a(,3:UBOUND(a,2)),
+90 PRINT
+130 MAT PRINT USING "0.000000";COLOR(2,5);a(1:1,1) | COLOR(3);a(1:1,2) | COLOR(2);a(1:1,3:UBOUND(a,2))
+170 MAT PRINT USING "0.000000";a(2:UBOUND(a,1),1) | COLOR(3);a(2:UBOUND(a,1),2) | COLOR();a(2:UBOUND(a,1),3:UBOUND(a,2))
+180 DATA 1,2,3,4,5,6,7,8,9
+```
 
 Detailed notes (`MAT INPUT` / `MAT READ`)
 - `MAT INPUT` traverses the elements by rows and respects the current base. For text, quotes are mandatory; empty ENTER or CTRL+C fill the rest with `0` or `""`.
@@ -381,7 +414,7 @@ Detailed notes (`MAT INPUT` / `MAT READ`)
 - Both commands accept one- or two-dimensional arrays; mixing types raises "Invalid value type."
 
 Related functions
-- `DET(expr)` returns the real-number determinant of a square matrix. It uses `MAT BASE` to determine the active block and returns 0 when the matrix is singular.
+- `DET(expr)` returns the real-number determinant of a square matrix. It uses `MAT BASE` to determine the active block and returns 0 when the matrix is singular. A vector with one active element is accepted as a `1×1` matrix.
 - `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN`, and `MAXAB` work with one- or two-dimensional numeric arrays and respect the active base just like the structural `MAT` operations.
 - `CNORM(expr)` returns the largest sum of absolute values by column; `CNORMCOL` returns the corresponding column from the last successfully executed `CNORM`.
 - `RNORM(expr)` returns the largest sum of absolute values by row; `RNORMROW` returns the corresponding row from the last successfully executed `RNORM`.
@@ -418,7 +451,22 @@ Compound expression example
 80 MAT PRINT C;D;E
 90 END
 ```
-`C` contains the mean of both matrices; `D`, the transpose of their sum with 1 added to each element; `E`, the identity multiplied by 0.5. More examples are available in `samples/matrix-expressions.bas`.
+`C` contains the mean of both matrices; `D`, the transpose of their sum with 1 added to each element; `E`, the identity multiplied by 0.5. More examples are available in `samples/matrix-expressions.bas`. Both `samples/g-animation.bas` and `samples/g-animation2.bas` use `@` for per-vertex shading; the first also uses it for perspective projection.
+
+Example of division by an array
+
+```basic
+10 MAT BASE 1
+20 DIM B(2),A(2)
+30 DATA 2,4,6,8
+40 MAT READ B,A : A(0)=9
+50 MAT R=1/B : MAT C=A/B
+60 MAT PRINT R;C
+70 PRINT R(0);C(0)
+80 END
+```
+
+`MAT READ` fills indices 1 and 2. `R` prints 0.5 and 0.25, and `C` prints 3 and 2. The final `PRINT` shows the preserved values at index 0, which are 0 from `B` and 9 from `A`.
 
 5. Text input/output in the console
 
@@ -448,6 +496,13 @@ Detailed notes (PRINT)
   * In fixed masks (without `^^^^`), that expansion uses the actual floating-point value stored. Very large magnitudes can therefore reveal the full IEEE-754 approximation; use an exponential mask (`#.##^^^^`) for compact output.
   * The format accepts either a literal mask or a non-empty string variable; otherwise, a format error is raised.
   * The `USING` mask is separated from the formatted list with `;`. Inside that following list, `,` and `;` separate and chain items exactly as in normal `PRINT`.
+- `COLOR(fg[,bg])` is a print-list function for `PRINT` and `MAT PRINT` that selects colors for subsequent items in the same statement. `COLOR(fg)` changes the foreground and retains the selected background. `COLOR(fg,bg)` changes both, and `COLOR()` selects the terminal's default foreground and background. The statement restores the attributes it selected when it ends, including after a trailing `;` or `,` or an error.
+  * Each argument is one AVL BASIC color value, such as a palette index, packed RGB number, color name, or `"r,g,b"` string. Arguments are evaluated once, foreground first, and both are validated before applying a new pair. For example, `PRINT "State ";COLOR("white","darkred");" ERROR ";COLOR();" continue"` highlights part of a line.
+  * `COLOR` is an isolated print-list item. It has no result value for assignments or larger expressions. It can appear before or after `USING`, for example `PRINT USING "0.00";COLOR(RGB(40,180,240));12.5`. In `PRINT`, `;` adds no spacing after `COLOR` and `,` advances to the next print zone. In `MAT PRINT`, either separator only separates the color item from the next item. The form without parentheses is invalid.
+  * A selected background also covers printed spaces, including those emitted by `TAB`, `SPC`, commas, `USING` padding, and MAT column padding. The console restores the selected attributes around explicit line breaks. When long colored text wraps automatically at the terminal edge, the background used for scrolling and newly exposed cells depends on the terminal. `COLOR` applies to console `PRINT`, `?`, `PRINT #`, and `MAT PRINT`. Graphics text uses `INK` and `PAPER`.
+  * The console uses 24-bit RGB or the closest available color on a 256- or 16-color terminal. Output stays plain when ANSI is disabled, when stdout is redirected, and with `PRINT #`. Color arguments are evaluated and validated in each case.
+  * The console adds its color sequences at output time, outside BASIC strings and print-column calculations. Escape notation such as `\x1b` in a string stays literal. Output containing an actual escape character, for example from `CHR$(27)`, is emitted unchanged, and the rest of the same statement receives no added color sequences. This preserves explicit terminal commands split across print items.
+  * As with `INK`, numeric values 0 through 31 select palette entries. For example, `RGB(0,0,1)` returns 1 and selects palette entry 1. `samples/usflag.bas` demonstrates foreground and background colors with the proportions of `g-usflag.bas`.
 - Special `PRINT` functions: `SPC(n)` and `TAB(n)`.
   * `SPC(n)`: prints `n` spaces.
   * `TAB(n)`: moves the cursor to column `n` if the current column has not reached it yet; it never moves backwards.

@@ -224,20 +224,20 @@ fn overlap(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> i64 {
     w.saturating_mul(h)
 }
 
-fn select_unique(areas: &[i64]) -> Result<usize, String> {
+fn select_unique(areas: &[i64]) -> Result<Option<usize>, String> {
     let max = areas.iter().copied().max().unwrap_or(0);
     if max <= 0 {
-        return Err("Cannot identify the window's XWayland monitor".into());
+        return Ok(None);
     }
     let mut indices = areas.iter().enumerate().filter(|(_, area)| **area == max);
     let selected = indices.next().unwrap().0;
     if indices.next().is_some() {
         return Err("Window overlaps multiple monitors equally; move it onto one monitor before fullscreen emulation".into());
     }
-    Ok(selected)
+    Ok(Some(selected))
 }
 
-// Unsupported capability is the only path that falls back to desktop fullscreen.
+// If the optional emulation is unavailable, use ordinary desktop fullscreen.
 // Transport/protocol errors remain errors, and every mutation is outside preflight.
 enum Preflight {
     Unsupported,
@@ -276,7 +276,11 @@ fn preflight(
         areas.push(area);
         candidates.push((output, crtc, modes));
     }
-    let selected = select_unique(&areas)?;
+    let Some(selected) = select_unique(&areas)? else {
+        // The WM can still place the fullscreen window when its initial
+        // geometry does not intersect any active RandR output.
+        return Ok(Preflight::Unsupported);
+    };
     let (output, previous, modes) = &candidates[selected];
     if !is_emulated_output(xlib, randr, display, *output)? {
         return Ok(Preflight::Unsupported);
@@ -454,10 +458,10 @@ mod tests {
     #[test]
     fn selection_requires_a_unique_intersecting_monitor() {
         assert_eq!(overlap((-100, 20, 200, 80), (0, 0, 1920, 1080)), 8000);
-        assert_eq!(select_unique(&[200, 900, 0]).unwrap(), 1);
+        assert_eq!(select_unique(&[200, 900, 0]).unwrap(), Some(1));
         assert!(select_unique(&[900, 900]).is_err());
-        assert!(select_unique(&[0, 0]).is_err());
-        assert!(select_unique(&[]).is_err());
+        assert_eq!(select_unique(&[0, 0]).unwrap(), None);
+        assert_eq!(select_unique(&[]).unwrap(), None);
     }
 
     #[test]

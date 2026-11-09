@@ -5,7 +5,7 @@ snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-146-program catalog. On GitHub, select any image or program name
+149-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -72,7 +72,7 @@ to inspect its BASIC source.
   <a href="g-animation2.bas"><img src="showcase/g-animation2.png" alt="Real-Time Moving Light running in AVL BASIC" width="100%"></a><br>
   <strong>7. Real-Time Moving Light</strong><br>
   A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap.<br>
-  <sub><strong>Shows:</strong> GTRIANGLE · procedural mesh · moving light · vertex lighting · FRAME</sub><br>
+  <sub><strong>Shows:</strong> MAT · @ · GTRIANGLE · procedural mesh · moving light · vertex lighting · FRAME</sub><br>
   <code>RUN "/samples/g-animation2.bas"</code>
 </td>
 </tr>
@@ -217,6 +217,7 @@ Every image above was captured from the real Rust runtime.
 - **Optimize a shadow demo with shared calculations and adaptive detail:** `g-shadow.bas` â†’ `g-shadow-adaptive.bas`.
 - **Animate the camera, then move the light:** `g-animation.bas` â†’ `g-animation2.bas`.
 - **Watch and interact with falling cloth:** `g-cloth.bas`; pause the simulation, restart the fall, or pull the fabric with the mouse.
+- **Apply per-vertex shading and perspective:** `g-animation.bas` uses `MAT` and `@` to combine coordinates with brightness and perspective factors; `g-animation2.bas` applies `@` to the colors as its light rotates.
 - **Use array arithmetic in a simulation:** `g-cloth.bas` uses `MAT` for particle velocities and light-space coordinates. Its default 128Ã—128 shadow map and 3Ã—3 filter preserve the original penumbra width; set `ShadowSize=256` and `ShadowPcf=5` to restore the original shadow quality. Physical resolution and solver passes stay unchanged.
 - **Organize larger BASIC programs:** `g-cloth.bas`, `g-dungeon.bas` and `g-dungeon-cpc.bas` use named procedures and functions, local variables, array reference parameters, mixed-case names and indented blocks. Short conditions stay inline and closely related statements can share a line with colons. Cloth keeps its solver operations together to avoid extra calls per particle; a few forward skips to loop ends preserve fast rejection in its hottest solver loops, since AVL BASIC has no `CONTINUE FOR`. Its lighting calculation remains a subroutine, while a function validates checkpoint headers. The CPC dungeon retains top-level audio handlers and interrupt-control bridges: `ON SQ`, `DI` and `EI` have procedure restrictions, and a queue callback can interrupt a function, where `CALL` is forbidden. Those handlers keep their legacy `GOSUB`/`RETURN` form.
 - **Build a texture mapper, then use the native primitive:** `g-zoomer.bas` â†’
@@ -241,7 +242,7 @@ Every image above was captured from the real Rust runtime.
 - **Modernize a classic algorithm:** `pimachin.bas` â†’ `pimachin-modern.bas`.
 - **Save and recover data:** `f-scores.bas` â†’ `f-text.bas` â†’ `f-records.bas`.
 
-## Full catalog — 146 programs
+## Full catalog — 149 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -289,8 +290,8 @@ demo.
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
-| <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
-| <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
+| <a id="sample-g-animation"></a>[`g-animation.bas`](g-animation.bas) | A camera rotates around a mathematical surface with fixed lighting; SPACE pauses motion and C toggles the 60 FPS cap. | MAT, @, GTRIANGLE, procedural mesh, camera rotation, vertex lighting, FRAME |
+| <a id="sample-g-animation2"></a>[`g-animation2.bas`](g-animation2.bas) [★](#highlight-g-animation2) | A rotating light shades a mathematical surface while the camera stays fixed; SPACE pauses motion and C toggles the 60 FPS cap. | MAT, @, GTRIANGLE, procedural mesh, moving light, vertex lighting, FRAME |
 | <a id="sample-g-cloth"></a>[`g-cloth.bas`](g-cloth.bas) [★](#highlight-g-cloth) | Watch satin cloth fall and drape over a sphere in real time; SPACE pauses, R restarts the fall, and mouse dragging pulls the fabric while it runs. | DEF SUB, DEF FN, LOCAL, array references, block IF, MAT, XPBD, GTRIANGLE, fixed-step physics, state interpolation, MOUSE, FRAME |
 | <a id="sample-g-cube"></a>[`g-cube.bas`](g-cube.bas) | Filled rotating cube with hidden-face removal. | 3D projection, back-face culling, FTRIANGLE |
 | <a id="sample-g-cube-gouraud"></a>[`g-cube-gouraud.bas`](g-cube-gouraud.bas) | One rotating cube combines interpolated corner colors and hidden-face removal; Z toggles depth, SPACE pauses rotation, and C toggles the 60 FPS cap, with measured FPS in the HUD. | GTRIANGLE, RGB interpolation, array depth buffer |
@@ -357,10 +358,11 @@ demo.
 | <a id="sample-g-scale7"></a>[`g-scale7.bas`](g-scale7.bas) | Shows aspect-ratio effects on two nominal circles. | SCALE, CIRCLE, aspect ratio |
 | <a id="sample-g-scale8"></a>[`g-scale8.bas`](g-scale8.bas) | Builds a DATA-driven bar chart with scaled axes. | DATA, RECTANGLE, scaled axes |
 
-### Drawing, color, and coordinate primitives (11)
+### Drawing, color, and coordinate primitives (12)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
+| <a id="sample-clover"></a>[`clover.bas`](clover.bas) | Draws a four-lobed clover from circular arcs and fills the outline. | CIRCLE, FILL, SWAP |
 | <a id="sample-g-colors"></a>[`g-colors.bas`](g-colors.bas) | Documents supported color syntaxes with labeled swatches. | INK and PAPER, RGB, named colors |
 | <a id="sample-g-demo2"></a>[`g-demo2.bas`](g-demo2.bas) | Tiny random circle-and-fill drawing test. | CIRCLE, FILL, RND |
 | <a id="sample-g-demo3"></a>[`g-demo3.bas`](g-demo3.bas) | Random filled circles and rectangles benchmark primitives. | FCIRCLE, FRECTANGLE, FRAME |
@@ -373,7 +375,7 @@ demo.
 | <a id="sample-g-texture-transparent"></a>[`g-texture-transparent.bas`](g-texture-transparent.bas) | Compare opaque and transparent rows of 2D rectangles, triangles, and quads over a checkerboard, including automatic and repeating UVs; ESC exits. | TRECTANGLE, TTRIANGLE, TQUAD, color-key transparency, SPRITE$, wrapped UVs |
 | <a id="sample-g-width"></a>[`g-width.bas`](g-width.bas) | Compares pen widths on lines and overlapping points. | PENWIDTH, DRAW, PLOT |
 
-### Text and typography (13)
+### Text and typography (14)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -390,6 +392,7 @@ demo.
 | <a id="sample-g-strings"></a>[`g-strings.bas`](g-strings.bas) | Compares colored opaque and transparent text output. | INK and PAPER, font modes, LABEL |
 | <a id="sample-g-text"></a>[`g-text.bas`](g-text.bas) | Scrolls numeric text by changing its substring offset. | GPRINT, MID$, font modes |
 | <a id="sample-g-usflag"></a>[`g-usflag.bas`](g-usflag.bas) | Draws a text-cell United States flag. | LOCATE, GPRINT, PAPER |
+| <a id="sample-usflag"></a>[`usflag.bas`](usflag.bas) | Draws the United States flag in the terminal with foreground and background colors. | PRINT, COLOR, TAB, USING |
 
 ### Sprites, images, and frame animation (10)
 
@@ -438,7 +441,7 @@ program, then reads it back.
 | <a id="sample-f-text"></a>[`f-text.bas`](f-text.bas) | Writes a formatted report and appends to an unfinished line. | PRINT #, USING, APPEND, LINE INPUT # |
 | <a id="sample-f-records"></a>[`f-records.bas`](f-records.bas) | Recovers quotes, commas, line breaks, empty strings, and numeric precision. | CSV quoting, CHR$, WRITE #, INPUT # |
 
-### Console algorithms and language features (13)
+### Console algorithms and language features (14)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
@@ -446,7 +449,8 @@ program, then reads it back.
 | <a id="sample-iif"></a>[`iif.bas`](iif.bas) | Select numeric or string results with nested IIF expressions while safely skipping unused divisions by zero. | IIF, conditional evaluation, strings, nested expressions |
 | <a id="sample-loan"></a>[`loan.bas`](loan.bas) | Console loan calculator with first-year amortization table. | INPUT, DEF FN, formatted output |
 | <a id="sample-matrix"></a>[`matrix.bas`](matrix.bas) | Inverts, transposes, multiplies, and prints a matrix. | MAT INV, MAT TRN, DET |
-| <a id="sample-matrix-expressions"></a>[`matrix-expressions.bas`](matrix-expressions.bas) | Combine matrix products, scalar operations, transposes, inverses, and statistics using BASIC expression precedence. | MAT, compound expressions, TRN, INV, SUM |
+| <a id="sample-matrix-expressions"></a>[`matrix-expressions.bas`](matrix-expressions.bas) | Compare matrix and elementwise products, combine scalar operations, transposes, inverses, and statistics using BASIC expression precedence, then change colors and formats between arrays in one MAT PRINT. | MAT, @, compound expressions, TRN, INV, SUM, MAT PRINT, COLOR, USING |
+| <a id="sample-matrix-slices"></a>[`matrix-slices.bas`](matrix-slices.bas) | Prints slices side by side, highlights a diagonal, and compares a slice with its transpose. | MAT PRINT, slices, COLOR, COL, custom separators |
 | <a id="sample-matrix-subarrays"></a>[`matrix-subarrays.bas`](matrix-subarrays.bas) | Copy matrix blocks, rows, and columns, then demonstrate overlapping and reversed vector ranges. | MAT, subarrays, MAT BASE, overlapping copies |
 | <a id="sample-nqueens"></a>[`nqueens.bas`](nqueens.bas) | Backtracking solves and prints a sixteen-queen board. | backtracking, arrays, formatted output |
 | <a id="sample-nr-factorial"></a>[`nr-factorial.bas`](nr-factorial.bas) | Computes 100 factorial using nine-digit integer blocks. | arbitrary precision, arrays, PRINT USING |

@@ -310,7 +310,7 @@ Notas rápidas
 Comandos
 + MAT nombre = expresión           Asignación y expresiones con matrices y vectores
 + MAT BASE 0|1                     Índice de partida para `MAT PRINT/INPUT/READ` y operaciones estructurales (por defecto 0)
-+ MAT PRINT [USING f$;] lista      Imprime arrays por filas o columnas (admite `ROW`/`COL`)
++ MAT PRINT lista                 Imprime filas/columnas de arrays con USING, COLOR y bloques en paralelo
 + MAT INPUT lista                  Solicita los elementos de los arrays en la consola
 + MAT READ lista                   Consume `DATA` y rellena los arrays
 
@@ -339,16 +339,20 @@ Notas detalladas (`MAT nombre = ...`)
 - Los nombres de arrays sin índices representan arrays completos en MAT, incluso si existe un escalar con el mismo nombre. Dentro de una función escalar se conservan las reglas normales de BASIC; por ejemplo, `MAT C=A+ABS(A)` usa el array a la izquierda y el escalar A dentro de ABS si ambos existen.
 - Los escalares pueden contener expresiones y funciones. Cada función se evalúa una vez por aparición, de izquierda a derecha, no una vez por elemento. `MAT C=A+ABS(-1)` y `MAT C=ABS(-1)+A` son válidos.
 - Los cálculos puramente escalares conservan las comprobaciones de tipos, dominio y desbordamiento de BASIC. Un error en un operando impide evaluar los operandos posteriores que BASIC no alcanzaría.
-- Cada operando de array se copia cuando se alcanza durante la evaluación, de izquierda a derecha. Si una función modifica un array, las apariciones anteriores conservan su copia y las posteriores leen los valores modificados.
+- Cada operando de array usa los valores que tiene al alcanzarlo durante la evaluación de izquierda a derecha. Si una función modifica un array, las apariciones anteriores conservan sus valores anteriores y las posteriores leen los valores modificados.
 - El resultado se asigna completo al terminar; `MAT A=A+B*A` utiliza los valores anteriores de A. Un error no escribe un resultado parcial, pero conserva la creación implícita del destino y los efectos de las funciones ya evaluadas.
-- Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión. Los rangos y ejes omitidos se reservan a las copias de subarrays.
+- Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión. Los rangos y ejes omitidos seleccionan subarrays en copias y en `MAT PRINT`.
 - `MAT A = B` copia otra matriz o vector. También admite escalares (`MAT A = 5`) que rellenan todas las posiciones del array.
   • Las palabras clave `CON`, `ZER` e `IDN` rellenan con 1, 0 o con la identidad (matrices cuadradas); `IDN` usa `MAT BASE` para situar la diagonal.
-- `MAT A = TRN(B)` calcula la traspuesta de un array numérico bidimensional; el argumento puede ser una expresión matricial como `TRN(B+C)`.
-- `MAT A = INV(B)` invierte una matriz cuadrada; también admite expresiones como `INV(B+C)`. Una matriz singular produce "Valor no válido"; un array que no sea bidimensional o una matriz no cuadrada produce "Número de dimensiones no válido".
-- Operaciones aritméticas: `+` y `-` suman/restan arrays compatibles o mezclan con escalares; `*` realiza producto matricial o de escalar elemento a elemento; `/` admite array dividido por escalar o escalar dividido por cada elemento de un array; `^` permite potencias elemento a elemento (`array ^ escalar` o `escalar ^ array`).
-- Las operaciones elemento a elemento conservan las dimensiones del array y recorren todos sus elementos almacenados, incluido el índice 0 con `MAT BASE 1`. El producto matricial, `TRN` e `INV` utilizan el bloque activo de `MAT BASE` y producen matrices de dos dimensiones. Con base 1, el producto y `TRN` dejan a cero el borde de índice 0; `INV` conserva ese borde del argumento. La copia completa `MAT A=B` conserva todos los valores del origen.
-- Un vector `DIM A(5)` se trata como una columna en el producto matricial. También puede combinarse con una matriz de una sola columna, `DIM B(5,0)` (o `DIM B(5,1)` con `MAT BASE 1`), en sumas/restas de formas activas compatibles, `DOT` y funciones estadísticas. Esto no cambia su número de dimensiones: `TRN` e `INV` requieren arrays bidimensionales y una copia completa conserva las dimensiones del origen.
+- `MAT A = TRN(B)` calcula la traspuesta de una matriz o un vector numérico. Un vector de `n` elementos activos se trata como una columna y da una matriz fila de dos dimensiones, de forma `1×n`. El argumento puede ser una expresión matricial como `TRN(B+C)`.
+- `MAT A = INV(B)` invierte una matriz numérica cuadrada y también admite expresiones como `INV(B+C)`. Un vector con exactamente un elemento activo se trata como una matriz `1×1` y da un resultado bidimensional de forma `1×1`. Una matriz singular produce "Valor no válido". Un bloque activo no cuadrado produce "Número de dimensiones no válido".
+- `+` y `-` suman o restan arrays compatibles o los combinan con escalares. `*` realiza el producto matricial o multiplica cada elemento por un escalar. `/` divide un array por un escalar, un escalar por un array o dos arrays compatibles elemento a elemento. `^` permite potencias elemento a elemento (`array ^ escalar` o `escalar ^ array`).
+- `MAT C = A @ B` multiplica los elementos correspondientes de dos arrays numéricos con la misma forma efectiva. `@` tiene la misma precedencia que `*` y `/` y se asocia de izquierda a derecha. El operador solo se admite en expresiones MAT.
+- Salvo la división por un array, las operaciones elemento a elemento sobre arrays con las mismas dimensiones o entre un array y un escalar recorren todos los elementos almacenados, incluido el índice 0 con `MAT BASE 1`. El producto matricial, `TRN` e `INV` utilizan el bloque activo de `MAT BASE`. Con base 1, el borde del resultado es determinista. El producto matricial y `TRN` dejan la fila y la columna 0 a cero. `INV` conserva la fila y la columna 0 del argumento matricial.
+- Para `TRN` e `INV`, con `MAT BASE b` (`0` o `1`), un vector `DIM V(n)` equivale a `DIM M(n,b)` con `M(i,b)=V(i)` para todos los índices almacenados, incluido el 0. Con base 1, la columna 0 de `M` está a cero. Cada operación, cuando está definida, devuelve el mismo resultado almacenado con el vector o con su matriz columna equivalente. Por eso, con base 1, `INV(V)` conserva `V(0)` en la celda `(0,1)` del resultado y deja la columna 0 a cero.
+- Un vector `DIM A(5)` se trata como una columna en el producto matricial. Si el operando derecho es un vector, el producto es un vector. Un vector también puede combinarse con una matriz de una sola columna, `DIM B(5,0)` (o `DIM B(5,1)` con `MAT BASE 1`), en sumas, restas, `@`, `DOT` y funciones estadísticas. La copia completa `MAT A=B` conserva las dimensiones y todos los valores almacenados del origen.
+- `@` conserva las dimensiones almacenadas del operando izquierdo. Con `MAT BASE 1`, si el operando izquierdo es un vector, se lee la columna 1 de la matriz derecha, incluida la fila 0. Si el operando izquierdo es una matriz y el derecho es un vector, cada columna almacenada usa el valor del vector de la fila correspondiente. Si ambos bloques activos están vacíos, la operación sigue necesitando un valor a la derecha por cada elemento almacenado a la izquierda, igual que `+` y `-`.
+- Con un array numérico como divisor, `s/B` y `A/B` dividen directamente elemento a elemento en el bloque activo. `A/B` sigue las mismas reglas de forma efectiva que `@`, incluida la compatibilidad entre vectores y matrices de una columna. El resultado toma las dimensiones almacenadas de `B` en `s/B` o de `A` en `A/B`. `MAT BASE 0` recorre todos los elementos almacenados. Con `MAT BASE 1`, el resultado conserva de ese mismo operando el elemento 0 de un vector o la fila y columna 0 de una matriz. Si el bloque activo compatible está vacío, el resultado conserva todos los valores de ese operando. Un divisor cero en el bloque activo produce un error de división por cero. `A/s` divide todos los elementos almacenados de `A`, incluido el índice 0.
 - El signo unario `-` aplica el cambio de signo a toda la matriz (`MAT A = -B`).
 - Con arrays de texto (`$`) solo se admite la suma: `MAT A$ = B$ + "sufijo"` concatena elemento a elemento; otras operaciones provocan "Expresión no permitida".
 - Las operaciones numéricas sobre arrays conservan la aritmética matricial IEEE: los resultados pueden contener infinitos o NaN. `INV` requiere una matriz finita y rechaza los casos cuyo resultado no puede calcularse como una inversa finita.
@@ -363,17 +367,46 @@ Notas detalladas (copia de subarrays)
 - La copia utiliza los valores originales del origen aunque se solape con el destino. Los límites no válidos o las formas o tipos incompatibles dejan el destino intacto.
 - Los rangos siguen la convención del HP-85: `primero:último` incluye ambos límites cuando `primero<=último`; `primero=último+1` no selecciona elementos. Si `primero>último+1`, selecciona desde `primero-1` hasta `último+1`, en orden descendente. Por ejemplo, `V(4:-1)` selecciona los índices 3,2,1,0 en ese orden. Deben existir los índices seleccionados, no necesariamente esos límites exteriores.
 - Una copia vacía en una selección existente no cambia nada. Un destino completo puede adquirir una dimensión activa vacía con `MAT BASE 1` (límite superior 0); con `MAT BASE 0`, un resultado completo vacío no es válido.
-- Las selecciones se admiten solo en copias, no como operandos de aritmética matricial. Copia primero el bloque a un array auxiliar para operar con él. `MAT A=B` conserva el comportamiento anterior de copia del array completo. Con un destino completo, una referencia a la derecha que solo contenga índices individuales conserva las reglas anteriores para expresiones escalares; no solicita una copia de subarray. Usa un rango como `MAT A=B(2:2)` para copiar un subarray de un elemento.
+- Las selecciones se admiten en copias y en `MAT PRINT`. Para usar un bloque seleccionado en aritmética matricial, cópialo primero a un array auxiliar. `MAT A=B` conserva el comportamiento anterior de copia del array completo. Con un destino completo, una referencia a la derecha que solo contenga índices individuales conserva las reglas anteriores para expresiones escalares; no solicita una copia de subarray. Usa un rango como `MAT A=B(2:2)` para copiar un subarray de un elemento.
 
 Notas detalladas (`MAT BASE`)
-- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), `MAT IDN`, `MAT TRN`, `MAT INV`, `DET` y los ejes omitidos/destinos redimensionados en las copias de subarrays.
+- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), la división por un array, `MAT IDN`, `MAT TRN`, `MAT INV`, `DET` los ejes omitidos en las copias y selecciones de impresión, y los destinos redimensionados en las copias de subarrays.
 - No modifica los datos almacenados: únicamente determina qué filas/columnas se recorren y dónde se traza la diagonal principal en `IDN`. Con `MAT BASE 1`, el producto matricial deja fuera la fila y columna 0 del cálculo.
 
 Notas detalladas (`MAT PRINT`)
-- Cada entrada puede escribirse como `A`, `ROW A` o `COL A`; `ROW` muestra la matriz por filas normalmente (es el valor implícito), `COL` transpone la matriz para mostrar las columnas como filas y viceversa.
-- `MAT PRINT` solo acepta referencias de array en esas formas; no admite expresiones como `TRN(A)` o `A+B`. Para imprimir un resultado calculado, asígnalo antes con `MAT B = ...` y luego imprime `B`.
-- `USING` emplea las mismas máscaras que `PRINT USING`. Con `;` se insertan espacios entre columnas; con `,` cada campo ocupa 22 caracteres.
+- Cada entrada de array puede escribirse como `A`, `ROW A` o `COL A`. `ROW` muestra la matriz por filas normalmente (es el valor implícito), mientras que `COL` transpone la matriz para mostrar las columnas como filas y viceversa.
+- Una entrada de impresión también puede seleccionar un subarray directamente, por ejemplo `A(2,)` para una fila, `A(,1:2)` para un bloque de columnas o `A(2,3)` para una sola celda. Los selectores siguen las reglas de las copias de subarrays, incluidos los rangos inclusivos, descendentes y vacíos. Los ejes omitidos empiezan en `MAT BASE`. Los índices explícitos permiten seleccionar el índice 0 incluso con `MAT BASE 1`. La orientación `ROW` o `COL` se aplica a la selección, como en `COL A(,1:2)`.
+- La lista admite esas referencias de array y los modificadores `USING formato$;`, `COLOR(fg[,bg])` y `COLOR()`. Para imprimir un array calculado como `TRN(A)` o `A+B`, asígnalo antes con `MAT B = ...` y luego imprime `B`.
+- Los modificadores pueden aparecer en cualquier posición de la lista. Cada máscara o color se aplica a los arrays posteriores hasta otro modificador del mismo tipo o hasta terminar la instrucción. Los modificadores no cuentan como arrays ni producen salida. Un modificador después de `|` se aplica a los arrays que siguen, incluidos los del mismo grupo.
+- `USING` emplea las mismas máscaras que `PRINT USING` y exige `;` después de la expresión de formato. Siguen siendo válidas las formas MAT existentes `USING "##";`, `USING"##";` y `USING("##");`.
+- Tras un array, `;` separa las columnas con espacios y `,` selecciona campos de al menos 22 caracteres para ese array. Tras `COLOR`, ambos separadores solo separan elementos de la lista, sin avanzar una zona de impresión ni seleccionar campos anchos para un array.
+- Usa `|` entre arrays para imprimirlos uno al lado del otro, en una línea por cada fila mostrada. Puedes encadenar separadores como en `A | B | C`. Solo se interpreta como separador un `|` situado fuera de las cadenas entre comillas y de los paréntesis.
+- Las entradas de un grupo deben tener el mismo número de filas mostradas tras aplicar `MAT BASE`, los selectores que haya y la orientación `ROW` o `COL`. Si difieren, se produce el error "Número de dimensiones no válido". Los bloques se unen de forma independiente en cada fila.
+- El separador implícito en `A | B` sigue el espaciado de dos columnas contiguas en un mismo array. Añade dos espacios para campos estrechos y une directamente los campos anchos. Si los formatos de campo difieren, el array de la derecha determina el espaciado. Las selecciones vacías de cero columnas no añaden separaciones implícitas.
+- Coloca un literal de cadena directamente entre dos barras para sustituir el separador implícito. Usa `A | "  /  " | B` para una barra inclinada con espacios o `A | "    " | B` para cuatro espacios. Una cadena vacía une directamente las filas ya formateadas y conserva los espacios propios de sus campos.
+- Escribe las variables y expresiones de cadena entre paréntesis para distinguirlas de las referencias a arrays, como en `A | (sep$) | B` y `A | (SPACE$(n)) | B`. La expresión del separador se evalúa una sola vez en el orden de la lista. El separador usa los colores predeterminados.
+- Las celdas y los separadores de un grupo deben contener texto de una sola línea. Un carácter de control en una celda formateada o en un separador, como un salto de línea, un tabulador o un escape insertado con `CHR$`, provoca "Valor no válido" antes de imprimir las filas de ese grupo.
+- Usa `A, | B` para seleccionar campos anchos en `A` dentro de un grupo. Las comas y los puntos y comas conservan su significado habitual. Los bloques separados se imprimen uno debajo del otro, con una línea vacía entre ellos.
+- `COLOR` usa los valores, colores predeterminados y alcance de instrucción descritos para `PRINT` más abajo. También colorea el relleno entre columnas. Con ANSI desactivado o la salida redirigida se escribe texto plano.
+- El ejemplo `MAT PRINT A;USING "0.00";COLOR("cyan");B;COLOR();COL C` imprime A normalmente, después B en cian y C con los colores predeterminados, aplicando la nueva máscara a B y C.
 - Sin argumentos, `MAT PRINT` no produce salida. Usa `PRINT` para insertar una línea vacía.
+
+Este ejemplo colorea filas directamente y después une cortes de columnas de distintos colores tras trasponer la matriz de recíprocos. Las dos últimas instrucciones de impresión aplican una máscara numérica a los cortes unidos.
+
+```basic
+10 MAT BASE 1
+20 DIM a(3,3)
+30 MAT READ a
+40 MAT PRINT COLOR(3);a(1,)
+50 MAT PRINT COLOR(2);a(2:UBOUND(a,1),)
+60 PRINT
+70 MAT a=TRN(1/a)
+80 MAT PRINT COLOR(2);a(,1:2), | COLOR(3);a(,3:UBOUND(a,2)),
+90 PRINT
+130 MAT PRINT USING "0.000000";COLOR(2,5);a(1:1,1) | COLOR(3);a(1:1,2) | COLOR(2);a(1:1,3:UBOUND(a,2))
+170 MAT PRINT USING "0.000000";a(2:UBOUND(a,1),1) | COLOR(3);a(2:UBOUND(a,1),2) | COLOR();a(2:UBOUND(a,1),3:UBOUND(a,2))
+180 DATA 1,2,3,4,5,6,7,8,9
+```
 
 Notas detalladas (`MAT INPUT` / `MAT READ`)
 - `MAT INPUT` recorre los elementos por filas y respeta la base actual. Para texto es obligatorio introducir comillas; ENTER vacío o CTRL+C completan el resto con `0` o `""`.
@@ -381,7 +414,7 @@ Notas detalladas (`MAT INPUT` / `MAT READ`)
 - Ambos comandos admiten arrays de una o dos dimensiones; mezclar tipos provoca "Valor de tipo no válido."
 
 Funciones relacionadas
-- `DET(expr)` devuelve un número real con el determinante de una matriz cuadrada. Usa `MAT BASE` para determinar el bloque activo y devuelve 0 cuando la matriz es singular.
+- `DET(expr)` devuelve un número real con el determinante de una matriz cuadrada. Usa `MAT BASE` para determinar el bloque activo y devuelve 0 cuando la matriz es singular. Un vector con un elemento activo se admite como matriz `1×1`.
 - `ABSUM`, `SUM`, `FNORM`, `CNORM`, `RNORM`, `AMAX`, `AMIN` y `MAXAB` trabajan con arrays numéricos de una o dos dimensiones y respetan la base activa igual que las operaciones `MAT` estructurales.
 - `CNORM(expr)` devuelve la mayor suma de valores absolutos por columna; `CNORMCOL` devuelve la columna correspondiente del último `CNORM` ejecutado correctamente.
 - `RNORM(expr)` devuelve la mayor suma de valores absolutos por fila; `RNORMROW` devuelve la fila correspondiente del último `RNORM` ejecutado correctamente.
@@ -418,7 +451,22 @@ Ejemplo de expresiones compuestas
 80 MAT PRINT C;D;E
 90 END
 ```
-`C` contiene la media de ambas matrices; `D`, la traspuesta de su suma con 1 añadido a cada elemento; `E`, la identidad multiplicada por 0.5. Hay más ejemplos en `samples/matrix-expressions.bas`.
+`C` contiene la media de ambas matrices; `D`, la traspuesta de su suma con 1 añadido a cada elemento; `E`, la identidad multiplicada por 0.5. Hay más ejemplos en `samples/matrix-expressions.bas`. Los ejemplos gráficos `samples/g-animation.bas` y `samples/g-animation2.bas` usan `@` para el sombreado de cada vértice; el primero también lo usa para la proyección de perspectiva.
+
+Ejemplo de división por un array
+
+```basic
+10 MAT BASE 1
+20 DIM B(2),A(2)
+30 DATA 2,4,6,8
+40 MAT READ B,A : A(0)=9
+50 MAT R=1/B : MAT C=A/B
+60 MAT PRINT R;C
+70 PRINT R(0);C(0)
+80 END
+```
+
+`MAT READ` rellena los índices 1 y 2. `R` imprime 0.5 y 0.25, y `C` imprime 3 y 2. El `PRINT` final muestra los valores conservados en el índice 0, que son 0 de `B` y 9 de `A`.
 
 5. Entrada / salida de texto en la consola
 
@@ -448,6 +496,13 @@ Notas detalladas (PRINT)
   • En máscaras fijas (sin `^^^^`), esa expansión usa el valor real almacenado en coma flotante. Con magnitudes enormes puede revelar la aproximación IEEE-754 completa; usa una máscara exponencial (`#.##^^^^`) para una salida compacta.
   • El formato acepta máscara literal o variable de cadena no vacía; en caso contrario → error de formato.
   • La plantilla de `USING` se separa de la lista formateada con `;`. Dentro de esa lista posterior, `,` y `;` separan y encadenan igual que en `PRINT` normal.
+- `COLOR(fg[,bg])` es una función de lista de impresión para `PRINT` y `MAT PRINT` que selecciona colores para los siguientes elementos de la misma instrucción. `COLOR(fg)` cambia el primer plano y conserva el fondo seleccionado. `COLOR(fg,bg)` cambia ambos y `COLOR()` selecciona el primer plano y el fondo predeterminados del terminal. Al terminar la instrucción se restauran los atributos seleccionados, incluso si acaba en `;` o `,` o si ocurre un error.
+  • Cada argumento admite un valor de color de AVL BASIC, como un índice de paleta, un número RGB empaquetado, un nombre de color o una cadena `"r,g,b"`. Los argumentos se evalúan una vez, primero el primer plano, y ambos se validan antes de aplicar una pareja nueva. Por ejemplo, `PRINT "Estado ";COLOR("white","darkred");" ERROR ";COLOR();" continuar"` resalta parte de una línea.
+  • `COLOR` es un elemento aislado de la lista de impresión. No devuelve un valor para asignaciones ni expresiones mayores. Puede aparecer antes o después de `USING`, por ejemplo `PRINT USING "0.00";COLOR(RGB(40,180,240));12.5`. En `PRINT`, `;` no añade espacios después de `COLOR` y `,` avanza a la siguiente zona. En `MAT PRINT`, ambos separadores solo separan el elemento de color del siguiente elemento. La forma sin paréntesis no es válida.
+  • El fondo seleccionado también cubre los espacios impresos, incluidos los que emiten `TAB`, `SPC`, las comas, el relleno de `USING` y el relleno de columnas de MAT. La consola restaura los atributos seleccionados alrededor de los saltos de línea explícitos. Si un texto coloreado largo se ajusta automáticamente al borde, el fondo usado al desplazar la pantalla y crear celdas nuevas depende del terminal. `COLOR` se aplica a `PRINT` de consola, `?`, `PRINT #` y `MAT PRINT`. El texto gráfico usa `INK` y `PAPER`.
+  • La consola usa RGB de 24 bits o el color disponible más cercano en terminales de 256 o 16 colores. Con ANSI desactivado, al redirigir la salida y con `PRINT #`, se escribe texto plano. Los argumentos de color se evalúan y validan en todos los casos.
+  • La consola añade las secuencias de color al escribir, fuera de las cadenas BASIC y del cálculo de columnas. Una notación como `\x1b` en una cadena se imprime literalmente. La salida que contiene un carácter de escape real, por ejemplo de `CHR$(27)`, se emite intacta y el resto de la misma instrucción no recibe secuencias de color añadidas. Así se conservan los comandos de terminal explícitos repartidos entre varios elementos.
+  • Como en `INK`, los valores numéricos del 0 al 31 seleccionan entradas de la paleta. Por ejemplo, `RGB(0,0,1)` devuelve 1 y selecciona la entrada 1 de la paleta. `samples/usflag.bas` muestra colores de primer plano y fondo con las proporciones de `g-usflag.bas`.
 - Funciones especiales de `PRINT`: `SPC(n)` y `TAB(n)`.
   • `SPC(n)`: imprime `n` espacios.
   • `TAB(n)`: mueve el cursor a la columna `n` si la columna actual todavía no ha llegado a ella; nunca retrocede.

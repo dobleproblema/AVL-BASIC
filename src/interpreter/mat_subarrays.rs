@@ -153,6 +153,24 @@ struct CopyBlock {
     rank: usize,
 }
 
+pub(super) struct MatPrintSource {
+    pub(super) key: String,
+    rows: CopyAxis,
+    cols: CopyAxis,
+    row_stride: usize,
+    col_stride: usize,
+}
+
+impl MatPrintSource {
+    pub(super) fn shape(&self) -> (usize, usize) {
+        (self.rows.len, self.cols.len)
+    }
+
+    pub(super) fn offset(&self, row: usize, col: usize) -> usize {
+        self.rows.at(row) * self.row_stride + self.cols.at(col) * self.col_stride
+    }
+}
+
 impl CopyBlock {
     fn resolve(
         dims: &[usize],
@@ -248,6 +266,45 @@ impl CopyBlock {
 }
 
 impl Interpreter {
+    pub(super) fn resolve_mat_print_source(
+        &mut self,
+        reference: CopyReference,
+        orientation: MatOrientation,
+    ) -> BasicResult<Option<MatPrintSource>> {
+        let selectors = self.copy_selectors(&reference)?;
+        if self.end_requested || self.function_return_requested || self.sub_return_requested {
+            return Ok(None);
+        }
+        // Bounds can call BASIC functions. Resolve the array and base after
+        // evaluating them, just as for the source of a subarray copy.
+        let key = match self.array_lookup_key(&reference.name) {
+            Cow::Borrowed(_) => reference.name,
+            Cow::Owned(key) => key,
+        };
+        let array = self
+            .arrays
+            .get(&key)
+            .ok_or_else(|| self.err(ErrorCode::Undefined))?;
+        let block = CopyBlock::resolve(
+            &array.dims,
+            selectors.as_deref(),
+            self.mat_base.max(0) as usize,
+        )
+        .map_err(|error| self.with_current_line(error))?;
+        let (rows, cols, row_stride, col_stride) = if orientation == MatOrientation::Col {
+            (block.cols, block.rows, 1, block.stride)
+        } else {
+            (block.rows, block.cols, block.stride, 1)
+        };
+        Ok(Some(MatPrintSource {
+            key,
+            rows,
+            cols,
+            row_stride,
+            col_stride,
+        }))
+    }
+
     fn copy_selectors(
         &mut self,
         reference: &CopyReference,

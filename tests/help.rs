@@ -1,6 +1,40 @@
 use avl_basic::{ErrorCode, Interpreter};
 
 #[test]
+fn help_describes_mat_print_modifiers_between_arrays() {
+    let mut interpreter = Interpreter::new();
+    for (topic, detail) in [
+        ("MAT PRINT", "may appear between arrays"),
+        ("MAT PRINT USING", "subsequent arrays"),
+        ("MAT PRINT COLOR", "COLOR() selects terminal defaults"),
+        ("COLOR", "PRINT or MAT PRINT items"),
+    ] {
+        interpreter
+            .process_immediate(&format!("HELP {topic}"))
+            .unwrap();
+        assert!(interpreter.take_output().contains(detail), "{topic}");
+    }
+}
+
+#[test]
+fn help_exposes_hadamard_symbol_without_word_aliases() {
+    let mut interpreter = Interpreter::new();
+    interpreter.process_immediate("HELP @").unwrap();
+    let output = interpreter.take_output();
+    assert!(output.starts_with("MAT destination = left @ right\n"));
+    assert!(output.contains("Multiplies corresponding elements"));
+
+    for alias in ["HAD", "HADAMARD"] {
+        interpreter
+            .process_immediate(&format!("HELP {alias}"))
+            .unwrap();
+        assert!(interpreter
+            .take_output()
+            .starts_with(&format!("No HELP entry for {alias}\n")));
+    }
+}
+
+#[test]
 fn help_describes_canvas_fullscreen_and_sync_separately() {
     let mut interpreter = Interpreter::new();
     interpreter.process_immediate("HELP MODE").unwrap();

@@ -46,6 +46,242 @@ fn matrix_times_vector_preserves_vector_rank_and_index_aliases() {
 }
 
 #[test]
+fn hadamard_keeps_left_rank_and_matches_mat_column_indexing() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!("MAT BASE {base}:DIM A(2,{base}),B(2,{base}),V(2)"),
+        );
+        command(
+            &mut interpreter,
+            "MAT A=3:MAT B=7:MAT V=2:A(0,0)=5:B(0,0)=11:V(0)=-2",
+        );
+        command(&mut interpreter, "MAT C=A@B");
+        assert_eq!(number(&mut interpreter, "UBOUND(C,2)"), base as f64);
+        assert_eq!(number(&mut interpreter, "C(0,0)"), 55.0);
+        assert_eq!(number(&mut interpreter, &format!("C(1,{base})")), 21.0);
+
+        command(&mut interpreter, "MAT C=V@A");
+        assert_eq!(number(&mut interpreter, "UBOUND(C)"), 2.0);
+        assert_eq!(
+            eval_expression(&mut interpreter, "UBOUND(C,2)")
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexOutOfRange
+        );
+        assert_eq!(
+            number(&mut interpreter, "C(0)"),
+            if base == 0 { -10.0 } else { -6.0 }
+        );
+        assert_eq!(number(&mut interpreter, "C(1)"), 6.0);
+
+        command(&mut interpreter, "MAT A=A @ V");
+        assert_eq!(number(&mut interpreter, "UBOUND(A,2)"), base as f64);
+        assert_eq!(number(&mut interpreter, "A(0,0)"), -10.0);
+        assert_eq!(number(&mut interpreter, &format!("A(1,{base})")), 6.0);
+        assert_eq!(number(&mut interpreter, "V(0)"), -2.0);
+    }
+}
+
+#[test]
+fn array_division_matches_active_vector_and_column_shapes_in_both_orders() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!("MAT BASE {base}:DIM V(2),M(2,{base}):MAT V=12:MAT M=3"),
+        );
+        if base == 1 {
+            command(&mut interpreter, "V(0)=17:M(0,1)=0:M(1,0)=19");
+        }
+        command(&mut interpreter, "MAT C=V/M");
+        assert_eq!(number(&mut interpreter, "UBOUND(C)"), 2.0);
+        assert_eq!(
+            eval_expression(&mut interpreter, "UBOUND(C,2)")
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexOutOfRange
+        );
+        assert_eq!(
+            number(&mut interpreter, "C(0)"),
+            if base == 0 { 4.0 } else { 17.0 }
+        );
+        assert_eq!(number(&mut interpreter, "C(1)"), 4.0);
+        assert_eq!(number(&mut interpreter, "C(2)"), 4.0);
+
+        if base == 1 {
+            command(&mut interpreter, "V(0)=0");
+        }
+        command(&mut interpreter, "MAT D=M/V");
+        assert_eq!(number(&mut interpreter, "UBOUND(D,2)"), base as f64);
+        assert_eq!(number(&mut interpreter, &format!("D(1,{base})")), 0.25);
+        assert_eq!(number(&mut interpreter, &format!("D(2,{base})")), 0.25);
+        if base == 0 {
+            assert_eq!(number(&mut interpreter, "D(0,0)"), 0.25);
+        } else {
+            assert_eq!(number(&mut interpreter, "D(0,1)"), 0.0);
+            assert_eq!(number(&mut interpreter, "D(1,0)"), 19.0);
+        }
+    }
+}
+
+#[test]
+fn array_denominators_compose_with_hadamard_and_powers_in_loaded_mat() {
+    let mut interpreter = run("10 MAT BASE 1:DIM A(2),B(2):A(0)=4:B(0)=9\n\
+         20 DATA 12,18,2,3\n30 MAT READ A,B\n\
+         40 MAT C=8/B@A:MAT D=A/B^2\n50 END");
+    for (cell, expected) in [
+        ("C(0)", 36.0),
+        ("C(1)", 48.0),
+        ("C(2)", 48.0),
+        ("D(0)", 4.0),
+        ("D(1)", 3.0),
+        ("D(2)", 2.0),
+    ] {
+        assert_eq!(number(&mut interpreter, cell), expected, "{cell}");
+    }
+}
+
+#[test]
+fn hadamard_composes_at_multiplicative_precedence_in_loaded_mat() {
+    let mut interpreter = run("10 DIM A(1),B(1),T(1):MAT A=2:MAT B=3:MAT T=7\n\
+         20 MAT C=T+A @ B^2\n\
+         30 MAT D=A*2 @ B\n40 END");
+    assert_eq!(number(&mut interpreter, "C(0)"), 25.0);
+    assert_eq!(number(&mut interpreter, "D(0)"), 12.0);
+    assert_eq!(
+        eval_expression(&mut interpreter, "A(0) @ B(0)")
+            .unwrap_err()
+            .code,
+        ErrorCode::Syntax
+    );
+    for alias in ["HAD", "HADAMARD"] {
+        assert_eq!(
+            interpreter
+                .process_immediate(&format!("MAT C=A {alias} B"))
+                .unwrap_err()
+                .code,
+            ErrorCode::Syntax,
+            "{alias}"
+        );
+    }
+    assert_eq!(number(&mut interpreter, "C(0)"), 25.0);
+}
+
+#[test]
+fn former_operator_spellings_are_ordinary_identifiers() {
+    for name in ["HAD", "HADAMARD"] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!(
+                "{name}=7:{name}$=\"ok\":DIM {name}(1),B(1):MAT {name}=3:MAT B=2:MAT C={name}@B"
+            ),
+        );
+        assert_eq!(number(&mut interpreter, name), 7.0);
+        assert_eq!(number(&mut interpreter, &format!("{name}(0)")), 3.0);
+        assert_eq!(number(&mut interpreter, "C(0)"), 6.0);
+        assert_eq!(
+            eval_expression(&mut interpreter, &format!("{name}$")).unwrap(),
+            avl_basic::Value::string("ok")
+        );
+    }
+}
+
+#[test]
+fn hadamard_symbol_uses_multiplicative_precedence_and_left_associativity() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "DIM A(1),B(1),C(1):MAT A=2:MAT B=3:MAT C=5",
+    );
+    for (expression, expected) in [
+        ("A@B", 6.0),
+        ("A*2@B", 12.0),
+        ("A@B*2", 12.0),
+        ("A/2@B", 3.0),
+        ("A@B/2", 3.0),
+        ("5 MOD 3*A@B", 12.0),
+        ("A@B^2", 18.0),
+        ("(A@B)^2", 36.0),
+        ("-A^2@B", -12.0),
+        ("A@-B^2", -18.0),
+        ("A@B@C", 30.0),
+    ] {
+        command(&mut interpreter, &format!("MAT D={expression}"));
+        assert_eq!(number(&mut interpreter, "D(0)"), expected, "{expression}");
+        assert_eq!(number(&mut interpreter, "D(1)"), expected, "{expression}");
+    }
+    command(&mut interpreter, "MAT A=1E308:MAT B=1E-308:MAT C=1E-308");
+    command(&mut interpreter, "MAT D=A@B@C:MAT E=A@(B@C)");
+    assert!(number(&mut interpreter, "D(0)") > 0.0);
+    assert_eq!(number(&mut interpreter, "E(0)"), 0.0);
+
+    for expression in ["2@3", "A(0)@B(0)"] {
+        assert_eq!(
+            eval_expression(&mut interpreter, expression)
+                .unwrap_err()
+                .code,
+            ErrorCode::Syntax,
+            "{expression}"
+        );
+    }
+    assert_eq!(
+        interpreter.process_immediate("MAT D=2@3").unwrap_err().code,
+        ErrorCode::ForbiddenExpression
+    );
+}
+
+#[test]
+fn hadamard_symbol_preserves_at_signs_in_strings_data_and_comments() {
+    let mut interpreter = run(
+        r#"10 PRINT "user@example.org";" C:\tmp\a@b.bas" ' @ remains a comment
+20 REM MAT X=A@B@
+30 DATA "x@y",@
+40 READ S$,T$
+50 DIM A(0),B(0):MAT A=2:MAT B=3
+60 MAT C=A@B ' @ remains a comment
+70 PRINT S$;" ";T$
+80 END"#,
+    );
+    assert_eq!(
+        interpreter.take_output(),
+        "user@example.org C:\\tmp\\a@b.bas\nx@y @\n"
+    );
+    assert_eq!(number(&mut interpreter, "C(0)"), 6.0);
+}
+
+#[test]
+fn hadamard_rejects_invalid_operands_without_replacing_destination() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "DIM A(1),B(2),M(0,1),T(1,1,1),S$(1),C(1):MAT A=4:MAT C=77",
+    );
+    for (expression, code) in [
+        ("A @ B", ErrorCode::InvalidDimensions),
+        ("A @ M", ErrorCode::InvalidDimensions),
+        ("T @ T", ErrorCode::InvalidDimensions),
+        ("A @ S$", ErrorCode::ForbiddenExpression),
+        ("S$ @ A", ErrorCode::ForbiddenExpression),
+        ("A @ A(0)", ErrorCode::ForbiddenExpression),
+        ("2 @ A", ErrorCode::ForbiddenExpression),
+    ] {
+        assert_eq!(
+            interpreter
+                .process_immediate(&format!("MAT C={expression}"))
+                .unwrap_err()
+                .code,
+            code,
+            "{expression}"
+        );
+        assert_eq!(number(&mut interpreter, "C(0)"), 77.0);
+        assert_eq!(number(&mut interpreter, "A(0)"), 4.0);
+    }
+}
+
+#[test]
 fn compound_mat_uses_basic_precedence_and_resolves_scalar_functions_symmetrically() {
     let mut interpreter = Interpreter::new();
     command(&mut interpreter, "DIM A(1),B(1):MAT A=4:MAT B=2:DYE=5");

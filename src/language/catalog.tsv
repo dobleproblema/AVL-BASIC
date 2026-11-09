@@ -196,10 +196,11 @@ statement	both	SWAP		SWAP variable1,variable2	variable1: First variable; variabl
 statement	both	CLEAR		CLEAR	-	Clears runtime data while keeping the stored program.	CLEAR INPUT,NEW	-
 statement	both	CLEAR INPUT		CLEAR INPUT	-	Empties the keyboard and input-event buffers.	CLEAR,INKEY$	-
 statement	immediate	NEW		NEW	-	Clears the program and fully resets the interpreter.	CLEAR,LOAD	-
-statement	both	MAT		MAT destination = expression | MAT destination[(selectors)] = source[(selectors)]	destination: Numeric or string array; expression: Supported compound matrix/scalar expression with BASIC precedence; selectors: Index, first:last range, or omitted row/column axis	Assigns a scalar, array, or matrix result; copies rows, columns, and rectangular subarrays.	MAT BASE,MAT PRINT,MAT INPUT,MAT READ	-
+statement	both	MAT		MAT destination = expression | MAT destination[(selectors)] = source[(selectors)]	destination: Numeric or string array; expression: Supported compound matrix/scalar expression with BASIC precedence; selectors: Index, first:last range, or omitted row/column axis	Assigns a scalar, array, or matrix result; copies rows, columns, and rectangular subarrays.	MAT BASE,@,MAT PRINT,MAT INPUT,MAT READ	-
 statement	both	MAT BASE		MAT BASE base	base: Matrix traversal base 0 or 1	Selects the starting index used by MAT operations.	MAT,MAT PRINT,MAT INPUT,MAT READ	-
-statement	both	MAT PRINT		MAT PRINT [ROW|COL] array[;|, ...]	array: Array to print; ROW: Normal orientation; COL: Transposed display orientation	Prints arrays by rows or columns.	MAT PRINT USING,MAT	-
-statement	both	MAT PRINT USING		MAT PRINT USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask; array: Array to print	Prints arrays using a numeric format mask.	MAT PRINT,PRINT USING	-
+statement	both	MAT PRINT		MAT PRINT item[;|,item...] || MAT PRINT A(,2:4) || MAT PRINT left | right || MAT PRINT left | "text" | right || MAT PRINT left | (expr$) | right	item: Array or slice reference, ROW reference, COL reference, USING format$; or COLOR(fg[,bg]) or COLOR(); ROW: Normal orientation; COL: Transposed display orientation; left and right: Arrays or slices with the same number of displayed rows; text or expr$: Optional separator string	Prints arrays and slices by rows or columns. The vertical bar joins blocks side by side using the normal spacing between cells. An explicit string replaces that spacing. USING and COLOR may appear between arrays and affect subsequent arrays. A comma after an array selects 22-character fields.	MAT PRINT USING,MAT PRINT COLOR,MAT	-
+statement	both	MAT PRINT USING		MAT PRINT [array;] USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask; array: Array to print	Selects the numeric format for subsequent arrays in the MAT PRINT list. The format expression requires a semicolon.	MAT PRINT,MAT PRINT COLOR,PRINT USING	-
+statement	both	MAT PRINT COLOR		MAT PRINT COLOR(fg[,bg]); array[;|,array...] || MAT PRINT COLOR(); array[;|,array...]	fg: Foreground AVL BASIC color value; bg: Optional background AVL BASIC color value; array: Array to print	Selects colors for subsequent arrays; COLOR() selects terminal defaults. The modifier may appear between arrays and adds no spacing. Redirected output remains plain text.	COLOR,MAT PRINT,MAT PRINT USING,PRINT COLOR	-
 statement	both	MAT INPUT		MAT INPUT array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Reads console input into array elements.	MAT READ,INPUT	-
 statement	both	MAT READ		MAT READ array1[,array2...]	array1: Existing array to fill; array2: Additional arrays	Fills arrays sequentially from DATA.	MAT INPUT,DATA,READ	-
 statement	both	DEF FN		DEF FNname[(parameter,...)] = expression || DEF FNname[(parameter,...)]	name: Function name; parameter: Scalar/text value or whole-array reference in a multiline function; expression: Single-line return expression	Defines a single-line or multiline user function.	FNEND,EXIT FN,LOCAL,ON ERROR,RESUME	-
@@ -214,15 +215,16 @@ statement	both	LOCAL		LOCAL name[(bound1[,bound2...])][,name...]	name: Local sca
 # Sequential data files
 statement	both	OPEN		OPEN filename$ FOR INPUT|OUTPUT|APPEND AS #channel	filename$: Data-file path; channel: Integer from 1 to 255	Opens a UTF-8 data file for reading, replacing, or appending. An occupied channel or conflicting open path is rejected.	CLOSE,PRINT #,WRITE,INPUT #,LINE INPUT #,EOF	-
 statement	both	CLOSE		CLOSE [#channel[,#channel...]]	channel: Open data-file channel	Closes the listed data files, or all data files when no channels are given.	OPEN	-
-statement	both	PRINT #		PRINT #channel, [item[;|,item...]] || PRINT #channel, USING format$; item[;|,item...]	channel: OUTPUT or APPEND channel; item: Expression or SPC or TAB item; format$: Numeric format mask	Writes formatted text using the channel's own print column. A trailing semicolon or comma suppresses the newline.	OPEN,PRINT,PRINT USING,WRITE	-
+statement	both	PRINT #		PRINT #channel, [item[;|,item...]] || PRINT #channel, USING format$; item[;|,item...]	channel: OUTPUT or APPEND channel; item: Expression or COLOR or SPC or TAB item; format$: Numeric format mask	Writes formatted text using the channel's own print column. A trailing semicolon or comma suppresses the newline. COLOR is accepted and the file receives plain text.	OPEN,PRINT,PRINT USING,PRINT COLOR,WRITE	-
 statement	both	WRITE	WRITE #	WRITE #channel[,expression...]	channel: OUTPUT or APPEND channel; expression: String or finite number	Writes one CSV record with quoted strings, doubled embedded quotes, and round-trip decimal numbers.	OPEN,INPUT #,PRINT #	-
 statement	both	INPUT #		INPUT #channel, target1[,target2...]	channel: INPUT channel; target1: Variable or array element; target2: Additional targets	Reads one CSV record with exactly one field per target. Numeric fields are decimal data, not BASIC expressions.	OPEN,WRITE,LINE INPUT #,EOF	-
 statement	both	LINE INPUT #		LINE INPUT #channel, target$	channel: INPUT channel; target$: String variable or array element	Reads one physical text line without its LF, CRLF, or CR terminator.	OPEN,INPUT #,EOF	-
 function	expression	EOF		EOF(channel)	channel: Open INPUT channel, from 1 to 255	Returns -1 at physical end of file and 0 otherwise, without consuming input.	OPEN,INPUT #,LINE INPUT #	builtin
 
 # Console and graphics text
-statement	both	PRINT	?	PRINT [item[;|,item...]] || ? [item[;|,item...]]	item: Expression or print-only SPC or TAB item	Prints values to the console.	PRINT USING,ZONE,INPUT	-
-statement	both	PRINT USING		PRINT USING format$; item[;|,item...]	format$: Numeric format mask; item: Value to format or print	Prints values using a numeric format mask.	PRINT,MAT PRINT USING,GPRINT USING	-
+statement	both	PRINT	?	PRINT [item[;|,item...]] || ? [item[;|,item...]]	item: Expression or print-only COLOR or SPC or TAB item	Prints values to the console.	PRINT USING,PRINT COLOR,ZONE,INPUT	-
+statement	both	PRINT USING		PRINT USING format$; item[;|,item...]	format$: Numeric format mask; item: Value to format or print	Prints values using a numeric format mask.	PRINT,PRINT COLOR,MAT PRINT USING,GPRINT USING	-
+statement	both	PRINT COLOR		PRINT COLOR(fg[,bg]); item[;|,item...] || PRINT COLOR(); item[;|,item...]	fg: Foreground AVL BASIC color value; bg: Optional background AVL BASIC color value; item: Value, spacing item, or USING modifier	Selects colors for subsequent PRINT items; COLOR() selects terminal defaults.	COLOR,PRINT,PRINT USING	-
 statement	both	ZONE		ZONE width	width: Print-zone width from 1 to 255	Sets the column width used by comma-separated output.	PRINT,GPRINT	-
 statement	both	INPUT		INPUT ["prompt"][,|;] target1[,target2...]	prompt: Optional prompt text; target1: Variable or array element; target2: Additional targets	Reads comma-separated values from the console.	LINE INPUT,GINPUT	-
 statement	both	LINE INPUT		LINE INPUT ["prompt"][,|;] target$	prompt: Optional prompt text; target$: String variable	Reads one complete console line into a string.	INPUT	-
@@ -407,8 +409,8 @@ function	expression	SUM		SUM(array)	array: numeric array name	Returns the algebr
 function	expression	ZER		MAT target = ZER	target: previously dimensioned numeric array	Fills a MAT destination with zeroes.	CON,IDN,MAT	mat-only
 function	expression	CON		MAT target = CON	target: previously dimensioned numeric array	Fills a MAT destination with ones.	ZER,IDN,MAT	mat-only
 function	expression	IDN		MAT target = IDN	target: previously dimensioned square numeric array	Fills a MAT destination with the identity matrix.	ZER,CON,MAT BASE	mat-only
-function	expression	TRN		MAT target = TRN(array)	target: destination array; array: two-dimensional numeric array or matrix expression	Assigns the matrix transpose.	INV,MAT	builtin
-function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix or matrix expression	Assigns the matrix inverse.	DET,TRN,MAT	builtin
+function	expression	TRN		MAT target = TRN(array)	target: destination array; array: numeric vector, matrix or matrix expression	Assigns the matrix transpose. A vector is treated as a column and becomes a one-row matrix.	INV,MAT	builtin
+function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix, matrix expression or numeric vector with one active element	Assigns the matrix inverse. A vector with one active element is treated as a 1 by 1 matrix.	DET,TRN,MAT	builtin
 
 # Graphics, screen, and sprite functions
 function	expression	WIDTH		WIDTH	-	Returns the graphics canvas width in pixels, independent of presentation scaling.	HEIGHT	builtin,zero-arg
@@ -454,10 +456,12 @@ function	expression	ERL		ERL	-	Returns the original line of the retained runtime
 function	expression	VERSION$		VERSION$	-	Returns the AVL-BASIC language version.	-	builtin,zero-arg
 
 # PRINT-only functions
+print-function	print	COLOR		COLOR(fg[,bg]) || COLOR()	fg: Foreground AVL BASIC color value; bg: Optional background AVL BASIC color value	Selects colors for subsequent PRINT or MAT PRINT items. One argument retains the selected background; COLOR() selects terminal defaults. Redirected output and PRINT # use plain text.	PRINT,PRINT USING,MAT PRINT,MAT PRINT COLOR,TAB,SPC,RGB,RGB$	builtin,print-only
 print-function	print	SPC		SPC(count)	count: number of spaces	Emits spaces inside a PRINT or GPRINT list.	TAB,PRINT,GPRINT	builtin,print-only
 print-function	print	TAB		TAB(column)	column: target output column	Advances to a column inside a PRINT or GPRINT list without moving backwards.	SPC,PRINT,GPRINT	builtin,print-only
 
-# Named expression operators
+# Expression operators
+operator	expression	@		MAT destination = left @ right	left: Numeric array; right: Numeric array of the same effective shape	Multiplies corresponding elements (Hadamard product) with the same precedence as * and left-to-right associativity. MAT treats vectors as single-column matrices for compatibility.	MAT,MAT BASE,DOT	-
 operator	expression	MOD		left MOD right	left: numeric expression; right: nonzero numeric expression	Returns the floating-point remainder.	-	-
 operator	expression	AND		left AND right	left: numeric expression rounded to an integer; right: numeric expression rounded to an integer	Returns the bitwise AND.	OR,XOR,NOT	-
 operator	expression	OR		left OR right	left: numeric expression rounded to an integer; right: numeric expression rounded to an integer	Returns the bitwise OR.	AND,XOR,NOT	-

@@ -1,4 +1,4 @@
-100 REM A red and blue mathematical surface illuminated by a rotating light.
+100 REM A red and blue surface shaded with @ and a rotating light.
 110 REM SPACE pauses the light; C toggles the 60 FPS limit; ESC exits.
 120 SCREEN : MODE 640 : DEG : PAPER 0 : CLG
 130 W=WIDTH : H=HEIGHT : N=50 : NV=(N+1)*(N+1)
@@ -18,19 +18,20 @@
 270 PX(K)=W/2+FOC*(X*CA-Y*SA)*Q(K)
 280 PY(K)=H/2+FOC*((X*SA+Y*CA)*CB+Z*SB)*Q(K)
 290 NEXT J : NEXT I
-300 FOR K=0 TO NV-1
-310 T=(Z0(K)-ZMIN)/(ZMAX-ZMIN) : R0(K)=255*T : B0(K)=255*(1-T)
-320 NEXT K
+300 MAT R0=(Z0-ZMIN)/(ZMAX-ZMIN)
+310 MAT B0=255*(1-R0)
+320 MAT R0=255*R0
 340 AZ=135 : EL=25 : PAUSED=0 : CAP=1 : FPS=0 : COUNT=0 : TLAST=TIME : TSIM=TIME
 350 SMALLFONT TRANSPARENT
 400 TNOW=TIME : DT=MIN(TNOW-TSIM,.1) : TSIM=TNOW
 410 IF PAUSED=0 THEN AZ=(AZ+45*DT) MOD 360
 420 LX=COS(EL)*COS(AZ) : LY=COS(EL)*SIN(AZ) : LZ=SIN(EL)
 430 CLG OFFSCREEN : MAT D=0
-440 FOR K=0 TO NV-1
-450 BR=MIN(1,.15+.9*MAX(0,NX0(K)*LX+NY0(K)*LY+NZ0(K)*LZ))
-460 R(K)=R0(K)*BR : B(K)=B0(K)*BR
-470 NEXT K
+435 REM R temporarily holds brightness; compute B before replacing R.
+440 MAT R=NX0*LX+NY0*LY+NZ0*LZ
+450 FOR K=0 TO NV-1 : R(K)=MIN(1,.15+.9*MAX(0,R(K))) : NEXT K
+460 MAT B=B0 @ R
+470 MAT R=R0 @ R
 500 FOR I=0 TO N-1 : FOR J=0 TO N-1
 510 IA=I*(N+1)+J : IB=IA+N+1 : IC=IB+1 : ID=IA+1
 520 GTRIANGLE D,PX(IA),PY(IA),Q(IA),R(IA),0,B(IA),PX(IB),PY(IB),Q(IB),R(IB),0,B(IB),PX(IC),PY(IC),Q(IC),R(IC),0,B(IC)

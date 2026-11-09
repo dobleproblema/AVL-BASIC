@@ -26,7 +26,6 @@ fn scalar_operations_keep_operands_dimensions_and_all_stored_elements() {
             ("A*3", 12.0),
             ("3*A", 12.0),
             ("A/2", 2.0),
-            ("2/A", 0.5),
             ("A^3", 64.0),
             ("3^A", 81.0),
             ("-A", -4.0),
@@ -40,6 +39,69 @@ fn scalar_operations_keep_operands_dimensions_and_all_stored_elements() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn scalar_over_array_preserves_inactive_denominator_cells() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 1:DIM B(2,2):B(0,0)=13:B(2,0)=-5:\
+         B(1,1)=2:B(1,2)=4:B(2,1)=8:B(2,2)=16",
+    );
+    command(&mut interpreter, "MAT C=8/B");
+    assert_eq!(number(&mut interpreter, "UBOUND(C,1)"), 2.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(C,2)"), 2.0);
+    for (cell, expected) in [
+        ("C(0,0)", 13.0),
+        ("C(0,1)", 0.0),
+        ("C(1,0)", 0.0),
+        ("C(2,0)", -5.0),
+        ("C(1,1)", 4.0),
+        ("C(1,2)", 2.0),
+        ("C(2,1)", 1.0),
+        ("C(2,2)", 0.5),
+        ("B(1,1)", 2.0),
+    ] {
+        assert_eq!(number(&mut interpreter, cell), expected, "{cell}");
+    }
+
+    command(&mut interpreter, "MAT BASE 0:MAT B=4:MAT C=8/B");
+    assert_eq!(number(&mut interpreter, "C(0,0)"), 2.0);
+    assert_eq!(number(&mut interpreter, "C(2,2)"), 2.0);
+}
+
+#[test]
+fn array_division_is_direct_and_can_replace_its_denominator() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!("MAT BASE {base}:DIM A(2,2),B(2,2):MAT A=8"),
+        );
+        if base == 0 {
+            command(&mut interpreter, "MAT B=2");
+        } else {
+            command(&mut interpreter, "B(1,1)=2:B(1,2)=2:B(2,1)=2");
+        }
+        command(&mut interpreter, "A(2,2)=1E-310:B(2,2)=1E-310");
+        command(&mut interpreter, "MAT B=A/B");
+        assert_eq!(number(&mut interpreter, "UBOUND(B,2)"), 2.0);
+        for row in 0..=2 {
+            for col in 0..=2 {
+                let expected = if base == 1 && (row == 0 || col == 0) {
+                    8.0
+                } else if (row, col) == (2, 2) {
+                    1.0
+                } else {
+                    4.0
+                };
+                let cell = format!("B({row},{col})");
+                assert_eq!(number(&mut interpreter, &cell), expected, "{cell}");
+            }
+        }
+        assert_eq!(number(&mut interpreter, "A(2,2)"), 1e-310);
     }
 }
 
@@ -103,7 +165,7 @@ fn elementwise_operations_include_stored_cells_when_active_region_is_empty() {
             ErrorCode::DivisionByZero
         );
         assert_eq!(number(&mut interpreter, "C(0)"), 37.0);
-        for (expression, expected) in [("0/A", 0.0), ("-A", -9.0), ("A+A", 18.0)] {
+        for (expression, expected) in [("-A", -9.0), ("A+A", 18.0), ("A @ A", 81.0)] {
             command(&mut interpreter, &format!("MAT C={expression}"));
             if dimensions.contains(',') {
                 assert_eq!(number(&mut interpreter, "C(0,0)"), expected);
@@ -112,6 +174,31 @@ fn elementwise_operations_include_stored_cells_when_active_region_is_empty() {
             }
         }
     }
+}
+
+#[test]
+fn array_denominators_with_empty_active_blocks_leave_the_reference_unchanged() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 1:DIM A(2,0),B(0,0),V(0):MAT A=9",
+    );
+    command(&mut interpreter, "MAT C=0/A:MAT D=1/V:MAT E=A/B");
+    for target in ["C", "E"] {
+        assert_eq!(
+            number(&mut interpreter, &format!("UBOUND({target},1)")),
+            2.0
+        );
+        assert_eq!(
+            number(&mut interpreter, &format!("UBOUND({target},2)")),
+            0.0
+        );
+        for row in 0..=2 {
+            assert_eq!(number(&mut interpreter, &format!("{target}({row},0)")), 9.0);
+        }
+    }
+    assert_eq!(number(&mut interpreter, "UBOUND(D)"), 0.0);
+    assert_eq!(number(&mut interpreter, "D(0)"), 0.0);
 }
 
 #[test]
@@ -161,13 +248,13 @@ fn vector_column_elementwise_mapping_matches_python_with_both_bases_and_text() {
 }
 
 #[test]
-fn structural_column_results_keep_two_dimensions_and_transpose_inverse_require_matrices() {
+fn structural_column_results_keep_two_dimensions() {
     for base in [0, 1] {
         let mut interpreter = Interpreter::new();
         command(
             &mut interpreter,
             &format!(
-                "MAT BASE {base}:DIM A({},{}),B({},{base}),V(2)",
+                "MAT BASE {base}:DIM A({},{}),B({},{base})",
                 base + 1,
                 base + 1,
                 base + 1
@@ -178,17 +265,128 @@ fn structural_column_results_keep_two_dimensions_and_transpose_inverse_require_m
         assert_eq!(number(&mut interpreter, &format!("C({base},{base})")), 12.0);
         command(&mut interpreter, "MAT D=TRN(C)");
         assert_eq!(number(&mut interpreter, "UBOUND(D,2)"), (base + 1) as f64);
-        for expression in ["TRN(V)", "INV(V)"] {
-            assert_eq!(
-                interpreter
-                    .process_immediate(&format!("MAT D={expression}"))
-                    .unwrap_err()
-                    .code,
-                ErrorCode::InvalidDimensions
+        assert_eq!(number(&mut interpreter, &format!("D({base},{base})")), 12.0);
+    }
+}
+
+#[test]
+fn transpose_of_vector_matches_transpose_of_column_matrix() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        let bound = base + 2;
+        command(
+            &mut interpreter,
+            &format!("MAT BASE {base}:DIM V({bound}),A({bound},{base}):MAT V=9:MAT A=7"),
+        );
+        for (offset, value) in ["-0", "2", "4"].into_iter().enumerate() {
+            let index = base + offset;
+            command(
+                &mut interpreter,
+                &format!("V({index})={value}:A({index},{base})={value}"),
             );
-            assert_eq!(number(&mut interpreter, &format!("D({base},{base})")), 12.0);
+        }
+        command(
+            &mut interpreter,
+            "MAT T=TRN(V):MAT U=TRN(A):MAT C=TRN(TRN(V))",
+        );
+        assert_eq!(number(&mut interpreter, "UBOUND(T,1)"), base as f64);
+        assert_eq!(number(&mut interpreter, "UBOUND(T,2)"), bound as f64);
+        assert_eq!(number(&mut interpreter, "UBOUND(C,1)"), bound as f64);
+        assert_eq!(number(&mut interpreter, "UBOUND(C,2)"), base as f64);
+        for row in 0..=base {
+            for col in 0..=bound {
+                let expected = if row < base || col < base {
+                    0.0
+                } else {
+                    number(&mut interpreter, &format!("V({col})"))
+                };
+                for cell in [
+                    format!("T({row},{col})"),
+                    format!("U({row},{col})"),
+                    format!("C({col},{row})"),
+                ] {
+                    assert_eq!(
+                        number(&mut interpreter, &cell).to_bits(),
+                        expected.to_bits(),
+                        "{cell}"
+                    );
+                }
+            }
         }
     }
+}
+
+#[test]
+fn inverse_of_singleton_vector_matches_inverse_of_column_matrix() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!(
+                "MAT BASE {base}:DIM V({base}),A({base},{base}):\
+                 V({base})=4:A({base},{base})=4"
+            ),
+        );
+        if base == 1 {
+            command(&mut interpreter, "V(0)=-0:A(0,1)=-0");
+        }
+        command(&mut interpreter, "MAT I=INV(V):MAT J=INV(A)");
+        assert_eq!(number(&mut interpreter, "UBOUND(I,1)"), base as f64);
+        assert_eq!(number(&mut interpreter, "UBOUND(I,2)"), base as f64);
+        for row in 0..=base {
+            for col in 0..=base {
+                let expected: f64 = if row == base && col == base {
+                    0.25
+                } else if (row, col) == (0, 1) {
+                    -0.0
+                } else {
+                    0.0
+                };
+                for cell in [format!("I({row},{col})"), format!("J({row},{col})")] {
+                    assert_eq!(
+                        number(&mut interpreter, &cell).to_bits(),
+                        expected.to_bits(),
+                        "{cell}"
+                    );
+                }
+            }
+        }
+
+        command(
+            &mut interpreter,
+            &format!("DIM W({}):V({base})=0", base + 1),
+        );
+        for (source, code) in [
+            ("W", ErrorCode::InvalidDimensions),
+            ("V", ErrorCode::InvalidValue),
+        ] {
+            assert_eq!(
+                interpreter
+                    .process_immediate(&format!("MAT I=INV({source})"))
+                    .unwrap_err()
+                    .code,
+                code
+            );
+            assert_eq!(number(&mut interpreter, &format!("I({base},{base})")), 0.25);
+        }
+    }
+}
+
+#[test]
+fn empty_base_one_vector_transposes_to_empty_row_and_has_no_inverse() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, "MAT BASE 1:DIM V(0):V(0)=9:MAT T=TRN(V)");
+    assert_eq!(number(&mut interpreter, "UBOUND(T,1)"), 1.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(T,2)"), 0.0);
+    assert_eq!(number(&mut interpreter, "T(0,0)"), 0.0);
+    assert_eq!(number(&mut interpreter, "T(1,0)"), 0.0);
+    assert_eq!(
+        interpreter
+            .process_immediate("MAT T=INV(V)")
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDimensions
+    );
 }
 
 #[test]
@@ -244,6 +442,13 @@ fn arithmetic_failures_leave_existing_destination_and_operands_intact() {
     for (expression, code) in [
         ("A/0", ErrorCode::DivisionByZero),
         ("2/A", ErrorCode::DivisionByZero),
+        ("A/A", ErrorCode::DivisionByZero),
+        ("A/B", ErrorCode::InvalidDimensions),
+        ("A/T", ErrorCode::InvalidDimensions),
+        ("2/T", ErrorCode::InvalidDimensions),
+        ("A/S$", ErrorCode::ForbiddenExpression),
+        ("S$/A", ErrorCode::ForbiddenExpression),
+        ("2/S$", ErrorCode::ForbiddenExpression),
         ("A+B", ErrorCode::InvalidDimensions),
         ("T*2", ErrorCode::InvalidDimensions),
         ("S$*A", ErrorCode::ForbiddenExpression),
@@ -257,6 +462,26 @@ fn arithmetic_failures_leave_existing_destination_and_operands_intact() {
         assert_eq!(number(&mut interpreter, "C(1)"), 37.0);
         assert_eq!(number(&mut interpreter, "A(0)"), 4.0);
         assert_eq!(number(&mut interpreter, "A(2)"), 0.0);
+    }
+}
+
+#[test]
+fn array_denominator_zero_leaves_aliased_destination_intact() {
+    for (literal, zero) in [("0", 0.0_f64), ("-0", -0.0)] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!("MAT BASE 1:DIM A(2),B(2):MAT A=12:B(1)=4:B(2)={literal}"),
+        );
+        for expression in ["A/B", "8/B"] {
+            let error = interpreter
+                .process_immediate(&format!("MAT B={expression}"))
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::DivisionByZero, "{expression}");
+            assert_eq!(number(&mut interpreter, "B(1)"), 4.0);
+            assert_eq!(number(&mut interpreter, "B(2)").to_bits(), zero.to_bits());
+            assert_eq!(number(&mut interpreter, "A(1)"), 12.0);
+        }
     }
 }
 

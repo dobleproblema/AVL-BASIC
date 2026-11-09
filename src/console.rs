@@ -21,8 +21,13 @@ use std::rc::Rc;
 
 mod inspector;
 mod navigation;
+mod print_color;
 use inspector::InspectorState;
 use navigation::DebugCodeSelection;
+pub(crate) use print_color::{
+    print_color_depth, PrintColorDepth, RESET_PRINT_BACKGROUND, RESET_PRINT_COLOR,
+    RESET_PRINT_COLORS,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;

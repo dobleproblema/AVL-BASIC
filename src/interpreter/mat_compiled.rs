@@ -5,6 +5,7 @@
 //! evaluator, while TRN/INV and arithmetic operate on whole matrices.
 use super::mat_subarrays::CopyReference;
 use super::*;
+use crate::expr::compile_mat_expression;
 
 #[derive(Debug, Clone)]
 pub(super) struct CompiledMatAssignment {
@@ -38,6 +39,14 @@ pub(super) enum CompiledMatExpr {
         left: Box<Self>,
         right: Box<Self>,
         op: char,
+    },
+    DivideByName {
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Hadamard {
+        left: Box<Self>,
+        right: Box<Self>,
     },
     MatrixFunction {
         name: String,
@@ -99,7 +108,7 @@ impl CompiledMatExpr {
     }
 
     pub(super) fn parse(source: &str) -> BasicResult<Self> {
-        Ok(Self::from_expr(compile_expression(source)?))
+        Ok(Self::from_expr(compile_mat_expression(source)?))
     }
 
     fn from_expr(expr: Expr) -> Self {
@@ -117,6 +126,14 @@ impl CompiledMatExpr {
                 op: UnaryOp::Plus,
                 expr,
             } => Self::Positive(Box::new(Self::from_expr(*expr))),
+            Expr::Binary {
+                op: BinaryOp::Hadamard,
+                left,
+                right,
+            } => Self::Hadamard {
+                left: Box::new(Self::from_expr(*left)),
+                right: Box::new(Self::from_expr(*right)),
+            },
             Expr::Binary { op, left, right }
                 if matches!(
                     op,
@@ -131,10 +148,12 @@ impl CompiledMatExpr {
                     BinaryOp::Pow => '^',
                     _ => unreachable!(),
                 };
-                Self::Binary {
-                    left: Box::new(Self::from_expr(*left)),
-                    right: Box::new(Self::from_expr(*right)),
-                    op,
+                let left = Box::new(Self::from_expr(*left));
+                let right = Box::new(Self::from_expr(*right));
+                if op == '/' && matches!(right.as_ref(), Self::Name { .. }) {
+                    Self::DivideByName { left, right }
+                } else {
+                    Self::Binary { left, right, op }
                 }
             }
             Expr::ArrayOrCall { name, args, .. } if matches!(name.as_str(), "TRN" | "INV") => {
@@ -166,18 +185,7 @@ impl CompiledMatExpr {
                 if let Some(array) = interpreter.array_ref(name) {
                     return Ok(MatExprValue::Matrix(array.clone()));
                 }
-                match eval_compiled(interpreter, scalar)
-                    .map_err(|error| interpreter.with_current_line(error))?
-                {
-                    Value::ArrayRef(name) => {
-                        let array = interpreter
-                            .array_ref(&name)
-                            .cloned()
-                            .ok_or_else(|| interpreter.err(ErrorCode::Undefined))?;
-                        Ok(MatExprValue::Matrix(array))
-                    }
-                    value => Ok(MatExprValue::Scalar(value)),
-                }
+                Self::eval_scalar_value(interpreter, scalar)
             }
             Self::Negate(inner) => {
                 let value = inner.eval(interpreter)?;
@@ -217,29 +225,86 @@ impl CompiledMatExpr {
     #[inline(never)]
     fn eval_extended(&self, interpreter: &mut Interpreter) -> BasicResult<MatExprValue> {
         match self {
+            Self::DivideByName { left, right } => {
+                let left = left.eval(interpreter)?;
+                if let MatExprValue::Scalar(value) = &left {
+                    value
+                        .as_number()
+                        .map_err(|error| interpreter.with_current_line(error))?;
+                }
+                let Self::Name { name, scalar } = right.as_ref() else {
+                    unreachable!("named division requires a name on the right");
+                };
+                // Resolve the divisor after taking the left snapshot and
+                // running any left-side effects. The array kernel only reads
+                // the divisor while writing into the owned numerator.
+                let right = if let Some(divisor) = interpreter.array_ref(name) {
+                    if let MatExprValue::Matrix(numerator) = left {
+                        return interpreter.mat_divide_arrays(numerator, divisor);
+                    }
+                    MatExprValue::Matrix(divisor.clone())
+                } else {
+                    Self::eval_scalar_value(interpreter, scalar)?
+                };
+                interpreter.mat_binary(left, right, '/')
+            }
+            Self::Hadamard { left, right } => {
+                let mut left = left.eval_numeric_array(interpreter)?;
+                // Resolve a bare RHS only after the left snapshot and its
+                // effects. Equal stored dimensions allow a contiguous pass
+                // without copying the RHS or changing the other MAT kernels.
+                if let Self::Name { name, .. } = right.as_ref() {
+                    if let Some(array) = interpreter.array_ref(name) {
+                        if left.dims == array.dims && !array.is_string() {
+                            interpreter.validate_mat_elementwise_shapes(&left.dims, &array.dims)?;
+                            let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
+                                (&mut left.data, &array.data)
+                            else {
+                                unreachable!("Hadamard operands have been checked as numeric");
+                            };
+                            for (a, b) in left_values.iter_mut().zip(right_values) {
+                                *a *= *b;
+                            }
+                            return Ok(MatExprValue::Matrix(left));
+                        }
+                    }
+                }
+                let right = right.eval_numeric_array(interpreter)?;
+                interpreter.mat_numeric_elementwise(left, right, |a, b| a * b)
+            }
             Self::MatrixFunction { name, args } => {
                 if args.len() != 1 {
                     return Err(interpreter.err(ErrorCode::ArgumentMismatch));
                 }
                 let value = args[0].eval(interpreter)?;
-                // Unlike TRN, Python's INV preserves the inactive row/column
-                // of its input. Save them from this already evaluated snapshot
-                // before converting its active block to a compact matrix.
+                // INV preserves the inactive border. Save it from the evaluated
+                // snapshot before compacting the active block.
+                enum InverseBorder {
+                    Vector(f64),
+                    Matrix { stride: usize, values: Vec<f64> },
+                }
                 let inactive_border = if name == "INV" && interpreter.mat_base == 1 {
                     match &value {
                         MatExprValue::Matrix(ArrayValue {
                             dims,
                             data: ArrayData::Number(values),
                             ..
-                        }) if dims.len() == 2 => {
-                            let stride = dims[1] + 1;
-                            let mut border = Vec::with_capacity(stride + dims[0]);
-                            border.extend_from_slice(&values[..stride]);
-                            for row in 1..=dims[0] {
-                                border.push(values[row * stride]);
+                        }) => match dims.as_slice() {
+                            [1] => Some(InverseBorder::Vector(values[0])),
+                            [rows, cols] => {
+                                let stride = cols + 1;
+                                let mut border = Vec::with_capacity(stride + rows);
+                                border.extend_from_slice(&values[..stride]);
+                                for row in 1..=*rows {
+                                    border.push(values[row * stride]);
+                                }
+                                Some(InverseBorder::Matrix {
+                                    stride,
+                                    values: border,
+                                })
                             }
-                            Some((stride, border))
-                        }
+                            _ => None,
+                        },
                         _ => None,
                     }
                 } else {
@@ -248,13 +313,22 @@ impl CompiledMatExpr {
                 let mut matrix = interpreter.mat_value_to_numeric_matrix(value)?;
                 if name == "INV" {
                     let mut inverse = interpreter.invert_numeric_matrix(matrix)?;
-                    if let Some((stride, border)) = inactive_border {
+                    if let Some(border) = inactive_border {
                         let ArrayData::Number(values) = &mut inverse.data else {
                             unreachable!();
                         };
-                        values[..stride].copy_from_slice(&border[..stride]);
-                        for (offset, value) in border[stride..].iter().enumerate() {
-                            values[(offset + 1) * stride] = *value;
+                        match border {
+                            // V(0) belongs to row 0 of the implicit column 1.
+                            InverseBorder::Vector(zero) => values[1] = zero,
+                            InverseBorder::Matrix {
+                                stride,
+                                values: border,
+                            } => {
+                                values[..stride].copy_from_slice(&border[..stride]);
+                                for (offset, value) in border[stride..].iter().enumerate() {
+                                    values[(offset + 1) * stride] = *value;
+                                }
+                            }
                         }
                     }
                     return Ok(MatExprValue::Matrix(inverse));
@@ -269,6 +343,9 @@ impl CompiledMatExpr {
                             matrix.data.swap(r * size + c, c * size + r);
                         }
                     }
+                    matrix.data
+                } else if matrix.rows == 1 || matrix.cols == 1 {
+                    // Transposing a row or column keeps its compact element order.
                     matrix.data
                 } else {
                     let mut out = checked_zeroed_numeric_buffer(matrix.rows, matrix.cols)
@@ -330,19 +407,32 @@ impl CompiledMatExpr {
                     .map(MatExprValue::Scalar)
                     .map_err(|error| interpreter.with_current_line(error))
             }
-            Self::Scalar(scalar) => {
-                match eval_compiled(interpreter, scalar)
-                    .map_err(|error| interpreter.with_current_line(error))?
-                {
-                    Value::ArrayRef(name) => interpreter
-                        .array_ref(&name)
-                        .cloned()
-                        .map(MatExprValue::Matrix)
-                        .ok_or_else(|| interpreter.err(ErrorCode::Undefined)),
-                    value => Ok(MatExprValue::Scalar(value)),
-                }
-            }
+            Self::Scalar(scalar) => Self::eval_scalar_value(interpreter, scalar),
             _ => unreachable!("ordinary MAT nodes are evaluated by the inline path"),
+        }
+    }
+
+    #[inline]
+    fn eval_scalar_value(
+        interpreter: &mut Interpreter,
+        scalar: &Expr,
+    ) -> BasicResult<MatExprValue> {
+        match eval_compiled(interpreter, scalar)
+            .map_err(|error| interpreter.with_current_line(error))?
+        {
+            Value::ArrayRef(name) => interpreter
+                .array_ref(&name)
+                .cloned()
+                .map(MatExprValue::Matrix)
+                .ok_or_else(|| interpreter.err(ErrorCode::Undefined)),
+            value => Ok(MatExprValue::Scalar(value)),
+        }
+    }
+
+    fn eval_numeric_array(&self, interpreter: &mut Interpreter) -> BasicResult<ArrayValue> {
+        match self.eval(interpreter)? {
+            MatExprValue::Matrix(array) if !array.is_string() => Ok(array),
+            _ => Err(interpreter.err(ErrorCode::ForbiddenExpression)),
         }
     }
 }

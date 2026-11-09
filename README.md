@@ -193,7 +193,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 146-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 149-program catalog →](samples/README.md)**
 
 ## Download
 

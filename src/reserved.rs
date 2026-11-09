@@ -27,12 +27,25 @@ mod tests {
 
     #[test]
     fn generated_reserved_names_keep_legacy_short_variable_exceptions() {
-        for name in ["A", "A1", "AB", "X$", "AS", "CD", "FN", "SQ"] {
+        for name in [
+            "A",
+            "A1",
+            "AB",
+            "X$",
+            "AS",
+            "CD",
+            "FN",
+            "SQ",
+            "HAD",
+            "Had$",
+            "HADAMARD",
+            "Hadamard$",
+        ] {
             assert!(!is_reserved_identifier_name(name), "{name}");
         }
         for name in [
             "IF", "ON", "OR", "PI", "TO", "DI", "EI", "di$", "Ei$", "PRINT", "RIGHT$", "ALPHA",
-            "alpha", "AlPhA$",
+            "alpha", "AlPhA$", "COLOR", "Color$",
         ] {
             assert!(is_reserved_identifier_name(name), "{name}");
         }

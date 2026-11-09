@@ -27,6 +27,7 @@ use alpha_ops::compile_alpha_clause;
 use gouraud_ops::CompiledGouraud;
 use local_array_pool::LocalArrayPool;
 use mat_compiled::CompiledMatAssignment;
+use mat_subarrays::{CopyReference, MatPrintSource};
 use sub_bindings::{SubBindingPlan, SubCallBindings};
 use texture_ops::{
     compile_textured_quad_statement, compile_textured_triangle_statement, CompiledTexturedQuad,
@@ -63,6 +64,7 @@ use crate::window::{
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write as _;
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{self, IsTerminal, Write};
@@ -80,6 +82,7 @@ const PRINT_ZONE_DEFAULT_ENV: &str = "AVL_BASIC_PRINT_ZONE_DEFAULT";
 const PRINT_ZONE_DEFAULT: usize = 22;
 const PRINT_ZONE_MIN: usize = 1;
 const PRINT_ZONE_MAX: usize = 255;
+const MAT_PRINT_CELL_GAP: &str = "  ";
 const DEBUG_ABORT_DETAIL: &str = "__AVL_DEBUG_ABORT__";
 const DEBUG_RESTART_DETAIL: &str = "__AVL_DEBUG_RESTART__";
 
@@ -485,10 +488,34 @@ fn normalize_debug_abort(result: BasicResult<RunOutcome>) -> BasicResult<RunOutc
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrintDestination {
-    Console,
+enum PrintDestination<'a> {
+    Console(Option<PrintStyle<'a>>),
     Graphics,
     File(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PrintStyle<'a> {
+    sequence: &'a str,
+    has_background: bool,
+    escape_generation: u64,
+}
+
+#[derive(Default)]
+struct PrintModifiers {
+    using_format: Option<String>,
+    color_sequence: Option<String>,
+    background: Option<String>,
+    escape_generation: u64,
+}
+
+struct MatPrintBlock {
+    rows: Vec<String>,
+    has_columns: bool,
+    wide: bool,
+    color_sequence: Option<String>,
+    has_background: bool,
+    separator: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2356,6 +2383,7 @@ fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
         BinaryOp::Add => checked_number(left + right),
         BinaryOp::Sub => checked_number(left - right),
         BinaryOp::Mul => checked_number(left * right),
+        BinaryOp::Hadamard => Err(BasicError::new(ErrorCode::ForbiddenExpression)),
         BinaryOp::Div => {
             if right == 0.0 {
                 Err(BasicError::new(ErrorCode::DivisionByZero))
@@ -2530,8 +2558,11 @@ pub struct Interpreter {
     stream_output: bool,
     line_open: bool,
     output_col: usize,
+    print_escape_generation: u64,
     print_zone: usize,
     ansi_output: bool,
+    #[cfg(test)]
+    print_color_depth_for_test: Option<console::PrintColorDepth>,
     pub graphics: Graphics,
     graphics_window: Option<GraphicsWindow>,
     graphics_fullscreen_requested: bool,
@@ -2659,8 +2690,11 @@ impl Interpreter {
             stream_output: false,
             line_open: false,
             output_col: 0,
+            print_escape_generation: 0,
             print_zone: default_print_zone(),
             ansi_output: console::ansi_enabled(),
+            #[cfg(test)]
+            print_color_depth_for_test: None,
             graphics: Graphics::default(),
             graphics_window: None,
             graphics_fullscreen_requested: false,
@@ -6963,34 +6997,41 @@ impl Interpreter {
             result?;
             return flushed;
         }
-        self.execute_print_to(args, PrintDestination::Console)
+        self.execute_print_to(args, PrintDestination::Console(None))
     }
 
-    fn execute_print_to(&mut self, args: &str, destination: PrintDestination) -> BasicResult<()> {
+    fn execute_print_to(
+        &mut self,
+        args: &str,
+        destination: PrintDestination<'_>,
+    ) -> BasicResult<()> {
         if args.trim().is_empty() {
             self.print_newline(destination)?;
             return Ok(());
         }
-        let mut item = String::new();
+        let mut start = 0;
         let mut depth = 0i32;
         let mut in_string = false;
         let mut newline = true;
-        let mut using_format: Option<String> = None;
-        for ch in args.chars().chain(std::iter::once('\n')) {
+        let mut modifiers = PrintModifiers {
+            escape_generation: self.print_escape_generation,
+            ..PrintModifiers::default()
+        };
+        for (end, ch) in args
+            .char_indices()
+            .chain(std::iter::once((args.len(), '\n')))
+        {
             if ch == '"' {
                 in_string = !in_string;
-                item.push(ch);
-                continue;
-            }
-            if !in_string {
+            } else if !in_string {
                 match ch {
                     '(' => depth += 1,
                     ')' => depth -= 1,
-                    ';' if depth == 0 => {
+                    ';' | ',' | '\n' if depth == 0 => {
                         self.print_list_item(
-                            item.trim(),
-                            Some(';'),
-                            &mut using_format,
+                            args[start..end].trim(),
+                            (ch != '\n').then_some(ch),
+                            &mut modifiers,
                             destination,
                         )?;
                         if self.end_requested
@@ -6999,51 +7040,22 @@ impl Interpreter {
                         {
                             return Ok(());
                         }
-                        item.clear();
-                        newline = false;
-                        continue;
-                    }
-                    ',' if depth == 0 => {
-                        self.print_list_item(
-                            item.trim(),
-                            Some(','),
-                            &mut using_format,
-                            destination,
-                        )?;
-                        if self.end_requested
-                            || self.function_return_requested
-                            || self.sub_return_requested
-                        {
-                            return Ok(());
+                        if ch == '\n' {
+                            break;
                         }
-                        item.clear();
                         newline = false;
-                        continue;
-                    }
-                    '\n' if depth == 0 => {
-                        self.print_list_item(item.trim(), None, &mut using_format, destination)?;
-                        if self.end_requested
-                            || self.function_return_requested
-                            || self.sub_return_requested
-                        {
-                            return Ok(());
-                        }
-                        break;
+                        start = end + 1;
                     }
                     _ => {}
                 }
             }
-            item.push(ch);
         }
         if depth != 0 || in_string {
             return Err(self.err(ErrorCode::Syntax));
         }
-        if !args.trim_end().ends_with(';') && !args.trim_end().ends_with(',') {
-            newline = true;
-        }
-        if newline {
+        if newline || !args.trim_end().ends_with([';', ',']) {
             self.print_newline(destination)?;
-        } else if destination == PrintDestination::Console {
+        } else if matches!(destination, PrintDestination::Console(_)) {
             self.flush_stream_output();
         }
         Ok(())
@@ -7053,32 +7065,94 @@ impl Interpreter {
         &mut self,
         item: &str,
         sep: Option<char>,
-        using_format: &mut Option<String>,
-        destination: PrintDestination,
+        modifiers: &mut PrintModifiers,
+        destination: PrintDestination<'_>,
     ) -> BasicResult<()> {
-        if let Some(fmt_expr) =
+        if let Some(expr) =
             print_using_format_expr(item).map_err(|()| self.err(ErrorCode::Syntax))?
         {
             if sep != Some(';') {
                 return Err(self.err(ErrorCode::Syntax));
             }
-            let fmt = self.eval_value(fmt_expr)?.into_string()?;
+            let fmt = self.eval_value(expr)?.into_string()?;
             if !valid_using_format(&fmt) {
                 return Err(self.err(ErrorCode::UsingFormat));
             }
-            *using_format = Some(fmt);
+            modifiers.using_format = Some(fmt);
             return Ok(());
         }
 
-        if let Some(fmt) = using_format.as_deref() {
-            self.print_using_item(item, fmt, destination)?;
-        } else if self.print_item(item, destination)? && sep == Some(';') {
-            self.print_write(destination, " ")?;
+        let color_arguments = whole_function_argument(item, "COLOR");
+        if let Some(arguments) = color_arguments {
+            if destination == PrintDestination::Graphics {
+                return Err(self.err(ErrorCode::ForbiddenExpression));
+            }
+            self.print_color_item(arguments, modifiers, destination)?;
+        }
+        let destination = match destination {
+            PrintDestination::Console(_) => {
+                PrintDestination::Console(modifiers.color_sequence.as_deref().map(|sequence| {
+                    PrintStyle {
+                        sequence,
+                        has_background: modifiers.background.is_some(),
+                        escape_generation: modifiers.escape_generation,
+                    }
+                }))
+            }
+            _ => destination,
+        };
+        if color_arguments.is_none() {
+            if let Some(fmt) = modifiers.using_format.as_deref() {
+                self.print_using_item(item, fmt, destination)?;
+            } else if self.print_item(item, destination)? && sep == Some(';') {
+                self.print_write(destination, " ")?;
+            }
         }
 
         if sep == Some(',') {
             self.write_print_zone_spacing_to(destination)?;
         }
+        Ok(())
+    }
+
+    fn print_color_item(
+        &mut self,
+        arguments: &str,
+        modifiers: &mut PrintModifiers,
+        destination: PrintDestination<'_>,
+    ) -> BasicResult<()> {
+        let parts = if arguments.trim().is_empty() {
+            Vec::new()
+        } else {
+            split_arguments(arguments)
+        };
+        if parts.len() > 2 {
+            return Err(self.err(ErrorCode::ArgumentMismatch));
+        }
+        let foreground = parts
+            .first()
+            .map(|expr| self.eval_color(expr))
+            .transpose()?;
+        let background = parts.get(1).map(|expr| self.eval_color(expr)).transpose()?;
+        if !matches!(destination, PrintDestination::Console(_)) {
+            return Ok(());
+        }
+        let Some(depth) = self.print_color_depth() else {
+            return Ok(());
+        };
+        let Some(foreground) = foreground else {
+            modifiers.background = Some(console::RESET_PRINT_BACKGROUND.to_string());
+            modifiers.color_sequence = Some(console::RESET_PRINT_COLORS.to_string());
+            return Ok(());
+        };
+        if let Some(background) = background {
+            modifiers.background = Some(depth.background(background));
+        }
+        let mut sequence = depth.foreground(foreground);
+        if let Some(background) = modifiers.background.as_deref() {
+            sequence.push_str(background);
+        }
+        modifiers.color_sequence = Some(sequence);
         Ok(())
     }
 
@@ -7103,7 +7177,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn print_item(&mut self, item: &str, destination: PrintDestination) -> BasicResult<bool> {
+    fn print_item(&mut self, item: &str, destination: PrintDestination<'_>) -> BasicResult<bool> {
         if item.is_empty() {
             return Ok(false);
         }
@@ -7145,7 +7219,7 @@ impl Interpreter {
         &mut self,
         item: &str,
         fmt: &str,
-        destination: PrintDestination,
+        destination: PrintDestination<'_>,
     ) -> BasicResult<()> {
         if item.is_empty() {
             return Ok(());
@@ -9995,83 +10069,280 @@ impl Interpreter {
     }
 
     fn execute_mat_print(&mut self, args: &str) -> BasicResult<()> {
-        let mut body = args.trim();
-        let mut using_format: Option<String> = None;
-        if starts_keyword(&body.to_ascii_uppercase(), "USING") {
-            let Some((fmt_expr, tail)) = split_first_top_level(body[5..].trim(), ';') else {
-                return Err(self.err(ErrorCode::Syntax));
-            };
-            using_format = Some(self.eval_value(fmt_expr.trim())?.into_string()?);
-            body = tail.trim();
+        let (items, has_join) = split_mat_print_items(args.trim());
+        if has_join {
+            return self.execute_joined_mat_print(items);
         }
-
-        let items = split_print_items(body);
+        let mut modifiers = PrintModifiers {
+            escape_generation: self.print_escape_generation,
+            ..PrintModifiers::default()
+        };
         let mut printed_any = false;
         for (raw_item, sep) in items {
             let item = raw_item.trim();
             if item.is_empty() {
                 continue;
             }
-            if printed_any {
+            if !self.apply_mat_print_modifier(item, sep, &mut modifiers)? {
+                if printed_any {
+                    self.write_line("");
+                }
+                let (orientation, reference) =
+                    parse_mat_print_item(item).map_err(|e| self.with_current_line(e))?;
+                let Some(source) = self.resolve_mat_print_source(reference, orientation)? else {
+                    return Ok(());
+                };
+                let style = modifiers
+                    .color_sequence
+                    .as_deref()
+                    .map(|sequence| PrintStyle {
+                        sequence,
+                        has_background: modifiers.background.is_some(),
+                        escape_generation: modifiers.escape_generation,
+                    });
+                self.write_mat_array(
+                    &source,
+                    modifiers.using_format.as_deref(),
+                    sep == Some(','),
+                    style,
+                )?;
+                printed_any = true;
+            }
+            if self.end_requested || self.function_return_requested || self.sub_return_requested {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_mat_print_modifier(
+        &mut self,
+        item: &str,
+        separator: Option<char>,
+        modifiers: &mut PrintModifiers,
+    ) -> BasicResult<bool> {
+        // Retain MAT PRINT's existing USING syntax and mask handling.
+        if starts_keyword(&item.to_ascii_uppercase(), "USING") {
+            if separator != Some(';') {
+                return Err(self.err(ErrorCode::Syntax));
+            }
+            modifiers.using_format = Some(self.eval_value(item[5..].trim())?.into_string()?);
+        } else if let Some(arguments) = whole_function_argument(item, "COLOR") {
+            if separator == Some('|') {
+                return Err(self.err(ErrorCode::Syntax));
+            }
+            self.print_color_item(arguments, modifiers, PrintDestination::Console(None))?;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn execute_joined_mat_print(&mut self, items: Vec<(&str, Option<char>)>) -> BasicResult<()> {
+        let mut modifiers = PrintModifiers {
+            escape_generation: self.print_escape_generation,
+            ..PrintModifiers::default()
+        };
+        let mut items = items.into_iter().peekable();
+        let mut group: Vec<MatPrintBlock> = Vec::new();
+        let mut printed_any = false;
+        while let Some((raw_item, sep)) = items.next() {
+            let item = raw_item.trim();
+            if item.is_empty() {
+                if sep == Some('|') {
+                    return Err(self.err(ErrorCode::Syntax));
+                }
+                continue;
+            }
+            if self.apply_mat_print_modifier(item, sep, &mut modifiers)? {
+                if self.end_requested || self.function_return_requested || self.sub_return_requested
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+            if item.starts_with(['"', '(']) {
+                let Some(left) = group.last_mut() else {
+                    return Err(self.err(ErrorCode::Syntax));
+                };
+                if sep != Some('|') || left.separator.is_some() {
+                    return Err(self.err(ErrorCode::Syntax));
+                }
+                let text = self.eval_value(item)?.into_string()?;
+                if self.end_requested || self.function_return_requested || self.sub_return_requested
+                {
+                    return Ok(());
+                }
+                if text.chars().any(char::is_control) {
+                    return Err(self.err(ErrorCode::InvalidValue));
+                }
+                left.separator = Some(text);
+                continue;
+            }
+
+            let (orientation, reference) =
+                parse_mat_print_item(item).map_err(|error| self.with_current_line(error))?;
+            let wide = sep == Some(',');
+            // A comma immediately before a join still selects wide fields for this array.
+            let joins_next = if sep == Some('|') {
+                true
+            } else if items
+                .peek()
+                .is_some_and(|(item, separator)| item.trim().is_empty() && *separator == Some('|'))
+            {
+                items.next();
+                true
+            } else {
+                false
+            };
+            let standalone = group.is_empty() && !joins_next;
+            if standalone && printed_any {
                 self.write_line("");
             }
-            let (orientation, name) =
-                parse_mat_print_item(item).map_err(|e| self.with_current_line(e))?;
-            let wide = sep == Some(',');
-            self.write_mat_array(&name, orientation, using_format.as_deref(), wide)?;
-            printed_any = true;
+            let Some(source) = self.resolve_mat_print_source(reference, orientation)? else {
+                return Ok(());
+            };
+            if standalone {
+                let style = modifiers
+                    .color_sequence
+                    .as_deref()
+                    .map(|sequence| PrintStyle {
+                        sequence,
+                        has_background: modifiers.background.is_some(),
+                        escape_generation: modifiers.escape_generation,
+                    });
+                self.write_mat_array(&source, modifiers.using_format.as_deref(), wide, style)?;
+                printed_any = true;
+                continue;
+            }
+
+            // Format this operand now, before later modifier expressions can change it.
+            let (rows, cols) = source.shape();
+            if group.first().is_some_and(|left| left.rows.len() != rows) {
+                return Err(self.err(ErrorCode::InvalidDimensions));
+            }
+            let mut block = MatPrintBlock {
+                rows: Vec::with_capacity(rows),
+                has_columns: cols > 0,
+                wide,
+                color_sequence: modifiers.color_sequence.clone(),
+                has_background: modifiers.background.is_some(),
+                separator: None,
+            };
+            for row in 0..rows {
+                let text = self.format_mat_print_row(
+                    &source,
+                    modifiers.using_format.as_deref(),
+                    wide,
+                    row,
+                );
+                if text.chars().any(char::is_control) {
+                    return Err(self.err(ErrorCode::InvalidValue));
+                }
+                block.rows.push(text);
+            }
+            group.push(block);
+            if !joins_next {
+                if printed_any {
+                    self.write_line("");
+                }
+                self.write_mat_print_group(&group, modifiers.escape_generation)?;
+                group.clear();
+                printed_any = true;
+            }
+        }
+        if !group.is_empty() {
+            return Err(self.err(ErrorCode::Syntax));
+        }
+        Ok(())
+    }
+
+    fn write_mat_print_group(
+        &mut self,
+        blocks: &[MatPrintBlock],
+        escape_generation: u64,
+    ) -> BasicResult<()> {
+        for row in 0..blocks[0].rows.len() {
+            let mut has_previous_column = false;
+            for block in blocks {
+                let style = block.color_sequence.as_deref().map(|sequence| PrintStyle {
+                    sequence,
+                    has_background: block.has_background,
+                    escape_generation,
+                });
+                let destination = PrintDestination::Console(style);
+                if block.has_columns {
+                    if has_previous_column && !block.wide {
+                        self.print_write(destination, MAT_PRINT_CELL_GAP)?;
+                    }
+                    self.print_write(destination, &block.rows[row])?;
+                    has_previous_column = true;
+                }
+                if let Some(separator) = block.separator.as_deref() {
+                    self.print_write(PrintDestination::Console(None), separator)?;
+                    has_previous_column = false;
+                }
+            }
+            self.write_line("");
         }
         Ok(())
     }
 
     fn write_mat_array(
         &mut self,
-        name: &str,
-        orientation: MatOrientation,
+        source: &MatPrintSource,
         using_format: Option<&str>,
         wide: bool,
+        style: Option<PrintStyle<'_>>,
     ) -> BasicResult<()> {
-        let name = name.to_ascii_uppercase();
-        let key = self.array_lookup_key(&name);
-        let Some(array) = self.arrays.get(key.as_ref()) else {
-            return Err(self.err(ErrorCode::Undefined));
-        };
-        if array.dims.len() > 2 {
-            return Err(self.err(ErrorCode::InvalidDimensions));
-        }
-        let (rows, cols) = self.mat_shape_for_print(key.as_ref(), orientation)?;
+        let (rows, _) = source.shape();
         for r in 0..rows {
-            let mut cells = Vec::with_capacity(cols);
-            for c in 0..cols {
-                let indexes = self.mat_indexes_for_print(key.as_ref(), orientation, r, c)?;
-                let value = self.arrays.get(key.as_ref()).unwrap().get(&indexes)?;
-                let cell = match value {
-                    Value::Number(n) => {
-                        let formatted = if let Some(fmt) = using_format {
-                            format_using(n, fmt)
-                        } else {
-                            format_basic_number(n)
-                        };
-                        if wide {
-                            format!("{formatted:>22}")
-                        } else {
-                            formatted
-                        }
-                    }
-                    Value::Str(s) => {
-                        if wide {
-                            format!("{s:>22}")
-                        } else {
-                            s
-                        }
-                    }
-                    Value::ArrayRef(_) => return Err(self.err(ErrorCode::TypeMismatch)),
-                };
-                cells.push(cell);
+            let row = self.format_mat_print_row(source, using_format, wide, r);
+            if let Some(style) = style {
+                let destination = PrintDestination::Console(Some(style));
+                self.print_write(destination, &row)?;
+                self.print_newline(destination)?;
+            } else {
+                // Keep the ordinary row writer, but observe manual escapes even
+                // before COLOR or inside a function called by an outer PRINT.
+                if row.chars().any(starts_terminal_escape) {
+                    self.print_escape_generation = self.print_escape_generation.wrapping_add(1);
+                }
+                self.write_line(&row);
             }
-            self.write_line(&cells.join(if wide { "" } else { "  " }));
         }
         Ok(())
+    }
+
+    fn format_mat_print_row(
+        &self,
+        source: &MatPrintSource,
+        using_format: Option<&str>,
+        wide: bool,
+        row: usize,
+    ) -> String {
+        let array = self.arrays.get(&source.key).unwrap();
+        let (_, cols) = source.shape();
+        let mut text = String::new();
+        for col in 0..cols {
+            let offset = source.offset(row, col);
+            let cell = match &array.data {
+                ArrayData::Number(values) => Cow::Owned(match using_format {
+                    Some(format) => format_using(values[offset], format),
+                    None => format_basic_number(values[offset]),
+                }),
+                ArrayData::Str(values) => Cow::Borrowed(values[offset].as_str()),
+            };
+            if wide {
+                write!(text, "{cell:>22}").expect("writing to a String cannot fail");
+            } else {
+                if col > 0 {
+                    text.push_str(MAT_PRINT_CELL_GAP);
+                }
+                text.push_str(&cell);
+            }
+        }
+        text
     }
 
     fn mat_positions(&self, name: &str, orientation: MatOrientation) -> BasicResult<Vec<Vec<i32>>> {
@@ -10316,9 +10587,10 @@ impl Interpreter {
                 '+' if left.is_string() || right.is_string() => {
                     self.mat_string_matrix_add(left, right)
                 }
-                '+' | '-' => self.mat_matrix_add_sub(left, right, op),
+                '+' => self.mat_numeric_elementwise(left, right, |a, b| a + b),
+                '-' => self.mat_numeric_elementwise(left, right, |a, b| a - b),
                 '*' => self.mat_matrix_multiply(left, right),
-                '/' => Err(self.err(ErrorCode::Undefined)),
+                '/' => self.mat_divide_arrays(left, &right),
                 '^' => Err(self.err(ErrorCode::ForbiddenExpression)),
                 _ => Err(self.err(ErrorCode::Syntax)),
             },
@@ -10390,6 +10662,15 @@ impl Interpreter {
         let ArrayData::Number(values) = &mut matrix.data else {
             return Err(self.err(ErrorCode::TypeMismatch));
         };
+        if op == '/' && scalar_left && self.mat_base == 1 {
+            let (stride, first_column) = Self::mat_base_one_row_layout(&matrix.dims);
+            for row in values.chunks_exact_mut(stride).skip(1) {
+                for divisor in &mut row[first_column..] {
+                    *divisor = self.mat_array_quotient(scalar, *divisor)?;
+                }
+            }
+            return Ok(MatExprValue::Matrix(matrix));
+        }
         for value in values {
             let v = *value;
             *value = match op {
@@ -10397,13 +10678,7 @@ impl Interpreter {
                 '-' if scalar_left => Ok(scalar - v),
                 '-' => Ok(v - scalar),
                 '*' => Ok(v * scalar),
-                '/' if scalar_left => {
-                    if v == 0.0 {
-                        Err(self.err(ErrorCode::DivisionByZero))
-                    } else {
-                        Ok(scalar / v)
-                    }
-                }
+                '/' if scalar_left => self.mat_array_quotient(scalar, v),
                 '/' => {
                     if scalar == 0.0 {
                         Err(self.err(ErrorCode::DivisionByZero))
@@ -10419,11 +10694,57 @@ impl Interpreter {
         Ok(MatExprValue::Matrix(matrix))
     }
 
-    fn mat_matrix_add_sub(
-        &mut self,
+    fn mat_array_quotient(&self, numerator: f64, divisor: f64) -> BasicResult<f64> {
+        if divisor == 0.0 {
+            return Err(self.err(ErrorCode::DivisionByZero));
+        }
+        Ok(numerator / divisor)
+    }
+
+    fn mat_base_one_row_layout(dims: &[usize]) -> (usize, usize) {
+        // The second value is the first active column. A vector has one
+        // stored value per row, so only its first row needs to be skipped.
+        dims.get(1).map_or((1, 0), |bound| (bound + 1, 1))
+    }
+
+    fn mat_divide_arrays(
+        &self,
+        mut left: ArrayValue,
+        right: &ArrayValue,
+    ) -> BasicResult<MatExprValue> {
+        let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
+            (&mut left.data, &right.data)
+        else {
+            return Err(self.err(ErrorCode::ForbiddenExpression));
+        };
+        self.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
+        let divide_row = |numerators: &mut [f64], divisors: &[f64]| -> BasicResult<()> {
+            for (numerator, &divisor) in numerators.iter_mut().zip(divisors) {
+                *numerator = self.mat_array_quotient(*numerator, divisor)?;
+            }
+            Ok(())
+        };
+        if self.mat_base == 0 {
+            divide_row(left_values, right_values)?;
+        } else {
+            let (left_stride, left_column) = Self::mat_base_one_row_layout(&left.dims);
+            let (right_stride, right_column) = Self::mat_base_one_row_layout(&right.dims);
+            // Align active rows, including a vector paired with a one-column
+            // matrix. Empty active blocks produce no pairs to divide.
+            let left_rows = left_values.chunks_exact_mut(left_stride).skip(1);
+            let right_rows = right_values.chunks_exact(right_stride).skip(1);
+            for (left_row, right_row) in left_rows.zip(right_rows) {
+                divide_row(&mut left_row[left_column..], &right_row[right_column..])?;
+            }
+        }
+        Ok(MatExprValue::Matrix(left))
+    }
+
+    fn mat_numeric_elementwise(
+        &self,
         mut left: ArrayValue,
         right: ArrayValue,
-        op: char,
+        operation: impl Fn(f64, f64) -> f64,
     ) -> BasicResult<MatExprValue> {
         self.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
         let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
@@ -10433,16 +10754,12 @@ impl Interpreter {
         };
         if left.dims == right.dims {
             for (a, b) in left_values.iter_mut().zip(right_values) {
-                *a = if op == '+' { *a + b } else { *a - b };
+                *a = operation(*a, *b);
             }
         } else {
             for (flat, value) in left_values.iter_mut().enumerate() {
                 let right_flat = self.mat_elementwise_right_index(&left.dims, &right.dims, flat)?;
-                *value = if op == '+' {
-                    *value + right_values[right_flat]
-                } else {
-                    *value - right_values[right_flat]
-                };
+                *value = operation(*value, right_values[right_flat]);
             }
         }
         Ok(MatExprValue::Matrix(left))
@@ -10565,15 +10882,7 @@ impl Interpreter {
 
     fn mat_value_to_numeric_matrix(&self, value: MatExprValue) -> BasicResult<NumericMatrix> {
         match value {
-            MatExprValue::Matrix(array) => {
-                if array.is_string() {
-                    return Err(self.err(ErrorCode::TypeMismatch));
-                }
-                if array.dims.len() != 2 {
-                    return Err(self.err(ErrorCode::InvalidDimensions));
-                }
-                self.owned_array_to_numeric_matrix(array)
-            }
+            MatExprValue::Matrix(array) => self.owned_array_to_numeric_matrix(array),
             MatExprValue::Scalar(_) => Err(self.err(ErrorCode::ForbiddenExpression)),
         }
     }
@@ -14909,16 +15218,38 @@ impl Interpreter {
     }
 
     fn write(&mut self, text: &str) {
+        self.write_console::<false>(text, None);
+    }
+
+    fn write_console<const TRACK_ESCAPES: bool>(
+        &mut self,
+        text: &str,
+        style: Option<PrintStyle<'_>>,
+    ) {
         if text.is_empty() {
             return;
         }
         if self.stream_output {
             self.prepare_debug_console_io();
-            print!("{text}");
+            if let Some(style) = style {
+                // Restore the default before a later item can evaluate a BASIC function.
+                write_colored_print(&mut io::stdout().lock(), text, style)
+                    .expect("failed printing to stdout");
+            } else {
+                print!("{text}");
+            }
         } else {
+            #[cfg(test)]
+            if let Some(style) = style {
+                let mut output = Vec::new();
+                write_colored_print(&mut output, text, style).unwrap();
+                self.output.push_str(std::str::from_utf8(&output).unwrap());
+                self.track_output_position::<TRACK_ESCAPES>(text);
+                return;
+            }
             self.output.push_str(text);
         }
-        self.track_output_position(text);
+        self.track_output_position::<TRACK_ESCAPES>(text);
     }
 
     fn write_line(&mut self, text: &str) {
@@ -14934,26 +15265,46 @@ impl Interpreter {
         self.output_col = 0;
     }
 
-    fn print_column(&self, destination: PrintDestination) -> i64 {
+    fn print_color_depth(&self) -> Option<console::PrintColorDepth> {
+        #[cfg(test)]
+        if let Some(depth) = self.print_color_depth_for_test {
+            return Some(depth);
+        }
+        if self.stream_output {
+            console::print_color_depth(self.ansi_output)
+        } else {
+            None
+        }
+    }
+
+    fn print_column(&self, destination: PrintDestination<'_>) -> i64 {
         match destination {
-            PrintDestination::Console => self.output_col as i64,
+            PrintDestination::Console(_) => self.output_col as i64,
             PrintDestination::Graphics => self.graphics.hpos() as i64,
             PrintDestination::File(number) => self.data_files.column(number) as i64,
         }
     }
 
-    fn print_write(&mut self, destination: PrintDestination, text: &str) -> BasicResult<()> {
+    fn print_write(&mut self, destination: PrintDestination<'_>, text: &str) -> BasicResult<()> {
         match destination {
-            PrintDestination::Console => self.write(text),
+            // BASIC may build a terminal sequence across several print items.
+            // Preserve the raw sequence and the rest of this statement verbatim.
+            PrintDestination::Console(Some(style))
+                if style.escape_generation == self.print_escape_generation
+                    && !text.chars().any(starts_terminal_escape) =>
+            {
+                self.write_console::<false>(text, Some(style));
+            }
+            PrintDestination::Console(_) => self.write_console::<true>(text, None),
             PrintDestination::Graphics => self.graphics.gprint(text, None, None),
             PrintDestination::File(number) => self.data_files.write(number, text)?,
         }
         Ok(())
     }
 
-    fn print_newline(&mut self, destination: PrintDestination) -> BasicResult<()> {
+    fn print_newline(&mut self, destination: PrintDestination<'_>) -> BasicResult<()> {
         match destination {
-            PrintDestination::Console => self.write_line(""),
+            PrintDestination::Console(_) => self.write_line(""),
             PrintDestination::File(number) => self.data_files.write(number, "\n")?,
             PrintDestination::Graphics => {
                 let next_row = self.graphics.vpos().saturating_add(1);
@@ -14963,7 +15314,10 @@ impl Interpreter {
         Ok(())
     }
 
-    fn write_print_zone_spacing_to(&mut self, destination: PrintDestination) -> BasicResult<()> {
+    fn write_print_zone_spacing_to(
+        &mut self,
+        destination: PrintDestination<'_>,
+    ) -> BasicResult<()> {
         let zone = self.print_zone as i64;
         let column = self.print_column(destination);
         let spaces = zone - column.rem_euclid(zone);
@@ -14982,7 +15336,7 @@ impl Interpreter {
         }
     }
 
-    fn track_output_position(&mut self, text: &str) {
+    fn track_output_position<const TRACK_ESCAPES: bool>(&mut self, text: &str) {
         for ch in text.chars() {
             match ch {
                 '\n' => {
@@ -14994,6 +15348,9 @@ impl Interpreter {
                     self.line_open = true;
                 }
                 _ => {
+                    if TRACK_ESCAPES && starts_terminal_escape(ch) {
+                        self.print_escape_generation = self.print_escape_generation.wrapping_add(1);
+                    }
                     self.output_col += 1;
                     self.line_open = true;
                 }
@@ -15315,7 +15672,7 @@ impl EvalContext for Interpreter {
             "TRN" | "INV" => {
                 return Err(self.err(ErrorCode::ForbiddenExpression));
             }
-            "SPC" | "TAB" => {
+            "COLOR" | "SPC" | "TAB" => {
                 return Err(self.err(ErrorCode::ForbiddenExpression));
             }
             _ => {}
@@ -16089,6 +16446,433 @@ impl Interpreter {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
+
+    #[test]
+    fn mat_print_color_preserves_width_format_and_statement_scope() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r#"DIM A(0),B(0),C(0):A(0)=1:B(0)=8:C(0)=9:MAT PRINT A;COLOR(2,4);USING "0#";B,;COLOR(1);C;COLOR();A"#,
+            )
+            .unwrap();
+        assert_eq!(interpreter.output_col, 0);
+        assert!(!interpreter.line_open);
+        interpreter
+            .process_immediate(r#"PRINT TAB(3);"z""#)
+            .unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            format!(
+                concat!(
+                    " 1\n\n",
+                    "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m{:>22}\x1b[39;49m\n\n",
+                    "\x1b[38;2;255;255;255m\x1b[48;2;0;0;255m09\x1b[39;49m\n\n",
+                    "\x1b[39;49m01\x1b[39;49m\n",
+                    "  z\n",
+                ),
+                "08"
+            )
+        );
+    }
+
+    #[test]
+    fn joined_mat_print_colors_each_block_and_leaves_the_separator_plain() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r#"DIM A$(1),B$(1):A$(0)="x":A$(1)="long":B$(0)="1":B$(1)="2":MAT PRINT COLOR(2,4);A$ | " | " | COLOR(1);B$"#,
+            )
+            .unwrap();
+        interpreter
+            .process_immediate(r#"PRINT TAB(3);"z""#)
+            .unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mx\x1b[39;49m | ",
+                "\x1b[38;2;255;255;255m\x1b[48;2;0;0;255m1\x1b[39;49m\n",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mlong\x1b[39;49m | ",
+                "\x1b[38;2;255;255;255m\x1b[48;2;0;0;255m2\x1b[39;49m\n",
+                "  z\n",
+            )
+        );
+    }
+
+    #[test]
+    fn mat_print_manual_escapes_suppress_generated_colors_for_the_statement() {
+        for (statement, expected) in [
+            (
+                r#"DIM A$(0),B$(0):A$(0)=CHR$(27)+"[32m":B$(0)="green":MAT PRINT A$;COLOR(2,4);B$"#,
+                "\x1b[32m\n\ngreen\n",
+            ),
+            (
+                r#"DIM A$(2),B$(0):A$(0)="red":A$(1)=CHR$(27)+"[32m":A$(2)="green":B$(0)="tail":MAT PRINT COLOR(2);A$;COLOR(2);B$"#,
+                "\x1b[38;2;255;0;0mred\x1b[39m\n\x1b[32m\ngreen\n\ntail\n",
+            ),
+            (
+                r#"DIM A$(0),B$(0):A$(0)=CHR$(155)+"32m":B$(0)="green":MAT PRINT COLOR(2);A$;COLOR(2);B$"#,
+                "\u{009b}32m\n\ngreen\n",
+            ),
+            (
+                r#"DIM A$(0):A$(0)="\x1b[32m":MAT PRINT COLOR(2);A$"#,
+                "\x1b[38;2;255;0;0m\\x1b[32m\x1b[39m\n",
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+            interpreter.process_immediate(statement).unwrap();
+            assert_eq!(interpreter.take_output(), expected, "{statement}");
+        }
+    }
+
+    #[test]
+    fn mat_print_color_restores_background_before_embedded_line_controls() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r#"DIM A$(0):A$(0)="a"+CHR$(10)+"b"+CHR$(13)+"c":MAT PRINT COLOR(2,4);A$"#,
+            )
+            .unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255ma\x1b[39;49m\n",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mb\x1b[39;49m\r",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mc\x1b[39;49m\n",
+            )
+        );
+    }
+
+    #[test]
+    fn mat_print_color_observes_escapes_from_format_functions_and_nested_mat_print() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .program
+            .load_text(
+                r###"10 DIM A$(0):A$(0)="[32mgreen"
+20 MAT PRINT USING FNFMT$();COLOR(2);A$
+30 PRINT COLOR(2);FNRAW$();"[32mtail"
+40 MAT PRINT COLOR(2);A$
+50 END
+100 DEF FNFMT$()
+110 PRINT CHR$(27);
+120 FNFMT$="##"
+130 FNEND
+200 DEF FNRAW$()
+210 A$(0)=CHR$(27):MAT PRINT A$
+220 A$(0)="red":FNRAW$=""
+230 FNEND"###,
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[32mgreen\n",
+                "\x1b\n[32mtail\n",
+                "\x1b[38;2;255;0;0mred\x1b[39m\n",
+            )
+        );
+    }
+
+    #[test]
+    fn mat_print_colors_are_restored_before_nested_calls_errors_and_resume() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .program
+            .load_text(
+                r#"10 ON ERROR GOTO 100
+20 DIM A$(0):A$(0)="before"
+30 MAT PRINT COLOR(2,4);A$;COLOR(FNBAD());A$
+40 PRINT "outside"
+50 END
+100 PRINT "handler"
+110 RESUME NEXT
+200 DEF FNBAD()
+210 PRINT "nested";
+220 FNBAD=-1
+230 FNEND"#,
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mbefore\x1b[39;49m\n",
+                "nestedhandler\n",
+                "outside\n",
+            )
+        );
+    }
+
+    #[test]
+    fn mat_print_stops_after_a_modifier_function_ends_the_program() {
+        for (modifier, function, value) in [
+            ("USING FNSTOP$();", "FNSTOP$", "\"0#\""),
+            ("COLOR(FNSTOP());", "FNSTOP", "2"),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+            interpreter
+                .program
+                .load_text(&format!(
+                    "10 DIM A(0):MAT A=8\n\
+                     20 MAT PRINT A;{modifier}A\n\
+                     30 PRINT \"unreachable\"\n\
+                     100 DEF {function}()\n\
+                     110 {function}={value}\n\
+                     120 END\n\
+                     130 FNEND"
+                ))
+                .unwrap();
+            interpreter.run_loaded().unwrap();
+            assert_eq!(interpreter.take_output(), " 8\n", "{modifier}");
+        }
+    }
+
+    #[test]
+    fn print_color_preserves_columns_and_using() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r##"ZONE 4:PRINT "a";COLOR("red");SPC(2);TAB(6);"b",USING "0#";8;COLOR("#0f0");9;"##,
+            )
+            .unwrap();
+        assert_eq!(interpreter.output_col, 12);
+        interpreter.process_immediate(r#"? "z""#).unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "a",
+                "\x1b[38;2;255;0;0m  \x1b[39m",
+                "\x1b[38;2;255;0;0m  \x1b[39m",
+                "\x1b[38;2;255;0;0mb\x1b[39m",
+                "\x1b[38;2;255;0;0m  \x1b[39m",
+                "\x1b[38;2;255;0;0m08\x1b[39m",
+                "\x1b[38;2;0;255;0m09\x1b[39m",
+                "z\n",
+            )
+        );
+    }
+
+    #[test]
+    fn print_color_retains_background_and_resets_both_defaults() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(r#"PRINT COLOR(2,4);"a";COLOR(1);"b";COLOR();"c";COLOR(3);"d";"#)
+            .unwrap();
+        assert_eq!(interpreter.output_col, 4);
+        interpreter.process_immediate(r#"PRINT "z""#).unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255ma\x1b[39;49m",
+                "\x1b[38;2;255;255;255m\x1b[48;2;0;0;255mb\x1b[39;49m",
+                "\x1b[39;49mc\x1b[39;49m",
+                "\x1b[38;2;0;128;0m\x1b[49md\x1b[39;49m",
+                "z\n",
+            )
+        );
+    }
+
+    #[test]
+    fn print_color_resets_background_before_embedded_line_controls() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r#"PRINT COLOR(2,4);"a"+CHR$(10)+"b"+CHR$(13)+"c"+CHR$(13)+CHR$(10)"#,
+            )
+            .unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255ma\x1b[39;49m\n",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mb\x1b[39;49m\r",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255mc\x1b[39;49m\r\n\n",
+            )
+        );
+    }
+
+    #[test]
+    fn print_color_is_a_print_item_with_ordered_arguments() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .program
+            .load_text(
+                r#"10 ZONE 4
+20 PRINT USING "0#";COLOR(FNPICK(2),FNPICK(4)),8;COLOR();9
+30 END
+100 DEF FNPICK(N)
+110 ORDER$=ORDER$+CHR$(48+N)
+120 FNPICK=N
+130 FNEND"#,
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert_eq!(
+            interpreter
+                .eval_value("ORDER$")
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            "24"
+        );
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m    \x1b[39;49m",
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m08\x1b[39;49m",
+                "\x1b[39;49m09\x1b[39;49m\n",
+            )
+        );
+        for source in [
+            "A=COLOR(2)",
+            "PRINT 1+COLOR(2)",
+            "PRINT ABS(COLOR())",
+            "PRINT COLOR(COLOR(2))",
+        ] {
+            assert_eq!(
+                interpreter.process_immediate(source).unwrap_err().code,
+                ErrorCode::ForbiddenExpression,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            interpreter
+                .execute_print_to("COLOR(2)", PrintDestination::Graphics)
+                .unwrap_err()
+                .code,
+            ErrorCode::ForbiddenExpression
+        );
+        assert_eq!(
+            interpreter
+                .process_immediate("PRINT COLOR(1,2,3)")
+                .unwrap_err()
+                .code,
+            ErrorCode::ArgumentMismatch
+        );
+    }
+
+    #[test]
+    fn print_color_preserves_raw_escape_sequences_split_across_items() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        for statement in [
+            r#"PRINT COLOR(2);"red";CHR$(27);"[32m";"green";COLOR(2);CHR$(27);"[39m""#,
+            r#"PRINT CHR$(27);COLOR(2);"[32m";"green";CHR$(27);"[39m""#,
+            r#"PRINT COLOR(2);CHR$(155);"32m";"green";CHR$(27);"[39m""#,
+            r#"PRINT COLOR(2);"\x1b[32m""#,
+        ] {
+            interpreter.process_immediate(statement).unwrap();
+        }
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0mred\x1b[39m\x1b[32mgreen\x1b[39m\n",
+                "\x1b[32mgreen\x1b[39m\n",
+                "\u{009b}32mgreen\x1b[39m\n",
+                "\x1b[38;2;255;0;0m\\x1b[32m\x1b[39m\n",
+            )
+        );
+    }
+
+    #[test]
+    fn print_color_respects_raw_escapes_written_by_nested_print() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .program
+            .load_text(
+                r#"10 PRINT COLOR(2);"red";COLOR(FNESC());"[32m";"green";CHR$(27);"[39m"
+20 PRINT COLOR(2);"red"
+30 END
+100 DEF FNESC()
+110 PRINT CHR$(27);
+120 FNESC=2
+130 FNEND"#,
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            "\x1b[38;2;255;0;0mred\x1b[39m\x1b[32mgreen\x1b[39m\n\x1b[38;2;255;0;0mred\x1b[39m\n"
+        );
+    }
+
+    #[test]
+    fn print_color_is_scoped_across_nested_prints_and_resume() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .program
+            .load_text(
+                r#"10 ON ERROR GOTO 100
+20 PRINT COLOR(2);"first";COLOR(FNPICK(0));"second"
+30 PRINT COLOR(2);"before";COLOR(FNPICK(1));"skipped"
+40 PRINT "outside"
+50 END
+100 PRINT "handler"
+110 RESUME NEXT
+200 DEF FNPICK(FAIL)
+210 PRINT "nested";
+220 IF FAIL THEN ERROR 5
+230 FNPICK=RGB(1,2,3)
+240 FNEND"#,
+            )
+            .unwrap();
+        interpreter.run_loaded().unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0mfirst\x1b[39mnested\x1b[38;2;1;2;3msecond\x1b[39m\n",
+                "\x1b[38;2;255;0;0mbefore\x1b[39mnestedhandler\n",
+                "outside\n",
+            )
+        );
+    }
+
+    #[test]
+    fn print_color_checks_syntax_and_keeps_file_output_plain() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut interpreter = Interpreter::new();
+        interpreter.root_dir = directory.path().to_path_buf();
+        interpreter.current_dir = directory.path().to_path_buf();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(
+                r#"OPEN "colors.txt" FOR OUTPUT AS #1:PRINT #1,COLOR("255,0,0",0);"A";TAB(4);COLOR();"B":CLOSE #1"#,
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(directory.path().join("colors.txt")).unwrap(),
+            "A  B\n"
+        );
+        assert!(interpreter.take_output().is_empty());
+
+        for source in ["PRINT COLOR", "PRINT COLOR ;", "PRINT COLOR 2,3;\"x\""] {
+            assert_eq!(
+                interpreter.process_immediate(source).unwrap_err().code,
+                ErrorCode::Undefined,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            interpreter
+                .process_immediate("PRINT COLOR(-1);\"x\"")
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArgument
+        );
+    }
 
     #[test]
     fn calls_without_local_error_statements_do_not_allocate_error_scopes() {
@@ -21778,28 +22562,16 @@ fn whole_function_argument<'a>(source: &'a str, function: &str) -> Option<&'a st
     Some(&trimmed[prefix_len + 1..trimmed.len() - 1])
 }
 
-fn parse_mat_print_item(item: &str) -> BasicResult<(MatOrientation, String)> {
+fn parse_mat_print_item(item: &str) -> BasicResult<(MatOrientation, CopyReference)> {
     let trimmed = item.trim();
-    let upper = trimmed.to_ascii_uppercase();
-    if upper.starts_with("ROW ") {
-        let name = trimmed[4..].trim().to_ascii_uppercase();
-        if !is_basic_identifier(&name) {
-            return Err(BasicError::new(ErrorCode::ForbiddenExpression));
-        }
-        return Ok((MatOrientation::Row, name));
-    }
-    if upper.starts_with("COL ") {
-        let name = trimmed[4..].trim().to_ascii_uppercase();
-        if !is_basic_identifier(&name) {
-            return Err(BasicError::new(ErrorCode::ForbiddenExpression));
-        }
-        return Ok((MatOrientation::Col, name));
-    }
-    let name = upper;
-    if !is_basic_identifier(&name) {
-        return Err(BasicError::new(ErrorCode::ForbiddenExpression));
-    }
-    Ok((MatOrientation::Normal, name))
+    let (orientation, operand) = match trimmed.get(..4) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("ROW ") => (MatOrientation::Row, &trimmed[4..]),
+        Some(prefix) if prefix.eq_ignore_ascii_case("COL ") => (MatOrientation::Col, &trimmed[4..]),
+        _ => (MatOrientation::Normal, trimmed),
+    };
+    let reference = CopyReference::parse(operand)
+        .ok_or_else(|| BasicError::new(ErrorCode::ForbiddenExpression))?;
+    Ok((orientation, reference))
 }
 
 fn classify_if_branch_command(command: &str) -> Option<IfBranchKind> {
@@ -23002,31 +23774,9 @@ fn is_assignment_target(source: &str) -> bool {
     is_basic_identifier(trimmed)
 }
 
-fn split_first_top_level(source: &str, separator: char) -> Option<(&str, &str)> {
-    let mut depth = 0i32;
-    let mut in_string = false;
-    for (i, ch) in source.char_indices() {
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if in_string {
-            continue;
-        }
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            _ if ch == separator && depth == 0 => {
-                return Some((&source[..i], &source[i + ch.len_utf8()..]));
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn split_print_items(source: &str) -> Vec<(&str, Option<char>)> {
+fn split_mat_print_items(source: &str) -> (Vec<(&str, Option<char>)>, bool) {
     let mut out = Vec::new();
+    let mut has_join = false;
     let mut start = 0usize;
     let mut depth = 0i32;
     let mut in_string = false;
@@ -23041,7 +23791,8 @@ fn split_print_items(source: &str) -> Vec<(&str, Option<char>)> {
         match ch {
             '(' => depth += 1,
             ')' => depth -= 1,
-            ';' | ',' if depth == 0 => {
+            ';' | ',' | '|' if depth == 0 => {
+                has_join |= ch == '|';
                 out.push((&source[start..i], Some(ch)));
                 start = i + ch.len_utf8();
             }
@@ -23051,18 +23802,52 @@ fn split_print_items(source: &str) -> Vec<(&str, Option<char>)> {
     if start < source.len() {
         out.push((&source[start..], None));
     }
-    out
+    (out, has_join)
+}
+
+fn starts_terminal_escape(ch: char) -> bool {
+    matches!(ch, '\x1b' | '\u{008e}'..='\u{0090}' | '\u{0098}' | '\u{009b}' | '\u{009d}'..='\u{009f}')
+}
+
+fn write_colored_print(
+    output: &mut impl Write,
+    text: &str,
+    style: PrintStyle<'_>,
+) -> io::Result<()> {
+    if !style.has_background {
+        return write!(
+            output,
+            "{}{text}{}",
+            style.sequence,
+            console::RESET_PRINT_COLOR
+        );
+    }
+    // A terminal can fill newly scrolled rows with its current background.
+    // Emit explicit line controls only after restoring the default colors.
+    for fragment in text.split_inclusive(['\r', '\n']) {
+        let content = fragment.trim_end_matches(['\r', '\n']);
+        if !content.is_empty() {
+            write!(
+                output,
+                "{}{}{}",
+                style.sequence,
+                content,
+                console::RESET_PRINT_COLORS
+            )?;
+        }
+        output.write_all(fragment[content.len()..].as_bytes())?;
+    }
+    Ok(())
 }
 
 fn print_using_format_expr(item: &str) -> Result<Option<&str>, ()> {
-    let trimmed = item.trim_start();
-    let Some(keyword) = trimmed.get(..5) else {
+    let Some(keyword) = item.get(..5) else {
         return Ok(None);
     };
     if !keyword.eq_ignore_ascii_case("USING") {
         return Ok(None);
     }
-    let rest = &trimmed[5..];
+    let rest = &item[5..];
     match rest.chars().next() {
         None => Err(()),
         Some(ch) if ch.is_whitespace() => {
