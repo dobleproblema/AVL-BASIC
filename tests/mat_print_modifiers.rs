@@ -41,7 +41,7 @@ fn mat_using_keeps_its_historical_expression_grammar_and_masks() {
         command(&mut interpreter, source);
         assert_eq!(interpreter.take_output(), " 8\n\n08\n", "{source}");
     }
-    for (format, expected) in [("", "8\n"), ("label", "label8\n")] {
+    for (format, expected) in [("", " 8\n"), ("label", "label8\n")] {
         command(&mut interpreter, &format!("MAT PRINT USING \"{format}\";A"));
         assert_eq!(interpreter.take_output(), expected);
         command(
@@ -55,6 +55,27 @@ fn mat_using_keeps_its_historical_expression_grammar_and_masks() {
         "DIM USINGvalues(0):MAT USINGvalues=9:MAT PRINT USINGvalues",
     );
     assert_eq!(interpreter.take_output(), " 9\n");
+}
+
+#[test]
+fn empty_using_mask_restores_default_number_format_within_print() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        r#"PRINT USING "0#";8;USING "";9;USING "000";7"#,
+    );
+    assert_eq!(interpreter.take_output(), "08 9 007\n");
+}
+
+#[test]
+fn empty_using_expression_resets_format_in_joined_mat_print() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, r#"DIM A(1):A(0)=8:A(1)=9:EMPTY$="""#);
+    command(
+        &mut interpreter,
+        r#"MAT PRINT USING "0#";A | USING EMPTY$+"";A | USING "000";A"#,
+    );
+    assert_eq!(interpreter.take_output(), "08   8  008\n09   9  009\n");
 }
 
 #[test]

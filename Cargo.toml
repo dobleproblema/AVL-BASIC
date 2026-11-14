@@ -1,6 +1,6 @@
 [package]
 name = "avl-basic"
-version = "1.6.29"
+version = "1.6.30"
 edition = "2021"
 license = "MIT"
 build = "build.rs"
@@ -20,6 +20,12 @@ minifb = { version = "0.29", default-features = false, features = ["x11"] }
 png = "0.17"
 kira = { version = "=0.12.4", default-features = false, features = ["wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
 cpal = { version = "=0.18.2", default-features = false }
+tempfile = "3"
+
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "=0.18.2", default-features = false, features = ["pulseaudio"] }
@@ -33,9 +39,6 @@ libc = "0.2"
 
 [build-dependencies]
 embed-resource = "3.0.9"
-
-[dev-dependencies]
-tempfile = "3"
 
 [profile.release]
 opt-level = 3

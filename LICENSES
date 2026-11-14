@@ -8,6 +8,8 @@ AVL BASIC's own MIT license is in COPYING.
 Apache-2.0
 ========================================================================
 
+The constant_time_eq dependency used by PACK is available under Apache-2.0.
+
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -223,6 +225,22 @@ Copyright (c) 2015 Carl Lerche + nix-rust Authors
 Copyright 2023 Colin Marc <hi@colinmarc.com>
 Copyright (c) [2021] [Marvin Countryman]
 Copyright (c) 2019 Carl Lerche
+
+Additional MIT notices for PACK and its temporary file dependencies:
+
+equivalent: Copyright (c) 2016--2023
+getrandom: Copyright (c) 2018-2026 The rust-random Project Developers
+           Copyright (c) 2014 The Rust Project Developers
+hashbrown: Copyright (c) 2016 Amanieu d'Antras
+indexmap: Copyright (c) 2016--2017
+memchr: Copyright (c) 2015 Andrew Gallant
+tempfile: Copyright (c) 2015 Steven Allen
+zeroize: Copyright (c) 2018-2026 The RustCrypto Project Developers
+zip: Copyright (c) 2014 Mathijs van de Nes
+
+The MIT terms also cover fastrand, itoa, once_cell, serde, serde_core,
+serde_json, typed-path, and zmij.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

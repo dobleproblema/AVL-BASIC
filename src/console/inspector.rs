@@ -2,7 +2,8 @@
 //! Edits only produce typed proposals; this module never evaluates or executes BASIC.
 use super::*;
 use crate::debugger::{
-    DebugDataSnapshot, DebugEditTarget, DebugSnapshot, DebugValue, DebugVariable,
+    DebugArrayPin, DebugArraySummary, DebugDataSnapshot, DebugEditTarget, DebugPauseAccess,
+    DebugSnapshot, DebugValue, DebugVariable,
 };
 
 mod edit;
@@ -38,6 +39,7 @@ enum EntryId {
     Heading(Category),
     Scalar(Category, String),
     ArrayElement(Category, String),
+    PinnedCell(usize),
     Array(String),
     Frame(usize),
     State,
@@ -51,6 +53,7 @@ impl EntryId {
             Self::Heading(category)
             | Self::Scalar(category, _)
             | Self::ArrayElement(category, _) => *category,
+            Self::PinnedCell(_) => Category::Pinned,
             Self::Array(_) => Category::Arrays,
             Self::Frame(_) => Category::Stack,
             Self::State => Category::State,
@@ -62,7 +65,11 @@ impl EntryId {
     fn selectable(&self) -> bool {
         matches!(
             self,
-            Self::Heading(_) | Self::Scalar(_, _) | Self::ArrayElement(_, _)
+            Self::Heading(_)
+                | Self::Scalar(_, _)
+                | Self::ArrayElement(_, _)
+                | Self::PinnedCell(_)
+                | Self::Array(_)
         )
     }
 
@@ -76,13 +83,13 @@ impl EntryId {
 }
 
 #[derive(Debug)]
-struct Pin {
+struct VariablePin {
     key: String,
     array: bool,
     display_name: String,
 }
 
-impl Pin {
+impl VariablePin {
     fn entry_id(&self) -> EntryId {
         if self.array {
             EntryId::ArrayElement(Category::Pinned, self.key.clone())
@@ -91,6 +98,37 @@ impl Pin {
         }
     }
 }
+
+#[derive(Debug)]
+struct CellPin {
+    target: DebugArrayPin,
+    display_name: String,
+    preview: Option<String>,
+}
+
+#[derive(Debug)]
+enum Pin {
+    Variable(VariablePin),
+    Cell(CellPin),
+}
+
+impl Pin {
+    fn entry_id(&self, index: usize) -> EntryId {
+        match self {
+            Self::Variable(pin) => pin.entry_id(),
+            Self::Cell(_) => EntryId::PinnedCell(index),
+        }
+    }
+
+    fn variable(&self) -> Option<&VariablePin> {
+        match self {
+            Self::Variable(pin) => Some(pin),
+            Self::Cell(_) => None,
+        }
+    }
+}
+
+const PIN_CELL_PREVIEW_WIDTH: usize = 80;
 
 fn array_base(name: &str) -> &str {
     name.split('(').next().unwrap_or(name)
@@ -316,10 +354,88 @@ impl InspectorState {
         true
     }
 
-    fn is_pinned(&self, key: &str, array: bool) -> bool {
-        self.pins
+    pub(super) fn open_array(
+        &mut self,
+        snapshot: &DebugSnapshot,
+        changes: &DebugPanelChanges,
+        width: usize,
+        rows: usize,
+    ) -> Option<DebugArraySummary> {
+        if !self.focused || self.is_editing() || width == 0 || rows == 0 {
+            return None;
+        }
+        let Some(EntryId::Array(key)) = self.panel(snapshot, changes, width, rows).selected else {
+            return None;
+        };
+        snapshot
+            .arrays
             .iter()
-            .any(|pin| pin.key == key && pin.array == array)
+            .find(|array| array.name.eq_ignore_ascii_case(&key))
+            .cloned()
+    }
+
+    pub(super) fn toggle_cell_pin(
+        &mut self,
+        target: DebugArrayPin,
+        access: &dyn DebugPauseAccess,
+    ) -> bool {
+        if let Some(index) = self
+            .pins
+            .iter()
+            .position(|pin| matches!(pin, Pin::Cell(cell) if cell.target == target))
+        {
+            self.remove_pin(index);
+            return false;
+        }
+        let indexes = target
+            .indexes
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let display_name = format!("{}({indexes})", target.name);
+        let preview = access.pinned_array_cell(&target, PIN_CELL_PREVIEW_WIDTH);
+        self.pins.push(Pin::Cell(CellPin {
+            target,
+            display_name,
+            preview,
+        }));
+        true
+    }
+
+    pub(super) fn refresh_cell_pins(&mut self, access: &dyn DebugPauseAccess) {
+        for pin in &mut self.pins {
+            if let Pin::Cell(cell) = pin {
+                cell.preview = access.pinned_array_cell(&cell.target, PIN_CELL_PREVIEW_WIDTH);
+            }
+        }
+    }
+
+    fn remove_pin(&mut self, index: usize) {
+        let removed = self.pins.remove(index).entry_id(index);
+        if self.selected.as_ref() == Some(&removed) {
+            let next = index.min(self.pins.len().saturating_sub(1));
+            self.selected = Some(
+                self.pins
+                    .get(next)
+                    .map_or(EntryId::Heading(Category::Pinned), |pin| pin.entry_id(next)),
+            );
+        } else if let Some(EntryId::PinnedCell(selected)) = self.selected.as_mut() {
+            if *selected > index {
+                *selected -= 1;
+            }
+        }
+    }
+
+    fn variable_pin_index(&self, key: &str, array: bool) -> Option<usize> {
+        self.pins.iter().position(|pin| {
+            pin.variable()
+                .is_some_and(|pin| pin.key == key && pin.array == array)
+        })
+    }
+
+    fn is_pinned(&self, key: &str, array: bool) -> bool {
+        self.variable_pin_index(key, array).is_some()
     }
 
     fn category(&self, category: Category, entries: Vec<Entry>) -> Vec<Entry> {
@@ -353,7 +469,22 @@ impl InspectorState {
         let pinned = self
             .pins
             .iter()
-            .map(|pin| {
+            .enumerate()
+            .map(|(index, pin)| {
+                let pin = match pin {
+                    Pin::Variable(pin) => pin,
+                    Pin::Cell(cell) => {
+                        return Entry::value(
+                            EntryId::PinnedCell(index),
+                            format!(
+                                "  [cell] {} = {}",
+                                cell.display_name,
+                                cell.preview.as_deref().unwrap_or("<unavailable>")
+                            ),
+                            false,
+                        );
+                    }
+                };
                 let variable = if pin.array {
                     pinned_array_value(snapshot, &pin.key)
                 } else {
@@ -630,6 +761,8 @@ impl InspectorState {
                     "Space Collapse"
                 }
             }
+            Some(EntryId::Array(_)) => "Enter Inspect",
+            Some(EntryId::PinnedCell(_)) => "Space Unpin",
             Some(id) if id.variable().is_some() => {
                 let (array, key) = id.variable().unwrap();
                 let available = if array {
@@ -823,22 +956,11 @@ impl InspectorState {
                     if !self.collapsed.remove(&category) {
                         self.collapsed.insert(category);
                     }
+                } else if let EntryId::PinnedCell(index) = id {
+                    self.remove_pin(index);
                 } else if let Some((array, key)) = id.variable() {
-                    if let Some(index) = self
-                        .pins
-                        .iter()
-                        .position(|pin| pin.key == key && pin.array == array)
-                    {
-                        self.pins.remove(index);
-                        if id.category() == Category::Pinned {
-                            self.selected = Some(
-                                self.pins
-                                    .get(index.min(self.pins.len().saturating_sub(1)))
-                                    .map_or(EntryId::Heading(Category::Pinned), |pin| {
-                                        pin.entry_id()
-                                    }),
-                            );
-                        }
+                    if let Some(index) = self.variable_pin_index(key, array) {
+                        self.remove_pin(index);
                     } else {
                         let variable = if array {
                             snapshot.array_elements.iter().find(|variable| {
@@ -851,7 +973,7 @@ impl InspectorState {
                                 .find(|variable| variable.name.eq_ignore_ascii_case(key))
                         };
                         if let Some(variable) = variable {
-                            self.pins.push(Pin {
+                            self.pins.push(Pin::Variable(VariablePin {
                                 key: key.to_string(),
                                 array,
                                 display_name: if array {
@@ -859,7 +981,7 @@ impl InspectorState {
                                 } else {
                                     variable.name.clone()
                                 },
-                            });
+                            }));
                         }
                     }
                 }
@@ -1001,6 +1123,7 @@ mod tests {
         DebugSnapshot {
             reason: DebugPauseReason::Step,
             location: DebugLocation {
+                source_path: None,
                 line: 10,
                 statement: 0,
                 source_span: None,
@@ -1054,6 +1177,73 @@ mod tests {
             .panel(snapshot, &DebugPanelChanges::default(), 42, 8)
             .render_lines(false, SyntaxTheme::Dark)
             .join("\n")
+    }
+
+    #[test]
+    fn visible_array_summary_is_actionable() {
+        let snapshot = snapshot();
+        let changes = DebugPanelChanges::default();
+        let mut state = state_at(EntryId::Heading(Category::Arrays));
+        key(&mut state, &snapshot, KeyCode::Down);
+        assert_eq!(state.status_hint(), "Enter Inspect");
+        let array = state.open_array(&snapshot, &changes, 42, 8).unwrap();
+        assert_eq!(array, snapshot.arrays[0]);
+
+        state.manual_scroll = true;
+        state.scroll = 0;
+        assert!(state.open_array(&snapshot, &changes, 42, 1).is_none());
+        state.focused = false;
+        assert!(state.open_array(&snapshot, &changes, 42, 8).is_none());
+    }
+
+    struct CellPreview(Option<String>);
+
+    impl DebugPauseAccess for CellPreview {
+        fn idle(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn set_variable(
+            &mut self,
+            _: &DebugEditTarget,
+            _: DebugValue,
+        ) -> Result<DebugSnapshot, String> {
+            unreachable!("rendering pins is read-only");
+        }
+
+        fn pinned_array_cell(&self, pin: &DebugArrayPin, width: usize) -> Option<String> {
+            assert_eq!(pin.indexes, [7]);
+            assert_eq!(width, PIN_CELL_PREVIEW_WIDTH);
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn fixed_cell_pin_survives_losing_last_write_and_can_be_removed_independently() {
+        let mut snapshot = snapshot();
+        let mut state = state_at(EntryId::ArrayElement(Category::Variables, "P".into()));
+        key(&mut state, &snapshot, KeyCode::Char(' '));
+        let pin = DebugArrayPin::test_pin("P", vec![7]);
+        assert!(state.toggle_cell_pin(pin, &CellPreview(Some("19".into()))));
+        assert!(text(&mut state, &snapshot).contains("[cell] P(7) = 19"));
+
+        snapshot.array_elements.clear();
+        state.selected = Some(EntryId::PinnedCell(1));
+        state.refresh_cell_pins(&CellPreview(Some("42".into())));
+        let rendered = text(&mut state, &snapshot);
+        assert!(rendered.contains("P() = <unavailable>"));
+        assert!(rendered.contains("[cell] P(7) = 42"));
+        state.refresh_cell_pins(&CellPreview(None));
+        assert!(text(&mut state, &snapshot).contains("[cell] P(7) = <unavailable>"));
+        assert_eq!(state.status_hint(), "Space Unpin");
+
+        key(&mut state, &snapshot, KeyCode::Char(' '));
+        assert_eq!(state.pins.len(), 1);
+        assert_eq!(
+            state.selected,
+            Some(EntryId::ArrayElement(Category::Pinned, "P".into()))
+        );
+        assert!(text(&mut state, &snapshot).contains("P() = <unavailable>"));
     }
 
     fn strip_sgr(text: &str) -> String {
@@ -1159,7 +1349,7 @@ mod tests {
             state
                 .pins
                 .iter()
-                .map(|pin| pin.key.as_str())
+                .map(|pin| pin.variable().unwrap().key.as_str())
                 .collect::<Vec<_>>(),
             ["A", "NAME$"]
         );
@@ -1234,7 +1424,7 @@ mod tests {
         assert_eq!(state.selected, Some(EntryId::Heading(Category::Variables)));
         state.selected = Some(EntryId::Array("P".into()));
         key(&mut state, &snapshot, KeyCode::Char(' '));
-        assert_eq!(state.selected, Some(EntryId::Heading(Category::Arrays)));
+        assert_eq!(state.selected, Some(EntryId::Array("P".into())));
         assert_eq!(state.pins.len(), 1);
         state.selected = Some(EntryId::Scalar(Category::Variables, "A".into()));
         key(&mut state, &snapshot, KeyCode::Char(' '));
@@ -1336,7 +1526,7 @@ mod tests {
         state.handle_key(KeyCode::PageUp, &snapshot, &changes, 120, usize::MAX);
         assert_eq!(state.selected, Some(EntryId::Heading(Category::Pinned)));
         state.handle_key(KeyCode::End, &snapshot, &changes, 120, 3);
-        assert_eq!(state.selected, Some(EntryId::Heading(Category::Arrays)));
+        assert_eq!(state.selected, Some(EntryId::Array("P".into())));
         state.handle_key(KeyCode::Home, &snapshot, &changes, 120, 3);
         assert_eq!(state.selected, Some(EntryId::Heading(Category::Pinned)));
         state.focused = false;
@@ -1371,7 +1561,10 @@ mod tests {
             state
                 .pins
                 .iter()
-                .map(|pin| (pin.key.as_str(), pin.array))
+                .map(|pin| {
+                    let pin = pin.variable().unwrap();
+                    (pin.key.as_str(), pin.array)
+                })
                 .collect::<Vec<_>>(),
             [("A", false), ("A", true), ("P", true)]
         );

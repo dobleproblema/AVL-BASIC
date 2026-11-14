@@ -1063,6 +1063,48 @@ fn missing_load_file_reports_basic_file_not_found() {
 }
 
 #[test]
+fn malformed_load_preserves_program_and_reports_physical_file_line() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("bad-format.bas"),
+        "900 PRINT 99\r\n\r\nnot a numbered line\r\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("bad-encoding.bas"),
+        b"900 PRINT 99\n\n910 REM \xff\n",
+    )
+    .unwrap();
+
+    let mut interp = Interpreter::new();
+    interp.root_dir = temp.path().to_path_buf();
+    interp.current_dir = temp.path().to_path_buf();
+    for line in ["10 Score=42", "20 STOP", "30 PRINT Score"] {
+        interp.process_immediate(line).unwrap();
+    }
+    let old_program = interp.program.list();
+    interp.process_immediate("RUN").unwrap();
+    interp.take_output();
+
+    for command in ["LOAD", "RUN"] {
+        for (filename, message) in [
+            ("bad-format.bas", "Invalid line format."),
+            ("bad-encoding.bas", "Invalid UTF-8."),
+        ] {
+            let error = interp
+                .process_immediate(&format!("{command} \"{filename}\""))
+                .unwrap_err();
+            assert_eq!(interp.program.list(), old_program);
+            assert_eq!(error.code, ErrorCode::InvalidLineFormat);
+            assert_eq!(error.line, None);
+            assert_eq!(error.display_for_basic(), format!("File line 3. {message}"));
+        }
+    }
+    interp.process_immediate("CONT").unwrap();
+    assert_eq!(interp.take_output(), " 42\n");
+}
+
+#[test]
 fn cd_reports_python_path_errors_and_keeps_virtual_root() {
     let temp = tempfile::tempdir().unwrap();
     let examples = temp.path().join("examples");
@@ -1395,7 +1437,7 @@ fn disabling_error_handler_inside_handler_still_reports_nested_handler_error() {
 40 A==W
 50 Z$ = ""
 60 ON ERROR GOTO 0
-70 PRINT USING W$;12.34
+70 PRINT USING "invalid";12.34
 80 END"###
         .lines()
     {
@@ -1850,7 +1892,7 @@ fn recursive_single_line_def_fn_reports_basic_error() {
         .expect_err("recursive single-line DEF FN must not overflow the Rust stack");
     assert_eq!(
         err.display_for_basic(),
-        "Line 20. Instruction not allowed inside a function."
+        "Line 20. Recursive call to function 'FNR' is not allowed."
     );
 }
 

@@ -12,6 +12,7 @@ mod keyboard;
 pub mod labels;
 mod language;
 pub mod lexer;
+pub mod pack;
 pub mod program;
 mod reserved;
 mod using_format;
@@ -19,9 +20,11 @@ pub mod value;
 pub mod window;
 
 pub use debugger::{
-    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugEditTarget,
-    DebugFrameKind, DebugLocation, DebugPauseAccess, DebugPauseReason, DebugSnapshot,
-    DebugStackFrame, DebugStatementTarget, DebugTimerSnapshot, DebugValue, DebugVariable, Debugger,
+    DebugAction, DebugArrayKind, DebugArrayPin, DebugArraySummary, DebugArrayWindow,
+    DebugArrayWindowRequest, DebugDataSnapshot, DebugEditTarget, DebugFrameKind, DebugLocation,
+    DebugPauseAccess, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugStatementTarget,
+    DebugTimerSnapshot, DebugValue, DebugVariable, Debugger, MAX_DEBUG_ARRAY_PREVIEW_WIDTH,
+    MAX_DEBUG_ARRAY_WINDOW_CELLS,
 };
 pub use error::{BasicError, BasicResult, ErrorCode};
 pub use graphics::Graphics;

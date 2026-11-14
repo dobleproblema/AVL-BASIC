@@ -1,9 +1,10 @@
 10 ' Dustline - a dirt-track time trial with scrolling prerendered scenery.
-20 ' Arrows/WASD: drive. Space: handbrake. G: ghost. P: pause. R: restart. M: sound. D: demo. F: FPS cap. V: VSYNC. U: fullscreen. J: window.
+20 ' Arrows/WASD: drive. Space: handbrake. G: ghost. P: pause. R: restart. M: sound. D: demo.
+25 ' 1: 960x540. 2: 1280x720. F: FPS cap. V: VSYNC. U: fullscreen. J: window.
 30 ' World: 10 pixels/metre; oblique orthographic projection, Y compressed to 65%.
 40 ' Physics, banked terrain contacts, mutable pixel mud, timing and audio are BASIC.
 50 SCREEN
-60 MODE 960 : SCREEN FULL ON : MOUSE OFF
+60 CALL setResolution(960) : SCREEN FULL ON : MOUSE OFF
 70 RAD
 80 MAT BASE 0
 90 PAPER RGB(22,32,31)
@@ -28,7 +29,7 @@
 410 CALL loadPersonalBest
 420 FrameLimit=0 : SyncEnabled=1 : SCREEN SYNC ON : CALL resetPerformance
 450 PrevT=TIME : Accum=0
-470 Cx=MAX(0,MIN(MapW-960,Px-480)) : Cy=MAX(0,MIN(MapH-540,Py*Iso-270))
+470 Cx=MAX(0,MIN(MapW-CanvasW,Px-CanvasW/2)) : Cy=MAX(0,MIN(MapH-CanvasH,Py*Iso-CanvasH/2))
 490 ' VSYNC starts ON; V toggles it, F toggles the optional 60 FPS cap. Physics stays at 120 Hz.
 500 WHILE 1
 510   Now=TIME
@@ -61,7 +62,8 @@
 860   CALL interpolateCar
 870   CamDt=MAX(0.001,Elapsed)
 880   IF Paused THEN CamDt=0
-910   Tx=MAX(0,MIN(MapW-960,RenderX+RenderVx*0.28-480)) : Ty=MAX(0,MIN(MapH-540,RenderY*Iso+RenderVy*Iso*0.28-300))
+910   Tx=MAX(0,MIN(MapW-CanvasW,RenderX+RenderVx*0.28-CanvasW/2))
+920   Ty=MAX(0,MIN(MapH-CanvasH,RenderY*Iso+RenderVy*Iso*0.28-CanvasH/2-30))
 930   Cx=Cx+(Tx-Cx)*MIN(1,5*CamDt) : Cy=Cy+(Ty-Cy)*MIN(1,5*CamDt)
 950   CALL drawWorld
 960   CALL drawHud
@@ -182,7 +184,7 @@
 2550   Paused=0 : Accum=0
 2570   MarkValid=0 : MarkT=0 : DustT=0
 2600   HitCool=0 : Rumble=0 : CamDt=0
-2630   Cx=MAX(0,MIN(MapW-960,Px-480)) : Cy=MAX(0,MIN(MapH-540,Py*Iso-300))
+2630   Cx=MAX(0,MIN(MapW-CanvasW,Px-CanvasW/2)) : Cy=MAX(0,MIN(MapH-CanvasH,Py*Iso-CanvasH/2-30))
 2650   Msg$="" : MsgT=0
 2670   LastLap=0 : LastDelta=0 : Laps=0
 2700   Collisions=0 : Jumps=0 : MaxHeight=0
@@ -889,7 +891,7 @@
 11840   MapX(Np)=MapX(0) : MapY(Np)=MapY(0)
 11860   SMALLFONT TRANSPARENT
 11870   FOR Mv=0 TO 6
-11880     MBx=(Mv MOD 4)*160 : MBy=540-(INT(Mv/4)+1)*112
+11880     MBx=(Mv MOD 4)*160 : MBy=CanvasH-(INT(Mv/4)+1)*112
 11900     TRECTANGLE MiniMap$,MBx,MBy,MBx+160,MBy+112
 11910     PENWIDTH 2
 11920     FOR Ms=1 TO 3
@@ -923,36 +925,36 @@
 12280   LOCAL Bounce
 12290   ' Keep camera fractions until drawing; integer offsets only select visible tiles.
 12300   Ix=INT(Cx) : Iy=INT(Cy)
-12320   TRECTANGLE Track$,0,0,960,540,Cx,MapH-Cy-540,Cx+960,MapH-Cy
-12330   ORIGIN 0,0,0,959,475,34
+12320   TRECTANGLE Track$,0,0,CanvasW,CanvasH,Cx,MapH-Cy-CanvasH,Cx+CanvasW,MapH-Cy
+12330   ORIGIN 0,0,0,CanvasW-1,CanvasH-65,34
 12340   ' Opaque coarse pixels cover painted arrows, wooden planks and kerb colours.
 12342   ' A conservative expiry per tile keeps pruning out of the normal per-patch loop.
 12350   FOR SoilPass=0 TO 2
-12360     FOR Ty=MAX(0,INT((Iy-30)/256)) TO MIN(TileRows-1,INT((Iy+570)/256))
-12370       FOR Tx=MAX(0,INT((Ix-30)/256)) TO MIN(TileCols-1,INT((Ix+990)/256))
+12360     FOR Ty=MAX(0,INT((Iy-30)/256)) TO MIN(TileRows-1,INT((Iy+CanvasH+30)/256))
+12370       FOR Tx=MAX(0,INT((Ix-30)/256)) TO MIN(TileCols-1,INT((Ix+CanvasW+30)/256))
 12380         Cell=Ty*TileCols+Tx+1
 12382         IF SoilPass=0 THEN
 12384           IF TileExpiry(Cell)>0 AND MudClock>=TileExpiry(Cell) THEN CALL pruneMudTile
 12386         ENDIF
 12390         Mi=Head(Cell)
 12400         WHILE Mi>0
-12410           IF MXMax(Mi)>=Ix AND MXMin(Mi)<=Ix+960 AND MYMax(Mi)>=Iy AND MYMin(Mi)<=Iy+540 THEN
+12410           IF MXMax(Mi)>=Ix AND MXMin(Mi)<=Ix+CanvasW AND MYMax(Mi)>=Iy AND MYMin(Mi)<=Iy+CanvasH THEN
 12420             ' Untouched clods hold for 25 s, then fade over 45-65 s of driving.
 12430             IF SoilPass=0 THEN MFade(Mi)=MAX(0,MIN(1,1-(MudClock-MTouch(Mi)-25)/MFadeDuration(Mi)))
 12460             IF MFade(Mi)>0 THEN
 12470               IF SoilPass=0 THEN
-12480                 Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12480                 Mx=M1x(Mi)-Cx : My=CanvasH-1-M1y(Mi)+Cy
 12490                 Dx=M2x(Mi) : Dy=M2y(Mi)
 12500                 FRECTANGLE Mx-2,My-1,Mx+Dx-3,My+Dy-2,MCol(Mi) ALPHA MFade(Mi)
 12510               ELSEIF SoilPass=1 THEN
 12520                 IF (MGx(Mi)+MGy(Mi)) MOD 3=0 THEN
-12530                   Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12530                   Mx=M1x(Mi)-Cx : My=CanvasH-1-M1y(Mi)+Cy
 12540                   Ex=M3x(Mi) : Ey=M3y(Mi)
 12550                   FRECTANGLE Mx+Ex-1,My+Ey-1,Mx+Ex+1,My+Ey+1,MBase(Mi) ALPHA MFade(Mi)
 12560                 ENDIF
 12570               ELSE
 12580                 IF (MGx(Mi)*3+MGy(Mi)) MOD 5=0 THEN
-12590                   Mx=M1x(Mi)-Cx : My=539-M1y(Mi)+Cy
+12590                   Mx=M1x(Mi)-Cx : My=CanvasH-1-M1y(Mi)+Cy
 12600                   Ex=M3x(Mi) : Ey=M3y(Mi)
 12610                   FRECTANGLE Mx+Ex,My+Ey,Mx+Ex+2,My+Ey+1,MEdge(Mi) ALPHA MFade(Mi)
 12612                 ENDIF
@@ -967,8 +969,8 @@
 12690   PENWIDTH 1
 12700   FOR DustParticle=0 TO MaxDust-1
 12710     IF DustL(DustParticle)>0 THEN
-12720       Dx=DustX(DustParticle)-Cx : Dy=539-DustY(DustParticle)*Iso+Cy+DustZ(DustParticle)*ZProj+DustAge(DustParticle)*8
-12740       IF Dx>=-20 AND Dx<=980 AND Dy>=20 AND Dy<=490 THEN
+12720       Dx=DustX(DustParticle)-Cx : Dy=CanvasH-1-DustY(DustParticle)*Iso+Cy+DustZ(DustParticle)*ZProj+DustAge(DustParticle)*8
+12740       IF Dx>=-20 AND Dx<=CanvasW+20 AND Dy>=20 AND Dy<=CanvasH-50 THEN
 12750         FCIRCLE Dx,Dy,3+DustAge(DustParticle)*12,RGB(199,164,110),0.65 ALPHA MIN(0.22,DustL(DustParticle)*0.2)
 12760       ENDIF
 12770     ENDIF
@@ -978,7 +980,7 @@
 12805   ' Smooth the position, but show the current heading without angular interpolation.
 12810   Dir=INT(Ang*64/(2*PI)+0.5) MOD 64
 12820   U=(Dir MOD 16)*64 : V=256-(Dir\16+1)*64
-12840   Sx=RenderX-Cx : Sy=539-RenderY*Iso+Cy
+12840   Sx=RenderX-Cx : Sy=CanvasH-1-RenderY*Iso+Cy
 12860   Shade=MAX(0.13,0.37-MAX(0,RenderZ-RenderFloor)*0.002)
 12870   GroundY=Sy+RenderFloor*ZProj
 12880   TRECTANGLE Shadow$,Sx-32,GroundY-21,Sx+32,GroundY+43,U,V,U+64,V+64,RGB(255,0,255) ALPHA Shade
@@ -998,8 +1000,8 @@
 13100   LOCAL GScreenX, GScreenY, GDir, Gu, Gv, GShadowY
 13110   CALL sampleGhost
 13120   IF GhostVisible=0 THEN EXIT SUB
-13150   GScreenX=GhostX-Cx : GScreenY=539-GhostY*Iso+Cy
-13170   IF GScreenX<-40 OR GScreenX>1000 OR GScreenY+GhostZ*ZProj<-40 OR GScreenY+GhostZ*ZProj>580 THEN EXIT SUB
+13150   GScreenX=GhostX-Cx : GScreenY=CanvasH-1-GhostY*Iso+Cy
+13170   IF GScreenX<-40 OR GScreenX>CanvasW+40 OR GScreenY+GhostZ*ZProj<-40 OR GScreenY+GhostZ*ZProj>CanvasH+40 THEN EXIT SUB
 13200   GDir=INT(GhostAngle*64/(2*PI)+0.5) MOD 64
 13210   IF GDir<0 THEN GDir=GDir+64
 13240   Gu=(GDir MOD 16)*64 : Gv=256-(GDir\16+1)*64
@@ -1013,7 +1015,7 @@
 13330 DEF SUB drawHud
 13340   LOCAL State$, GhostState$, Progress
 13350   ' Current lap, session best, saved record, last lap, speed and small map.
-13355   ORIGIN 80,-60
+13355   ORIGIN HudX,HudTop
 13360   FRECTANGLE 0,536,799,599,RGB(18,29,29) ALPHA 0.6
 13370   FRECTANGLE 0,535,799,536,RGB(189,146,70)
 13380   SMALLFONT TRANSPARENT
@@ -1029,8 +1031,8 @@
 13620   INK RGB(231,207,150) : MOVE 528,565 : LABEL FNCLOCK$(Best)
 13650   INK RGB(139,155,139) : MOVE 684,587 : LABEL "LAST LAP"
 13680   INK RGB(216,217,185) : MOVE 684,565 : LABEL FNCLOCK$(LastLap)
-13705   ORIGIN 80,0
-13710   FRECTANGLE -80,0,879,33,RGB(18,29,29) ALPHA 0.6
+13705   ORIGIN HudX,0
+13710   FRECTANGLE -HudX,0,CanvasW-HudX-1,33,RGB(18,29,29) ALPHA 0.6
 13720   INK RGB(173,184,162)
 13730   MOVE 18,22 : LABEL "ARROWS/WASD  SPACE: HANDBRAKE  G: GHOST  P: PAUSE  R: RESTART  M: SOUND  ESC: QUIT"
 13750   FRECTANGLE 20,48,178,114,RGB(18,29,29) ALPHA 0.6
@@ -1062,7 +1064,7 @@
 14300   IF TIME<MsgT AND Phase=2 THEN CALL drawMessage
 14330   IF WrongTime>0.7 AND Paused=0 THEN MsgDisplay$="WRONG WAY":CALL drawCenteredMessage
 14370   IF Demo THEN
-14380     INK RGB(240,190,99) : MOVE 22,451 : LABEL "DEMO  /  PRESS D TO PLAY"
+14380     INK RGB(240,190,99) : MOVE 22,CanvasH-89 : LABEL "DEMO  /  PRESS D TO PLAY"
 14410   ENDIF
 14420   IF Invalid THEN
 14430     INK RGB(246,151,102) : MOVE 225,115 : LABEL "INVALID LAP - PRESS R TO RESTART"
@@ -1087,10 +1089,13 @@
 14611 DEF SUB displayInput
 14612   IF K$="U" THEN SCREEN FULL ON
 14613   IF K$="J" THEN SCREEN FULL OFF
+14614   IF K$="1" THEN CALL setResolution(960)
+14615   IF K$="2" THEN CALL setResolution(1280)
 14617 SUBEND
 14618 DEF SUB drawDisplayControls
 14623   SMALLFONT TRANSPARENT : INK RGB(231,207,150)
-14624   MOVE 810,22 : LABEL "U FULL  J WINDOW"
+14624   MOVE CanvasW-150,32 : LABEL "U FULL  J WINDOW"
+14625   MOVE CanvasW-150,16 : LABEL "1/2 RES "+TRIM$(STR$(CanvasW))+"x"+TRIM$(STR$(CanvasH))
 14626 SUBEND
 14627 ' ----------------------------------------------------------------------
 14630 DEF SUB drawMessage
@@ -1098,17 +1103,17 @@
 14660 SUBEND
 14670 ' ----------------------------------------------------------------------
 14680 DEF SUB drawCenteredMessage
-14685   ORIGIN 80,-60
+14685   ORIGIN HudX,HudTop
 14690   FRECTANGLE 158,465,641,500,RGB(18,29,29) ALPHA 0.6
 14700   ' SMALLFONT is 8 by 16 pixels; centre the text inside the message panel.
 14710   SMALLFONT TRANSPARENT
 14720   INK RGB(241,211,147) : MOVE 400-4*LEN(MsgDisplay$),490 : LABEL MsgDisplay$
-14745   ORIGIN 80,0
+14745   ORIGIN HudX,0
 14750 SUBEND
 14760 ' ----------------------------------------------------------------------
 14770 DEF SUB drawTitle
 14775   ' Centre headings and prompts; keep both key-table columns left-aligned.
-14777   ORIGIN 80,-30
+14777   ORIGIN HudX,HudTop/2
 14780   FRECTANGLE 166,173,634,449,RGB(14,25,25) ALPHA 0.9
 14790   FRECTANGLE 166,447,634,450,RGB(221,166,76)
 14800   INK RGB(242,217,162)
@@ -1127,7 +1132,7 @@
 15050 SUBEND
 15060 ' ----------------------------------------------------------------------
 15070 DEF SUB drawPause
-15075   ORIGIN 80,-30
+15075   ORIGIN HudX,HudTop/2
 15080   FRECTANGLE 248,258,552,352,RGB(14,25,25) ALPHA 0.6
 15090   BIGFONT TRANSPARENT
 15100   INK RGB(242,217,162) : MOVE 352,329 : LABEL "PAUSED"
@@ -1137,7 +1142,7 @@
 15160 SUBEND
 15170 ' ----------------------------------------------------------------------
 15180 DEF SUB drawCountdown
-15185   ORIGIN 80,-30
+15185   ORIGIN HudX,HudTop/2
 15190   FRECTANGLE 332,273,468,367,RGB(14,25,25) ALPHA 0.6
 15200   BIGFONT TRANSPARENT
 15210   INK RGB(242,217,162) : MOVE 392,338 : LABEL DEC$(MAX(1,INT(ReadyUntil-TIME)+1),"0")
@@ -1251,7 +1256,7 @@
 16560   IF FpsReady THEN PerfText$="FPS "+DEC$(Fps,"0.0")+"  MAX "+DEC$(FramePeakMs,"0.0")+" ms"
 16570   SyncText$="OFF" : IF SyncEnabled THEN SyncText$="ON"
 16572   CapText$="F: "+CapText$+"  V: SYNC "+SyncText$
-16580   ORIGIN 80,-60
+16580   ORIGIN HudX,HudTop
 16590   FRECTANGLE 450,490,799,533,RGB(18,29,29) ALPHA 0.8
 16600   SMALLFONT TRANSPARENT : INK RGB(231,207,150)
 16610   MOVE 458,526 : LABEL PerfText$
@@ -1291,3 +1296,17 @@
 16920   WEND
 16930   TileExpiry(Cell)=NextExpiry
 16940 SUBEND
+16950 ' The canvas can change during a run. Keep the camera centred on the same world point.
+16960 DEF SUB setResolution(NewWidth)
+16970   LOCAL OldWidth,OldHeight
+16980   IF NewWidth=CanvasW THEN EXIT SUB
+16990   OldWidth=CanvasW : OldHeight=CanvasH
+17000   MODE NewWidth
+17010   CanvasW=WIDTH : CanvasH=HEIGHT
+17020   HudX=(CanvasW-800)/2 : HudTop=CanvasH-600
+17030   IF OldWidth=0 THEN EXIT SUB
+17040   Cx=MAX(0,MIN(MapW-CanvasW,Cx+(OldWidth-CanvasW)/2))
+17050   Cy=MAX(0,MIN(MapH-CanvasH,Cy+(OldHeight-CanvasH)/2))
+17060   CALL resetPerformance
+17070   PrevT=TIME
+17080 SUBEND

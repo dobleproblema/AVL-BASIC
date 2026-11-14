@@ -22,8 +22,7 @@ g-chess960.bas	Games, applications, and algorithmic scenes	11	Chess960 Generator
 g-crystal.bas	Games, applications, and algorithmic scenes	5	Crystal Siege	Rescue the golden core, then demolish one of three crystal constructions with ten shots; switch between three 4:3 resolutions, fullscreen and windowed presentation. Starts in a window with the mouse pointer hidden.	GOSUB;shared arrays;fixed-step Verlet/PBD;GTRIANGLE;depth buffer;AUDIO;WAV;CSV
 g-dungeon.bas	Games, applications, and algorithmic scenes	6	AVL Dungeon	Explore a 16:9 textured maze at 640x360, 960x540 or 1280x720, with warm torch lighting, a lantern with transparent glass, original music and sound effects. Find the gold key, unlock the gate and escape.	DEF SUB;DEF FN;LOCAL;array references;block IF;MODE;SCREEN FULL;SCREEN SYNC;FRAME;DDA raycasting;TRECTANGLE;TQUAD;perspective correction;vertex lighting;light map;depth testing;ALPHA;AUDIO;WAV
 g-dungeon-cpc.bas	Games, applications, and algorithmic scenes		AVL Dungeon CPC	Play the same 16:9 maze at 640x360, 960x540 or 1280x720 with the original melody and bass arranged for three CPC voices, percussion yielding to game effects and a three-part victory fanfare; no WAV files required. Shares the resolution, fullscreen and VSYNC controls with Dungeon.	DEF SUB;DEF FN;LOCAL;array references;block IF;MODE;SCREEN FULL;SCREEN SYNC;FRAME;SOUND;ENV;ENT;DATA;ON SQ;channel rendezvous;DDA raycasting;TQUAD;perspective correction;vertex lighting;light map;ALPHA
-g-dustline.bas	Games, applications, and algorithmic scenes	1	Dustline	Race a banked dirt circuit at 960x540 with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost and colored sector times; V toggles display synchronization.	DEF SUB;multiline DEF FN;LOCAL;array references;block IF;procedure error handling;BLOAD;TRECTANGLE;ALPHA;fixed-step physics;KEYDOWN;AUDIO;sequential files;spatial indexing;SCREEN FULL;SCREEN SYNC
-g-dustline-720.bas	Games, applications, and algorithmic scenes		Dustline 720	Drive the same Dustline circuit at 1280x720; V toggles display synchronization and F toggles the optional 60 FPS cap.	MODE;SCREEN FULL;SCREEN SYNC;FRAME;fixed-step physics;KEYDOWN;AUDIO
+g-dustline.bas	Games, applications, and algorithmic scenes	1	Dustline	Race a banked dirt circuit with controllable drifts, persistent pixel mud, ramp jumps, a session-best ghost and colored sector times. Press 1 for 960×540 or 2 for 1280×720.	DEF SUB;multiline DEF FN;LOCAL;array references;block IF;procedure error handling;BLOAD;TRECTANGLE;ALPHA;fixed-step physics;KEYDOWN;AUDIO;sequential files;spatial indexing;MODE;SCREEN FULL;SCREEN SYNC
 g-loan.bas	Games, applications, and algorithmic scenes		Graphical Loan Calculator	Graphical loan calculator with optional amortization table.	GINPUT;DEF FN;formatted output
 g-maze.bas	Games, applications, and algorithmic scenes	12	Maze Generator	A fresh maze appears with its solution stitched through it in a dashed path.	DFS/Prim;bit masks;path reconstruction
 g-random.bas	Games, applications, and algorithmic scenes		Random Walk	Random walk runs until it reaches the border.	RND;DRAW;boundary detection
@@ -48,6 +47,7 @@ g-origin.bas	3D, lighting, and texture mapping		Bouncing Viewport Cube	Rotating 
 g-raytracer.bas	3D, lighting, and texture mapping	2	Ray Tracer	A 640×480 glass-and-mirrors scene ray-traced entirely in BASIC.	ray tracing;Fresnel;reflection and refraction
 g-sphere.bas	3D, lighting, and texture mapping		Parametric Sphere	Parametric line sweep sketches a colored sphere.	parametric plotting;SCALE;DRAW
 g-voxel.bas	3D, lighting, and texture mapping	8	Voxel World	Fly over a procedural landscape with filtered lighting, cached fog colors and adjustable viewing distance.	voxel terrain;procedural generation;lighting;fog;FRAME
+g-cellular-automata.bas	Fractals, curves, and procedural geometry		Cellular Automata	Draws Rule 90 at startup. Press Space to switch between Rules 30 and 90 or Esc to quit.	IMPORT;array references;cellular automata;graphics
 g-chords.bas	Fractals, curves, and procedural geometry		Circle Chords	Complete chord graph drawn around a circle.	polar coordinates;DRAW;FRAME
 g-fdragon.bas	Fractals, curves, and procedural geometry		Dragon Curve	Dragon curve drawn with simulated recursive calls.	simulated recursion;DRAWR;arrays
 g-fhilbert.bas	Fractals, curves, and procedural geometry		Hilbert Curve	Hilbert curve generated from an expanded L-system.	L-system;string rewriting;DRAWR
@@ -84,6 +84,7 @@ g-scale5.bas	Plotting, charts, and mathematical visualization		Clipped Reciproca
 g-scale6.bas	Plotting, charts, and mathematical visualization		Masked Reciprocal Ranges	Overlays masked reciprocal plots across two ranges.	GRAPHRANGE;MASK;GRAPH
 g-scale7.bas	Plotting, charts, and mathematical visualization		Aspect-Ratio Circles	Shows aspect-ratio effects on two nominal circles.	SCALE;CIRCLE;aspect ratio
 g-scale8.bas	Plotting, charts, and mathematical visualization		Data Bar Chart	Builds a DATA-driven bar chart with scaled axes.	DATA;RECTANGLE;scaled axes
+g-clover.bas	Drawing, color, and coordinate primitives		Four-Leaf Clover	Draws a four-lobed clover from circular arcs and fills the outline.	CIRCLE;FILL;SWAP
 g-colors.bas	Drawing, color, and coordinate primitives		Color Formats	Documents supported color syntaxes with labeled swatches.	INK and PAPER;RGB;named colors
 g-demo2.bas	Drawing, color, and coordinate primitives		Circle Fill Test	Tiny random circle-and-fill drawing test.	CIRCLE;FILL;RND
 g-demo3.bas	Drawing, color, and coordinate primitives		Filled Primitive Benchmark	Random filled circles and rectangles benchmark primitives.	FCIRCLE;FRECTANGLE;FRAME
@@ -108,11 +109,12 @@ g-locate.bas	Text and typography		Cursor and Font Test	Mixes font sizes, cursor 
 g-strings.bas	Text and typography		Colored Text Modes	Compares colored opaque and transparent text output.	INK and PAPER;font modes;LABEL
 g-text.bas	Text and typography		Substring Text Scroll	Scrolls numeric text by changing its substring offset.	GPRINT;MID$;font modes
 g-usflag.bas	Text and typography		Text-Cell Flag	Draws a text-cell United States flag.	LOCATE;GPRINT;PAPER
+usflag.bas	Text and typography		Terminal Flag	Draws the United States flag in the terminal with foreground and background colors.	PRINT;COLOR;TAB;USING
 g-balls.bas	Sprites, images, and frame animation	14	Colliding Balls	Fifty numbered sprites bounce and collide without full clears.	sprite collisions;dirty redraw;COLMODE
 g-png-animation.bas	Sprites, images, and frame animation		PNG Dance Animation	A short anime dance loops from preloaded PNG frames.	BLOAD;string arrays;SCREEN;FRAME
 g-sprite.bas	Sprites, images, and frame animation		Sprite Transparency	Captures and redraws one sprite with transparency variants.	SPRITE$;SPRITE;transparency
 g-sprite-alpha.bas	Sprites, images, and frame animation		Sprite Opacity	A large, multicolored anime fairy moves and fades from 0% to 100% opacity over an anime image; translucent panels use the same ALPHA clause.	SPRITE MOVE;ALPHA;color-key transparency;BLOAD;frame restoration
-g-sprite-layers.bas	Sprites, images, and frame animation		Sprite Layers	Two aligned anime fairy sprites move together: half-transparent wings behind a fully opaque body.	SPRITE$;SPRITE MOVE;ALPHA;sprite layers;color-key transparency
+g-sprite-layers.bas	Sprites, images, and frame animation		RGBA Fairy	One cropped RGBA fairy sprite has an opaque body and wings at about 70% opacity.	BLOAD AS RGBA;CROP$;SPRITE MOVE;per-pixel alpha
 g-sprite2.bas	Sprites, images, and frame animation		Scaled Sprite Transparency	Repeats sprite transparency inside a scaled viewport.	SPRITE$;ORIGIN;transparency
 g-sprite3.bas	Sprites, images, and frame animation		Sprite Benchmark	Benchmarks many randomly placed transparent sprites.	SPRITE$;RND;FRAME
 g-sprite4.bas	Sprites, images, and frame animation		Draggable Sprite	Drags a sprite while restoring its captured background.	mouse events;background capture;SPRITE
@@ -137,6 +139,7 @@ iif.bas	Console algorithms and language features		Conditional Expressions	Select
 loan.bas	Console algorithms and language features		Console Loan Calculator	Console loan calculator with first-year amortization table.	INPUT;DEF FN;formatted output
 matrix.bas	Console algorithms and language features		Matrix Operations	Inverts, transposes, multiplies, and prints a matrix.	MAT INV;MAT TRN;DET
 matrix-expressions.bas	Console algorithms and language features		Compound Matrix Expressions	Combine matrix products, scalar operations, transposes, inverses, and statistics using BASIC expression precedence.	MAT;compound expressions;TRN;INV;SUM
+matrix-slices.bas	Console algorithms and language features		Matrix Slices	Prints slices side by side, highlights a diagonal, and compares a slice with its transpose.	MAT PRINT;slices;COLOR;COL;custom separators
 matrix-subarrays.bas	Console algorithms and language features		Matrix Subarray Copies	Copy matrix blocks, rows, and columns, then demonstrate overlapping and reversed vector ranges.	MAT;subarrays;MAT BASE;overlapping copies
 nqueens.bas	Console algorithms and language features		N-Queens	Backtracking solves and prints a sixteen-queen board.	backtracking;arrays;formatted output
 nr-factorial.bas	Console algorithms and language features		Block Factorial	Computes 100 factorial using nine-digit integer blocks.	arbitrary precision;arrays;PRINT USING
@@ -145,3 +148,4 @@ pimachin.bas	Console algorithms and language features		Machin Pi	GOSUB-based Mac
 pimachin-mat.bas	Console algorithms and language features		Machin Pi with MAT	Compute 1,000 pi digits with vector addition and subtraction, retaining BASIC loops for carries and borrows.	MAT;vector arithmetic;arbitrary precision;Machin formula
 pimachin-modern.bas	Console algorithms and language features		Modern Machin Pi	Compute 1,000 digits of π with block arithmetic and structured, modern BASIC.	DEF SUB;LOCAL;arbitrary precision
 powermul.bas	Console algorithms and language features		Arbitrary-Precision Powers	Computes arbitrary-precision integer powers by block multiplication.	DEF SUB;block multiplication;PRINT USING
+rule30.bas	Console algorithms and language features		Rule 30 in Text	Prints 31 generations of Rule 30 with # and uses the imported function to evaluate the neighborhood 100.	IMPORT;qualified functions;array references;cellular automata

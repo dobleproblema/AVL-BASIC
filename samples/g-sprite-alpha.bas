@@ -1,11 +1,12 @@
 100 REM A large multicolored anime fairy fades over a sunny anime background.
-110 REM ALPHA is opacity: 0=invisible, 1=opaque; magenta marks the sprite exterior.
+110 REM ALPHA fades the entire sprite from invisible to opaque.
 120 REM SPACE: pause; C: FPS cap; ESC: exit.
 130 SCREEN : MODE 640 : RAD : PAPER 0 : CLG OFFSCREEN : SMALLFONT TRANSPARENT
 140 BLOAD "assets/anime.png",BACKGROUND$
-150 BLOAD "assets/fairy-sprite.png",FAIRY$
+150 BLOAD "assets/fairy-layers-rgba.png",FAIRY$
+155 REM The RGB load discards per-pixel alpha. Black marks the transparent exterior.
 160 W=WIDTH : H=HEIGHT : SW=320 : SH=320
-200 COLMODE 0 : SPRITE FAIRY$,0,0,RGB(255,0,255),1 ALPHA 0
+200 COLMODE 0 : SPRITE FAIRY$,0,0,RGB(0,0,0),1 ALPHA 0
 210 T=0 : PAUSED=0 : CAP=1 : FRAMEI=0 : FPS=0 : COUNT=0
 220 TSIM=TIME : TLAST=TSIM : MAXFRAMES=0 : FIXEDDT=0 : FINALPNG$=""
 230 REM Optional capture: MAXFRAMES=150, FIXEDDT=1/60, FINALPNG$="alpha.png".

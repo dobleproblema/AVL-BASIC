@@ -1,6 +1,5 @@
 //! Language metadata generated at build time and embedded in the executable.
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TopicKind {
     Statement,
@@ -13,7 +12,6 @@ pub(crate) enum TopicKind {
 
 #[derive(Debug)]
 pub(crate) struct LanguageTopic {
-    #[cfg(test)]
     pub(crate) kind: TopicKind,
     #[cfg(test)]
     pub(crate) topic: &'static str,
@@ -188,19 +186,30 @@ mod tests {
     }
 
     #[test]
-    fn help_is_the_only_contextual_metacommand() {
-        let metacommands = topics()
+    fn contextual_metacommands_keep_their_names_available() {
+        let mut metacommands = topics()
             .iter()
             .filter(|topic| topic.kind == TopicKind::Metacommand)
             .map(|topic| topic.topic)
             .collect::<Vec<_>>();
-        assert_eq!(metacommands, ["HELP"]);
+        metacommands.sort_unstable();
+        assert_eq!(metacommands, ["HELP", "PACK"]);
         assert!(!is_known_word("HELP"));
+        assert!(!is_known_word("PACK"));
         assert!(!is_known_word("TOUR"));
         assert!(!is_known_word("SAMPLES"));
         assert!(!is_immediate_command_word("HELP"));
+        assert!(!is_immediate_command_word("PACK"));
         assert!(!is_immediate_command_word("EXIT"));
         assert!(is_immediate_command_word("QUIT"));
         assert!(is_immediate_command_word("SYSTEM"));
+    }
+
+    #[test]
+    fn import_has_help_without_reserving_its_name() {
+        assert!(topic("IMPORT").is_some());
+        assert!(!is_known_word("IMPORT"));
+        assert!(!is_reserved_base_name("IMPORT"));
+        assert!(!is_program_command_word("IMPORT"));
     }
 }

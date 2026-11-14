@@ -2,14 +2,27 @@ mod alpha_ops;
 mod array_expr;
 mod audio_commands;
 mod color_lut;
+mod debug_arrays;
 mod fused_leaves;
 mod gouraud_ops;
+mod imports;
 mod local_array_pool;
+mod mat_blocked;
+mod mat_elimination;
+#[cfg(test)]
+mod mat_blocked_tests;
 mod mat_compiled;
 #[cfg(test)]
 mod mat_compiled_tests;
+mod mat_divide;
+#[cfg(target_arch = "x86_64")]
+mod mat_rng_avx2;
 mod mat_stats;
 mod mat_subarrays;
+mod mat_transpose;
+#[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
+mod pack_validation;
+mod packed_files;
 #[cfg(test)]
 mod presentation_tests;
 mod sub_bindings;
@@ -25,9 +38,12 @@ mod texture_transparency_tests;
 
 use alpha_ops::compile_alpha_clause;
 use gouraud_ops::CompiledGouraud;
+use imports::{import_argument, is_import_alias, ActiveModule, ImportDeclaration, ImportedModule};
 use local_array_pool::LocalArrayPool;
 use mat_compiled::CompiledMatAssignment;
 use mat_subarrays::{CopyReference, MatPrintSource};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(crate) use pack_validation::validate_pack;
 use sub_bindings::{SubBindingPlan, SubCallBindings};
 use texture_ops::{
     compile_textured_quad_statement, compile_textured_triangle_statement, CompiledTexturedQuad,
@@ -38,11 +54,12 @@ use crate::audio::{cpc::Note as SoundNote, AudioSystem};
 use crate::console;
 use crate::data_files::{self, DataFiles, FileMode};
 use crate::debugger::{
-    DebugAction, DebugArrayKind, DebugArraySummary, DebugDataSnapshot, DebugEditTarget,
-    DebugFrameKind, DebugLocation, DebugPauseAccess, DebugPauseReason, DebugSnapshot,
-    DebugStackFrame, DebugStatementTarget, DebugTimerSnapshot, DebugValue, DebugVariable, Debugger,
+    DebugAction, DebugArrayKind, DebugArrayPin, DebugArraySummary, DebugArrayWindow,
+    DebugArrayWindowRequest, DebugDataSnapshot, DebugEditTarget, DebugFrameKind, DebugLocation,
+    DebugPauseAccess, DebugPauseReason, DebugSnapshot, DebugStackFrame, DebugStatementTarget,
+    DebugTimerSnapshot, DebugValue, DebugVariable, Debugger,
 };
-use crate::error::{BasicError, BasicResult, ErrorCode};
+use crate::error::{BasicError, BasicResult, ErrorCode, StaticErrorDetail};
 use crate::expr::{
     call_pure_function, checked_number, compile_expression, eval_compiled, eval_compiled_number,
     is_pi_constant_name, is_zero_arg_function, split_arguments, ArrayOrCallKind, BinaryOp,
@@ -67,7 +84,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -387,6 +404,9 @@ impl ArrayVariables {
 
     #[inline(always)]
     fn insert_resolved(&mut self, index: usize, value: ArrayValue) -> Option<ArrayValue> {
+        if let Some(previous) = &self.slots[index] {
+            value.debug_binding_id.set(previous.debug_binding_id.get());
+        }
         self.slots[index].replace(value)
     }
 
@@ -409,7 +429,7 @@ impl ArrayVariables {
 
     fn insert(&mut self, name: String, value: ArrayValue) -> Option<ArrayValue> {
         let index = self.slot_for_name(&name);
-        self.slots[index].replace(value)
+        self.insert_resolved(index, value)
     }
 
     fn remove(&mut self, name: &str) -> Option<ArrayValue> {
@@ -707,11 +727,26 @@ struct TimerInterruptState {
     interrupts_enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ArrayValue {
     dims: Vec<usize>,
     data: ArrayData,
     last_debug_write: Option<DebugArrayWrite>,
+    debug_writes: Option<Box<debug_arrays::DebugArrayWrites>>,
+    // Assigned lazily when a paused debugger pins this storage.
+    debug_binding_id: Cell<u64>,
+}
+
+impl Clone for ArrayValue {
+    fn clone(&self) -> Self {
+        Self {
+            dims: self.dims.clone(),
+            data: self.data.clone(),
+            last_debug_write: self.last_debug_write.clone(),
+            debug_writes: None,
+            debug_binding_id: Cell::new(0),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -738,6 +773,8 @@ impl ArrayValue {
             dims,
             data,
             last_debug_write: None,
+            debug_writes: None,
+            debug_binding_id: Cell::new(0),
         }
     }
 
@@ -762,6 +799,8 @@ impl ArrayValue {
             dims,
             data,
             last_debug_write: None,
+            debug_writes: None,
+            debug_binding_id: Cell::new(0),
         })
     }
 
@@ -810,20 +849,25 @@ impl ArrayValue {
             _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
         };
         if result.is_ok() {
-            self.last_debug_write = None;
+            self.clear_debug_write();
         }
         result
     }
 
-    fn remember_debug_write(&mut self, written_as: &str, indexes: &[i32]) {
+    fn remember_debug_write(&mut self, written_as: &str, indexes: &[i32], stamp: u64) {
         self.last_debug_write = Some(DebugArrayWrite {
             written_as: written_as.to_string(),
             indexes: indexes.to_vec(),
         });
+        if stamp != 0 {
+            let flat = self.flat_index(indexes).expect("the cell was just written");
+            self.remember_debug_array_change(stamp, debug_arrays::DebugArrayChange::Cell(flat));
+        }
     }
 
     fn clear_debug_write(&mut self) {
         self.last_debug_write = None;
+        self.debug_writes = None;
     }
 
     fn data_len(&self) -> usize {
@@ -1053,6 +1097,8 @@ impl ArrayValue {
                 dims,
                 data: ArrayData::Number(data),
                 last_debug_write: None,
+                debug_writes: None,
+                debug_binding_id: Cell::new(0),
             });
         }
         if base == 1 && !name.ends_with('$') {
@@ -1074,6 +1120,8 @@ impl ArrayValue {
                 dims,
                 data: ArrayData::Number(data),
                 last_debug_write: None,
+                debug_writes: None,
+                debug_binding_id: Cell::new(0),
             });
         }
         let mut array = ArrayValue::try_new(name, dims)?;
@@ -1099,6 +1147,50 @@ fn checked_zeroed_numeric_buffer(rows: usize, cols: usize) -> BasicResult<Vec<f6
         .map_err(|_| BasicError::new(ErrorCode::Overflow))?;
     values.resize(len, 0.0);
     Ok(values)
+}
+
+fn matrix_product_threads(rows: usize, work: usize) -> usize {
+    // Scoped workers have a fixed startup cost. Increase the limit only
+    // when the product and the number of output rows can amortize it.
+    let target = match work {
+        0..4_194_304 => return 1,
+        4_194_304..67_108_864 => 4,
+        67_108_864..134_217_728 => 8,
+        134_217_728..402_653_184 => 16,
+        _ => 24,
+    };
+    static AVAILABLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let available =
+        *AVAILABLE.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from));
+    target.min(available).min(rows.div_ceil(16))
+}
+
+#[inline(never)]
+fn try_avx_matrix_product(left: &NumericMatrix, right: &NumericMatrix, data: &mut [f64]) -> bool {
+    let work = left
+        .rows
+        .saturating_mul(left.cols)
+        .saturating_mul(right.cols);
+    if left.rows >= 16 && left.cols >= 32 && right.cols >= 32 && work >= 1_048_576 {
+        mat_blocked::try_multiply(
+            &left.data,
+            &right.data,
+            data,
+            left.rows,
+            left.cols,
+            right.cols,
+            matrix_product_threads(left.rows, work),
+        )
+    } else {
+        mat_blocked::try_multiply_small(
+            &left.data,
+            &right.data,
+            data,
+            left.rows,
+            left.cols,
+            right.cols,
+        )
+    }
 }
 
 fn checked_zeroed_numeric_matrix_buffer(
@@ -1409,6 +1501,9 @@ struct ActiveDebugRoutineFrame {
 #[derive(Debug, Default)]
 struct InterpreterDebuggerState {
     debugger: Option<Debugger>,
+    next_array_command: u64,
+    active_array_command: u64,
+    last_array_command: u64,
     terminal: Option<console::DebugTerminalSession>,
     resume_guards: Vec<(Cursor, usize)>,
     resume_relocated: Option<(Cursor, usize)>,
@@ -1433,6 +1528,30 @@ struct InterpreterDebugPause<'a> {
 impl DebugPauseAccess for InterpreterDebugPause<'_> {
     fn idle(&mut self) -> io::Result<()> {
         self.interpreter.pump_graphics_window_for_editor()
+    }
+
+    fn array_window(
+        &self,
+        name: &str,
+        request: &DebugArrayWindowRequest,
+    ) -> Result<DebugArrayWindow, String> {
+        self.interpreter.debug_array_window(name, request)
+    }
+
+    fn array_cell(&self, name: &str, indexes: &[i32]) -> Result<DebugValue, String> {
+        self.interpreter.debug_array_cell(name, indexes)
+    }
+
+    fn last_array_write(&self, name: &str) -> Option<Vec<i32>> {
+        self.interpreter.debug_last_array_write(name)
+    }
+
+    fn pin_array_cell(&self, name: &str, indexes: &[i32]) -> Result<DebugArrayPin, String> {
+        self.interpreter.debug_pin_array_cell(name, indexes)
+    }
+
+    fn pinned_array_cell(&self, pin: &DebugArrayPin, preview_width: usize) -> Option<String> {
+        self.interpreter.debug_pinned_array_cell(pin, preview_width)
     }
 
     fn set_variable(
@@ -1844,6 +1963,37 @@ enum FastNumberFunction {
     Round,
 }
 
+impl FastNumberFunction {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "ABS" => Self::Abs,
+            "INT" => Self::Int,
+            "SQR" => Self::Sqr,
+            "SIN" => Self::Sin,
+            "COS" => Self::Cos,
+            "FIX" => Self::Fix,
+            "SGN" => Self::Sgn,
+            "FRAC" => Self::Frac,
+            "LOG" => Self::Log,
+            "LOG10" => Self::Log10,
+            "EXP" => Self::Exp,
+            "TAN" => Self::Tan,
+            "ASN" => Self::Asn,
+            "ACS" => Self::Acs,
+            "ATN" => Self::Atn,
+            "COT" => Self::Cot,
+            "RTD" => Self::Rtd,
+            "DTR" => Self::Dtr,
+            "ROUND" => Self::Round,
+            _ => return None,
+        })
+    }
+}
+
+pub(crate) fn is_mat_map_function(name: &str) -> bool {
+    FastNumberFunction::from_name(name).is_some()
+}
+
 #[derive(Debug, Clone, Copy)]
 enum FastZeroArgFunction {
     Rnd,
@@ -2033,6 +2183,7 @@ enum CachedCommand {
     SubEnd,
     SubExit,
     Local,
+    Read(Rc<[String]>),
     Next(Option<String>),
     While(Rc<CompiledNumberExpr>),
     Wend,
@@ -2471,6 +2622,8 @@ fn eval_fast_index(interpreter: &mut Interpreter, expr: &FastIndexExpr) -> Basic
 #[derive(Debug)]
 pub struct Interpreter {
     pub program: Program,
+    imported_modules: HashMap<String, ImportedModule>,
+    active_module: Option<ActiveModule>,
     data_files: DataFiles,
     audio: AudioSystem,
     sound_handlers: [Option<i32>; 3],
@@ -2496,7 +2649,10 @@ pub struct Interpreter {
     immediate_commands: Option<Rc<[Rc<CachedCommand>]>>,
     pub root_dir: PathBuf,
     pub current_dir: PathBuf,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pack_export_enabled: bool,
     pub program_dir: Option<PathBuf>,
+    packed_files: Option<packed_files::PackedFiles>,
     numeric_variables: NumericVariables,
     string_variables: FastHashMap<String, String>,
     texture_cache: FastHashMap<String, CachedTexture>,
@@ -2607,6 +2763,8 @@ impl Interpreter {
         let root_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             program: Program::default(),
+            imported_modules: HashMap::new(),
+            active_module: None,
             data_files: DataFiles::default(),
             audio: AudioSystem::new(),
             sound_handlers: [None; 3],
@@ -2633,6 +2791,9 @@ impl Interpreter {
             root_dir: root_dir.clone(),
             current_dir: root_dir,
             program_dir: None,
+            packed_files: None,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            pack_export_enabled: false,
             numeric_variables: NumericVariables::default(),
             string_variables: FastHashMap::default(),
             texture_cache: FastHashMap::default(),
@@ -2701,7 +2862,7 @@ impl Interpreter {
             graphics_sync_enabled: false,
             graphics_mouse_cursor_visible: true,
             graphics_window_position: None,
-            graphics_window_enabled: graphics_window_enabled(),
+            graphics_window_enabled: graphics_window_enabled(false),
             graphics_window_suppressed: false,
             graphics_window_dirty: false,
             graphics_window_used_this_run: false,
@@ -2798,13 +2959,6 @@ impl Interpreter {
         }
     }
 
-    #[inline(always)]
-    fn debug_array_writes_enabled(&self) -> bool {
-        self.debugger_state
-            .as_ref()
-            .is_some_and(|state| state.debugger.is_some())
-    }
-
     pub fn debugger(&self) -> Option<&Debugger> {
         self.debugger_state
             .as_ref()
@@ -2868,6 +3022,18 @@ impl Interpreter {
         self.stream_output = enabled;
     }
 
+    /// Enables PACK in the native AVL BASIC console, whose binary is the export template.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pub fn enable_pack_export(&mut self) {
+        self.pack_export_enabled = true;
+    }
+
+    /// Enables graphics by default when a packaged program has no terminal.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pub fn enable_pack_gui(&mut self) {
+        self.graphics_window_enabled = graphics_window_enabled(true);
+    }
+
     pub fn print_banner(&mut self) {
         self.write_line(concat!(
             "AVL BASIC v",
@@ -2921,8 +3087,7 @@ impl Interpreter {
                     if let Err(err) = self.process_immediate(line) {
                         suppress_ready = false;
                         self.finish_output_line();
-                        let text = err.display_for_basic();
-                        self.write_line(&console::error_text(self.ansi_output, &text));
+                        self.write_line(&console::error_diagnostic_text(self.ansi_output, &err));
                     } else {
                         suppress_ready = is_program_line || line.trim().is_empty();
                     }
@@ -2979,8 +3144,7 @@ impl Interpreter {
     }
 
     pub fn load_file(&mut self, path: &Path) -> BasicResult<()> {
-        let text = read_text_file(path)?;
-        self.program.load_text(&text)?;
+        self.program = read_program_file(path)?;
         self.clear_program_breakpoints();
         self.clear_runtime()?;
         self.clear_command_caches();
@@ -3201,7 +3365,7 @@ impl Interpreter {
                 ErrorCode::RoutineDefinitionNotAtTopLevel,
             )?;
         }
-        let commands = self.prepare_immediate_commands(trimmed)?;
+        let (commands, metadata) = self.prepare_immediate_commands(trimmed)?;
         let saved_commands = self.immediate_commands.replace(commands.clone());
         let saved_for_stack = std::mem::take(&mut self.for_stack);
         let saved_while_stack = std::mem::take(&mut self.while_stack);
@@ -3212,7 +3376,7 @@ impl Interpreter {
         let saved_stopped_cursor = self.stopped_cursor;
         let saved_transfer_generation = self.program_transfer_generation;
         let saved_numeric_table = self.numeric_variables.table_id;
-        let result = self.execute_immediate_commands(&commands);
+        let result = self.execute_immediate_commands(&commands, &metadata, trimmed);
         self.immediate_commands = saved_commands;
         // Prompt loops have their own scopes, including after an error. A
         // transfer into a new or resumed program keeps that program's scopes.
@@ -3271,6 +3435,23 @@ impl Interpreter {
                     return Ok(true);
                 }
             }
+            if let Some(arg) = immediate_arg(trimmed, &upper, "PACK") {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+                if !self.pack_export_enabled {
+                    return Err(self.err(ErrorCode::InvalidArgument)
+                        .with_detail("PACK requires the native AVL BASIC console."));
+                }
+                let messages = crate::pack::run_command(
+                    arg,
+                    |source| self.resolve_bas_path_text(source, &self.current_dir),
+                    |output| self.resolve_virtual_path_text(output, &self.current_dir),
+                )?;
+                self.finish_output_line();
+                for message in messages {
+                    self.write_line(&message);
+                }
+                return Ok(true);
+            }
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "SAVE") {
             let path = self.resolve_bas_literal_arg(arg)?;
@@ -3318,7 +3499,10 @@ impl Interpreter {
         Ok(false)
     }
 
-    fn prepare_immediate_commands(&mut self, source: &str) -> BasicResult<Rc<[Rc<CachedCommand>]>> {
+    fn prepare_immediate_commands(
+        &mut self,
+        source: &str,
+    ) -> BasicResult<(Rc<[Rc<CachedCommand>]>, Vec<ExecutionMetadata>)> {
         let mut commands = Vec::new();
         let mut metadata = Vec::new();
         let mut visible_statement = 0;
@@ -3332,12 +3516,14 @@ impl Interpreter {
                 &mut visible_statement,
             );
         }
-        // Reuse inline IF expansion, but keep normal immediate statement
-        // dispatch (including commands forbidden at the prompt).
-        for (command, metadata) in commands.iter_mut().zip(metadata) {
+        // Keep normal immediate dispatch except for inline IF control and
+        // READ's validated targets, which use the same semantics in both modes.
+        for (command, metadata) in commands.iter_mut().zip(&metadata) {
             if matches!(
                 command.as_ref(),
-                CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
+                CachedCommand::InlineIfGuard { .. }
+                    | CachedCommand::InlineJump { .. }
+                    | CachedCommand::Read(_)
             ) {
                 continue;
             }
@@ -3357,10 +3543,15 @@ impl Interpreter {
             }
         }
         validate_immediate_structure(&commands)?;
-        Ok(Rc::from(commands.into_boxed_slice()))
+        Ok((Rc::from(commands.into_boxed_slice()), metadata))
     }
 
-    fn execute_immediate_commands(&mut self, commands: &[Rc<CachedCommand>]) -> BasicResult<()> {
+    fn execute_immediate_commands(
+        &mut self,
+        commands: &[Rc<CachedCommand>],
+        metadata: &[ExecutionMetadata],
+        source: &str,
+    ) -> BasicResult<()> {
         let mut cursor = Cursor {
             line_idx: 0,
             cmd_idx: 0,
@@ -3374,7 +3565,10 @@ impl Interpreter {
                 line_idx: cursor.line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             };
-            self.execute_cached_command(command.as_ref(), &mut cursor, &[])?;
+            self.execute_cached_command(command.as_ref(), &mut cursor, &[])
+                .map_err(|error| {
+                    with_statement_context(error, None, source, metadata, before.cmd_idx, false)
+                })?;
             if self.restart_run_loop {
                 // CHAIN entered at the prompt transfers into the stored
                 // program without RUN's variable and file reset.
@@ -4052,6 +4246,9 @@ impl Interpreter {
     }
 
     fn save_file(&mut self, path: &Path) -> BasicResult<()> {
+        if self.packed_files.is_some() {
+            return Err(self.err(ErrorCode::InvalidArgument));
+        }
         fs::write(path, self.program.list())
             .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))
     }
@@ -4206,6 +4403,7 @@ impl Interpreter {
 
     fn clear_runtime(&mut self) -> BasicResult<()> {
         self.prepare_run()?;
+        self.imported_modules.clear();
         self.functions.clear();
         self.immediate_functions.clear();
         self.routines_prepared = false;
@@ -4436,25 +4634,15 @@ impl Interpreter {
                         retry,
                         next: error_next,
                     } = failure;
-                    let err = if err
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.starts_with("Error in error handler:"))
-                    {
-                        err
-                    } else {
-                        self.with_current_line(err)
-                    };
+                    let err = self.with_numbered_statement(err, line_no, retry.cmd_idx);
                     if err.code == ErrorCode::KeyboardInterrupt {
                         return Err(err);
                     }
-                    if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
-                        if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
-                            continue 'run_loop;
-                        }
-                        continue;
+                    self.handle_runtime_error(err, &mut cursor, retry, error_next)?;
+                    if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
+                        continue 'run_loop;
                     }
-                    return Err(err);
+                    continue;
                 }
                 if self.end_requested {
                     self.present_dirty_graphics_at_run_boundary()?;
@@ -4578,8 +4766,7 @@ impl Interpreter {
             }
             while cursor.cmd_idx < commands_len {
                 let relocating = self.debugger_state.as_ref().is_some_and(|state| {
-                    state.resume_relocated
-                        == Some((cursor, self.run_depth + self.gosub_stack.len()))
+                    state.resume_relocated == Some((cursor, self.debug_depth()))
                 });
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
@@ -4627,7 +4814,7 @@ impl Interpreter {
                         }
                     }
                 }
-                let debug_depth = self.run_depth + self.gosub_stack.len();
+                let debug_depth = self.debug_depth();
                 let mut before = cursor;
                 let mut next = Cursor {
                     line_idx: cursor.line_idx,
@@ -4649,13 +4836,15 @@ impl Interpreter {
                         result => result?,
                     }
                 } else {
-                    self.execute_cached_command_debug(command, &mut cursor, &[])
-                        .err()
-                        .map(|error| CachedExecutionFailure {
-                            error,
-                            retry: before,
-                            next,
-                        })
+                    self.with_debug_array_command(debugger_boundary, |interpreter| {
+                        interpreter.execute_cached_command_debug(command, &mut cursor, &[])
+                    })
+                    .err()
+                    .map(|error| CachedExecutionFailure {
+                        error,
+                        retry: before,
+                        next,
+                    })
                 };
                 if !Rc::ptr_eq(&lines, &self.line_numbers_cache) && !self.restart_run_loop {
                     merged_line = true;
@@ -4693,25 +4882,22 @@ impl Interpreter {
                         retry,
                         next: error_next,
                     } = failure;
-                    let err = if err
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.starts_with("Error in error handler:"))
-                    {
-                        err
-                    } else {
-                        self.with_current_line(err)
-                    };
+                    let err = with_statement_context(
+                        err,
+                        Some(line_no),
+                        &line_source,
+                        &line_metadata,
+                        retry.cmd_idx,
+                        self.active_module.is_some(),
+                    );
                     if err.code == ErrorCode::KeyboardInterrupt {
                         return Err(err);
                     }
-                    if self.handle_runtime_error(err.clone(), &mut cursor, retry, error_next)? {
-                        if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
-                            continue 'run_loop;
-                        }
-                        continue;
+                    self.handle_runtime_error(err, &mut cursor, retry, error_next)?;
+                    if cursor.line_idx != before.line_idx || self.return_line_plan.is_some() {
+                        continue 'run_loop;
                     }
-                    return Err(err);
+                    continue;
                 }
                 if debugger_boundary {
                     self.debug_finished_cached_command(
@@ -4794,6 +4980,15 @@ impl Interpreter {
     }
 
     #[cold]
+    fn debug_depth(&self) -> usize {
+        let suspended = self
+            .active_module
+            .as_ref()
+            .map_or(0, |module| module.gosub_depth);
+        self.run_depth + self.gosub_stack.len() + suspended
+    }
+
+    #[cold]
     fn debug_before_cached_command(
         &mut self,
         cursor: &Cursor,
@@ -4803,7 +4998,7 @@ impl Interpreter {
     ) -> BasicResult<DebugHookControl> {
         self.sync_debug_routine_stack();
         self.sync_debug_control_scope();
-        let depth = self.run_depth + self.gosub_stack.len();
+        let depth = self.debug_depth();
         if self.debugger_state.as_mut().is_some_and(|state| {
             if state.resume_relocated == Some((*cursor, depth)) {
                 state.resume_relocated = None;
@@ -4834,7 +5029,12 @@ impl Interpreter {
             // breakpoint that originally stopped this wait command: a pending
             // step or explicit pause request must still be allowed to stop at
             // the suspended instruction.
-            let breakpoint = !resume_guarded && cursor.cmd_idx == 0 && debugger.is_breakpoint(line);
+            let breakpoint = !resume_guarded
+                && cursor.cmd_idx == 0
+                && match &self.active_module {
+                    Some(module) => debugger.is_module_breakpoint(&module.path, line),
+                    None => debugger.is_breakpoint(line),
+                };
             let step = debugger.step_is_due(depth);
             let reason = if breakpoint {
                 Some(DebugPauseReason::Breakpoint)
@@ -5322,6 +5522,10 @@ impl Interpreter {
             reason,
             location: DebugLocation {
                 line,
+                source_path: self
+                    .active_module
+                    .as_ref()
+                    .map(|module| module.path.clone()),
                 statement,
                 source_span,
                 source,
@@ -5567,7 +5771,7 @@ impl Interpreter {
         self.present_dirty_graphics_at_run_boundary()?;
         self.finish_output_line();
         let running_program = self.run_depth > 0;
-        if running_program {
+        if running_program && self.active_module.is_none() {
             self.stopped_cursor = Some(cursor.clone());
             self.return_line_plan = self.retain_current_line();
         }
@@ -5611,8 +5815,22 @@ impl Interpreter {
         if command.is_empty() {
             return Ok(());
         }
+        if import_argument(command).is_some() {
+            return if self.current_line.is_some() {
+                Ok(()) // Already validated when the routine catalog was prepared.
+            } else {
+                Err(self.err(ErrorCode::NonImmediateCommand))
+            };
+        }
         let upper = command.to_ascii_uppercase();
         let first = upper.split_whitespace().next().unwrap_or("");
+        if self.active_module.is_some()
+            && (first == "STOP" || (first == "CLEAR" && upper != "CLEAR INPUT"))
+        {
+            return Err(self
+                .err(ErrorCode::InvalidArgument)
+                .with_detail(format!("{first} is not allowed in an imported routine.")));
+        }
         if self.current_line.is_none() && is_non_immediate_command(first) {
             return Err(self.err(ErrorCode::NonImmediateCommand));
         }
@@ -6127,6 +6345,7 @@ impl Interpreter {
             CachedCommand::SubEnd => self.execute_subend(),
             CachedCommand::SubExit => self.execute_subexit(),
             CachedCommand::Local => self.execute_local(),
+            CachedCommand::Read(targets) => self.execute_read_targets(targets),
             CachedCommand::Next(var) => self.execute_next_cached(var.as_deref(), cursor),
             CachedCommand::While(condition) => {
                 self.execute_compiled_while(condition.clone(), cursor)
@@ -6279,6 +6498,9 @@ impl Interpreter {
             cursor.line_idx = self.merge_line_index(plan.line);
             self.return_line_plan = Some(plan);
         }
+        if self.active_module.is_some() {
+            return Ok(());
+        }
         self.restore_timer_interrupt_if_returned();
         if self
             .sound_isr_markers
@@ -6309,6 +6531,9 @@ impl Interpreter {
     }
 
     fn unwind_interrupts_to_gosub_depth(&mut self, depth: usize) {
+        if self.active_module.is_some() {
+            return;
+        }
         // Every ISR owns a GOSUB frame. Discarding a call can abandon several
         // nested ISRs; restore them in return order without touching an ISR
         // which was already running when the call began.
@@ -6450,11 +6675,16 @@ impl Interpreter {
             _ => unreachable!("inline IF debug path requires a guard command"),
         };
 
-        let condition_true = match condition.eval(self).map_err(|mut error| {
-            if error.line.is_none() {
-                error.line = self.current_line;
-            }
-            error
+        let guard_boundary = metadata
+            .get(guard_idx)
+            .is_none_or(|metadata| metadata.debugger_boundary);
+        let condition_true = match self.with_debug_array_command(guard_boundary, |interpreter| {
+            condition.eval(interpreter).map_err(|mut error| {
+                if error.line.is_none() {
+                    error.line = interpreter.current_line;
+                }
+                error
+            })
         }) {
             Ok(value) => value != 0.0,
             Err(error) => {
@@ -6504,7 +6734,7 @@ impl Interpreter {
                 }
             }
 
-            let debug_depth = self.run_depth + self.gosub_stack.len();
+            let debug_depth = self.debug_depth();
             let old_lines = self.line_numbers_cache.clone();
             let mut before = *cursor;
             let mut next = Cursor {
@@ -6515,7 +6745,9 @@ impl Interpreter {
                 command,
                 CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
             );
-            let result = self.execute_cached_command_debug(command, cursor, &[]);
+            let result = self.with_debug_array_command(debugger_boundary, |interpreter| {
+                interpreter.execute_cached_command_debug(command, cursor, &[])
+            });
             if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
                 line_idx = self.merge_line_index(source_line);
                 before.line_idx = line_idx;
@@ -6791,11 +7023,19 @@ impl Interpreter {
         let path = self.eval_value(args[..for_pos].trim())?.into_string()?;
         let number = self.eval_file_channel(channel.trim())?;
         self.data_files.check_free(number)?;
-        let path = self.resolve_data_path(&path)?;
-        self.data_files.open(number, path, mode)
+        let path = self.resolve_data_path(&path, mode)?;
+        let (identity, path) = match &self.packed_files {
+            Some(files) => {
+                let identity = files.identity(&path)?;
+                self.data_files.check_path_free(&identity, mode)?;
+                (identity, files.resolve(path, mode)?)
+            }
+            None => (path.clone(), path),
+        };
+        self.data_files.open(number, identity, &path, mode)
     }
 
-    fn resolve_data_path(&self, path: &str) -> BasicResult<PathBuf> {
+    fn resolve_data_path(&self, path: &str, mode: FileMode) -> BasicResult<PathBuf> {
         if path.is_empty() || path.contains('\0') {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
@@ -6852,6 +7092,9 @@ impl Interpreter {
         if candidate == root {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
+        if self.packed_files.is_some() {
+            return Ok(candidate);
+        }
         if candidate.exists() {
             return candidate
                 .canonicalize()
@@ -6862,9 +7105,13 @@ impl Interpreter {
             .ok_or_else(|| self.err(ErrorCode::InvalidArgument))?;
         // Canonical paths identify channels reached through different aliases;
         // containment has already been checked in the logical virtual tree.
-        let parent = parent
-            .canonicalize()
-            .map_err(|_| self.err(ErrorCode::FileIoError))?;
+        let parent = parent.canonicalize().map_err(|error| {
+            if mode == FileMode::Input && error.kind() == io::ErrorKind::NotFound {
+                self.err(ErrorCode::FileNotFound)
+            } else {
+                self.err(ErrorCode::FileIoError)
+            }
+        })?;
         Ok(parent.join(
             candidate
                 .file_name()
@@ -6957,7 +7204,7 @@ impl Interpreter {
                 if is_reserved_identifier_name(&name) {
                     return Err(self.err(ErrorCode::InvalidArgument));
                 }
-                compile_assignment_lvalue(target)
+                compile_assignment_lvalue(target, ErrorCode::InvalidArgument)
             })
             .collect::<BasicResult<Vec<_>>>()?;
         if line_input && !assignment_target_is_string(&targets[0]) {
@@ -7075,10 +7322,10 @@ impl Interpreter {
                 return Err(self.err(ErrorCode::Syntax));
             }
             let fmt = self.eval_value(expr)?.into_string()?;
-            if !valid_using_format(&fmt) {
+            if !fmt.is_empty() && !valid_using_format(&fmt) {
                 return Err(self.err(ErrorCode::UsingFormat));
             }
-            modifiers.using_format = Some(fmt);
+            modifiers.using_format = (!fmt.is_empty()).then_some(fmt);
             return Ok(());
         }
 
@@ -7365,7 +7612,7 @@ impl Interpreter {
         value: f64,
     ) -> BasicResult<()> {
         let current_line = self.current_line;
-        let capture_debug_write = self.debug_array_writes_enabled();
+        let debug_write = self.debug_array_write_stamp();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -7381,8 +7628,8 @@ impl Interpreter {
                 } else {
                     array.set_number(raw_indexes, value)
                 };
-                if result.is_ok() && capture_debug_write {
-                    array.remember_debug_write(name, raw_indexes);
+                if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
+                    array.remember_debug_write(name, raw_indexes, stamp);
                 }
                 return result.map_err(|mut e| {
                     if e.line.is_none() {
@@ -7405,8 +7652,8 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
         let result = array.set_number(&indexes, value);
-        if result.is_ok() && capture_debug_write {
-            array.remember_debug_write(name, &indexes);
+        if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
+            array.remember_debug_write(name, &indexes, stamp);
         }
         result.map_err(|mut e| {
             if e.line.is_none() {
@@ -8300,7 +8547,7 @@ impl Interpreter {
             return self.assign_mid_string(&lhs, value);
         }
         if let Some(open) = lhs.find('(') {
-            let capture_debug_write = self.debug_array_writes_enabled();
+            let debug_write = self.debug_array_write_stamp();
             let close = lhs.rfind(')').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let name = lhs[..open].trim().to_string();
             let indexes = split_arguments(&lhs[open + 1..close])
@@ -8325,8 +8572,8 @@ impl Interpreter {
                 }
                 e
             })?;
-            if capture_debug_write {
-                array.remember_debug_write(&name, &indexes);
+            if let Some(stamp) = debug_write {
+                array.remember_debug_write(&name, &indexes, stamp);
             }
             Ok(())
         } else {
@@ -8406,7 +8653,7 @@ impl Interpreter {
         is_string: bool,
         value: Value,
     ) -> BasicResult<()> {
-        let capture_debug_write = self.debug_array_writes_enabled();
+        let debug_write = self.debug_array_write_stamp();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -8426,8 +8673,8 @@ impl Interpreter {
             } else {
                 array.set(raw_indexes, value)
             };
-            if result.is_ok() && capture_debug_write {
-                array.remember_debug_write(name, raw_indexes);
+            if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
+                array.remember_debug_write(name, raw_indexes, stamp);
             }
             return result.map_err(|mut e| {
                 if e.line.is_none() {
@@ -8449,8 +8696,8 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
         let result = array.set(&indexes, value);
-        if result.is_ok() && capture_debug_write {
-            array.remember_debug_write(name, &indexes);
+        if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
+            array.remember_debug_write(name, &indexes, stamp);
         }
         result.map_err(|mut e| {
             if e.line.is_none() {
@@ -9072,6 +9319,11 @@ impl Interpreter {
     }
 
     fn execute_on_mouse(&mut self, command: &str) -> BasicResult<()> {
+        if self.active_module.is_some() {
+            return Err(self
+                .err(ErrorCode::InvalidArgument)
+                .with_detail("ON MOUSE is not allowed in an imported routine."));
+        }
         let body = command[2..].trim();
         let upper = body.to_ascii_uppercase();
         let Some(rest) = upper.strip_prefix("MOUSE") else {
@@ -9592,7 +9844,9 @@ impl Interpreter {
 
     fn execute_exit_for(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
         let Some(frame) = self.for_stack.pop() else {
-            return Err(self.err(ErrorCode::NextWithoutFor));
+            return Err(self
+                .err(ErrorCode::NextWithoutFor)
+                .with_static_detail(StaticErrorDetail::ExitForWithoutLoop));
         };
         let target = self.find_after_matching_next(cursor)?;
         self.for_stack
@@ -9713,7 +9967,9 @@ impl Interpreter {
 
     fn execute_exit_while(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
         let Some(frame) = self.while_stack.pop() else {
-            return Err(self.err(ErrorCode::WendWithoutWhile));
+            return Err(self
+                .err(ErrorCode::WendWithoutWhile)
+                .with_static_detail(StaticErrorDetail::ExitWhileWithoutLoop));
         };
         let target = self.find_after_matching_wend(cursor)?;
         self.for_stack
@@ -9744,7 +10000,7 @@ impl Interpreter {
                 .into_iter()
                 .map(|arg| {
                     if arg.trim().is_empty() {
-                        return Err(self.err(ErrorCode::UndefinedIndex));
+                        return Err(self.err(ErrorCode::NoDimension));
                     }
                     let n = self.eval_number(&arg)?;
                     array_dimension_bound(n).map_err(|error| self.with_current_line(error))
@@ -9780,7 +10036,7 @@ impl Interpreter {
                 .into_iter()
                 .map(|arg| {
                     if arg.trim().is_empty() {
-                        return Err(self.err(ErrorCode::UndefinedIndex));
+                        return Err(self.err(ErrorCode::NoDimension));
                     }
                     let n = self.eval_number(&arg)?;
                     array_dimension_bound(n).map_err(|error| self.with_current_line(error))
@@ -9840,7 +10096,7 @@ impl Interpreter {
     }
 
     fn execute_mat_read(&mut self, args: &str) -> BasicResult<()> {
-        let capture_debug_write = self.debug_array_writes_enabled();
+        let debug_write = self.debug_array_write_stamp();
         for target in split_arguments(args) {
             let name = target.trim().to_ascii_uppercase();
             if !is_basic_identifier(&name) {
@@ -9870,8 +10126,8 @@ impl Interpreter {
                     }
                     e
                 })?;
-                if capture_debug_write {
-                    array.remember_debug_write(&name, &indexes);
+                if let Some(stamp) = debug_write {
+                    array.remember_debug_write(&name, &indexes, stamp);
                 }
             }
         }
@@ -9997,7 +10253,7 @@ impl Interpreter {
         indexes: &[i32],
         raw_token: &str,
     ) -> BasicResult<()> {
-        let capture_debug_write = self.debug_array_writes_enabled();
+        let debug_write = self.debug_array_write_stamp();
         let raw = raw_token.trim();
         let is_string = self
             .array_ref(name)
@@ -10030,8 +10286,8 @@ impl Interpreter {
             }
             e
         })?;
-        if capture_debug_write {
-            array.remember_debug_write(name, indexes);
+        if let Some(stamp) = debug_write {
+            array.remember_debug_write(name, indexes, stamp);
         }
         Ok(())
     }
@@ -10042,7 +10298,7 @@ impl Interpreter {
         start_entry: usize,
         start_position: usize,
     ) {
-        let capture_debug_write = self.debug_array_writes_enabled();
+        let debug_write = self.debug_array_write_stamp();
         for (idx, entry) in entries.iter().enumerate().skip(start_entry) {
             let Some(array) = self.array_ref(&entry.name) else {
                 continue;
@@ -10060,8 +10316,9 @@ impl Interpreter {
             let name = self.array_lookup_key(&entry.name);
             for indexes in entry.positions.iter().skip(position) {
                 if let Some(array) = self.arrays.get_mut(name.as_ref()) {
-                    if array.set(indexes, default.clone()).is_ok() && capture_debug_write {
-                        array.remember_debug_write(&entry.name, indexes);
+                    let result = array.set(indexes, default.clone());
+                    if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
+                        array.remember_debug_write(&entry.name, indexes, stamp);
                     }
                 }
             }
@@ -10126,7 +10383,8 @@ impl Interpreter {
             if separator != Some(';') {
                 return Err(self.err(ErrorCode::Syntax));
             }
-            modifiers.using_format = Some(self.eval_value(item[5..].trim())?.into_string()?);
+            let fmt = self.eval_value(item[5..].trim())?.into_string()?;
+            modifiers.using_format = (!fmt.is_empty()).then_some(fmt);
         } else if let Some(arguments) = whole_function_argument(item, "COLOR") {
             if separator == Some('|') {
                 return Err(self.err(ErrorCode::Syntax));
@@ -10454,11 +10712,40 @@ impl Interpreter {
             );
         }
 
-        let value = self.eval_mat_expr(rhs)?;
-        self.finish_mat_assignment(&target, target_key, value)
+        let expression = self.parse_mat_expr(rhs)?;
+        if let Some(result) = self.try_execute_named_map(&target, &expression) {
+            return result;
+        }
+        self.execute_mat_arithmetic(&target, target_key, &expression)
+    }
+
+    fn mat_random_fill(&mut self, target: &str) -> BasicResult<()> {
+        let debug_write = self.debug_array_write_stamp();
+        let Some(array) = self.arrays.get_mut(target) else {
+            return Err(self.err(ErrorCode::Undefined));
+        };
+        let ArrayData::Number(values) = &mut array.data else {
+            return Err(self.err(ErrorCode::TypeMismatch));
+        };
+        let base_one = self.mat_base == 1;
+        if base_one && (array.dims.is_empty() || array.dims.contains(&0)) {
+            return Ok(());
+        }
+        self.rng.fill_matrix(values, &array.dims, base_one);
+        let change = if base_one {
+            debug_arrays::DebugArrayChange::BaseOne
+        } else {
+            debug_arrays::DebugArrayChange::All
+        };
+        array.clear_debug_write();
+        if let Some(stamp) = debug_write {
+            array.remember_debug_array_change(stamp, change);
+        }
+        Ok(())
     }
 
     fn mat_fill_array(&mut self, target: &str, value: Value) -> BasicResult<()> {
+        let debug_write = self.debug_array_write_stamp();
         let Some(array) = self.arrays.get_mut(target) else {
             return Err(self.err(ErrorCode::Undefined));
         };
@@ -10467,7 +10754,11 @@ impl Interpreter {
                 e.line = self.current_line;
             }
             e
-        })
+        })?;
+        if let Some(stamp) = debug_write {
+            array.remember_debug_array_change(stamp, debug_arrays::DebugArrayChange::All);
+        }
+        Ok(())
     }
 
     fn mat_identity(&mut self, target: &str) -> BasicResult<()> {
@@ -10499,6 +10790,12 @@ impl Interpreter {
     }
 
     fn eval_mat_expr(&mut self, source: &str) -> BasicResult<MatExprValue> {
+        self.parse_mat_expr(source)?
+            .eval(self)
+            .map_err(|error| self.with_current_line(error))
+    }
+
+    fn parse_mat_expr(&self, source: &str) -> BasicResult<mat_compiled::CompiledMatExpr> {
         mat_compiled::CompiledMatExpr::parse(source)
             .map_err(|error| {
                 if error.code == ErrorCode::Syntax && mat_compiled::has_array_slice(source, self) {
@@ -10506,9 +10803,7 @@ impl Interpreter {
                 } else {
                     self.with_current_line(error)
                 }
-            })?
-            .eval(self)
-            .map_err(|error| self.with_current_line(error))
+            })
     }
 
     fn mat_unary_minus(&mut self, value: MatExprValue) -> BasicResult<MatExprValue> {
@@ -10718,7 +11013,15 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ForbiddenExpression));
         };
         self.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
+        let use_avx = left_values.len() >= 32 && mat_divide::avx_available();
         let divide_row = |numerators: &mut [f64], divisors: &[f64]| -> BasicResult<()> {
+            if use_avx && numerators.len() >= 32 && numerators.len() == divisors.len() {
+                // The numerator is a private snapshot, so a late zero leaves
+                // the BASIC destination unchanged.
+                return mat_divide::divide(numerators, divisors)
+                    .then_some(())
+                    .ok_or_else(|| self.err(ErrorCode::DivisionByZero));
+            }
             for (numerator, &divisor) in numerators.iter_mut().zip(divisors) {
                 *numerator = self.mat_array_quotient(*numerator, divisor)?;
             }
@@ -10841,7 +11144,12 @@ impl Interpreter {
                     data[r * right.cols + c] = sum;
                 }
             }
-        } else if right.cols >= 5 {
+        } else if right.cols >= 5
+            && !(cfg!(target_arch = "x86_64")
+                && left.rows >= 5
+                && left.cols >= 5
+                && try_avx_matrix_product(&left, &right, &mut data))
+        {
             for r in 0..left.rows {
                 let output_row = &mut data[r * right.cols..(r + 1) * right.cols];
                 let left_row = &left.data[r * left.cols..(r + 1) * left.cols];
@@ -10928,6 +11236,14 @@ impl Interpreter {
     }
 
     fn invert_numeric_matrix(&self, matrix: NumericMatrix) -> BasicResult<ArrayValue> {
+        self.invert_numeric_matrix_with_avx(matrix, true)
+    }
+
+    fn invert_numeric_matrix_with_avx(
+        &self,
+        matrix: NumericMatrix,
+        allow_avx: bool,
+    ) -> BasicResult<ArrayValue> {
         if matrix.rows != matrix.cols {
             return Err(self.err(ErrorCode::InvalidDimensions));
         }
@@ -10981,6 +11297,37 @@ impl Interpreter {
         for i in 0..n {
             inv[i * n + i] = 1.0;
         }
+        if allow_avx && mat_elimination::enabled(n) {
+            let threads = mat_elimination::inverse_threads(&a, n);
+            mat_elimination::run(threads, |workers| {
+                self.eliminate_inverse(&mut a, &mut inv, n, Some(workers))
+            })?;
+        } else {
+            self.eliminate_inverse(&mut a, &mut inv, n, None)?;
+        }
+        if a.iter().chain(&inv).any(|value| !value.is_finite()) {
+            return Err(self.err(ErrorCode::InvalidValue));
+        }
+        if scale != 1.0 {
+            for value in &mut inv {
+                let restored = *value * scale;
+                if !restored.is_finite() || (restored == 0.0 && *value != 0.0) {
+                    return Err(self.err(ErrorCode::InvalidValue));
+                }
+                *value = restored;
+            }
+        }
+        ArrayValue::from_numeric_matrix("", self.mat_base, n, n, inv)
+            .map_err(|error| self.with_current_line(error))
+    }
+
+    fn eliminate_inverse(
+        &self,
+        a: &mut [f64],
+        inv: &mut [f64],
+        n: usize,
+        mut workers: Option<&mut mat_elimination::Workers<'_>>,
+    ) -> BasicResult<()> {
         for col in 0..n {
             let mut pivot = col;
             let mut pivot_abs = a[col * n + col].abs();
@@ -11009,6 +11356,10 @@ impl Interpreter {
                 a[col * n + c] *= pivot_inv;
                 inv[col * n + c] *= pivot_inv;
             }
+            if let Some(workers) = workers.as_deref_mut() {
+                workers.update(a, Some(inv), n, col);
+                continue;
+            }
             for row in 0..n {
                 if row == col {
                     continue;
@@ -11023,20 +11374,7 @@ impl Interpreter {
                 }
             }
         }
-        if a.iter().chain(&inv).any(|value| !value.is_finite()) {
-            return Err(self.err(ErrorCode::InvalidValue));
-        }
-        if scale != 1.0 {
-            for value in &mut inv {
-                let restored = *value * scale;
-                if !restored.is_finite() || (restored == 0.0 && *value != 0.0) {
-                    return Err(self.err(ErrorCode::InvalidValue));
-                }
-                *value = restored;
-            }
-        }
-        ArrayValue::from_numeric_matrix("", self.mat_base, n, n, inv)
-            .map_err(|error| self.with_current_line(error))
+        Ok(())
     }
 
     // This representation is used only after a product leaves the normal f64
@@ -11081,6 +11419,21 @@ impl Interpreter {
         }
         let n = matrix.rows;
         let mut a = matrix.data;
+        if mat_elimination::enabled(n) {
+            let threads = mat_elimination::determinant_threads(n);
+            Ok(mat_elimination::run(threads, |workers| {
+                Self::eliminate_determinant(&mut a, n, Some(workers))
+            }))
+        } else {
+            Ok(Self::eliminate_determinant(&mut a, n, None))
+        }
+    }
+
+    fn eliminate_determinant(
+        a: &mut [f64],
+        n: usize,
+        mut workers: Option<&mut mat_elimination::Workers<'_>>,
+    ) -> f64 {
         let mut det = 1.0;
         let mut sign = 1.0;
         let mut needs_scaled_product = false;
@@ -11095,7 +11448,7 @@ impl Interpreter {
                 }
             }
             if pivot_abs == 0.0 {
-                return Ok(0.0);
+                return 0.0;
             }
             if pivot != col {
                 for c in 0..n {
@@ -11106,6 +11459,10 @@ impl Interpreter {
             let pivot_value = a[col * n + col];
             det *= pivot_value;
             needs_scaled_product |= !det.is_normal();
+            if let Some(workers) = workers.as_deref_mut() {
+                workers.update(a, None, n, col);
+                continue;
+            }
             for row in col + 1..n {
                 let factor = a[row * n + col] / pivot_value;
                 for c in col + 1..n {
@@ -11121,23 +11478,28 @@ impl Interpreter {
                 // Preserve existing DET NaN/Inf behavior if elimination itself
                 // cannot represent a pivot; this fallback fixes the product.
                 if !pivot.is_finite() {
-                    return Ok(det * sign);
+                    return det * sign;
                 }
                 Self::multiply_scaled_numeric_product(&mut product, pivot);
             }
-            return Ok(Self::scaled_numeric_product_value(product) * sign);
+            return Self::scaled_numeric_product_value(product) * sign;
         }
-        Ok(det * sign)
+        det * sign
     }
 
     fn execute_read(&mut self, args: &str) -> BasicResult<()> {
-        for target in split_arguments(args) {
+        let targets = compile_read_targets(args).map_err(|error| self.with_current_line(error))?;
+        self.execute_read_targets(&targets)
+    }
+
+    fn execute_read_targets(&mut self, targets: &[String]) -> BasicResult<()> {
+        for target in targets {
             if self.data_pointer >= self.data.len() {
                 return Err(self.err(ErrorCode::DataExhausted));
             }
             let value = self.data[self.data_pointer].clone();
             self.data_pointer += 1;
-            self.assign(&target, value)?;
+            self.assign(target, value)?;
         }
         Ok(())
     }
@@ -11349,7 +11711,7 @@ impl Interpreter {
 
     fn process_timers(&mut self, cursor: &mut Cursor) -> BasicResult<bool> {
         self.audio.tick();
-        if self.run_depth == 0 {
+        if self.run_depth == 0 || self.active_module.is_some() {
             return Ok(false);
         }
         if !self.interrupts_enabled {
@@ -11441,7 +11803,10 @@ impl Interpreter {
         let saved_line = self.current_line;
         let result = self
             .collect_program_routines()
-            .and_then(|_| self.prepare_line_labels())
+            .and_then(|imports| {
+                self.prepare_line_labels()?;
+                self.prepare_imports(imports)
+            })
             .map_err(|error| self.with_current_line(error));
         self.current_line = saved_line;
         if result.is_err() {
@@ -11451,6 +11816,7 @@ impl Interpreter {
             self.fn_line_owner.clear();
             self.sub_line_owner.clear();
             self.routine_definition_skips.clear();
+            self.imported_modules.clear();
         } else {
             self.routines_prepared = true;
         }
@@ -11613,9 +11979,11 @@ impl Interpreter {
         Ok(())
     }
 
-    fn collect_program_routines(&mut self) -> BasicResult<()> {
+    fn collect_program_routines(&mut self) -> BasicResult<Vec<ImportDeclaration>> {
         let lines = self.line_numbers_cache.clone();
         let compiled_lines = self.compiled_line_cache.clone();
+        let mut imports = Vec::new();
+        let mut aliases = HashSet::new();
         let mut if_depth = 0usize;
         let mut for_names: Vec<String> = Vec::new();
         let mut while_depth = 0usize;
@@ -11639,10 +12007,36 @@ impl Interpreter {
                         ErrorCode::RoutineDefinitionNotAtTopLevel,
                     )
                     .map_err(|error| error.at_line(line))?;
+                    if import_argument(source).is_none() && imports::contains_import(source) {
+                        return Err(self
+                            .err(ErrorCode::Syntax)
+                            .with_detail("IMPORT must be a standalone top-level declaration."));
+                    }
                 }
             }
             let command = commands[cursor.cmd_idx].as_ref();
             if let CachedCommand::Raw(source) = command {
+                if let Some(argument) = import_argument(source) {
+                    if self.active_module.is_some()
+                        || if_depth > 0
+                        || !for_names.is_empty()
+                        || while_depth > 0
+                        || commands.len() != 1
+                    {
+                        return Err(self.err(ErrorCode::Syntax).with_detail(
+                            "IMPORT must be a standalone declaration in the main program.",
+                        ));
+                    }
+                    let import = ImportDeclaration::parse(line, argument)?;
+                    if !aliases.insert(import.alias.clone()) {
+                        return Err(self
+                            .err(ErrorCode::Syntax)
+                            .with_detail(format!("Duplicate IMPORT alias '{}'.", import.alias)));
+                    }
+                    imports.push(import);
+                    cursor.cmd_idx += 1;
+                    continue;
+                }
                 if first_word_is(source, "DEF") {
                     if if_depth > 0 || !for_names.is_empty() || while_depth > 0 {
                         return Err(self.err(ErrorCode::RoutineDefinitionNotAtTopLevel));
@@ -11655,6 +12049,24 @@ impl Interpreter {
                             cmd_idx: cursor.cmd_idx + 1,
                         });
                     } else {
+                        let end = if cursor.cmd_idx == 0 {
+                            cursor.line_idx - 1
+                        } else {
+                            cursor.line_idx
+                        };
+                        for &body_line in &lines[definition.line_idx..=end] {
+                            if self
+                                .command_cache
+                                .get(&body_line)
+                                .into_iter()
+                                .flatten()
+                                .any(|command| imports::contains_import(command))
+                            {
+                                return Err(BasicError::new(ErrorCode::Syntax)
+                                    .with_detail("IMPORT cannot appear inside a routine.")
+                                    .at_line(body_line));
+                            }
+                        }
                         let nested_error = if source.to_ascii_uppercase().starts_with("DEF SUB") {
                             ErrorCode::SubroutineForbidden
                         } else {
@@ -11685,6 +12097,17 @@ impl Interpreter {
                     self.routine_definition_skips.insert(definition, cursor);
                     continue;
                 }
+            }
+            if self.active_module.is_some()
+                && !self
+                    .command_cache
+                    .get(&line)
+                    .and_then(|commands| commands.get(cursor.cmd_idx))
+                    .is_some_and(|source| first_word_is(source, "REM"))
+            {
+                return Err(self.err(ErrorCode::Syntax).with_detail(
+                    "A library may contain only comments and routine definitions at top level.",
+                ));
             }
             match classify_cached_structure(command) {
                 Some(CachedStructureKind::IfStart) => if_depth += 1,
@@ -11727,7 +12150,7 @@ impl Interpreter {
             }
             cursor.cmd_idx += 1;
         }
-        Ok(())
+        Ok(imports)
     }
 
     fn execute_def(&mut self, command: &str, cursor: &mut Cursor) -> BasicResult<()> {
@@ -12036,14 +12459,14 @@ impl Interpreter {
         if self.handling_error {
             return self.handler_inside_multiline_routine(true);
         }
-        !self.active_functions.is_empty()
+        self.active_function_frame().is_some()
     }
 
     fn inside_multiline_sub(&self) -> bool {
         if self.handling_error {
             return self.handler_inside_multiline_routine(false);
         }
-        !self.active_subs.is_empty()
+        self.active_sub_name().is_some()
     }
 
     #[cold]
@@ -12066,13 +12489,35 @@ impl Interpreter {
     }
 
     fn active_function_name(&self) -> Option<&str> {
-        self.active_functions
-            .last()
+        self.active_function_frame()
             .map(|frame| frame.name.as_ref())
     }
 
+    fn active_function_frame(&self) -> Option<&ActiveFunctionFrame> {
+        let base = self
+            .active_module
+            .as_ref()
+            .map_or(0, |module| module.function_base);
+        self.active_functions.get(base..)?.last()
+    }
+
+    fn active_function_frame_mut(&mut self) -> Option<&mut ActiveFunctionFrame> {
+        let base = self
+            .active_module
+            .as_ref()
+            .map_or(0, |module| module.function_base);
+        self.active_functions.get_mut(base..)?.last_mut()
+    }
+
     fn active_sub_name(&self) -> Option<&str> {
-        self.active_subs.last().map(|frame| frame.name.as_ref())
+        let base = self
+            .active_module
+            .as_ref()
+            .map_or(0, |module| module.sub_base);
+        self.active_subs
+            .get(base..)?
+            .last()
+            .map(|frame| frame.name.as_ref())
     }
 
     fn function_for_line(&self, line: i32) -> Option<&str> {
@@ -12195,7 +12640,7 @@ impl Interpreter {
     }
 
     fn return_value_for_active_function(&mut self, lhs: &str, value: &Value) {
-        let Some(frame) = self.active_functions.last_mut() else {
+        let Some(frame) = self.active_function_frame_mut() else {
             return;
         };
         if lhs.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
@@ -12204,7 +12649,7 @@ impl Interpreter {
     }
 
     fn return_number_value_for_active_function(&mut self, lhs: &str, value: f64) {
-        let Some(frame) = self.active_functions.last_mut() else {
+        let Some(frame) = self.active_function_frame_mut() else {
             return;
         };
         if lhs.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
@@ -12213,7 +12658,7 @@ impl Interpreter {
     }
 
     fn return_array_for_active_function(&mut self, name: &str) {
-        let Some(frame) = self.active_functions.last_mut() else {
+        let Some(frame) = self.active_function_frame_mut() else {
             return;
         };
         if name.trim().eq_ignore_ascii_case(frame.name.as_ref()) {
@@ -12222,7 +12667,7 @@ impl Interpreter {
     }
 
     fn active_function_variable(&self, name: &str) -> Option<Value> {
-        let frame = self.active_functions.last()?;
+        let frame = self.active_function_frame()?;
         if !frame.name.as_ref().eq_ignore_ascii_case(name) {
             return None;
         }
@@ -12241,7 +12686,7 @@ impl Interpreter {
     }
 
     fn active_function_return_value(&self, name: &str) -> Option<Value> {
-        let frame = self.active_functions.last()?;
+        let frame = self.active_function_frame()?;
         if frame.name.as_ref().eq_ignore_ascii_case(name) {
             frame.return_value.clone()
         } else {
@@ -12571,6 +13016,7 @@ impl Interpreter {
 
     fn process_mouse_event(&mut self) -> BasicResult<()> {
         if !self.interrupts_enabled
+            || self.active_module.is_some()
             || self.run_depth == 0
             || !self.current_run_uses_graphics_window()
             || self.handling_mouse_event
@@ -12841,16 +13287,24 @@ impl Interpreter {
         self.present_graphics_window()
     }
 
-    fn execute_screen_full(&mut self, arg: &str) -> BasicResult<()> {
+    fn parse_screen_toggle(&self, arg: &str, detail: StaticErrorDetail) -> BasicResult<bool> {
         let mut words = arg.split_whitespace();
-        let enabled = match words.next() {
-            Some(word) if word.eq_ignore_ascii_case("ON") => true,
-            Some(word) if word.eq_ignore_ascii_case("OFF") => false,
-            _ => return Err(self.err(ErrorCode::ArgumentMismatch)),
-        };
-        if words.next().is_some() {
+        let (Some(word), None) = (words.next(), words.next()) else {
             return Err(self.err(ErrorCode::ArgumentMismatch));
+        };
+        if word.eq_ignore_ascii_case("ON") {
+            Ok(true)
+        } else if word.eq_ignore_ascii_case("OFF") {
+            Ok(false)
+        } else {
+            Err(self
+                .err(ErrorCode::ArgumentMismatch)
+                .with_static_detail(detail))
         }
+    }
+
+    fn execute_screen_full(&mut self, arg: &str) -> BasicResult<()> {
+        let enabled = self.parse_screen_toggle(arg, StaticErrorDetail::ScreenFullToggle)?;
         if enabled {
             self.ensure_graphics_window()?;
         }
@@ -12873,13 +13327,7 @@ impl Interpreter {
     }
 
     fn execute_screen_sync(&mut self, arg: &str) -> BasicResult<()> {
-        let enabled = if arg.eq_ignore_ascii_case("ON") {
-            true
-        } else if arg.eq_ignore_ascii_case("OFF") {
-            false
-        } else {
-            return Err(self.err(ErrorCode::ArgumentMismatch));
-        };
+        let enabled = self.parse_screen_toggle(arg, StaticErrorDetail::ScreenSyncToggle)?;
         if enabled {
             self.ensure_graphics_window()?;
             if let Some(window) = self.graphics_window.as_mut() {
@@ -13699,7 +14147,11 @@ impl Interpreter {
         let sprite = self.eval_value(&parts[0])?.into_string()?;
         let x = self.eval_number(&parts[1])?;
         let y = self.eval_number(&parts[2])?;
-        let transparent = parts.get(3).map(|s| self.eval_color(s)).transpose()?;
+        let transparent = parts
+            .get(3)
+            .filter(|key| parts.len() != 5 || !key.is_empty())
+            .map(|s| self.eval_color(s))
+            .transpose()?;
         let id = parts
             .get(4)
             .map(|s| self.eval_number(s).map(|n| n as i32))
@@ -13726,6 +14178,7 @@ impl Interpreter {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let path = self.resolve_png_path_expr(&parts[0])?;
+        let path = self.resolve_packed_file(path, FileMode::Output)?;
         if parts.len() == 1 {
             self.graphics.save_png(&path)
         } else {
@@ -13735,15 +14188,27 @@ impl Interpreter {
     }
 
     fn execute_bload(&mut self, args: &str) -> BasicResult<()> {
+        let (args, rgba) = match file_syntax_separator(args, "AS") {
+            Some(pos) if args[pos + 2..].trim().eq_ignore_ascii_case("RGBA") => {
+                (&args[..pos], true)
+            }
+            Some(_) => return Err(self.err(ErrorCode::Syntax)),
+            None => (args, false),
+        };
         let parts = split_arguments(args);
-        if parts.is_empty() {
+        if parts.is_empty() || (rgba && (parts.len() != 2 || parts[1].is_empty())) {
             return Err(self.err(ErrorCode::ArgumentMismatch));
         }
         let path = self.resolve_png_path_expr(&parts[0])?;
+        let path = self.resolve_packed_file(path, FileMode::Input)?;
         if !path.exists() {
             return Err(self.err(ErrorCode::FileNotFound));
         }
-        let gscr = Graphics::load_png_to_gscr(&path)?;
+        let gscr = if rgba {
+            Graphics::load_png_to_gscr_rgba(&path)?
+        } else {
+            Graphics::load_png_to_gscr(&path)?
+        };
         if parts.len() == 1 {
             self.graphics.restore_screen(&gscr)?;
             self.graphics_window_suppressed = false;
@@ -14209,7 +14674,7 @@ impl Interpreter {
         cursor: &mut Cursor,
         retry: Cursor,
         next: Cursor,
-    ) -> BasicResult<bool> {
+    ) -> BasicResult<()> {
         if let Some(index) = self
             .routine_error_scopes()
             .iter()
@@ -14223,7 +14688,7 @@ impl Interpreter {
             if index + 1 != self.routine_error_depth {
                 // Let normal call cleanup restore locals, aliases and control
                 // stacks. The owning caller catches its CALL/expression below.
-                return Ok(false);
+                return Err(err);
             }
             let plan = self.retain_current_line();
             let state = RuntimeErrorState {
@@ -14244,7 +14709,7 @@ impl Interpreter {
                 self.return_line_plan = state.plan;
                 // Automatic continuation retains ERR/ERL but does not activate
                 // an error handler or create a continuation for RESUME.
-                return Ok(true);
+                return Ok(());
             }
             scope.error = Some(state.clone());
             let handler = scope.handler_line.unwrap();
@@ -14252,13 +14717,13 @@ impl Interpreter {
             let flow = self.capture_routine_error_flow();
             self.procedural_errors.as_mut().unwrap().scopes[index].flow = Some(flow);
             self.jump_to_line_unchecked(handler, cursor)?;
-            return Ok(true);
+            return Ok(());
         }
         if !self.active_subs.is_empty() || !self.active_functions.is_empty() {
             // Root policies recover at their own CALL/expression, just like a
             // local ancestor. Let every abandoned invocation restore its
             // parameters, aliases and control stacks before dispatching there.
-            return Ok(false);
+            return Err(err);
         }
         if err
             .detail
@@ -14282,10 +14747,12 @@ impl Interpreter {
             plan,
         });
         if self.handling_error {
-            return Err(BasicError::new(err.code).with_detail(format!(
-                "Error in error handler: {}",
-                error_message_without_dot(&err)
-            )));
+            let detail = format!("Error in error handler: {}", err.message_for_basic());
+            let mut error = err.with_detail(detail);
+            if error.source_path.is_none() {
+                error.line = None;
+            }
+            return Err(error);
         }
         if self.error_resume_next {
             if let Some(state) = &self.last_error {
@@ -14293,7 +14760,7 @@ impl Interpreter {
                 self.return_line_plan = state.plan.clone();
             }
             self.handling_error = false;
-            return Ok(true);
+            return Ok(());
         }
         if let Some(handler) = self.error_handler_line {
             let handler = if let Some(name) = &self.root_label_handler {
@@ -14314,9 +14781,9 @@ impl Interpreter {
                 .get_or_insert_with(Box::default)
                 .root_flow = Some(flow);
             self.jump_to_line_unchecked(handler, cursor)?;
-            return Ok(true);
+            return Ok(());
         }
-        Ok(false)
+        Err(err)
     }
 
     fn validate_function_jump(
@@ -14469,7 +14936,7 @@ impl Interpreter {
         let trimmed = command.trim();
         let trimmed_source_start = command_source_start + leading;
         let upper = trimmed.to_ascii_uppercase();
-        if !upper.starts_with("IF ") {
+        if !first_word_is(trimmed, "IF") {
             self.append_cached_execution_leaf(
                 trimmed,
                 trimmed_source_start,
@@ -14763,6 +15230,9 @@ impl Interpreter {
 
     fn compile_cached_command(&mut self, command: &str) -> CachedCommand {
         let trimmed = command.trim();
+        if import_argument(trimmed).is_some() {
+            return CachedCommand::Raw(Rc::from(trimmed));
+        }
         if crate::labels::label_definition(trimmed).is_some() {
             return CachedCommand::Noop;
         }
@@ -14781,6 +15251,9 @@ impl Interpreter {
         let first = upper.split_whitespace().next().unwrap_or("");
         match first {
             "REM" | "DATA" => CachedCommand::Noop,
+            "READ" => compile_read_targets(trimmed[4..].trim())
+                .map(|targets| CachedCommand::Read(Rc::from(targets)))
+                .unwrap_or_else(|_| CachedCommand::Raw(Rc::from(trimmed))),
             "MAT" => CompiledMatAssignment::compile(trimmed[3..].trim())
                 .map(|compiled| CachedCommand::MatAssignment(Rc::new(compiled)))
                 .unwrap_or_else(|| CachedCommand::Raw(Rc::<str>::from(trimmed))),
@@ -15432,6 +15905,103 @@ impl Interpreter {
         }
         err
     }
+
+    #[cold]
+    fn with_numbered_statement(&self, error: BasicError, line: i32, command: usize) -> BasicError {
+        if let Some(plan) = self
+            .active_line_plan
+            .as_ref()
+            .filter(|plan| plan.line == line)
+        {
+            return with_statement_context(
+                error,
+                Some(line),
+                &plan.source,
+                &plan.metadata,
+                command,
+                self.active_module.is_some(),
+            );
+        }
+        let code = self.program.get(line).unwrap_or("");
+        let metadata = self
+            .execution_source_cache
+            .get(&line)
+            .map_or(&[][..], Vec::as_slice);
+        with_statement_context(
+            error,
+            Some(line),
+            code,
+            metadata,
+            command,
+            self.active_module.is_some(),
+        )
+    }
+}
+
+#[cold]
+fn with_statement_context(
+    mut error: BasicError,
+    line: Option<i32>,
+    code: &str,
+    metadata: &[ExecutionMetadata],
+    command: usize,
+    in_library: bool,
+) -> BasicError {
+    if error.statement.is_some()
+        || error.source_path.is_some()
+        || (error.line.is_some() && error.line != line)
+    {
+        return error;
+    }
+    if error.line.is_none()
+        && !error
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.starts_with("Error in error handler:"))
+    {
+        error.line = line;
+    }
+    if error.code == ErrorCode::KeyboardInterrupt {
+        return error;
+    }
+    let Some(mut span) = metadata
+        .get(command)
+        .and_then(ExecutionMetadata::source_span)
+    else {
+        return error;
+    };
+    let mut inline_guard = false;
+    if let Some(statement) = code
+        .get(span.clone())
+        .filter(|text| first_word_is(text, "IF"))
+    {
+        let upper = statement.to_ascii_uppercase();
+        if let Some((_, body)) = split_if_condition_and_rest(statement, &upper) {
+            if !body.is_empty() {
+                // A guard error belongs to IF ... THEN. Branch instructions
+                // have their own ranges even though the debugger shows the whole IF.
+                span.end = span.start + statement[..statement.len() - body.len()].trim_end().len();
+                inline_guard = true;
+            }
+        }
+    }
+    if !in_library
+        && !inline_guard
+        && !metadata
+            .iter()
+            .any(|item| item.visible_statement() == Some(1))
+    {
+        return error;
+    }
+    if let Some(line) = line {
+        let number = line.to_string();
+        error.with_statement(
+            format!("{number}{code}"),
+            number.len() + span.start..number.len() + span.end,
+        )
+    } else {
+        error.with_statement(code, span)
+    }
 }
 
 impl EvalContext for Interpreter {
@@ -15578,6 +16148,9 @@ impl EvalContext for Interpreter {
         } else {
             name
         };
+        if let Some((alias, function)) = name.split_once('.') {
+            return self.call_imported_function(alias, function, args);
+        }
         match name {
             "EOF" => {
                 if args.len() != 1 {
@@ -15838,6 +16411,9 @@ impl EvalContext for Interpreter {
                 _ => Err(self.err(ErrorCode::ArgumentMismatch)),
             },
             name if name.starts_with("FN") => self.call_user_function(name, args),
+            name if language::is_builtin_function(name) => {
+                Err(self.err(ErrorCode::ArgumentMismatch))
+            }
             _ => Err(self.err(ErrorCode::Undefined)),
         }
     }
@@ -15924,7 +16500,9 @@ impl Interpreter {
             .iter()
             .any(|active| active.as_ref() == call_name.as_ref())
         {
-            return Err(self.err(ErrorCode::FunctionForbidden));
+            return Err(self.err(ErrorCode::FunctionForbidden).with_detail(format!(
+                "Recursive call to function '{call_name}' is not allowed."
+            )));
         }
         match fun {
             UserFunction::Single { params, expr, .. } => {
@@ -16229,6 +16807,9 @@ impl Interpreter {
         name: &str,
         args: &mut dyn ExactSizeIterator<Item = Value>,
     ) -> BasicResult<()> {
+        if let Some((alias, name)) = name.split_once('.') {
+            return self.call_imported_sub(alias, name, args.collect());
+        }
         let Some(sub) = self.subs.get(name).cloned() else {
             return Err(self.err(ErrorCode::Undefined));
         };
@@ -16240,6 +16821,9 @@ impl Interpreter {
         compiled: &CompiledCall,
         args: &mut dyn ExactSizeIterator<Item = Value>,
     ) -> BasicResult<()> {
+        if let Some((alias, name)) = compiled.name.split_once('.') {
+            return self.call_imported_sub(alias, name, args.collect());
+        }
         let cached = compiled.target.borrow();
         let sub = cached
             .as_ref()
@@ -16268,7 +16852,10 @@ impl Interpreter {
             .iter()
             .any(|active| active.as_ref() == sub.name.as_ref())
         {
-            return Err(self.err(ErrorCode::SubEndWithoutDef));
+            return Err(self.err(ErrorCode::SubEndWithoutDef).with_detail(format!(
+                "Recursive CALL to subroutine '{}' is not allowed.",
+                sub.name
+            )));
         }
         if sub.params.len() != args.len() {
             return Err(self.err(ErrorCode::ArgumentMismatch));
@@ -16294,7 +16881,7 @@ impl Interpreter {
         self.sub_return_requested = false;
         self.sub_call_stack.push(sub.name.clone());
         self.active_subs.push(ActiveSubFrame {
-            name: sub.name.clone(),
+            name: self.debug_call_identity(&sub.name),
         });
         let run_result = if sub.uses_error_handling || self.routine_error_depth != 0 {
             self.run_routine_with_error_scope(sub.name.clone(), false, sub.start)
@@ -16397,7 +16984,7 @@ impl Interpreter {
         let previous_function_return = self.function_return_requested;
         self.function_return_requested = false;
         self.active_functions.push(ActiveFunctionFrame {
-            name: name.clone(),
+            name: self.debug_call_identity(&name),
             return_value: None,
         });
         let run_result = if uses_error_handling || self.routine_error_depth != 0 {
@@ -16657,6 +17244,23 @@ mod interpreter_tests {
                 "\x1b[38;2;255;0;0m08\x1b[39m",
                 "\x1b[38;2;0;255;0m09\x1b[39m",
                 "z\n",
+            )
+        );
+    }
+
+    #[test]
+    fn empty_using_restores_tab_and_numeric_format_without_resetting_color() {
+        let mut interpreter = Interpreter::new();
+        interpreter.print_color_depth_for_test = Some(console::PrintColorDepth::TrueColor);
+        interpreter
+            .process_immediate(r#"PRINT COLOR(2);USING "0.00";1.234;USING "";TAB(7);1.234"#)
+            .unwrap();
+        assert_eq!(
+            interpreter.take_output(),
+            concat!(
+                "\x1b[38;2;255;0;0m1.23\x1b[39m",
+                "\x1b[38;2;255;0;0m  \x1b[39m",
+                "\x1b[38;2;255;0;0m 1.234\x1b[39m\n",
             )
         );
     }
@@ -21054,7 +21658,7 @@ mod interpreter_tests {
     }
 }
 
-fn graphics_window_enabled() -> bool {
+fn graphics_window_enabled(prefer_window: bool) -> bool {
     match std::env::var("AVL_BASIC_WINDOW") {
         Ok(value)
             if matches!(
@@ -21072,7 +21676,7 @@ fn graphics_window_enabled() -> bool {
         {
             false
         }
-        _ => io::stdout().is_terminal(),
+        _ => prefer_window || io::stdout().is_terminal(),
     }
 }
 
@@ -21133,17 +21737,69 @@ impl SimpleRng {
     }
 
     fn next_f64(&mut self) -> f64 {
-        let a = (self.next_u32() >> 5) as u64;
-        let b = (self.next_u32() >> 6) as u64;
+        Self::number_from_words(self.next_u32(), self.next_u32())
+    }
+
+    #[inline]
+    fn number_from_words(first: u32, second: u32) -> f64 {
+        let a = (first >> 5) as u64;
+        let b = (second >> 6) as u64;
         ((a << 26) + b) as f64 / ((1u64 << 53) as f64)
+    }
+
+    fn fill_matrix(&mut self, values: &mut [f64], dims: &[usize], base_one: bool) {
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 is available on the current CPU and OS.
+            unsafe { mat_rng_avx2::fill(self, values, dims, base_one) };
+            return;
+        }
+        self.fill_matrix_scalar(values, dims, base_one);
+    }
+
+    fn fill_matrix_scalar(&mut self, values: &mut [f64], dims: &[usize], base_one: bool) {
+        if base_one {
+            self.fill_base_one(values, dims, Self::fill_numbers);
+        } else {
+            self.fill_numbers(values);
+        }
+    }
+
+    fn fill_numbers(&mut self, values: &mut [f64]) {
+        for value in values {
+            *value = self.next_f64();
+        }
+    }
+
+    fn fill_base_one(
+        &mut self,
+        values: &mut [f64],
+        dims: &[usize],
+        fill_row: impl Fn(&mut Self, &mut [f64]) + Copy,
+    ) {
+        match dims {
+            [_] => fill_row(self, &mut values[1..]),
+            [bound, inner @ ..] => {
+                let stride = values.len() / (bound + 1);
+                for block in values.chunks_exact_mut(stride).skip(1) {
+                    self.fill_base_one(block, inner, fill_row);
+                }
+            }
+            [] => unreachable!("an array has at least one dimension"),
+        }
     }
 
     fn next_u32(&mut self) -> u32 {
         if self.index >= 624 {
             self.twist();
         }
-        let mut y = self.state[self.index];
+        let word = self.state[self.index];
         self.index += 1;
+        Self::temper(word)
+    }
+
+    #[inline]
+    fn temper(mut y: u32) -> u32 {
         y ^= y >> 11;
         y ^= (y << 7) & 0x9D2C5680;
         y ^= (y << 15) & 0xEFC60000;
@@ -21212,7 +21868,7 @@ fn is_non_immediate_command(first: &str) -> bool {
 
 fn is_immediate_only_command(first: &str, upper_command: &str) -> bool {
     language::is_immediate_command_word(first)
-        || (first == "HELP" && !is_assignment(upper_command))
+        || (matches!(first, "HELP" | "PACK") && !is_assignment(upper_command))
         || (first == "EXIT"
             && !matches!(
                 upper_command,
@@ -21523,13 +22179,17 @@ fn parse_call_statement(args: &str) -> BasicResult<(String, Vec<String>)> {
             if !ch.is_ascii_alphabetic() && ch != '_' {
                 return Err(BasicError::new(ErrorCode::InvalidArgument));
             }
-        } else if !is_ident_char_for_parse(ch) {
+        } else if !is_ident_char_for_parse(ch) && ch != '.' {
             break;
         }
         end = idx + ch.len_utf8();
     }
     let name = text[..end].to_ascii_uppercase();
-    if !is_basic_identifier(&name) {
+    let valid_name = match name.split_once('.') {
+        Some((alias, routine)) => is_import_alias(alias) && is_basic_identifier(routine),
+        None => is_basic_identifier(&name),
+    };
+    if !valid_name {
         return Err(BasicError::new(ErrorCode::InvalidArgument));
     }
     let rest = text[end..].trim();
@@ -21576,7 +22236,7 @@ fn parse_local_specs(args: &str) -> BasicResult<Vec<LocalSpec>> {
                 }
                 let dims = split_arguments(&spec[open + 1..close]);
                 if dims.is_empty() || dims.iter().any(|dim| dim.trim().is_empty()) {
-                    return Err(BasicError::new(ErrorCode::UndefinedIndex));
+                    return Err(BasicError::new(ErrorCode::NoDimension));
                 }
                 Ok(LocalSpec::Array { name, dims })
             } else {
@@ -21764,7 +22424,9 @@ pub(crate) fn record_identifier_case_forms(
             .next()
             .unwrap_or("")
             .to_ascii_uppercase();
-        if matches!(first.as_str(), "DATA" | "REM") {
+        if matches!(first.as_str(), "DATA" | "REM")
+            || console::import_alias_offset(&command).is_some()
+        {
             continue;
         }
 
@@ -21803,6 +22465,11 @@ pub(crate) fn record_identifier_case_forms(
                 }
                 let upper = ident.to_ascii_uppercase();
 
+                if chars.get(start.wrapping_sub(1)) == Some(&'.') || chars.get(i) == Some(&'.') {
+                    skip_callable_name = false;
+                    after_def = false;
+                    continue;
+                }
                 if skip_callable_name {
                     skip_callable_name = false;
                     after_def = false;
@@ -21923,6 +22590,7 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
     }
     let mut out = String::with_capacity(source.len());
     let symbolic_ranges = crate::labels::symbolic_name_ranges(source);
+    let import_alias = console::import_alias_offset(source);
     let mut chars = source.char_indices().peekable();
     let mut in_string = false;
     let mut in_data = false;
@@ -21951,7 +22619,11 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
                 }
             }
             let ident = &source[start..end];
-            if symbolic_ranges.iter().any(|range| range.contains(&start)) {
+            if symbolic_ranges.iter().any(|range| range.contains(&start))
+                || import_alias == Some(start)
+                || source.as_bytes().get(start.wrapping_sub(1)) == Some(&b'.')
+                || source.as_bytes().get(end) == Some(&b'.')
+            {
                 out.push_str(ident);
                 continue;
             }
@@ -22066,7 +22738,12 @@ fn save_array_binding_ref<'a>(
     if saved.iter().any(|(existing, _)| *existing == name) {
         return;
     }
-    saved.push((name, SavedArrayBinding::Value(arrays.get(name).cloned())));
+    let value = arrays.get(name).map(|array| {
+        let saved = array.clone();
+        saved.debug_binding_id.set(array.debug_binding_id.get());
+        saved
+    });
+    saved.push((name, SavedArrayBinding::Value(value)));
 }
 
 fn save_array_alias_binding_ref<'a>(
@@ -22131,7 +22808,7 @@ fn tokenize_mat_input_line(line: &str) -> (Vec<String>, bool) {
 
 #[cfg(windows)]
 fn console_read_key_code() -> Option<u8> {
-    #[link(name = "msvcrt")]
+    #[cfg_attr(not(target_feature = "crt-static"), link(name = "msvcrt"))]
     extern "C" {
         fn _kbhit() -> i32;
         fn _getch() -> i32;
@@ -22158,8 +22835,25 @@ fn console_read_key_code() -> Option<u8> {
     console::read_runtime_key_code()
 }
 
-fn read_text_file(path: &Path) -> BasicResult<String> {
-    fs::read_to_string(path).map_err(file_io_error)
+fn read_program_file(path: &Path) -> BasicResult<Program> {
+    let file = fs::File::open(path).map_err(file_io_error)?;
+    let mut program = Program::default();
+    for (index, line) in io::BufReader::new(file).lines().enumerate() {
+        let file_line = index + 1;
+        let line = line.map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidData {
+                BasicError::new(ErrorCode::InvalidLineFormat)
+                    .with_detail(format!("File line {file_line}. Invalid UTF-8."))
+            } else {
+                file_io_error(error)
+            }
+        })?;
+        program.add_source_line(&line).map_err(|error| {
+            let message = error.code.message();
+            error.with_detail(format!("File line {file_line}. {message}"))
+        })?;
+    }
+    Ok(program)
 }
 
 fn read_validated_program_text(path: &Path) -> BasicResult<String> {
@@ -22242,13 +22936,6 @@ fn basic_error_number(err: &BasicError) -> i32 {
         }
     }
     err.code.number()
-}
-
-fn error_message_without_dot(err: &BasicError) -> String {
-    err.detail
-        .as_deref()
-        .unwrap_or_else(|| err.code.message())
-        .to_string()
 }
 
 fn color_number_from_value(value: Value) -> BasicResult<i32> {
@@ -23133,28 +23820,7 @@ fn compile_fast_number_expr_tree(expr: &Expr, allow_arrays: bool) -> Option<Fast
             }
         }
         Expr::ArrayOrCall { name, args, .. } if args.len() == 1 => {
-            let function = match name.as_str() {
-                "ABS" => FastNumberFunction::Abs,
-                "INT" => FastNumberFunction::Int,
-                "SQR" => FastNumberFunction::Sqr,
-                "SIN" => FastNumberFunction::Sin,
-                "COS" => FastNumberFunction::Cos,
-                "FIX" => FastNumberFunction::Fix,
-                "SGN" => FastNumberFunction::Sgn,
-                "FRAC" => FastNumberFunction::Frac,
-                "LOG" => FastNumberFunction::Log,
-                "LOG10" => FastNumberFunction::Log10,
-                "EXP" => FastNumberFunction::Exp,
-                "TAN" => FastNumberFunction::Tan,
-                "ASN" => FastNumberFunction::Asn,
-                "ACS" => FastNumberFunction::Acs,
-                "ATN" => FastNumberFunction::Atn,
-                "COT" => FastNumberFunction::Cot,
-                "RTD" => FastNumberFunction::Rtd,
-                "DTR" => FastNumberFunction::Dtr,
-                "ROUND" => FastNumberFunction::Round,
-                _ => return None,
-            };
+            let function = FastNumberFunction::from_name(name)?;
             Some(fused_leaves::function(
                 function,
                 compile_fast_number_expr_tree(&args[0], allow_arrays)?,
@@ -23233,28 +23899,7 @@ fn compile_fast_number_expr_unfused(expr: &Expr, allow_arrays: bool) -> Option<F
             }
         }
         Expr::ArrayOrCall { name, args, .. } if args.len() == 1 => {
-            let function = match name.as_str() {
-                "ABS" => FastNumberFunction::Abs,
-                "INT" => FastNumberFunction::Int,
-                "SQR" => FastNumberFunction::Sqr,
-                "SIN" => FastNumberFunction::Sin,
-                "COS" => FastNumberFunction::Cos,
-                "FIX" => FastNumberFunction::Fix,
-                "SGN" => FastNumberFunction::Sgn,
-                "FRAC" => FastNumberFunction::Frac,
-                "LOG" => FastNumberFunction::Log,
-                "LOG10" => FastNumberFunction::Log10,
-                "EXP" => FastNumberFunction::Exp,
-                "TAN" => FastNumberFunction::Tan,
-                "ASN" => FastNumberFunction::Asn,
-                "ACS" => FastNumberFunction::Acs,
-                "ATN" => FastNumberFunction::Atn,
-                "COT" => FastNumberFunction::Cot,
-                "RTD" => FastNumberFunction::Rtd,
-                "DTR" => FastNumberFunction::Dtr,
-                "ROUND" => FastNumberFunction::Round,
-                _ => return None,
-            };
+            let function = FastNumberFunction::from_name(name)?;
             Some(FastNumberExpr::Function1 {
                 function,
                 arg: Box::new(compile_fast_number_expr_unfused(&args[0], allow_arrays)?),
@@ -23579,7 +24224,7 @@ fn compile_assignment_statement(source: &str) -> BasicResult<CompiledAssignment>
         .any(|target| assignment_target_is_string(target));
     let compiled_targets = targets
         .into_iter()
-        .map(compile_assignment_lvalue)
+        .map(|target| compile_assignment_lvalue(target, ErrorCode::Syntax))
         .collect::<BasicResult<Vec<_>>>()?;
     let rhs = compile_expression(rhs)?;
     let fast_numeric_rhs = compile_fast_assignment_rhs(&compiled_targets, rhs_is_string, &rhs);
@@ -23692,7 +24337,44 @@ fn compile_fast_assignment_rhs(
     compile_fast_number_expr(rhs, true)
 }
 
-fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
+fn compile_read_targets(source: &str) -> BasicResult<Vec<String>> {
+    fn validate_variable(target: &str) -> BasicResult<()> {
+        if !is_assignment_target(target) {
+            return Err(BasicError::new(ErrorCode::Syntax));
+        }
+        compile_assignment_lvalue(target, ErrorCode::Syntax).map(|_| ())
+    }
+
+    let targets = split_arguments(source);
+    for target in &targets {
+        // READ has historically supported substring assignments through MID$.
+        let target = target.trim();
+        if target
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("MID$("))
+        {
+            let body = target[5..]
+                .strip_suffix(')')
+                .ok_or_else(|| BasicError::new(ErrorCode::Syntax))?;
+            let args = split_arguments(body);
+            if !(2..=3).contains(&args.len()) {
+                return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+            }
+            validate_variable(&args[0])?;
+            for arg in &args[1..] {
+                compile_expression(arg)?;
+            }
+        } else {
+            validate_variable(target)?;
+        }
+    }
+    Ok(targets)
+}
+
+fn compile_assignment_lvalue(
+    source: &str,
+    invalid_name_error: ErrorCode,
+) -> BasicResult<CompiledLValue> {
     let lhs = source.trim().to_ascii_uppercase();
     if lhs.starts_with("MID$(") {
         return Err(BasicError::new(ErrorCode::Syntax));
@@ -23709,7 +24391,7 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
             return Err(BasicError::new(ErrorCode::Undefined));
         }
         if !is_basic_identifier(&name) {
-            return Err(BasicError::new(ErrorCode::InvalidArgument));
+            return Err(BasicError::new(invalid_name_error));
         }
         let indexes = split_arguments(&lhs[open + 1..close])
             .into_iter()
@@ -23726,7 +24408,7 @@ fn compile_assignment_lvalue(source: &str) -> BasicResult<CompiledLValue> {
         return Err(BasicError::new(ErrorCode::Undefined));
     }
     if !is_basic_identifier(&lhs) {
-        return Err(BasicError::new(ErrorCode::InvalidArgument));
+        return Err(BasicError::new(invalid_name_error));
     }
     Ok(CompiledLValue::Scalar {
         is_string: lhs.ends_with('$'),

@@ -3,7 +3,7 @@ use crate::error::{BasicError, BasicResult, ErrorCode};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileMode {
@@ -19,7 +19,7 @@ enum Stream {
 }
 #[derive(Debug)]
 struct Channel {
-    path: PathBuf,
+    identity: PathBuf,
     stream: Stream,
     column: usize,
 }
@@ -54,17 +54,27 @@ impl DataFiles {
             Ok(())
         }
     }
-    pub(crate) fn open(&mut self, number: u8, path: PathBuf, mode: FileMode) -> BasicResult<()> {
-        self.check_free(number)?;
+    pub(crate) fn check_path_free(&self, identity: &Path, mode: FileMode) -> BasicResult<()> {
         if self.channels.values().any(|channel| {
-            channel.path == path
+            channel.identity == identity
                 && (mode != FileMode::Input || matches!(channel.stream, Stream::Output(_)))
         }) {
             return Err(error(ErrorCode::FileAlreadyOpen));
         }
+        Ok(())
+    }
+    pub(crate) fn open(
+        &mut self,
+        number: u8,
+        identity: PathBuf,
+        path: &Path,
+        mode: FileMode,
+    ) -> BasicResult<()> {
+        self.check_free(number)?;
+        self.check_path_free(&identity, mode)?;
         let stream = match mode {
             FileMode::Input => {
-                let file = File::open(&path).map_err(|err| {
+                let file = File::open(path).map_err(|err| {
                     if err.kind() == std::io::ErrorKind::NotFound {
                         error(ErrorCode::FileNotFound)
                     } else {
@@ -86,21 +96,21 @@ impl DataFiles {
                     .write(true)
                     .create(true)
                     .truncate(true)
-                    .open(&path)
+                    .open(path)
                     .map_err(io_error)?,
             ),
             FileMode::Append => Stream::Output(
                 OpenOptions::new()
                     .append(true)
                     .create(true)
-                    .open(&path)
+                    .open(path)
                     .map_err(io_error)?,
             ),
         };
         self.channels.insert(
             number,
             Channel {
-                path,
+                identity,
                 stream,
                 column: 0,
             },

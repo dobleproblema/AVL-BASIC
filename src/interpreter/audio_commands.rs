@@ -298,6 +298,7 @@ impl Interpreter {
                 let path = Self::match_existing_case(
                     self.resolve_virtual_path_text(&path, &self.effective_base_dir())?,
                 );
+                let path = self.resolve_packed_file(path, super::FileMode::Input)?;
                 let metadata = fs::metadata(&path).map_err(|error| {
                     self.err(if error.kind() == io::ErrorKind::NotFound {
                         ErrorCode::FileNotFound

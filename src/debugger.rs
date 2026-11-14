@@ -1,7 +1,9 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Action selected while program execution is synchronously paused.
@@ -25,6 +27,8 @@ pub enum DebugPauseReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DebugLocation {
+    /// Source file of an imported routine, when paused outside the main program.
+    pub source_path: Option<PathBuf>,
     pub line: i32,
     /// Zero-based statement index within the BASIC source line.
     pub statement: usize,
@@ -84,6 +88,75 @@ pub struct DebugArraySummary {
     /// BASIC upper bounds, matching the values used by DIM.
     pub dimensions: Vec<usize>,
     pub elements: usize,
+}
+
+pub const MAX_DEBUG_ARRAY_WINDOW_CELLS: usize = 4096;
+pub const MAX_DEBUG_ARRAY_PREVIEW_WIDTH: usize = 256;
+
+/// A bounded rectangle in the first two axes of an array, with the remaining
+/// indexes held fixed. A one-dimensional array uses a single column at zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugArrayWindowRequest {
+    pub first_row: i32,
+    pub first_col: i32,
+    pub row_count: usize,
+    pub col_count: usize,
+    pub higher_indexes: Vec<i32>,
+    pub preview_width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugArrayWindow {
+    /// Single-line display previews in row-major order.
+    pub cells: Vec<String>,
+    pub mat_base: i32,
+    /// Cells written by the most recently executed BASIC statement.
+    pub changed: Vec<bool>,
+}
+
+/// A fixed coordinate in one binding, independent of its last write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugArrayPin {
+    pub name: String,
+    pub indexes: Vec<i32>,
+    pub(crate) binding: u64,
+    pub(crate) scope: DebugArrayScope,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DebugArrayScope {
+    pub module: Option<u64>,
+    pub sub: Option<Rc<str>>,
+    pub function: Option<Rc<str>>,
+}
+
+impl PartialEq for DebugArrayScope {
+    fn eq(&self, other: &Self) -> bool {
+        fn same_invocation(left: &Option<Rc<str>>, right: &Option<Rc<str>>) -> bool {
+            match (left, right) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                _ => false,
+            }
+        }
+        self.module == other.module
+            && same_invocation(&self.sub, &other.sub)
+            && same_invocation(&self.function, &other.function)
+    }
+}
+
+impl Eq for DebugArrayScope {}
+
+#[cfg(test)]
+impl DebugArrayPin {
+    pub(crate) fn test_pin(name: &str, indexes: Vec<i32>) -> Self {
+        Self {
+            name: name.to_string(),
+            indexes,
+            binding: 0,
+            scope: DebugArrayScope::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +233,31 @@ pub trait DebugPauseAccess {
         self.set_variable(&DebugEditTarget::Scalar(name.to_string()), value)
     }
 
+    fn array_window(
+        &self,
+        _name: &str,
+        _request: &DebugArrayWindowRequest,
+    ) -> Result<DebugArrayWindow, String> {
+        Err("Array inspection is not supported.".into())
+    }
+
+    fn array_cell(&self, _name: &str, _indexes: &[i32]) -> Result<DebugValue, String> {
+        Err("Array inspection is not supported.".into())
+    }
+
+    /// The cell nearest the origin among those written by the last BASIC statement.
+    fn last_array_write(&self, _name: &str) -> Option<Vec<i32>> {
+        None
+    }
+
+    fn pin_array_cell(&self, _name: &str, _indexes: &[i32]) -> Result<DebugArrayPin, String> {
+        Err("Pinning array cells is not supported.".into())
+    }
+
+    fn pinned_array_cell(&self, _pin: &DebugArrayPin, _preview_width: usize) -> Option<String> {
+        None
+    }
+
     fn statement_targets(&self) -> Vec<DebugStatementTarget> {
         Vec::new()
     }
@@ -207,6 +305,7 @@ enum DebugPauseHandler {
 /// meant to resume, which keeps Rust and BASIC call frames alive while paused.
 pub struct Debugger {
     breakpoints: HashSet<i32>,
+    module_breakpoints: HashMap<PathBuf, HashSet<i32>>,
     pause_requested: bool,
     pub(crate) step: Option<DebugStep>,
     handler: DebugPauseHandler,
@@ -221,6 +320,7 @@ impl fmt::Debug for Debugger {
         };
         f.debug_struct("Debugger")
             .field("breakpoints", &self.breakpoints)
+            .field("module_breakpoints", &self.module_breakpoints)
             .field("pause_requested", &self.pause_requested)
             .field("step", &self.step)
             .field("handler", &handler)
@@ -239,6 +339,7 @@ impl Debugger {
     ) -> Self {
         Self {
             breakpoints: HashSet::new(),
+            module_breakpoints: HashMap::new(),
             pause_requested: false,
             step: None,
             handler: DebugPauseHandler::Interactive(Box::new(handler)),
@@ -258,6 +359,7 @@ impl Debugger {
     ) -> Self {
         Self {
             breakpoints: HashSet::new(),
+            module_breakpoints: HashMap::new(),
             pause_requested: false,
             step: None,
             handler: DebugPauseHandler::InteractiveEditable(Box::new(handler)),
@@ -269,6 +371,7 @@ impl Debugger {
     pub fn scripted(actions: impl IntoIterator<Item = DebugAction>) -> Self {
         Self {
             breakpoints: HashSet::new(),
+            module_breakpoints: HashMap::new(),
             pause_requested: false,
             step: None,
             handler: DebugPauseHandler::Scripted {
@@ -297,6 +400,7 @@ impl Debugger {
 
     pub fn clear_breakpoints(&mut self) {
         self.breakpoints.clear();
+        self.module_breakpoints.clear();
     }
 
     pub fn replace_breakpoints(&mut self, breakpoints: impl IntoIterator<Item = i32>) {
@@ -331,6 +435,12 @@ impl Debugger {
         self.breakpoints.contains(&line)
     }
 
+    pub(crate) fn is_module_breakpoint(&self, path: &Path, line: i32) -> bool {
+        self.module_breakpoints
+            .get(path)
+            .is_some_and(|breakpoints| breakpoints.contains(&line))
+    }
+
     pub(crate) fn take_pause_request(&mut self) -> bool {
         std::mem::take(&mut self.pause_requested)
     }
@@ -340,12 +450,16 @@ impl Debugger {
         snapshot: &DebugSnapshot,
         access: &mut dyn DebugPauseAccess,
     ) -> io::Result<DebugAction> {
+        let breakpoints = match &snapshot.location.source_path {
+            Some(path) => self.module_breakpoints.entry(path.clone()).or_default(),
+            None => &mut self.breakpoints,
+        };
         match &mut self.handler {
             DebugPauseHandler::Interactive(handler) => {
-                handler(snapshot, &mut self.breakpoints, &mut || access.idle())
+                handler(snapshot, breakpoints, &mut || access.idle())
             }
             DebugPauseHandler::InteractiveEditable(handler) => {
-                handler(snapshot, &mut self.breakpoints, access)
+                handler(snapshot, breakpoints, access)
             }
             DebugPauseHandler::Scripted { actions, snapshots } => {
                 snapshots.push(snapshot.clone());
@@ -403,6 +517,7 @@ mod tests {
         let snapshot = DebugSnapshot {
             reason: DebugPauseReason::Breakpoint,
             location: DebugLocation {
+                source_path: None,
                 line: 10,
                 statement: 0,
                 source_span: None,

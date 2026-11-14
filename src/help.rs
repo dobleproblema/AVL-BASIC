@@ -49,7 +49,7 @@ fn render_entry(entry: &LanguageTopic) -> Vec<String> {
     lines
 }
 
-fn normalized_key(text: &str) -> String {
+pub(crate) fn normalized_key(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")

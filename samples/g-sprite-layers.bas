@@ -1,15 +1,14 @@
-100 REM Two aligned sprites: opaque fairy body over translucent wings.
-110 REM Both layers share one 320x320 frame; magenta marks their exterior.
+100 REM One RGBA fairy sprite with an opaque body and translucent wings.
+110 REM The PNG stores the wing opacity and the transparent border.
 120 REM SPACE: pause; C: FPS cap; ESC: exit.
 130 SCREEN : MODE 640 : RAD : PAPER 0 : CLG OFFSCREEN : SMALLFONT TRANSPARENT
 140 BLOAD "assets/anime.png",BACKGROUND$
-150 BLOAD "assets/fairy-layers.png",SHEET$
-160 TRECTANGLE SHEET$,0,0,640,320
-170 BODY$=SPRITE$(0,1,319,320) : WINGS$=SPRITE$(320,1,639,320)
-180 W=WIDTH : H=HEIGHT : SW=320 : SH=320 : WINGALPHA=0.7
-190 COLMODE 0 : KEY=RGB(255,0,255)
-200 SPRITE WINGS$,0,0,KEY,1 ALPHA WINGALPHA
-210 SPRITE BODY$,0,0,KEY,2 ALPHA 1
+150 BLOAD "assets/fairy-layers-rgba.png",SHEET$ AS RGBA
+160 REM Trim transparent margins and keep the anchor of the original 320x320 frame.
+170 FAIRY$=CROP$(SHEET$,17,5,290,311)
+180 W=WIDTH : H=HEIGHT : SW=320 : SH=320
+190 COLMODE 0
+200 SPRITE FAIRY$,17,4,,1
 220 T=0 : PAUSED=0 : CAP=1 : FRAMEI=0 : FPS=0 : COUNT=0
 230 TSIM=TIME : TLAST=TSIM : MAXFRAMES=0 : FIXEDDT=0 : FINALPNG$=""
 240 REM Optional capture: MAXFRAMES=150, FIXEDDT=1/60, FINALPNG$="layers.png".
@@ -17,14 +16,13 @@
 260 IF FIXEDDT>0 THEN DT=FIXEDDT
 270 IF PAUSED=0 THEN T=T+DT
 280 X=(W-SW)/2+145*SIN(T*0.73) : Y=(H-SH)/2+30*SIN(T*0.91)
-290 REM Restore the background, then draw wings behind the opaque body.
+290 REM Restore the background before compositing the sprite for this frame.
 300 SCREEN BACKGROUND$
-310 SPRITE MOVE 1,X,Y ALPHA WINGALPHA
-320 SPRITE MOVE 2,X,Y ALPHA 1
+310 SPRITE MOVE 1,X+17,Y+4
 330 FRECTANGLE 0,H-48,W-1,H-1,RGB(8,14,24) ALPHA 0.7
 340 FRECTANGLE 0,0,W-1,40,RGB(8,14,24) ALPHA 0.7
-350 INK RGB(245,248,255) : LOCATE 3,1 : GPRINT "ONE FAIRY / TWO ALIGNED SPRITES"
-360 LOCATE 3,2 : GPRINT "BODY 100% / WINGS ";USING "###";WINGALPHA*100;"% OPACITY    ";USING "###.0";FPS;" FPS"
+350 INK RGB(245,248,255) : LOCATE 3,1 : GPRINT "ONE FAIRY / ONE RGBA SPRITE"
+360 LOCATE 3,2 : GPRINT "BODY 100% / WINGS 70% OPACITY    ";USING "###.0";FPS;" FPS"
 370 PS$="" : IF PAUSED THEN PS$="  [PAUSED]"
 380 CP$="ON" : IF CAP=0 THEN CP$="OFF"
 390 LOCATE 3,28 : GPRINT "SPACE:PAUSE  C:CAP ";CP$;"  ESC:EXIT";PS$

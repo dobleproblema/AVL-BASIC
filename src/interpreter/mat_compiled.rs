@@ -2,10 +2,13 @@
 //!
 //! MAT arithmetic shares the scalar parser's tokens, precedence and grouping.
 //! Array names remain dynamically resolved; scalar calls use the ordinary
-//! evaluator, while TRN/INV and arithmetic operate on whole matrices.
+//! evaluator, while TRN/INV, MAP and arithmetic operate on whole matrices.
+use super::debug_arrays::DebugArrayChange;
 use super::mat_subarrays::CopyReference;
 use super::*;
 use crate::expr::compile_mat_expression;
+
+mod map_affine;
 
 #[derive(Debug, Clone)]
 pub(super) struct CompiledMatAssignment {
@@ -17,6 +20,10 @@ enum CompiledMatOperation {
     Arithmetic {
         target: String,
         expression: CompiledMatExpr,
+    },
+    NamedMap {
+        target: String,
+        plan: map_affine::NamedMap,
     },
     Copy {
         left: CopyReference,
@@ -52,6 +59,11 @@ pub(super) enum CompiledMatExpr {
         name: String,
         args: Vec<Self>,
     },
+    Map {
+        function: FastNumberFunction,
+        array: Box<Self>,
+    },
+    InvalidMap(ErrorCode),
     ScalarUnary {
         op: UnaryOp,
         expr: Box<Self>,
@@ -74,6 +86,7 @@ impl CompiledMatAssignment {
                 && !right.name.ends_with('$')
                 && !left.name.starts_with("FN")
                 && !right.name.starts_with("FN")
+                && !right.is_map_call()
                 && (left.selectors.is_some() || right.explicit_slice())
             {
                 return Some(Self {
@@ -93,11 +106,14 @@ impl CompiledMatAssignment {
         if matches!(rhs.to_ascii_uppercase().as_str(), "CON" | "ZER" | "IDN") {
             return None;
         }
+        let expression = CompiledMatExpr::compile(rhs)?;
+        let operation =
+            map_affine::NamedMap::compile(&expression).map(|plan| CompiledMatOperation::NamedMap {
+                target: target.clone(),
+                plan,
+            });
         Some(Self {
-            operation: CompiledMatOperation::Arithmetic {
-                target,
-                expression: CompiledMatExpr::compile(rhs)?,
-            },
+            operation: operation.unwrap_or(CompiledMatOperation::Arithmetic { target, expression }),
         })
     }
 }
@@ -109,6 +125,14 @@ impl CompiledMatExpr {
 
     pub(super) fn parse(source: &str) -> BasicResult<Self> {
         Ok(Self::from_expr(compile_mat_expression(source)?))
+    }
+
+    fn is_random_fill(&self) -> bool {
+        match self {
+            Self::Name { name, .. } => name == "RND",
+            Self::Scalar(Expr::ArrayOrCall { name, args, .. }) => name == "RND" && args.is_empty(),
+            _ => false,
+        }
     }
 
     fn from_expr(expr: Expr) -> Self {
@@ -162,6 +186,21 @@ impl CompiledMatExpr {
                     args: args.into_iter().map(Self::from_expr).collect(),
                 }
             }
+            Expr::ArrayOrCall { name, args, .. } if name == "MAP" => {
+                let Ok([selector, array]) = <[Expr; 2]>::try_from(args) else {
+                    return Self::InvalidMap(ErrorCode::ArgumentMismatch);
+                };
+                let Expr::Var(name) = selector else {
+                    return Self::InvalidMap(ErrorCode::InvalidArgument);
+                };
+                let Some(function) = FastNumberFunction::from_name(&name) else {
+                    return Self::InvalidMap(ErrorCode::InvalidArgument);
+                };
+                Self::Map {
+                    function,
+                    array: Box::new(Self::from_expr(array)),
+                }
+            }
             Expr::Unary { op, expr } => Self::ScalarUnary {
                 op,
                 expr: Box::new(Self::from_expr(*expr)),
@@ -203,7 +242,7 @@ impl CompiledMatExpr {
                 }
             }
             Self::Binary { left, right, op } => {
-                let left = left.eval(interpreter)?;
+                let mut left = left.eval(interpreter)?;
                 // Preserve scalar conversion errors before RHS effects without
                 // interpreting a matrix operand as a scalar.
                 if let MatExprValue::Scalar(value) = &left {
@@ -213,11 +252,109 @@ impl CompiledMatExpr {
                             .map_err(|error| interpreter.with_current_line(error))?;
                     }
                 }
+                if matches!(op, '+' | '-') {
+                    if let MatExprValue::Matrix(array) = &mut left {
+                        let applied = if *op == '+' {
+                            right.apply_named_numeric_rhs(interpreter, array, |a, b| a + b)?
+                        } else {
+                            right.apply_named_numeric_rhs(interpreter, array, |a, b| a - b)?
+                        };
+                        if applied {
+                            return Ok(left);
+                        }
+                    }
+                }
                 let right = right.eval(interpreter)?;
                 interpreter.mat_binary(left, right, *op)
             }
             extended => extended.eval_extended(interpreter),
         }
+    }
+
+    #[inline]
+    fn apply_named_numeric_rhs(
+        &self,
+        interpreter: &Interpreter,
+        left: &mut ArrayValue,
+        operation: impl Fn(f64, f64) -> f64,
+    ) -> BasicResult<bool> {
+        // Resolve the name after evaluating the left operand and its effects.
+        let Self::Name { name, .. } = self else {
+            return Ok(false);
+        };
+        let Some(right) = interpreter.array_ref(name) else {
+            return Ok(false);
+        };
+        if left.dims != right.dims {
+            return Ok(false);
+        }
+        let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
+            (&mut left.data, &right.data)
+        else {
+            return Ok(false);
+        };
+        interpreter.validate_mat_elementwise_shapes(&left.dims, &right.dims)?;
+        for (a, &b) in left_values.iter_mut().zip(right_values) {
+            *a = operation(*a, b);
+        }
+        Ok(true)
+    }
+
+    fn transpose_named_matrix(
+        interpreter: &Interpreter,
+        array: &ArrayValue,
+    ) -> BasicResult<MatExprValue> {
+        if let Some(result) = mat_transpose::try_transpose(array, interpreter.mat_base) {
+            return result
+                .map(MatExprValue::Matrix)
+                .map_err(|error| interpreter.with_current_line(error));
+        }
+        Self::transpose_compact_matrix(interpreter, interpreter.array_to_numeric_matrix(array)?)
+    }
+
+    fn transpose_owned_matrix(
+        interpreter: &Interpreter,
+        array: ArrayValue,
+    ) -> BasicResult<MatExprValue> {
+        if let Some(result) = mat_transpose::try_transpose(&array, interpreter.mat_base) {
+            return result
+                .map(MatExprValue::Matrix)
+                .map_err(|error| interpreter.with_current_line(error));
+        }
+        Self::transpose_compact_matrix(
+            interpreter,
+            interpreter.owned_array_to_numeric_matrix(array)?,
+        )
+    }
+
+    fn transpose_compact_matrix(
+        interpreter: &Interpreter,
+        mut matrix: NumericMatrix,
+    ) -> BasicResult<MatExprValue> {
+        let out = if matrix.rows == matrix.cols {
+            let size = matrix.rows;
+            for r in 0..size {
+                for c in r + 1..size {
+                    matrix.data.swap(r * size + c, c * size + r);
+                }
+            }
+            matrix.data
+        } else if matrix.rows == 1 || matrix.cols == 1 {
+            // A row or column keeps its compact element order.
+            matrix.data
+        } else {
+            let mut out = checked_zeroed_numeric_buffer(matrix.rows, matrix.cols)
+                .map_err(|error| interpreter.with_current_line(error))?;
+            for r in 0..matrix.rows {
+                for c in 0..matrix.cols {
+                    out[c * matrix.rows + r] = matrix.data[r * matrix.cols + c];
+                }
+            }
+            out
+        };
+        ArrayValue::from_numeric_matrix("", interpreter.mat_base, matrix.cols, matrix.rows, out)
+            .map(MatExprValue::Matrix)
+            .map_err(|error| interpreter.with_current_line(error))
     }
 
     // Keep ordinary fills, copies and arithmetic independent of the stack and
@@ -250,33 +387,59 @@ impl CompiledMatExpr {
             }
             Self::Hadamard { left, right } => {
                 let mut left = left.eval_numeric_array(interpreter)?;
-                // Resolve a bare RHS only after the left snapshot and its
-                // effects. Equal stored dimensions allow a contiguous pass
-                // without copying the RHS or changing the other MAT kernels.
-                if let Self::Name { name, .. } = right.as_ref() {
-                    if let Some(array) = interpreter.array_ref(name) {
-                        if left.dims == array.dims && !array.is_string() {
-                            interpreter.validate_mat_elementwise_shapes(&left.dims, &array.dims)?;
-                            let (ArrayData::Number(left_values), ArrayData::Number(right_values)) =
-                                (&mut left.data, &array.data)
-                            else {
-                                unreachable!("Hadamard operands have been checked as numeric");
-                            };
-                            for (a, b) in left_values.iter_mut().zip(right_values) {
-                                *a *= *b;
-                            }
-                            return Ok(MatExprValue::Matrix(left));
-                        }
-                    }
+                if right.apply_named_numeric_rhs(interpreter, &mut left, |a, b| a * b)? {
+                    return Ok(MatExprValue::Matrix(left));
                 }
                 let right = right.eval_numeric_array(interpreter)?;
                 interpreter.mat_numeric_elementwise(left, right, |a, b| a * b)
             }
+            Self::Map { function, array } => {
+                let mut array = array.eval_numeric_array(interpreter)?;
+                let ArrayData::Number(values) = &mut array.data else {
+                    unreachable!("numeric array required by MAP");
+                };
+                let degrees = interpreter.angle_degrees;
+                let apply = |cells: &mut [f64]| -> BasicResult<()> {
+                    for value in cells {
+                        *value = eval_fast_number_function(*function, *value, degrees)?;
+                    }
+                    Ok(())
+                };
+                match (interpreter.mat_base, array.dims.as_slice()) {
+                    (0, [_] | [_, _]) => apply(values)?,
+                    (1, [_]) => apply(&mut values[1..])?,
+                    (1, [_, cols]) => {
+                        for row in values.chunks_exact_mut(cols + 1).skip(1) {
+                            apply(&mut row[1..])?;
+                        }
+                    }
+                    _ => return Err(interpreter.err(ErrorCode::InvalidDimensions)),
+                }
+                Ok(MatExprValue::Matrix(array))
+            }
+            Self::InvalidMap(code) => Err(interpreter.err(*code)),
             Self::MatrixFunction { name, args } => {
                 if args.len() != 1 {
                     return Err(interpreter.err(ErrorCode::ArgumentMismatch));
                 }
+                if name == "TRN" {
+                    if let Self::Name { name, .. } = &args[0] {
+                        if let Some(array) = interpreter.array_ref(name) {
+                            return Self::transpose_named_matrix(interpreter, array);
+                        }
+                    }
+                }
                 let value = args[0].eval(interpreter)?;
+                if name == "TRN" {
+                    return match value {
+                        MatExprValue::Matrix(array) => {
+                            Self::transpose_owned_matrix(interpreter, array)
+                        }
+                        MatExprValue::Scalar(_) => {
+                            Err(interpreter.err(ErrorCode::ForbiddenExpression))
+                        }
+                    };
+                }
                 // INV preserves the inactive border. Save it from the evaluated
                 // snapshot before compacting the active block.
                 enum InverseBorder {
@@ -310,7 +473,7 @@ impl CompiledMatExpr {
                 } else {
                     None
                 };
-                let mut matrix = interpreter.mat_value_to_numeric_matrix(value)?;
+                let matrix = interpreter.mat_value_to_numeric_matrix(value)?;
                 if name == "INV" {
                     let mut inverse = interpreter.invert_numeric_matrix(matrix)?;
                     if let Some(border) = inactive_border {
@@ -333,40 +496,7 @@ impl CompiledMatExpr {
                     }
                     return Ok(MatExprValue::Matrix(inverse));
                 }
-                let out = if matrix.rows == matrix.cols {
-                    // The argument is already an owned snapshot with a compact
-                    // active block. Square transposes only exchange elements;
-                    // keep their exact bits and reuse this numeric buffer.
-                    let size = matrix.rows;
-                    for r in 0..size {
-                        for c in r + 1..size {
-                            matrix.data.swap(r * size + c, c * size + r);
-                        }
-                    }
-                    matrix.data
-                } else if matrix.rows == 1 || matrix.cols == 1 {
-                    // Transposing a row or column keeps its compact element order.
-                    matrix.data
-                } else {
-                    let mut out = checked_zeroed_numeric_buffer(matrix.rows, matrix.cols)
-                        .map_err(|error| interpreter.with_current_line(error))?;
-                    for r in 0..matrix.rows {
-                        for c in 0..matrix.cols {
-                            out[c * matrix.rows + r] = matrix.data[r * matrix.cols + c];
-                        }
-                    }
-                    out
-                };
-                Ok(MatExprValue::Matrix(
-                    ArrayValue::from_numeric_matrix(
-                        "",
-                        interpreter.mat_base,
-                        matrix.cols,
-                        matrix.rows,
-                        out,
-                    )
-                    .map_err(|error| interpreter.with_current_line(error))?,
-                ))
+                Self::transpose_compact_matrix(interpreter, matrix)
             }
             Self::ScalarUnary { op, expr } => {
                 let value = expr.eval(interpreter)?;
@@ -456,7 +586,8 @@ pub(super) fn has_array_slice(source: &str, interpreter: &Interpreter) -> bool {
         let Token::Ident(name) = token else {
             continue;
         };
-        if !interpreter.array_exists(name)
+        if name == "MAP"
+            || !interpreter.array_exists(name)
             || !matches!(tokens.get(position + 1), Some(Token::LParen))
         {
             continue;
@@ -495,6 +626,9 @@ impl Interpreter {
         &mut self,
         compiled: &CompiledMatAssignment,
     ) -> BasicResult<()> {
+        if let CompiledMatOperation::NamedMap { target, plan } = &compiled.operation {
+            return self.execute_named_map(target, plan);
+        }
         let CompiledMatOperation::Arithmetic { target, expression } = &compiled.operation else {
             let CompiledMatOperation::Copy {
                 left,
@@ -521,6 +655,30 @@ impl Interpreter {
                 target_key.to_string(),
                 ArrayValue::new(target_key.as_ref(), vec![10]),
             );
+        }
+        self.execute_mat_arithmetic(target, target_key, expression)
+    }
+
+    pub(super) fn try_execute_named_map(
+        &mut self,
+        target: &str,
+        expression: &CompiledMatExpr,
+    ) -> Option<BasicResult<()>> {
+        let plan = map_affine::NamedMap::compile(expression)?;
+        Some(self.execute_named_map(target, &plan))
+    }
+
+    #[inline]
+    pub(super) fn execute_mat_arithmetic(
+        &mut self,
+        target: &str,
+        target_key: Cow<'_, str>,
+        expression: &CompiledMatExpr,
+    ) -> BasicResult<()> {
+        if expression.is_random_fill() {
+            self.mat_random_fill(target_key.as_ref())?;
+            self.return_array_for_active_function(target);
+            return Ok(());
         }
         let value = expression
             .eval(self)
@@ -560,6 +718,9 @@ impl Interpreter {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
                 matrix.clear_debug_write();
+                if let Some(stamp) = self.debug_array_write_stamp() {
+                    matrix.remember_debug_array_change(stamp, DebugArrayChange::All);
+                }
                 self.arrays.insert(target_key.into_owned(), matrix);
                 self.return_array_for_active_function(target);
                 Ok(())

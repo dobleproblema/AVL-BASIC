@@ -1,4 +1,4 @@
-100 REM Calculate pi with Machin's formula and matrix operations.
+100 REM Calculate pi with Machin 's formula and matrix operations.
 102 REM Set P to choose the number of decimal digits.
 105 P=1000 'INPUT "DIGITS: ",P
 110 L=9 'Safe 9-digit blocks: keeps R*F+B4(A) exact (no rounding) up to 1,000,000 decimal digits
@@ -12,10 +12,7 @@
 150 GOSUB 300
 155 T2=TIME
 160 REM PRINT
-165 FOR A=0 TO G
-170 PRINT USING F$;B1(A);
-175 IF A>0 AND A MOD 8 = 7 THEN PRINT
-180 NEXT A
+170 MAT PRINT USING F$;COL B1
 185 PRINT : PRINT USING "#.###";T2-T1;" SEC."
 190 END
 200 REM B1+B2->B1; normalize the active suffix, then any carry in its prefix
@@ -75,6 +72,7 @@
 750 REM B4/F1->B4; advance J past leading zeros, Z=1 if empty
 755 R=0
 760 FOR A=J TO G
+765 IF R=0 THEN IF B4(A)=0 THEN 790
 770 D=R*F+B4(A) : B4(A)=D\P : R=D MOD P
 790 NEXT A
 795 IF J>G THEN Z=1:RETURN

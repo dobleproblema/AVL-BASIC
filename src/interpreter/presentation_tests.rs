@@ -56,7 +56,11 @@ fn invalid_sync_and_fullscreen_options_do_not_change_presentation_state() {
         "SCREEN FULL ON,",
         "SCREEN FULL ON,INF",
     ] {
-        interpreter.process_immediate(command).expect_err(command);
+        let error = interpreter.process_immediate(command).expect_err(command);
+        assert_eq!(error.code, ErrorCode::ArgumentMismatch, "{command}");
+        if matches!(command, "SCREEN SYNC 1" | "SCREEN SYNC REPORT") {
+            assert_eq!(error.display_for_basic(), "SCREEN SYNC expects ON or OFF.");
+        }
         assert!(interpreter.graphics_sync_enabled, "{command}");
         assert!(interpreter.requested_graphics_fullscreen(), "{command}");
     }
@@ -285,7 +289,11 @@ fn screen_full_requires_on_or_off_and_does_not_change_state_on_invalid_input() {
         "SCREEN FULL ON,OFF",
         "SCREEN FULL OFF EXTRA",
     ] {
-        interpreter.process_immediate(command).expect_err(command);
+        let error = interpreter.process_immediate(command).expect_err(command);
+        assert_eq!(error.code, ErrorCode::ArgumentMismatch, "{command}");
+        if command == "SCREEN FULL 1" {
+            assert_eq!(error.display_for_basic(), "SCREEN FULL expects ON or OFF.");
+        }
         assert!(interpreter.requested_graphics_fullscreen(), "{command}");
         assert_eq!(dimensions(&interpreter), (640, 360), "{command}");
         assert_eq!(interpreter.graphics.buffer(), before, "{command}");

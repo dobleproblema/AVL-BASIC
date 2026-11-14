@@ -1,9 +1,15 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::fonts::{font_dimensions, glyph_chars, glyph_rows, FontKind};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
 use std::path::Path;
+
+#[path = "graphics/gscr.rs"]
+mod gscr;
+use gscr::{parse_rgb as parse_gscr, Encoding, Image};
+
+#[cfg(target_arch = "x86_64")]
+#[path = "graphics/gouraud.rs"]
+mod gouraud;
 
 #[derive(Debug, Clone)]
 pub struct Graphics {
@@ -1746,7 +1752,7 @@ impl Graphics {
         if vertices.iter().flatten().any(|value| !value.is_finite()) {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         }
-        self.gouraud_triangle_raster(vertices, depth, depth_height)?;
+        self.gouraud_triangle_raster::<true>(vertices, depth, depth_height)?;
         let (cx, cy) = if self.scale.is_some() {
             self.user_to_canvas(endpoint.0, endpoint.1)
         } else {
@@ -1761,7 +1767,7 @@ impl Graphics {
         Ok(())
     }
 
-    fn gouraud_triangle_raster(
+    fn gouraud_triangle_raster<const ACCELERATED: bool>(
         &mut self,
         vertices: [[f64; 6]; 3],
         depth: &mut [f64],
@@ -1851,6 +1857,26 @@ impl Graphics {
             .any(|value| !value.is_finite())
         {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if ACCELERATED && gouraud::should_vectorize(right - left + 1, top - bottom + 1) {
+            let rows = gouraud::Rows {
+                left,
+                right,
+                bottom,
+                top,
+                weight_dx,
+                weight_dy,
+                weights: row_weights,
+                attribute_dx,
+                attribute_dy,
+                attributes: row_attributes,
+            };
+            if gouraud::draw(&mut self.buffer, depth, self.width, depth_height, rows) {
+                self.buffer_dirty = true;
+            }
+            return Ok(());
         }
 
         let mut wrote_pixel = false;
@@ -2255,8 +2281,8 @@ impl Graphics {
         self.draw_sprite_with_alpha(sprite, x, y, transparent, sprite_id, hittest_only, 1.0)
     }
 
-    /// Opacity affects the image only; even an invisible sprite owns its
-    /// non-key pixels and participates in the usual collision checks.
+    /// Uniform opacity affects the image only. The sprite's collision shape
+    /// contains pixels with nonzero source alpha that survive the color key.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_sprite_with_alpha(
         &mut self,
@@ -2269,33 +2295,46 @@ impl Graphics {
         alpha: f64,
     ) -> BasicResult<()> {
         alpha::validate_alpha(alpha)?;
-        if alpha == 1.0 {
-            self.draw_sprite_alpha_impl::<false>(
+        let image = Image::parse(sprite)?;
+        match (image.encoding, alpha == 1.0) {
+            (Encoding::Rgba, _) => self.draw_sprite_alpha_impl::<true, true>(
                 sprite,
+                image,
                 x,
                 y,
                 transparent,
                 sprite_id,
                 hittest_only,
                 alpha,
-            )
-        } else {
-            self.draw_sprite_alpha_impl::<true>(
+            ),
+            (Encoding::Rgb, true) => self.draw_sprite_alpha_impl::<false, false>(
                 sprite,
+                image,
                 x,
                 y,
                 transparent,
                 sprite_id,
                 hittest_only,
                 alpha,
-            )
+            ),
+            (Encoding::Rgb, false) => self.draw_sprite_alpha_impl::<true, false>(
+                sprite,
+                image,
+                x,
+                y,
+                transparent,
+                sprite_id,
+                hittest_only,
+                alpha,
+            ),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_sprite_alpha_impl<const BLEND: bool>(
+    fn draw_sprite_alpha_impl<const BLEND: bool, const RGBA: bool>(
         &mut self,
         sprite: &str,
+        image: Image<'_>,
         x: f64,
         y: f64,
         transparent: Option<i32>,
@@ -2303,7 +2342,9 @@ impl Graphics {
         hittest_only: bool,
         alpha: f64,
     ) -> BasicResult<()> {
-        let (w, h, pixels) = parse_gscr(sprite)?;
+        let w = image.width;
+        let h = image.height;
+        let pixels = image.pixels()?;
         let transparent_rgb = transparent.map(resolve_color_number);
         let id = sprite_id.unwrap_or(0);
         if id < 0 {
@@ -2341,8 +2382,13 @@ impl Graphics {
         let mut touched = Vec::new();
         for row in 0..h {
             for col in 0..w {
-                let rgb = pixels[row * w + col];
-                if Some(rgb) == transparent_rgb {
+                let pixel = pixels[row * w + col];
+                let (rgb, source_alpha) = if RGBA {
+                    (pixel >> 8, pixel as u8)
+                } else {
+                    (pixel, 255)
+                };
+                if source_alpha == 0 || Some(rgb) == transparent_rgb {
                     continue;
                 }
                 let cx = left + col as i32;
@@ -2374,10 +2420,15 @@ impl Graphics {
                     continue;
                 }
                 if !hittest_only {
-                    if !BLEND {
+                    if !BLEND || (RGBA && source_alpha == 255 && alpha == 1.0) {
                         self.buffer[idx] = rgb;
                     } else if alpha > 0.0 {
-                        self.buffer[idx] = alpha::blend_rgb(rgb, self.buffer[idx], alpha);
+                        let pixel_opacity = if RGBA {
+                            alpha * (f64::from(source_alpha) / 255.0)
+                        } else {
+                            alpha
+                        };
+                        self.buffer[idx] = alpha::blend_rgb(rgb, self.buffer[idx], pixel_opacity);
                     }
                     if id > 0 {
                         self.owner[idx] = id;
@@ -2386,9 +2437,11 @@ impl Graphics {
                 }
             }
         }
-        if let Some(id) = sprite_id {
-            if let Some(mem) = self.sprites.get_mut(&id) {
-                mem.pixels = touched;
+        if !hittest_only {
+            if let Some(id) = sprite_id {
+                if let Some(mem) = self.sprites.get_mut(&id) {
+                    mem.pixels = touched;
+                }
             }
         }
         Ok(())
@@ -2515,75 +2568,36 @@ impl Graphics {
     }
 
     pub fn save_png(&self, path: &Path) -> BasicResult<()> {
-        Self::save_pixels_png(path, self.width, self.height, &self.buffer)
+        gscr::save_png(path, self.width, self.height, &self.buffer, Encoding::Rgb)
     }
 
     pub fn save_gscr_png(screen: &str, path: &Path) -> BasicResult<()> {
-        let (width, height, pixels) = parse_gscr(screen)?;
-        Self::save_pixels_png(path, width, height, &pixels)
-    }
-
-    fn save_pixels_png(
-        path: &Path,
-        width: usize,
-        height: usize,
-        pixels: &[u32],
-    ) -> BasicResult<()> {
-        if width == 0
-            || height == 0
-            || width.checked_mul(height) != Some(pixels.len())
-            || width > u32::MAX as usize
-            || height > u32::MAX as usize
-        {
-            return Err(BasicError::new(ErrorCode::InvalidValue));
-        }
-        let file = File::create(path)
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let writer = BufWriter::new(file);
-        let mut encoder = png::Encoder::new(writer, width as u32, height as u32);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut png_writer = encoder
-            .write_header()
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let mut bytes = Vec::with_capacity(pixels.len() * 3);
-        for rgb in pixels {
-            bytes.push((rgb >> 16) as u8);
-            bytes.push((rgb >> 8) as u8);
-            bytes.push(*rgb as u8);
-        }
-        png_writer
-            .write_image_data(&bytes)
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))
+        let image = Image::parse(screen)?;
+        gscr::save_png(
+            path,
+            image.width,
+            image.height,
+            &image.pixels()?,
+            image.encoding,
+        )
     }
 
     pub fn load_png_to_gscr(path: &Path) -> BasicResult<String> {
-        let file = File::open(path)
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let decoder = png::Decoder::new(BufReader::new(file));
-        let mut reader = decoder
-            .read_info()
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let mut buf = vec![0; reader.output_buffer_size()];
-        let info = reader
-            .next_frame(&mut buf)
-            .map_err(|e| BasicError::new(ErrorCode::InvalidValue).with_detail(e.to_string()))?;
-        let bytes = &buf[..info.buffer_size()];
-        let mut out = format!("{}x{}:", info.width, info.height);
-        match info.color_type {
-            png::ColorType::Rgb => {
-                for chunk in bytes.chunks_exact(3) {
-                    out.push_str(&format!("{:02x}{:02x}{:02x}", chunk[0], chunk[1], chunk[2]));
-                }
-            }
-            png::ColorType::Rgba => {
-                for chunk in bytes.chunks_exact(4) {
-                    out.push_str(&format!("{:02x}{:02x}{:02x}", chunk[0], chunk[1], chunk[2]));
-                }
-            }
-            _ => return Err(BasicError::new(ErrorCode::InvalidValue)),
-        }
-        Ok(out)
+        gscr::load_png(path, Encoding::Rgb)
+    }
+
+    pub fn load_png_to_gscr_rgba(path: &Path) -> BasicResult<String> {
+        gscr::load_png(path, Encoding::Rgba)
+    }
+
+    pub fn crop_gscr(
+        source: &str,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+    ) -> BasicResult<String> {
+        Image::parse(source)?.crop(x, y, width, height)
     }
 
     fn user_to_canvas(&self, x: f64, y: f64) -> (i32, i32) {
@@ -4176,31 +4190,6 @@ fn rgb_to_index_like(rgb: u32) -> i32 {
     rgb as i32
 }
 
-fn parse_gscr(screen: &str) -> BasicResult<(usize, usize, Vec<u32>)> {
-    let Some((res, hex)) = screen.split_once(':') else {
-        return Err(BasicError::new(ErrorCode::InvalidValue));
-    };
-    let Some((w, h)) = res.split_once('x') else {
-        return Err(BasicError::new(ErrorCode::InvalidValue));
-    };
-    let w = w
-        .parse::<usize>()
-        .map_err(|_| BasicError::new(ErrorCode::InvalidValue))?;
-    let h = h
-        .parse::<usize>()
-        .map_err(|_| BasicError::new(ErrorCode::InvalidValue))?;
-    if hex.len() != w * h * 6 {
-        return Err(BasicError::new(ErrorCode::InvalidValue));
-    }
-    let mut pixels = Vec::with_capacity(w * h);
-    for i in (0..hex.len()).step_by(6) {
-        let rgb = u32::from_str_radix(&hex[i..i + 6], 16)
-            .map_err(|_| BasicError::new(ErrorCode::InvalidValue))?;
-        pixels.push(rgb);
-    }
-    Ok((w, h, pixels))
-}
-
 #[cfg(test)]
 #[path = "graphics/perspective_texture_tests.rs"]
 mod perspective_texture_tests;
@@ -4213,8 +4202,16 @@ mod texture_transparency_tests;
 mod alpha;
 
 #[cfg(test)]
+#[path = "graphics/gouraud_tests.rs"]
+mod gouraud_tests;
+
+#[cfg(test)]
 #[path = "graphics/alpha_tests.rs"]
 mod alpha_tests;
+
+#[cfg(test)]
+#[path = "graphics/rgba_tests.rs"]
+mod rgba_tests;
 
 #[cfg(test)]
 mod tests {

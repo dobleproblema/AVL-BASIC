@@ -226,6 +226,7 @@ fn validate_language_catalog(catalog: &LanguageSource) {
     let valid_flags = BTreeSet::from([
         "array-name",
         "builtin",
+        "contextual",
         "fast-constant",
         "mat-only",
         "pi",
@@ -263,10 +264,15 @@ fn validate_language_catalog(catalog: &LanguageSource) {
                 panic!("invalid or duplicate flag `{flag}` in {}", topic.topic);
             }
         }
+        if topic_flags.remove("contextual")
+            && (topic.kind != "statement" || topic.context != "program")
+        {
+            panic!("{} cannot be a contextual program statement", topic.topic);
+        }
         if matches!(
             topic.kind.as_str(),
             "statement" | "metacommand" | "operator"
-        ) && !topic.flags.is_empty()
+        ) && !topic_flags.is_empty()
         {
             panic!("{} cannot have parser function flags", topic.topic);
         }
@@ -320,7 +326,7 @@ fn validate_language_catalog(catalog: &LanguageSource) {
         panic!("the catalog must classify only PI with the `pi` flag");
     }
     for topic in &catalog.topics {
-        if topic.kind != "statement" {
+        if topic.kind != "statement" || topic.flags.iter().any(|flag| flag == "contextual") {
             continue;
         }
         for name in std::iter::once(&topic.topic).chain(topic.aliases.iter()) {
@@ -470,9 +476,10 @@ fn render_language_catalog(catalog: &LanguageSource) -> String {
                 }
             }
         } else if topic.context == "program" {
+            let contextual = topic.flags.iter().any(|flag| flag == "contextual");
             for name in names {
                 program_topics.insert(name.clone());
-                if let Some(first) = name.split_whitespace().next() {
+                if let Some(first) = name.split_whitespace().next().filter(|_| !contextual) {
                     program_commands.insert(first.to_string());
                 }
             }
@@ -486,7 +493,7 @@ fn render_language_catalog(catalog: &LanguageSource) -> String {
     for topic in &catalog.topics {
         out.push_str("    LanguageTopic {\n");
         out.push_str(&format!(
-            "        #[cfg(test)]\n        kind: TopicKind::{},\n",
+            "        kind: TopicKind::{},\n",
             topic_kind_variant(&topic.kind)
         ));
         out.push_str(&format!(

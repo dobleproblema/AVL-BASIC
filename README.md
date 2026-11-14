@@ -46,8 +46,8 @@ clause for opacity from 0 to 1. Color-key holes remain fully transparent;
 `SPRITE MOVE` remembers opacity, and fading does not change collision masks.
 The [sprite opacity example](samples/g-sprite-alpha.bas) moves a large,
 multicolored anime fairy over an anime image and fades it between 0% and 100%.
-The [sprite layers example](samples/g-sprite-layers.bas) moves two aligned
-sprites together: half-transparent wings behind a fully opaque fairy body.
+The [sprite layers example](samples/g-sprite-layers.bas) uses `BLOAD ... AS RGBA`
+and `CROP$` to move one fairy sprite with an opaque body and translucent wings.
 Depth-buffer primitives keep their existing behavior. See manual sections 6.3
 and 6.7.
 
@@ -99,9 +99,9 @@ synchronization can wait even without an FPS cap, and slower drawing can miss
 refreshes. It reduces tearing and irregular presentation but may add input
 latency. `MODE` and `SCREEN` preserve this setting; `SCREEN CLOSE` resets it.
 The [widescreen example](samples/g-widescreen.bas) compares these options with
-moving bars, Alt+Enter and mouse coordinates. Both Dustline versions start with
-synchronization enabled and no explicit FPS cap;
-V toggles synchronization and F toggles the optional 60 FPS cap.
+moving bars, Alt+Enter and mouse coordinates. Dustline starts at 960×540 with
+synchronization enabled. Press 1 for 960×540 or 2 for 1280×720, V to toggle
+synchronization, or F to toggle the optional 60 FPS cap.
 
 ## Interactive by design
 
@@ -123,11 +123,13 @@ breakpoints, step into/over/out, and a live view of variables, arrays, the call
 stack, errors, and timers, including the exact next statement and values
 changed since the previous pause. Inspector categories can be collapsed, and
 scalars and arrays can be pinned for focused tracking, entirely from the keyboard.
-Each pinned array follows its last-written element. Press Enter on an inspector
-value to edit a scalar or the displayed array element in place, without resuming
-execution. In the code panel, F3 sets the next complete statement within a compatible
-execution context; F9 restarts from the beginning while retaining breakpoints and
-inspector preferences. The BASIC source remains read-only while debugging.
+Enter on an array in `ARRAYS` opens a scrollable view. Use G to jump to a
+coordinate and Space to pin that specific cell. Pinning an array from `VARIABLES`
+tracks its latest write. Enter on a scalar or last-written element edits its
+value while paused. In the code panel, F3 sets the next complete statement within
+a compatible execution context. F9 restarts from the beginning while retaining
+breakpoints and inspector preferences. The BASIC source remains read-only while
+debugging.
 
 <p align="center">
   <img src="README-console.png" alt="AVL BASIC interactive session showing the welcome screen, CD, LOAD, and LIST" width="900">
@@ -193,7 +195,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 149-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 150-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -251,7 +253,19 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-146 sample programs and their visual gallery are optional companion material.
+150 sample programs and their visual gallery are optional companion material.
+
+## Matrices and standalone programs
+
+`MAT A=RND` fills every active cell with its own random value. Use
+`RANDOMIZE` to repeat a sequence and `MAT A=MAP(INT,10*A)` to turn those
+values into integers from 0 to 9. `MAP` also accepts unary numeric functions
+such as `ABS`, `SIN`, and `LOG`. Large matrix products use multiple cores
+while keeping the order of floating-point additions for each result.
+
+On Windows x64, the immediate command `PACK` bundles a BASIC program, its
+libraries, and selected assets into a standalone executable. See section 9.5
+of the [English manual](MANUAL.txt) or [Spanish manual](MANUAL.es.txt).
 
 ## Build From Source
 
@@ -335,6 +349,7 @@ adding a practical modern feature set:
 - syntax-preserving program editing and listing, plus a separate full-screen debugger,
 - scoped line labels (`100 Name:`) across line targets, event handlers, editing ranges, and named error handlers, with distinct highlighting,
 - procedure-local and root `ON ERROR`/`RESUME` with uniform caller recovery,
+- `IMPORT` for calling functions and subroutines from numbered BASIC libraries,
 - `AFTER`/`EVERY`, `ON MOUSE`, procedures, functions, and matrices,
 - graphics commands for plotting, shapes, axes, sprites, screenshots, and input,
 - triangles with interpolated RGB and a depth buffer stored in a BASIC array,
@@ -383,7 +398,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 146 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 150 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

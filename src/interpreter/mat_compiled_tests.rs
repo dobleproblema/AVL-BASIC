@@ -95,6 +95,132 @@ fn cached_mat_compiles_expression_syntax_without_running_effectful_calls() {
 }
 
 #[test]
+fn mat_rnd_matches_seeded_loops_and_leaves_the_next_draw_in_place() {
+    for (assignment, loop_setup, loop_body, seed, warmup_draws) in [
+        (
+            "MAT A=RND",
+            "MAT BASE 0:DIM A(2,3)",
+            "FOR I=0 TO 2:FOR J=0 TO 3:A(I,J)=RND:NEXT J:NEXT I",
+            12,
+            0,
+        ),
+        (
+            "MAT A=(RND())",
+            "MAT BASE 1:DIM A(2,3):MAT A=-7",
+            "FOR I=1 TO 2:FOR J=1 TO 3:A(I,J)=RND:NEXT J:NEXT I",
+            12,
+            0,
+        ),
+        (
+            "MAT A=RND()",
+            "MAT BASE 1:DIM A(3):A(0)=-7",
+            "FOR I=1 TO 3:A(I)=RND:NEXT I",
+            12,
+            0,
+        ),
+        (
+            "MAT A=(RND)",
+            "MAT BASE 1:DIM A(2,3,4):MAT A=-7",
+            "FOR I=1 TO 2:FOR J=1 TO 3:FOR K=1 TO 4:A(I,J,K)=RND:NEXT K:NEXT J:NEXT I",
+            12,
+            0,
+        ),
+        ("MAT A=RND", "MAT BASE 1:DIM A(2,0)", "", 12, 0),
+        // Each MT19937 state block yields 312 draws. Exercise fills
+        // starting at a block boundary and inside a partially used block.
+        (
+            "MAT A=RND",
+            "MAT BASE 0:DIM A(3,999)",
+            "FOR I=0 TO 3:FOR J=0 TO 999:A(I,J)=RND:NEXT J:NEXT I",
+            0,
+            312,
+        ),
+        (
+            "MAT A=RND",
+            "MAT BASE 1:DIM A(4,1000):MAT A=-7",
+            "FOR I=1 TO 4:FOR J=1 TO 1000:A(I,J)=RND:NEXT J:NEXT I",
+            12,
+            311,
+        ),
+        (
+            "MAT A=RND",
+            "MAT BASE 1:DIM A(2,3,1001):MAT A=-7",
+            "FOR I=1 TO 2:FOR J=1 TO 3:FOR K=1 TO 1001:A(I,J,K)=RND:NEXT K:NEXT J:NEXT I",
+            8_589_934_604u64,
+            313,
+        ),
+    ] {
+        let seed_and_warmup = if warmup_draws == 0 {
+            format!("RANDOMIZE {seed}")
+        } else {
+            format!("RANDOMIZE {seed}:FOR W=1 TO {warmup_draws}:D=RND:NEXT W")
+        };
+        let run = |body: &str| {
+            let mut interpreter = Interpreter::new();
+            interpreter
+                .program
+                .load_text(&format!(
+                    "10 {loop_setup}\n20 {seed_and_warmup}\n30 {body}\n40 N=RND\n"
+                ))
+                .unwrap();
+            interpreter.run_loaded().unwrap();
+            interpreter
+        };
+        let cached = run(assignment);
+        let reference = run(if loop_body.is_empty() {
+            "REM empty block"
+        } else {
+            loop_body
+        });
+        let mut immediate = Interpreter::new();
+        setup(&mut immediate, loop_setup);
+        setup(&mut immediate, &seed_and_warmup);
+        immediate
+            .execute_mat_assignment(assignment.strip_prefix("MAT ").unwrap())
+            .unwrap();
+        setup(&mut immediate, "N=RND");
+        for actual in [&cached, &immediate] {
+            assert_same_array(actual, &reference, "A");
+            assert_eq!(
+                actual.numeric_variables.get("N").unwrap().to_bits(),
+                reference.numeric_variables.get("N").unwrap().to_bits(),
+            );
+            assert_eq!(actual.rng.index, reference.rng.index);
+            assert_eq!(actual.rng.state, reference.rng.state);
+        }
+    }
+}
+
+#[test]
+fn mat_rnd_specializes_only_the_complete_rhs() {
+    let mut interpreter = Interpreter::new();
+    setup(&mut interpreter, "RANDOMIZE 12");
+    setup(&mut interpreter, "R=RND:MAT A=R");
+    let draw = *interpreter.numeric_variables.get("R").unwrap();
+    let ArrayData::Number(values) = &interpreter.array_ref("A").unwrap().data else {
+        unreachable!();
+    };
+    assert_eq!(values, &[draw; 11]);
+
+    setup(&mut interpreter, "RANDOMIZE 12:MAT B=RND+0");
+    let ArrayData::Number(values) = &interpreter.array_ref("B").unwrap().data else {
+        unreachable!();
+    };
+    assert_eq!(values, &[draw; 11]);
+
+    setup(&mut interpreter, "RANDOMIZE 12:MAT BASE 1:MAT C=RND");
+    let ArrayData::Number(values) = &interpreter.array_ref("C").unwrap().data else {
+        unreachable!();
+    };
+    assert_eq!(values.len(), 11);
+    assert_eq!(values[0], 0.0);
+    assert_eq!(values[1], draw);
+    assert_ne!(values[1], values[2]);
+    let error = interpreter.process_immediate("MAT S$=RND").unwrap_err();
+    assert_eq!(error.code, ErrorCode::TypeMismatch);
+}
+
+#[test]
 fn cached_mat_replay_resolves_scalar_array_resize_base_and_clear_dynamically() {
     let source = "C=A*2";
     let compiled = CompiledMatAssignment::compile(source).unwrap();
@@ -730,7 +856,7 @@ fn cached_and_raw_mat_reject_rank_zero_even_for_function_returns_and_keep_higher
 fn cached_and_raw_scalar_mat_domain_and_overflow_errors_keep_destination_intact() {
     for (expression, expected) in [
         ("(-1)^.5", ErrorCode::InvalidValue),
-        ("ABS((-1)^.5)", ErrorCode::TypeMismatch),
+        ("ABS((-1)^.5)", ErrorCode::InvalidValue),
         ("1E309-1E309", ErrorCode::InvalidValue),
         ("1E308+1E308", ErrorCode::Overflow),
         ("-1E308-1E308", ErrorCode::Overflow),
@@ -796,7 +922,7 @@ fn cached_and_raw_mat_unary_minus_type_error_keeps_line_and_destination() {
 fn scalar_mat_numeric_errors_keep_erl_and_resume_next_in_cached_and_raw_programs() {
     for (expression, expected) in [
         ("(-1)^.5", ErrorCode::InvalidValue),
-        ("ABS((-1)^.5)", ErrorCode::TypeMismatch),
+        ("ABS((-1)^.5)", ErrorCode::InvalidValue),
         ("1E308*2", ErrorCode::Overflow),
         ("EXP(1000)", ErrorCode::Overflow),
     ] {

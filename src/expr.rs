@@ -1,4 +1,5 @@
 use crate::error::{BasicError, BasicResult, ErrorCode};
+use crate::graphics::Graphics;
 use crate::language;
 use crate::lexer::{Lexer, Token};
 use crate::reserved::is_reserved_identifier_name;
@@ -159,6 +160,9 @@ impl Expr {
                 }
                 if name.eq_ignore_ascii_case("IIF") {
                     return select_iif_branch(ctx, args)?.eval_number(ctx);
+                }
+                if name.eq_ignore_ascii_case("CROP$") {
+                    return eval_crop_function(ctx, args)?.as_number();
                 }
                 if let Some(result) = eval_direct_numeric_function(ctx, name, args)? {
                     return Ok(result);
@@ -344,6 +348,7 @@ impl Expr {
                     "LEFT$" => return eval_left_function(ctx, args),
                     "RIGHT$" => return eval_right_function(ctx, args),
                     "MID$" => return eval_mid_function(ctx, args),
+                    "CROP$" => return eval_crop_function(ctx, args),
                     _ => {}
                 }
                 let values = eval_call_args(ctx, name, args)?;
@@ -734,10 +739,27 @@ impl Parser {
 
     fn parse_ident_value(&mut self, name: String) -> BasicResult<Expr> {
         let mut expr = if self.consume_lparen() {
+            let mat_map = self.allow_mat_operators && name == "MAP";
             let mut args = Vec::new();
             if !matches!(self.peek(), Token::RParen) {
                 loop {
-                    args.push(self.parse_or()?);
+                    // The first MAP argument names a function rather than calling it.
+                    let arg = match self.peek() {
+                        Token::Ident(selector)
+                            if mat_map
+                                && args.is_empty()
+                                && matches!(
+                                    self.tokens.get(self.pos + 1),
+                                    Some(Token::Comma | Token::RParen)
+                                ) =>
+                        {
+                            let selector = Expr::Var(selector.clone());
+                            self.bump();
+                            selector
+                        }
+                        _ => self.parse_or()?,
+                    };
+                    args.push(arg);
                     if !matches!(self.peek(), Token::Comma) {
                         break;
                     }
@@ -751,6 +773,9 @@ impl Parser {
             }
             Expr::ArrayOrCall { name, args, kind }
         } else {
+            if name.contains('.') {
+                return Err(BasicError::new(ErrorCode::Syntax));
+            }
             if name.eq_ignore_ascii_case("IIF") {
                 return Err(BasicError::new(ErrorCode::ArgumentMismatch));
             }
@@ -1286,7 +1311,7 @@ fn eval_call_args(
 ) -> BasicResult<Vec<Value>> {
     args.iter()
         .map(|arg| {
-            if function.starts_with("FN") {
+            if is_user_function_name(function) {
                 if let Expr::Var(name) = arg {
                     // Whole-array arguments are available only when this bare
                     // name does not already denote a visible scalar.
@@ -1295,13 +1320,7 @@ fn eval_call_args(
                     }
                 }
             }
-            arg.eval(ctx).map_err(|err| {
-                if function.eq_ignore_ascii_case("ABS") && err.code == ErrorCode::InvalidValue {
-                    BasicError::new(ErrorCode::TypeMismatch)
-                } else {
-                    err
-                }
-            })
+            arg.eval(ctx)
         })
         .collect()
 }
@@ -1324,6 +1343,32 @@ fn eval_mid_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult<V
 
     let text = args[0].eval(ctx)?.into_string()?;
     Ok(Value::string(string_slice(&text, start, count)))
+}
+
+fn eval_crop_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult<Value> {
+    let [source, x, y, width, height] = args else {
+        return Err(BasicError::new(ErrorCode::ArgumentMismatch));
+    };
+    let x = image_integer(x.eval_number(ctx)?)?;
+    let y = image_integer(y.eval_number(ctx)?)?;
+    let width = image_integer(width.eval_number(ctx)?)?;
+    let height = image_integer(height.eval_number(ctx)?)?;
+    let crop = |text: &str| Graphics::crop_gscr(text, x, y, width, height).map(Value::string);
+    // Like MID$, resolve the bounds first so a simple source variable can be
+    // read by reference and only the selected rectangle has to be copied.
+    if let Some(name) = direct_string_variable_name(source) {
+        if let Some(result) = ctx.with_string_variable(name, crop) {
+            return result;
+        }
+    }
+    crop(&source.eval(ctx)?.into_string()?)
+}
+
+fn image_integer(value: f64) -> BasicResult<usize> {
+    if !(0.0..=u32::MAX as f64).contains(&value) || value.fract() != 0.0 {
+        return Err(BasicError::new(ErrorCode::InvalidArgument));
+    }
+    Ok(value as usize)
 }
 
 fn eval_len_function(ctx: &mut impl EvalContext, args: &[Expr]) -> BasicResult<Value> {
@@ -1741,11 +1786,17 @@ fn classify_array_or_call(name: &str) -> ArrayOrCallKind {
         ArrayOrCallKind::ArrayNameFunction
     } else if is_builtin_function(name) {
         ArrayOrCallKind::BuiltinFunction
-    } else if name.starts_with("FN") {
+    } else if is_user_function_name(name) {
         ArrayOrCallKind::UserFunction
     } else {
         ArrayOrCallKind::Array
     }
+}
+
+fn is_user_function_name(name: &str) -> bool {
+    name.split_once('.')
+        .map_or(name, |(_, function)| function)
+        .starts_with("FN")
 }
 
 fn is_array_name_function(name: &str) -> bool {

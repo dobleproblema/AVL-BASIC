@@ -475,9 +475,63 @@ impl Graphics {
             return;
         }
         let row = y as usize * self.width;
-        for pixel in &mut self.buffer[row + left as usize..=row + right as usize] {
+        let pixels = &mut self.buffer[row + left as usize..=row + right as usize];
+        #[cfg(target_arch = "x86_64")]
+        if pixels.len() >= 16 && std::arch::is_x86_feature_detected!("avx") {
+            // SAFETY: The CPU and OS support AVX, and the callers validate alpha.
+            unsafe { avx::blend_span(color, pixels, alpha) };
+            self.buffer_dirty = true;
+            return;
+        }
+        for pixel in pixels {
             *pixel = blend_rgb(color, *pixel, alpha);
         }
         self.buffer_dirty = true;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod avx {
+    use std::arch::x86_64::*;
+
+    #[target_feature(enable = "avx")]
+    fn channel<const SHIFT: i32>(
+        source: __m256d,
+        destination: __m128i,
+        byte: __m128i,
+        alpha: __m256d,
+        half: __m256d,
+    ) -> __m128i {
+        let destination =
+            _mm256_cvtepi32_pd(_mm_and_si128(_mm_srli_epi32::<SHIFT>(destination), byte));
+        let delta = _mm256_sub_pd(source, destination);
+        let scaled = _mm256_mul_pd(delta, alpha);
+        let blended = _mm256_add_pd(destination, scaled);
+        // Byte endpoints and alpha in 0..=1 make truncation equal to floor.
+        // Keep the multiply and adds separate, as in blend_rgb.
+        _mm256_cvttpd_epi32(_mm256_add_pd(blended, half))
+    }
+
+    #[target_feature(enable = "avx")]
+    pub(super) fn blend_span(source: u32, destination: &mut [u32], alpha: f64) {
+        let opacity = _mm256_set1_pd(alpha);
+        let half = _mm256_set1_pd(0.5);
+        let byte = _mm_set1_epi32(255);
+        let red = _mm256_set1_pd(((source >> 16) & 255) as f64);
+        let green = _mm256_set1_pd(((source >> 8) & 255) as f64);
+        let blue = _mm256_set1_pd((source & 255) as f64);
+        let mut groups = destination.chunks_exact_mut(4);
+        for group in &mut groups {
+            let pixels = group.as_mut_ptr().cast::<__m128i>();
+            // SAFETY: Each group contains four pixels and the accesses are unaligned.
+            let values = unsafe { _mm_loadu_si128(pixels) };
+            let r = _mm_slli_epi32::<16>(channel::<16>(red, values, byte, opacity, half));
+            let g = _mm_slli_epi32::<8>(channel::<8>(green, values, byte, opacity, half));
+            let b = channel::<0>(blue, values, byte, opacity, half);
+            unsafe { _mm_storeu_si128(pixels, _mm_or_si128(_mm_or_si128(r, g), b)) };
+        }
+        for pixel in groups.into_remainder() {
+            *pixel = super::blend_rgb(source, *pixel, alpha);
+        }
     }
 }

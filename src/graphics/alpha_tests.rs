@@ -8,6 +8,52 @@ fn background() -> Graphics {
 }
 
 #[test]
+fn constant_color_alpha_spans_match_scalar_rounding_at_vector_boundaries() {
+    let mut graphics = background();
+    let source = 0xb436de;
+    let (left, y) = graphics.user_to_canvas(11.0, 30.0);
+    let start = y as usize * graphics.width + left as usize;
+    let colors = [
+        0x000000, 0xffffff, 0xb337df, 0xb535dd, 0x123456, 0xabcdef, 0x0182f7,
+    ];
+    for length in 15..=19 {
+        for opacity in [
+            f64::from_bits(1),
+            0.1,
+            0.5_f64.next_down(),
+            0.5,
+            0.5_f64.next_up(),
+        ] {
+            let mut expected = [0; 19];
+            for (index, pixel) in graphics.buffer[start..start + 19].iter_mut().enumerate() {
+                let original = colors[index % colors.len()];
+                *pixel = original;
+                expected[index] = if index < length {
+                    alpha::blend_rgb(source, original, opacity)
+                } else {
+                    original
+                };
+            }
+            graphics.clear_buffer_dirty();
+            graphics
+                .filled_rectangle_with_alpha(
+                    11.0,
+                    30.0,
+                    (10 + length) as f64,
+                    30.0,
+                    Some(source as i32),
+                    opacity,
+                )
+                .unwrap();
+            assert_eq!(&graphics.buffer[start..start + 19], &expected);
+            assert_eq!(graphics.buffer[start - 1], 0x204060);
+            assert_eq!(graphics.buffer[start + 19], 0x204060);
+            assert!(graphics.buffer_dirty());
+        }
+    }
+}
+
+#[test]
 fn sprite_alpha_blends_rounds_and_tests_the_original_color_key() {
     let mut graphics = background();
     graphics

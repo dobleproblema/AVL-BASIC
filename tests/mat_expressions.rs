@@ -268,14 +268,13 @@ fn hadamard_rejects_invalid_operands_without_replacing_destination() {
         ("A @ A(0)", ErrorCode::ForbiddenExpression),
         ("2 @ A", ErrorCode::ForbiddenExpression),
     ] {
-        assert_eq!(
-            interpreter
-                .process_immediate(&format!("MAT C={expression}"))
-                .unwrap_err()
-                .code,
-            code,
-            "{expression}"
-        );
+        let error = interpreter
+            .process_immediate(&format!("MAT C={expression}"))
+            .unwrap_err();
+        assert_eq!(error.code, code, "{expression}");
+        if code == ErrorCode::InvalidDimensions {
+            assert_eq!(error.display_for_basic(), "Invalid array dimensions.");
+        }
         assert_eq!(number(&mut interpreter, "C(0)"), 77.0);
         assert_eq!(number(&mut interpreter, "A(0)"), 4.0);
     }
@@ -524,4 +523,156 @@ fn invalid_left_scalar_arithmetic_stops_before_rhs_effects_and_errors() {
             assert_eq!(number(&mut interpreter, "CALLS"), 0.0, "{expression}");
         }
     }
+}
+
+#[test]
+fn mat_map_composes_with_mat_operators_and_can_replace_its_input() {
+    let mut interpreter = run("10 MAT BASE 0:DIM A(2),B(2):A=17:MAT B=2\n\
+         20 A(0)=.25:A(1)=-.25:A(2)=.375\n\
+         30 MAT A=MAP(aBs,MAP(INT,A*10)) @ B\n\
+         40 MAT C=INT(A*10)\n50 END");
+    for (index, expected) in [4.0, 6.0, 6.0].into_iter().enumerate() {
+        assert_eq!(number(&mut interpreter, &format!("A({index})")), expected);
+    }
+    assert_eq!(number(&mut interpreter, "UBOUND(A)"), 2.0);
+    assert_eq!(
+        eval_expression(&mut interpreter, "UBOUND(A,2)")
+            .unwrap_err()
+            .code,
+        ErrorCode::IndexOutOfRange
+    );
+    assert_eq!(number(&mut interpreter, "A"), 17.0);
+    assert_eq!(number(&mut interpreter, "C(0)"), 170.0);
+}
+
+#[test]
+fn mat_map_preserves_base_one_border_of_the_evaluated_argument() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 1:DIM A(2,1),V(1),E(0,1):A(0,1)=-2:A(1,0)=-3:A(2,0)=-4:\
+         A(1,1)=.5:A(2,1)=1:V(0)=-2:V(1)=.5:E(0,1)=-7",
+    );
+    command(
+        &mut interpreter,
+        "MAT C=MAP(LOG,A*2):MAT W=MAP(LOG,V*2):MAT D=MAP(LOG,E)",
+    );
+    let log_two = number(&mut interpreter, "LOG(2)");
+    for (cell, expected) in [
+        ("UBOUND(C,2)", 1.0),
+        ("C(0,0)", 0.0),
+        ("C(0,1)", -4.0),
+        ("C(1,0)", -6.0),
+        ("C(2,0)", -8.0),
+        ("C(1,1)", 0.0),
+        ("C(2,1)", log_two),
+        ("W(0)", -4.0),
+        ("W(1)", 0.0),
+        ("D(0,0)", 0.0),
+        ("D(0,1)", -7.0),
+        ("A(0,1)", -2.0),
+    ] {
+        assert_eq!(number(&mut interpreter, cell), expected, "{cell}");
+    }
+}
+
+#[test]
+fn mat_map_matches_pure_unary_scalar_functions_in_both_angle_modes() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, "MAT BASE 0:DIM A(1):A(0)=.5:A(1)=.75");
+    for mode in ["DEG", "RAD"] {
+        command(&mut interpreter, mode);
+        for function in [
+            "ABS", "INT", "SQR", "SIN", "COS", "FIX", "SGN", "FRAC", "LOG", "LOG10", "EXP", "TAN",
+            "ASN", "ACS", "ATN", "COT", "RTD", "DTR", "ROUND",
+        ] {
+            command(&mut interpreter, &format!("MAT C=MAP({function},A)"));
+            for index in 0..=1 {
+                let expected = number(&mut interpreter, &format!("{function}(A({index}))"));
+                assert_eq!(
+                    number(&mut interpreter, &format!("C({index})")).to_bits(),
+                    expected.to_bits(),
+                    "{mode} {function} at index {index}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mat_map_evaluates_its_array_expression_once() {
+    let mut interpreter = run("10 MAT BASE 0:DIM A(3):MAT A=2.75:CALLS=0\n\
+         20 MAT C=MAP(INT,A+FNONCE())\n30 END\n\
+         100 DEF FNONCE()\n110 CALLS=CALLS+1:FNONCE=.5\n120 FNEND");
+    assert_eq!(number(&mut interpreter, "CALLS"), 1.0);
+    for index in 0..=3 {
+        assert_eq!(number(&mut interpreter, &format!("C({index})")), 3.0);
+    }
+}
+
+#[test]
+fn mat_map_domain_error_leaves_the_original_array_intact() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, "MAT BASE 0:DIM A(2):A(0)=2:A(1)=3:A(2)=0");
+    let expected = eval_expression(&mut interpreter, "LOG(A(2))")
+        .unwrap_err()
+        .code;
+    let error = interpreter
+        .process_immediate("MAT A=MAP(LOG,A)")
+        .unwrap_err();
+    assert_eq!(error.code, expected);
+    for (index, original) in [2.0, 3.0, 0.0].into_iter().enumerate() {
+        assert_eq!(number(&mut interpreter, &format!("A({index})")), original);
+    }
+}
+
+#[test]
+fn mat_map_rejects_invalid_selectors_arity_and_operands() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 0:DIM A(1),C(1),T(1,1,1),S$(1):MAT A=5:MAT C=77",
+    );
+    for (expression, code) in [
+        ("MAP()", ErrorCode::ArgumentMismatch),
+        ("MAP(INT)", ErrorCode::ArgumentMismatch),
+        ("MAP(INT,A,1)", ErrorCode::ArgumentMismatch),
+        ("MAP(\"INT\",A)", ErrorCode::InvalidArgument),
+        ("MAP(INT(1),A)", ErrorCode::InvalidArgument),
+        ("MAP(RND,A)", ErrorCode::InvalidArgument),
+        ("MAP(SUM,A)", ErrorCode::InvalidArgument),
+        ("MAP(INT,A(0))", ErrorCode::ForbiddenExpression),
+        ("MAP(INT,S$)", ErrorCode::ForbiddenExpression),
+        ("MAP(INT,T)", ErrorCode::InvalidDimensions),
+    ] {
+        let error = interpreter
+            .process_immediate(&format!("MAT C={expression}"))
+            .unwrap_err();
+        assert_eq!(error.code, code, "{expression}");
+        assert_eq!(number(&mut interpreter, "C(0)"), 77.0);
+        assert_eq!(number(&mut interpreter, "C(1)"), 77.0);
+    }
+}
+
+#[test]
+fn mat_map_preserves_existing_map_identifiers_outside_the_new_call_form() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 0:MAP=5:DIM MAP(1):MAP(0)=2.5:MAP(1)=3.5:MAT C=MAP:MAT D=MAP(INT,MAP)",
+    );
+    assert_eq!(number(&mut interpreter, "MAP"), 5.0);
+    assert_eq!(number(&mut interpreter, "MAP(0)+MAP(1)"), 6.0);
+    assert_eq!(number(&mut interpreter, "C(0)"), 2.5);
+    assert_eq!(number(&mut interpreter, "D(0)"), 2.0);
+    assert_eq!(number(&mut interpreter, "D(1)"), 3.0);
+    command(&mut interpreter, "MAT C=INT(MAP(1))");
+    assert_eq!(number(&mut interpreter, "C(0)"), 3.0);
+    assert_eq!(
+        interpreter
+            .process_immediate("MAT C=MAP()")
+            .unwrap_err()
+            .code,
+        ErrorCode::ArgumentMismatch
+    );
 }

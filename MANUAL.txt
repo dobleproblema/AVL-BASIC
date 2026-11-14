@@ -39,8 +39,10 @@ Contents
 9.2 - Program editing and debugging (EDIT - DEBUG - RENUM - DELETE)
 9.3 - Other immediate utilities
 9.4 - Saving and loading programs
+9.5 - Packaging programs for Windows (PACK)
 10. - Built-in functions
 11. - User-defined functions and subroutines
+11.1 - Importing routine libraries
 12. - Hexadecimal/Binary and bitwise logic
 
 0. Requirements and installation
@@ -282,9 +284,12 @@ Change `V=75` to `V=0` or `V=25` to try the other two branches.
 + CLEAR                          Clears all variables
 + NEW                            Clears all variables and the current program. Returns the interpreter to its initial state.
 
+`READ` checks the syntax of all destinations before consuming any `DATA`.
+
 Quick notes (arrays)
 - Each DIM/REDIM dimension indicates the inclusive upper index. Array indices always start at 0, but after `MAT BASE 1` the `MAT` operations that traverse the active matrix block ignore the 0 indices.
 - Bounds in `DIM`, `REDIM` and local array declarations must be finite and nonnegative. Fractions are truncated toward zero; the resulting integer must not exceed 2147483647. Invalid bounds or sizes exceeding the array storage capacity report a BASIC error before replacing that array.
+- An empty bound in `DIM`, `REDIM` or a local array declaration raises error 27, "Empty dimension expression".
 - `REDIM` only acts on existing arrays and preserves type and number of dimensions. Elements that still lie within the new bounds are kept; the rest are discarded, and newly created positions are initialized to `0` or `""`.
 - If you normally access an undeclared array, it is created implicitly with bounds 0..10 in each dimension. MAT assignments and subarray copies have their own rules for creating the destination (section 4.1).
 
@@ -323,6 +328,7 @@ Functions
 + DOT(v1,v2)                      Dot product of two compatible numeric vectors
 + FNORM(expr)                     Frobenius norm
 + LBOUND(array[,dimension])       Lower bound of any existing array dimension
++ MAP(function,array)             Applies a numeric function to active elements in a MAT expression
 + MAXAB(expr) | MAXABCOL | MAXABROW  Largest absolute value and its associated column/row
 + RNORM(expr) | RNORMROW          Row norm and the corresponding row
 + SUM(expr)                       Algebraic sum of all elements
@@ -343,9 +349,13 @@ Detailed notes (`MAT name = ...`)
 - The complete result is assigned when evaluation finishes; `MAT A=A+B*A` uses the previous values of A. An error does not write a partial result, but preserves implicit destination creation and effects of functions already evaluated.
 - Individual indices, such as `A(2)` or `A(1,2)`, read a scalar element and can appear in the expression. Ranges and omitted axes select subarrays in copies and `MAT PRINT`.
 - `MAT A = B` copies another matrix or vector. It also accepts scalars (`MAT A = 5`), which fill every position in the array.
+  • `MAT A = RND` or `MAT A = RND()` generates one random number per active element of the numeric array, in row-major order. With `MAT BASE 1`, cells with any zero index are preserved. Given the same `RANDOMIZE` seed, it produces the same sequence as a loop visiting the elements in that order. To repeat a single draw throughout the array, use `R=RND:MAT A=R`.
   * The keywords `CON`, `ZER` and `IDN` fill with 1, 0, or the identity matrix (square matrices only); `IDN` uses `MAT BASE` to place the diagonal.
 - `MAT A = TRN(B)` computes the transpose of a numeric matrix or vector. A vector with `n` active elements is treated as a column and yields a two-dimensional row matrix of shape `1×n`. The argument can be a matrix expression such as `TRN(B+C)`.
-- `MAT A = INV(B)` inverts a square numeric matrix and also accepts expressions such as `INV(B+C)`. A vector with exactly one active element is treated as a `1×1` matrix and yields a two-dimensional `1×1` result. A singular matrix reports "Invalid value". A non-square active block reports "Invalid number of dimensions".
+- `MAT A = INV(B)` inverts a square numeric matrix and also accepts expressions such as `INV(B+C)`. A vector with exactly one active element is treated as a `1×1` matrix and yields a two-dimensional `1×1` result. A singular matrix reports "Invalid value". A non-square active block reports "Invalid array dimensions".
+- `MAP(function,array)` applies a unary numeric function to each active element of a numeric vector, matrix, or matrix expression. Use the function name without parentheses, as in `MAT A=MAP(INT,A*10)`. The result has the same dimensions as the evaluated argument.
+  • Supported functions are `ABS`, `INT`, `FIX`, `SGN`, `FRAC`, `ROUND` (one argument), `SQR`, `LOG`, `LOG10`, `EXP`, `SIN`, `COS`, `TAN`, `COT`, `ASN`, `ACS`, `ATN`, `RTD`, and `DTR`. The same numeric rules as for scalar calls apply, including `DEG` and `RAD` for trigonometry. An error in an active element stops the assignment without writing a partial result.
+  • `MAT BASE 0` maps every stored element. With `MAT BASE 1`, the result keeps element 0 of a vector or row and column 0 of a matrix from the evaluated argument. For example, `MAP(LOG,A)` can have zeros on this border.
 - `+` and `-` add or subtract compatible arrays or combine them with scalars. `*` performs matrix multiplication or scalar multiplication element by element. `/` divides an array by a scalar, a scalar by an array, or two compatible arrays element by element. `^` allows element-wise powers (`array ^ scalar` or `scalar ^ array`).
 - `MAT C = A @ B` multiplies corresponding elements of two numeric arrays with the same effective shape. `@` has the same precedence as `*` and `/` and associates from left to right. The operator is available only in MAT expressions.
 - Except for division by an array, element-wise operations on equally dimensioned arrays or between an array and a scalar visit all stored elements, including index 0 with `MAT BASE 1`. Matrix multiplication, `TRN`, and `INV` use the active `MAT BASE` block. With base 1, the result's border is deterministic. Matrix multiplication and `TRN` set row and column 0 to zero. `INV` preserves row and column 0 of its matrix argument.
@@ -378,10 +388,10 @@ Detailed notes (`MAT PRINT`)
 - A print entry can also select a subarray directly, for example `A(2,)` for a row, `A(,1:2)` for a block of columns or `A(2,3)` for a single cell. The selectors follow the same rules as subarray copies, including inclusive, descending and empty ranges. Omitted axes start at `MAT BASE`. Explicit indices can select index 0 even with `MAT BASE 1`. The `ROW` or `COL` orientation applies to the selection, as in `COL A(,1:2)`.
 - The list accepts those array references and the modifiers `USING format$;`, `COLOR(fg[,bg])`, and `COLOR()`. To print a calculated array such as `TRN(A)` or `A+B`, first assign it with `MAT B = ...` and then print `B`.
 - Modifiers may appear anywhere in the list. Each mask or color applies to subsequent arrays until another modifier of the same kind or the end of the statement. Modifiers do not count as arrays or produce output. A modifier after `|` applies to the following arrays, including those in the same group.
-- `USING` employs the same masks as `PRINT USING` and requires `;` after its format expression. The existing MAT forms `USING "##";`, `USING"##";`, and `USING("##");` remain valid.
+- `USING` employs the same masks as `PRINT USING` and requires `;` after its format expression. The existing MAT forms `USING "##";`, `USING"##";`, and `USING("##");` remain valid. An empty string clears the mask for subsequent arrays in the same statement. For example, `MAT PRINT COLOR("cyan");USING "0.00";A;USING "";B` prints both arrays in cyan, with the mask on `A` and ordinary formatting on `B`.
 - After an array, `;` separates columns with spaces and `,` selects fields at least 22 characters wide for that array. After `COLOR`, either separator only separates list items, without advancing a print zone or selecting wide fields for an array.
 - Use `|` between arrays to print them side by side, one line per displayed row. Chain separators as in `A | B | C` to join more arrays. Only a `|` outside quoted strings and parentheses acts as a separator.
-- Joined entries must have the same number of displayed rows after applying `MAT BASE`, any selectors, and the `ROW` or `COL` orientation. A mismatch raises "Invalid number of dimensions". The blocks are joined independently on each row.
+- Joined entries must have the same number of displayed rows after applying `MAT BASE`, any selectors, and the `ROW` or `COL` orientation. A mismatch raises "Invalid array dimensions". The blocks are joined independently on each row.
 - The implicit separator in `A | B` follows the spacing of adjacent columns in a single array. It adds two spaces for narrow fields and joins wide fields directly. The right-hand array determines the spacing when the field modes differ. Empty slices with zero columns add no implicit gaps.
 - Place a string literal directly between two bars to replace the implicit separator. Use `A | "  /  " | B` for a slash with spaces or `A | "    " | B` for four spaces. An empty string joins the already formatted rows directly and keeps the spaces within their fields.
 - Put string variables and expressions in parentheses to distinguish them from array references, as in `A | (sep$) | B` and `A | (SPACE$(n)) | B`. The separator expression is evaluated once in list order. The separator uses the default colors.
@@ -494,8 +504,8 @@ Detailed notes (PRINT)
   * `+` only forces the sign when it is the first character of the mask; anywhere else it is just a literal.
   * Numbers longer than the integer part of the mask do not overflow: they are shown in full, expanding to the left.
   * In fixed masks (without `^^^^`), that expansion uses the actual floating-point value stored. Very large magnitudes can therefore reveal the full IEEE-754 approximation; use an exponential mask (`#.##^^^^`) for compact output.
-  * The format accepts either a literal mask or a non-empty string variable; otherwise, a format error is raised.
-  * The `USING` mask is separated from the formatted list with `;`. Inside that following list, `,` and `;` separate and chain items exactly as in normal `PRINT`.
+  * `USING` takes a string expression followed by `;`. A nonempty string is checked as a format mask. Within the print list, `,` and `;` keep their ordinary meaning.
+  * `USING "";` or a format expression that evaluates to an empty string clears the mask for subsequent items in the same statement. It restores ordinary formatting and spacing while keeping the active color. This works in `PRINT`, `PRINT #`, `GPRINT`, and `MAT PRINT`. For example, `PRINT USING "0.00";12.5;USING "";7` prints `12.50 7`.
 - `COLOR(fg[,bg])` is a print-list function for `PRINT` and `MAT PRINT` that selects colors for subsequent items in the same statement. `COLOR(fg)` changes the foreground and retains the selected background. `COLOR(fg,bg)` changes both, and `COLOR()` selects the terminal's default foreground and background. The statement restores the attributes it selected when it ends, including after a trailing `;` or `,` or an error.
   * Each argument is one AVL BASIC color value, such as a palette index, packed RGB number, color name, or `"r,g,b"` string. Arguments are evaluated once, foreground first, and both are validated before applying a new pair. For example, `PRINT "State ";COLOR("white","darkred");" ERROR ";COLOR();" continue"` highlights part of a line.
   * `COLOR` is an isolated print-list item. It has no result value for assignments or larger expressions. It can appear before or after `USING`, for example `PRINT USING "0.00";COLOR(RGB(40,180,240));12.5`. In `PRINT`, `;` adds no spacing after `COLOR` and `,` advances to the next print zone. In `MAT PRINT`, either separator only separates the color item from the next item. The form without parentheses is invalid.
@@ -951,9 +961,9 @@ Quick notes (figures)
 - `asp` controls the aspect ratio of the circle (Y/X).
 - Radius `r` is in user units (if `SCALE` is active, it adapts automatically).
 - `RECTANGLE/TRIANGLE` respect `MASK` and `PENWIDTH` just like `DRAW`.
-- `TRECTANGLE/TTRIANGLE/TQUAD` use a `gscr$` texture, typically loaded with `BLOAD "img.png",T$` or captured with `SPRITE$`.
+- `TRECTANGLE/TTRIANGLE/TQUAD` use an RGB graphics string, typically loaded with `BLOAD "img.png",T$` or captured with `SPRITE$`.
 - Every form accepts an optional final transparent color `t`, resolved exactly as in `SPRITE`: a palette index, packed RGB value, color name, or RGB string. Omit `t` for an opaque texture; `t=0` makes black transparent. For example, `TRECTANGLE T$,20,20,180,140,6` uses magenta as the transparent color, while `TRECTANGLE T$,20,20,180,140,0,0,64,64,6` also supplies UV coordinates.
-- Transparency compares the sampled original RGB texel before any vertex RGB modulation. Matching texels leave both the destination color and `D` untouched, so farther geometry can show through even if drawn afterwards. This is exact color-key transparency; graphics strings store RGB, not PNG alpha. These texture commands do not register sprite collision identities.
+- Transparency compares the sampled original RGB texel before any vertex RGB modulation. Matching texels leave both the destination color and `D` untouched, so farther geometry can show through even if drawn afterwards. These texture commands do not register sprite collision identities.
 - In `TRECTANGLE`, `(u0,v0)` is assigned to `(x0,y0)` and `(u1,v1)` to `(x1,y1)`; the other two corners use `(u1,v0)` and `(u0,v1)`.
 - In the original `TTRIANGLE/TQUAD` forms without a depth array, each vertex pairs a screen position `(x,y)` with a texture position `(u,v)`. The renderer linearly interpolates `u,v` inside each triangle, so scaling, rotation, mirroring, and shearing are inferred from those vertex correspondences.
 - `SCALE` affects only the screen coordinates `x,y`. The `u,v` coordinates remain texture texels and are not scaled by the user coordinate system.
@@ -966,7 +976,7 @@ Quick notes (figures)
 `FRECTANGLE`, `FTRIANGLE`, `FCIRCLE`, `FCIRCLER`, `TRECTANGLE`, and the affine forms of `TTRIANGLE/TQUAD` accept an optional final `ALPHA a` clause. `SPRITE` and `SPRITE MOVE` use the same clause (6.7). It belongs to that single drawing call; it does not change a global graphics setting. `ALPHA` is a reserved word, like `TO` and `STEP`; use a different variable name, such as `OPACITY`.
 
 - `a` is a numeric expression evaluated once, and must be finite and between 0 and 1 inclusive. Omitting the clause means 1 (opaque); 0 leaves destination colors unchanged. Invalid opacity produces an error before drawing.
-- Each RGB channel is rounded from `a*source+(1-a)*destination`. A texture's transparent color still creates complete holes; only the other original texels are blended. PNG alpha is not imported and opacity is uniform across the call.
+- Each RGB channel is rounded from `a*source+(1-a)*destination`. A texture's transparent color creates holes. For RGBA sprites, the effective `a` is the pixel's alpha divided by 255 and multiplied by the call's opacity (see 6.7).
 - Draw the background first, then objects and overlays in their desired 2D order. Rebuild or restore the scene each frame when fading or moving a translucent object: blending repeatedly onto the previous frame accumulates color.
 - The filled primitives blend each covered pixel once, including the shared diagonal of an affine `TQUAD`. They retain their clipping, coordinate, and graphics cursor rules. Opacity does not alter `INK`.
 - This clause is limited to the listed 2D commands. The depth-buffer forms of `TTRIANGLE/TQUAD` and `GTRIANGLE` do not accept `ALPHA`, including `ALPHA 1`; their existing depth and color-key behavior is unchanged. Outlines, `PLOT`, `DRAW`, `FILL`, text, and `CLG` do not accept it either.
@@ -1194,17 +1204,23 @@ Example
 + gscr$ = SCREEN$               Function. Current graphics window -> variable
 + BSAVE "img.png"[,gscr$]       Screen or variable -> PNG
 + BLOAD "img.png"[,gscr$]       PNG -> screen or variable
++ BLOAD "img.png",gscr$ AS RGBA   PNG -> variable with per-pixel alpha
++ clip$ = CROP$(gscr$,x,y,w,h)    Extracts an image rectangle as a graphics string
 
 Quick notes
-- `SCREEN$` captures the graphics buffer into a string; `SCREEN gscr$` restores the complete opaque image to that buffer.
+- `SCREEN$` captures the composed graphics buffer as RGB. `SCREEN gscr$` restores a complete RGB image to that buffer.
 - During a program, `SCREEN gscr$` does not present the image immediately. Add text or other drawing, then use `FRAME` to present the completed image. In immediate mode it is presented automatically, like other drawing commands. `SCREEN` with no arguments still restores the default graphics state.
 - Example: `SCREEN gscr$ : LOCATE 2,2 : GPRINT "STATUS" : FRAME 30` presents the restored image and its overlay together.
 - `BSAVE "img.png",gscr$` uses the dimensions encoded in the graphics string; `BLOAD "img.png",gscr$` loads the PNG into the string with the PNG's own dimensions. These forms do not modify the main screen.
+- `BLOAD "img.png",gscr$ AS RGBA` stores four 8-bit channels per pixel. PNG transparency can come from an alpha channel or from the image's transparency information, such as a transparent palette entry. Opaque pixels have alpha 255. `AS RGBA` requires a string destination. `BSAVE "img.png",gscr$` writes an RGBA PNG when given an RGBA string. `BSAVE "img.png"` saves the composed screen as RGB.
+- `CROP$(gscr$,x,y,w,h)` accepts an RGB or RGBA graphics string and returns a new string of the same format. Coordinates are image pixels with `(0,0)` at the upper-left corner, independently of `MODE`, `ORIGIN`, or `SCALE`. Use nonnegative integer coordinates and positive integer sizes. The rectangle must fit entirely inside the image. Invalid coordinates or sizes give `Invalid argument`, and a malformed graphics string gives `Invalid value`.
 - `BLOAD "img.png"` and `SCREEN gscr$` require the image/string dimensions to match the active `MODE` exactly; otherwise they report `Invalid value` without changing the screen.
 - PNG filenames are string expressions, such as `"img.png"`, `P$` or `P$+".png"`. Quotes delimit string literals; the resulting filename must have the `.png` extension.
 - BLOAD/BSAVE use the same logical virtual filesystem as program files, including allowed directory aliases (see section 9.3). Host absolute paths and UNC paths are rejected; `..` is clamped at the virtual root.
 - In immediate mode, relative paths in `BLOAD/BSAVE` are resolved from the current virtual directory.
 - Inside a program loaded from disk, relative paths in `BLOAD/BSAVE` are resolved from the program's own directory. This does not change the user's current `CD`.
+
+For a sheet with two adjacent 32×32 frames, `F$=CROP$(Sheet$,32,0,32,32)` extracts the right-hand frame for use with `SPRITE F$,x,y`.
 
 Example (rapid screen-restoration benchmark)
 This intentionally alternates images as quickly as possible and reports the measured rate. Both PNGs are included under `samples/assets`. The texture is drawn into the 640x480 buffer and captured with `SCREEN$`, so both graphics strings match the active mode. Use the package-root setup from section 1. `SCREEN a$` restores each image to the buffer; `FRAME` presents it. The distributed `samples/g-swap.bas` demonstrates the same technique.
@@ -1242,25 +1258,27 @@ Collision functions
 + HITID                         Internal id of the first sprite collided with (0 if there was no collision).
 
 General notes
-- Sprite strings and `SCREEN$` use the in-memory format `widthxheight:hexdata`. `BSAVE` converts these strings into PNG files, and `BLOAD` converts PNG files back into graphics strings. Store strings in variables or save PNGs to reuse them.
+- `SPRITE`, `SPRITE MOVE`, and `SPRITE HITTEST` accept RGB and RGBA sprite strings. RGB graphics strings use `widthxheight:hexdata` with six hexadecimal digits per pixel. RGBA strings use `widthxheight@RGBA:hexdata` with eight digits per pixel in red, green, blue, alpha order.
 - `SPRITE$` applies `ORIGIN` and the logical window. If the capture goes outside the screen, it keeps the requested size and fills the out-of-bounds physical areas with black.
 - `SPRITE` respects `ORIGIN`, the graphics window, and canvas clipping. It does not force a refresh; call `FRAME` when you want to display the result.
 - Remember the anchor: `SPRITE ... ,X,Y` uses `Y` as the bottom edge. If you are coming from `LABEL` with `MOVE X,Y` (top edge), convert `Y` with `Ysprite = Ytext - (height - 1)`.
 - `SPRITE HITTEST` uses exactly the same clipping and transparency rules as `SPRITE`, but does not alter either the graphics buffer or the owner map.
-- `SPRITE ... ALPHA a` blends non-key pixels with the current background; omitted opacity defaults to 1. `SPRITE MOVE ... ALPHA a` overrides the registered sprite's opacity, while omitting the clause reuses its saved opacity. Color key and opacity are saved independently.
-- Opacity is visual only: even `ALPHA 0` keeps the original non-key collision footprint and collision results. `SPRITE HITTEST` tests that footprint and does not accept `ALPHA`. In `COLMODE 2/3`, another sprite's occupied pixels still block drawing as before, so use `COLMODE 0` for visual overlays; detect collisions separately with `SPRITE HITTEST` if needed.
+- For RGBA sprites, alpha 0 pixels are holes in both drawing and collisions. Positive-alpha pixels take part in collisions unless their original RGB matches the optional transparent color. Drawing multiplies the pixel alpha divided by 255 by the optional `ALPHA a`, which defaults to 1. `SPRITE MOVE ... ALPHA a` overrides the saved opacity. Omitting the clause reuses the saved value. The color key and this opacity are stored separately.
+- The call's `ALPHA` affects drawing only. Even `ALPHA 0` preserves the collision footprint defined by the source image and color key. `SPRITE HITTEST` tests that footprint. In `COLMODE 2/3`, pixels occupied by another sprite block drawing.
 - Color collision still tests the current destination RGB. Pixels already blended by a previous call are tested using their resulting displayed color, rather than the original source color.
 - `samples/g-sprite-alpha.bas` restores `assets/anime.png` each frame and moves a large, multicolored anime fairy. Its opacity fades between exact 0% and 100%, holding both endpoints briefly; the area outside the character remains transparent. SPACE pauses, C toggles the FPS cap, and ESC exits. The panels demonstrate `FRECTANGLE ... ALPHA`.
+- `samples/g-sprite-layers.bas` draws one RGBA fairy sprite with an opaque body and semitransparent wings. The PNG supplies the opacity of each part.
 - Parameter `t` accepts any color format (`INK`, `RGB`, palette indices). Pixels of that color are left untouched.
 - If you do not pass `id`, sprite-sprite detection uses an internal identifier based on frame drawing order (`CLG/COLRESET` reset that map).
 - If you pass `id`, that value is used as the sprite identifier for collisions (allowing you to control groups or the "same object" across frames).
+- To supply an `id` without a color key, leave `t` empty, as in `SPRITE F$,x,y,,1` or `SPRITE HITTEST F$,x,y,,1`.
 - Redrawing the same `id` at a new position updates its collision footprint (avoiding ghost collisions from old positions).
 - With `COLMODE 2` or `3`, `SPRITE` does not overwrite pixels that already belong to another sprite: it detects the collision and keeps the previous sprite.
 - `SPRITE DEL id` removes the footprint of `id` from the collision map without modifying what is already visible on screen.
 - `SPRITE MOVE id,x,y[,t]` requires that at least one `SPRITE ... ,id` has previously been drawn, so the image is known.
 
 Usage notes
-- You can use `SCREEN var$` to switch quickly between several previously captured screens, but everything you draw must happen in the real window; variables can only be modified manually by manipulating the string that stores the screen.
+- Use `SCREEN var$` to switch quickly between captured screens. Use `CROP$` to extract a sprite directly from a graphics string (see 6.6).
 - Captured sprites can be stored in string arrays, `DATA`, etc., to build preloaded catalogs, for example with the different frames of an animation.
 
 Recommended patterns (clarity vs performance)
@@ -1685,7 +1703,7 @@ Local and global handlers follow the same rule: the current routine handles an
 error first, then its callers, up to the root scope. Execution resumes within the
 scope of the handler that catches the error.
 
-- Without a handler: on error, execution stops and reports: "Line <n>. <message>".
+- An unhandled error stops execution and prints the error message. When the location is available, the diagnostic shows the source line and underlines the failing statement on lines with multiple statements and inside imported routines. In an inline `IF`, it underlines `IF ... THEN` if the condition fails or the executed `THEN` or `ELSE` statement if the branch fails. If the error originated in an imported library, the message includes its file.
 - With a handler: when the error occurs, `ERR` and `ERL` identify its code and original source line. A successful explicit `RESUME` clears the handled error; when returning to an outer active handler, that handler's pending `ERR`/`ERL` are restored.
 - Inside a multiline `DEF SUB` or `DEF FN`, `ON ERROR` belongs to that invocation. Each call starts without a local handler; returning discards its handler and restores the caller's error state. `ON ERROR GOTO 0` disables only the current invocation's handler, leaving its callers' handlers available.
 - Each valid local `ON ERROR` statement clears the visible `ERR`/`ERL`. Changing the policy inside an active handler preserves its separate pending `RESUME` state, including `ON ERROR GOTO 0`: it disables future trapping in that invocation without cancelling the error already being handled. `RESUME` requires an active handler context; a remembered error from implicit continuation alone does not make `RESUME` valid.
@@ -1695,6 +1713,14 @@ scope of the handler that catches the error.
 - `ON ERROR RESUME NEXT`, local or at the root scope, skips the failing statement, or the calling statement when the error propagates from a deeper routine, without entering a handler. `ERR` and `ERL` remain available for inspection; use `ON ERROR GOTO 0` to clear them and disable this mode.
 - Root scope: if no local handler catches the error, all pending calls are abandoned before the global handler runs. Its `RESUME` retries the root statement that initiated the call and its `RESUME NEXT` continues after that statement; neither resumes the abandoned invocation. This replaces the previous behavior that retained the suspended routine. Installing or disabling a local handler does not replace the global handler. Top-level `ON ERROR GOTO 0` still clears the global handler and its pending `RESUME` state. `GOSUB` does not create a procedure-local error scope.
 - `ERROR n`: if error `n` is not among the interpreter's predefined ones, it is treated as a custom error number.
+
+An unhandled error in the second statement on the line looks like this.
+
+```output error=1,2,3
+Line 10. Division by zero.
+10 A=1 : PRINT 10/(A-1) : PRINT "FIN"
+         ^^^^^^^^^^^^^^
+```
 
 Example (handled error followed by an intentional unhandled error)
 The first error is custom error 200 and is handled by lines 60–70. Line 30 then disables the handler. Line 40 deliberately jumps to missing line 100, demonstrating the normal error report; the missing destination is part of this example.
@@ -1810,7 +1836,7 @@ Complete table of error codes
 49 IF without matching END IF.
 50 ELSE without matching IF.
 51 END IF without matching IF.
-52 Invalid number of dimensions.
+52 Invalid array dimensions.
 53 MAT IDN requires a two-dimensional square matrix.
 54 Instruction not allowed inside a subroutine.
 55 Malformed subroutine.
@@ -1826,7 +1852,7 @@ Complete table of error codes
 
 9. "Immediate mode only" commands
 
-+ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | QUIT | RENUM | RUN | SAVE | SYSTEM
++ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | PACK | QUIT | RENUM | RUN | SAVE | SYSTEM
 
 Notes
 - If they appear inside a program, they raise `IMMEDIATE_COMMAND`.
@@ -1834,7 +1860,7 @@ Notes
 
 9.1 Commands forbidden in immediate mode:
 
-+ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
++ DATA | ERROR | FRAME | GOSUB | IMPORT | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
 
 Range formats
 1 `n`        Only line `n`
@@ -1865,7 +1891,7 @@ Notes on `EDIT`
 Notes on `DEBUG`
 - `DEBUG` takes no parameters. It opens the stored program in a full-screen debugger and initially pauses immediately before the first statement. Program text is read-only; existing variable values can be edited in the inspector. When execution ends or is aborted, it returns to immediate mode.
 - A red `●` in the gutter marks a breakpoint. While execution is paused, a bright-yellow `▶` appears immediately before the next statement (orange-red with the light theme), and an emerald `●` beside the line number identifies the execution line; a red `▶` in the gutter marks the viewed line when it differs from the execution line.
-- With the code focused, F5 continues (F1 is an alias), F2 toggles a breakpoint on the viewed line, F3 sets the next statement, F4 shows the output console, F6 steps into, F7 steps over, F8 steps out, and F9 restarts debugging. Function keys have no effect while the inspector has focus. Esc or Ctrl+C aborts execution from either panel.
+- With the code focused, F5 continues (F1 is an alias), F2 toggles a breakpoint on the viewed line, F3 sets the next statement, F4 shows the output console, and F9 restarts debugging. F6 steps into, F7 steps over and F8 steps out from the code, inspector or array browser. These step keys are suspended while editing a value, entering coordinates with G or viewing output. Esc aborts execution from the code or inspector. Ctrl+C aborts execution from any panel.
 - In the code panel, Up/Down selects a line and Left/Right selects a complete top-level statement on that line; Ctrl+Left/Right scrolls horizontally. The candidate statement is underlined when ANSI styling is enabled; the execution `▶` still marks the actual next statement. F3 moves execution to the candidate without running it. Colon-separated top-level statements are individual targets; an inline `IF` is a whole target, not its `THEN`/`ELSE` statements.
 - Setting the next statement preserves current values and requires a compatible routine and loop region. It also works within the current `GOSUB` or timer, mouse or error handler, preserving its return context and, for an error handler, `ERR`, `ERL` and the pending `RESUME` state. A caller's suspended wait is preserved; moving away from the suspended `PAUSE`/`FRAME` itself is not allowed.
 - Checks reject entering an unentered loop, leaving an active loop and crossing routine or known handler boundaries. These checks are conservative, not a complete analysis of every `GOTO` or computed target. A rejected move leaves the program at the same pause and reports a debugger message, without invoking `ON ERROR`.
@@ -1873,10 +1899,16 @@ Notes on `DEBUG`
 - Tab or Shift+Tab switches keyboard focus between the code and inspector. In the inspector, Up/Down selects category headings or pinnable entries, Left/Right changes column, and Home/End selects the first/last actionable entry in that column. PageUp/PageDown scrolls all content, including long stacks. Space collapses or expands the selected category heading; a selection outside the visible page cannot be activated. Collapsed headings retain their entry count. A selected heading is underlined (bracketed without ANSI); a selected variable has a `▶` marker.
 - Space on a variable in `VARIABLES` adds it to `PINNED`; Space on an already pinned variable removes it. `PINNED` appears first, keeps insertion order, and can also be collapsed. A `[+]` beside a variable in `VARIABLES` indicates that it is pinned; it is not repeated in `PINNED`. Values refresh at every debugger pause and show `<unavailable>` when that name is not visible in the current scope. A local variable with the same name temporarily replaces the global value in the pin.
 - Pinning an array entry follows its most recently modified element, not a fixed cell: after `A(7)=9` and then `A(12)=8`, the pinned entry changes from `A(7)` to `A(12)`. A scalar `A` and array `A()` are separate pins. When no last-modified element is available, the array pin shows `A() = <unavailable>`. Pinning never evaluates BASIC expressions.
-- Enter on an existing numeric or string value in `VARIABLES` or `PINNED` edits it in place. For an array, the edit applies to exactly the displayed element, with its indices fixed when editing starts. The initial value is selected, so typing replaces it. Arrow keys and Home/End move the text cursor; long values scroll horizontally. Enter applies the edit and refreshes both lists without advancing BASIC. Esc cancels the edit; Ctrl+C still aborts debugging. While editing, Space inserts a space, and Tab/function keys do not change panel or execute the program. Enter on a heading or unavailable value has no effect.
+- Select an entry in `ARRAYS` and press Enter to open the array browser in place of the inspector. When the panels are side by side, their widths swap so the browser gets the wider panel. On narrow terminals the panels stack, with more rows for the browser. The browser fits a window of cells to the space available and reads just those cells. A vector is shown as a list. For three or more dimensions, the grid uses the first two dimensions and the header shows the fixed indices for the remaining dimensions. Indices are the actual BASIC indices, including index 0 when `MAT BASE 1` is active.
+- While the browser is open, Tab or Shift+Tab switches focus between the browser and code. Stepping keeps the focus and refreshes the browser at the next pause. If the array goes out of scope, the inspector returns.
+- Use the arrow keys to move, PageUp/PageDown to move by a page of rows, and Ctrl+Left/Right to move by a page of columns. Press G, type one integer index per dimension separated by commas, and press Enter to jump directly. For a three-dimensional array, entering `2,3,4` shows the slice at third index 4 and selects row 2, column 3. The selected cell's value appears below the grid. Use `[` and `]` to page through a long value. With the browser focused, Esc cancels a jump in progress or closes the browser and returns to the inspector.
+- With ANSI styling, row and column labels have their own color. Under `MAT BASE 1`, element 0 of a vector and row and column 0 of a two-dimensional matrix have a gray background and remain selectable. The browser highlights cells written by the last BASIC statement, including individual assignments and `MAT` operations. Press J to jump to a cell written by that statement, even in another slice. If several cells of this array were written, J selects the one closest to the origin by Euclidean distance across all dimensions. Ties go to the lexicographically first coordinate. If the statement did not write to this array, the selection stays in place.
+- Automatic following is on by default. With the browser focused, press T to toggle it. The browser displays the setting and remembers it for the current `DEBUG` session, including when you open a different array or restart with F9. With following on, stepping with F6, F7 or F8 from either panel moves to the same cell as J, even if the next pause is a breakpoint. Stepping with following off, a step that writes no cells in this array, and continuing with F5 all keep the selection within the current array bounds. J is available in either mode.
+- Space in the browser pins the selected coordinate, for example `A(7,2)`. The pin reads that same cell at each pause, including after a whole-array `MAT` assignment. It shows `<unavailable>` if the selected array is out of scope or the coordinate is outside its current bounds. Press Space on the same cell or on its entry in `PINNED` to remove it.
+- Enter on an existing scalar or most-recently-written array element in `VARIABLES` or `PINNED` edits it in place. For an array, the edit applies to exactly the displayed element, with its indices fixed when editing starts. The initial value is selected, so typing replaces it. Arrow keys and Home/End move the text cursor; long values scroll horizontally. Enter applies the edit and refreshes both lists without advancing BASIC. Esc cancels the edit; Ctrl+C still aborts debugging. While editing, Space inserts a space, and Tab/function keys do not change panel or execute the program. Enter on a heading or unavailable value has no effect.
 - Numeric edits accept finite decimal literals, optionally signed or in exponent notation, not expressions. String edits need no enclosing quotes; quotes are ordinary characters. Use `\\`, `\n`, `\r`, `\t`, `\0`, `\xNN` or `\u{...}` for backslashes and control characters. Unicode characters with variable terminal width are also displayed as reversible escapes while editing, keeping the cursor aligned. Invalid input remains editable without changing the variable or invoking `ON ERROR`. Timers remain paused throughout editing.
 - Pinned variables, collapsed categories, focus, selection and scroll position are retained across pauses in the current `DEBUG` session. They are not stored in the `.bas` file and reset on the next `DEBUG`. Inspector navigation uses only the keyboard.
-- From the code panel, F4 shows the existing output screen while the program remains paused, without adding a prompt. Press F4 again or Esc to return to the same debugger pause with the code focused, preserving the viewed line and inspector state without executing a statement. While viewing output, Ctrl+C still aborts; other keys are ignored. Return to the code panel before using F5/F6/F7/F8.
+- From the code panel, F4 shows the existing output screen while the program remains paused, without adding a prompt. Press F4 again or Esc to return to the same debugger pause with the code focused, preserving the viewed line and inspector state without executing a statement. While viewing output, Ctrl+C still aborts; other keys are ignored. Close the output view before continuing or stepping.
 - With F6/F7/F8, the debugger screen is retained during steps that do not need the console. The normal output screen is restored immediately before console output (for example, `PRINT` or `CLS`) or console input through `INPUT`, `LINE INPUT`, or `MAT INPUT`. `INKEY$`, `KEYDOWN`, and `PAUSE` also restore that screen before polling or waiting for input. The next pause shows the debugger again. F5 still leaves the debugger screen immediately.
 - Preparing the graphics window, drawing, presenting, and reading the graphics buffer (for example, `TEST`, `TESTCHR$`, `SCREEN$`, or `SPRITE$`) do not switch the console screen. `GINPUT` uses only the graphics window and does not show the output console either. File I/O alone does not switch screens.
 - When the current program is using the graphics window, the current graphics buffer is presented automatically on entering each debugger pause. After F6, the next pause therefore shows the graphics changes made by the previous step without needing to add `FRAME`. With F7/F8, the accumulated result is presented at the next debugger stop. This inspection update does not execute `FRAME`, apply its FPS limiter or wait for `SCREEN SYNC`; explicit `FRAME` and `FRAME fps` calls retain their normal behavior.
@@ -1972,6 +2004,18 @@ Notes
 - If the current program does not come from a file loaded from disk, relative paths used inside the program are resolved from the current virtual directory.
 - To continue after `STOP` or `CTRL+C`, use `CONT`. If the interruption came from closing a graphics window, `CONT` is not valid.
 
+9.5 Packaging programs for Windows (`PACK`)
+
++ PACK "program.bas" TO "game.exe" ID "game-id" [INCLUDE "path"] [PERSIST "path"] [GUI]
+
+- Run `PACK` as an immediate command on Windows x64. It reads the entry program from disk and creates a native Windows x64 executable that starts it with the interpreter and resources embedded. The player can run the executable directly. The embedded BASIC source remains extractable.
+- The entry program and output paths use the current virtual directory. `INCLUDE` and `PERSIST` are relative to the entry program's directory. Repeat either option to add paths. `INCLUDE` accepts files or folders. End a `PERSIST` folder with `/`.
+- Use `GUI` for a graphical program that should open without a console window. The default mode provides a console for programs that use `PRINT` or `INPUT`.
+- `PACK` includes literal `IMPORT` libraries and checks known file references against the files selected for the package. A missing required file blocks export. A path computed at runtime produces a warning, so exercise those paths in the packaged program before sharing it.
+- Packaged writes go to the declared `PERSIST` paths under `%LOCALAPPDATA%\AVL BASIC\game-id`. Keep the same `ID` across versions to retain user data. A folder included in the package skips persistent files. To ship an initial copy, add `INCLUDE` for that specific file. Reads use the player's copy first, then the initial copy if one was included.
+
++ PACK "samples/g-dustline.bas" TO "Dustline.exe" INCLUDE "assets/dustline/" PERSIST "g-dustline-best.csv" ID "avl-basic.dustline" GUI
+
 10. Built-in functions
 
 Zero-argument functions are used without parentheses.
@@ -2055,6 +2099,7 @@ Color & screen
 + XMIN | XMAX | YMIN | YMAX | BORDER  Current scale parameters
 + XPOS | YPOS | HPOS | VPOS  Graphics and text cursor coordinates
 + TEST(x,y)  Returns the pixel color at coordinates `(x,y)`
++ CROP$(gscr$,x,y,w,h)  Extracts a rectangle from an RGB or RGBA graphics string (see 6.6)
 
 - `XMIN/XMAX/YMIN/YMAX/BORDER` return the active scale of the graphics window.
 - If there is no active graphics window, they return the physical scale: `XMIN=0`, `XMAX=WIDTH-1`, `YMIN=0`, `YMAX=HEIGHT-1`, `BORDER=0`.
@@ -2262,6 +2307,21 @@ Subroutine example
 100 PRINT Y       : REM -> 4
 110 PRINT Z(1)    : REM -> 9
 ```
+
+11.1 Importing routine libraries
+
++ IMPORT "library.bas" AS Alias  Makes the functions and subroutines in a separate file available under an alias.
+
+- Write `IMPORT` on its own numbered line at the top level of the main program. Each alias is unique within that program. Alias and routine names are case-insensitive.
+- `RUN` and `DEBUG` resolve and validate the libraries before executing the main program. The quoted path is relative to the main file's directory, or to the current virtual directory for a program entered at the prompt. The normal virtual-root path rules apply. `CONT` uses the libraries already loaded for the stopped execution.
+- At the top level of a library, use numbered comments and `DEF FN` or `DEF SUB` definitions. Imports are one level deep. Each library has its own numbering and may reuse line numbers from the main program. Inside a library, call its other routines by their ordinary unqualified names.
+- Use `Alias.FNname(...)` in expressions and `CALL Alias.Name(...)` for subroutines. Include parentheses for qualified functions with no arguments. As with other calls, scalars and strings pass by value, and whole arrays passed to multiline routines pass by reference.
+- A library has its own variables, arrays and `DATA` stream. Variables shared among its routines are initialized when first used and retain their values between calls in the same execution. Pass a value or an array explicitly when a routine needs data from the caller.
+- `LIST`, `EDIT` and `SAVE` in the main program work with the `IMPORT` line. Open the library file separately to edit its routines. When you step into a library with `DEBUG`, the debugger shows that file's source and filename. Breakpoints set there are scoped to the file within the current debugger session.
+- Each invocation of an imported `DEF SUB` or multiline `DEF FN` can install an `ON ERROR` handler. The handler and `RESUME n` targets must be within the same routine. When the error occurs in that invocation, `RESUME` retries the failing statement and `RESUME NEXT` advances to the next one.
+- If the error propagates, the caller's handler uses `RESUME` to retry its `CALL` or the statement that called the function and `RESUME NEXT` to skip it. `ERL` identifies the original BASIC line in the library. If the error goes unhandled, the diagnostic includes the source file (see 8.2). A malformed library file reports its physical line, counting blank lines.
+- The main program's asynchronous handlers wait until control returns from the library. Imported routines cannot execute `STOP`, bare `CLEAR` or `ON MOUSE`. Ctrl+C during an imported call interrupts the execution without a `CONT` continuation.
+- Run `samples/rule30.bas` for a text pattern or `samples/g-cellular-automata.bas` to compare Rules 30 and 90 graphically. Both import `samples/lib/automata.bas`, whose function computes one cell and whose subroutine updates a whole array passed by reference.
 
 12. Hexadecimal/Binary and bitwise logic
 

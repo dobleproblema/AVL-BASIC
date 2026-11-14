@@ -39,8 +39,10 @@ Licencia: MIT. Ver `COPYING`.
 9.2 - Edición y depuración (EDIT · DEBUG · RENUM · DELETE)
 9.3 - Otras utilidades inmediatas
 9.4 - Guardar y cargar programas
+9.5 - Empaquetar programas para Windows (PACK)
 10. - Funciones integradas
 11. - Funciones y subrutinas definidas por el usuario
+11.1 - Importación de bibliotecas de rutinas
 12. - Hexadecimal/Binario y lógica bit a bit
 
 0. Requisitos e instalación
@@ -282,9 +284,12 @@ Cambia `V=75` por `V=0` o `V=25` para probar las otras dos ramas.
 + CLEAR                          Borra todas las variables
 + NEW                            Borra todas las variables y el programa actual. Pone el intérprete en su estado inicial.
 
+`READ` comprueba la sintaxis de todos los destinos antes de consumir ningún dato de `DATA`.
+
 Notas rápidas (arrays)
 - Cada dimensión de DIM/REDIM indica el índice superior inclusivo. Los índices de los arrays arrancan en 0 siempre, pero tras `MAT BASE 1` las operaciones `MAT` que recorren el bloque matricial activo ignoran los índices 0.
 - Los límites de `DIM`, `REDIM` y las declaraciones de arrays locales deben ser finitos y no negativos. Los decimales se truncan hacia cero; el entero resultante no puede superar 2147483647. Los límites inválidos o los tamaños que exceden la capacidad de almacenamiento del array producen un error BASIC antes de sustituir ese array.
+- Un límite vacío en `DIM`, `REDIM` o en la declaración de un array local produce el error 27, «Expresión de dimensión vacía».
 - `REDIM` solo actúa sobre arrays existentes y mantiene tipo y número de dimensiones. Los elementos que sigan dentro de los nuevos límites se conservan; el resto se descarta y las posiciones recién creadas se inicializan a `0` o `""`.
 - Si accedes normalmente a un array no declarado, se crea implícitamente con límites 0..10 en cada dimensión. Las asignaciones MAT y las copias de subarrays tienen sus propias reglas de creación del destino (sección 4.1).
 
@@ -323,6 +328,7 @@ Funciones
 + DOT(v1,v2)                       Producto escalar de dos vectores numéricos compatibles
 + FNORM(expr)                      Norma de Frobenius
 + LBOUND(array[,dimensión])        Límite inferior de cualquier dimensión existente del array
++ MAP(función,array)               Aplica una función numérica a los elementos activos en una expresión MAT
 + MAXAB(expr) | MAXABCOL | MAXABROW  Mayor valor absoluto y su columna/fila asociada
 + RNORM(expr) | RNORMROW           Norma de fila y fila correspondiente
 + SUM(expr)                        Suma algebraica de todos los elementos
@@ -343,9 +349,13 @@ Notas detalladas (`MAT nombre = ...`)
 - El resultado se asigna completo al terminar; `MAT A=A+B*A` utiliza los valores anteriores de A. Un error no escribe un resultado parcial, pero conserva la creación implícita del destino y los efectos de las funciones ya evaluadas.
 - Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión. Los rangos y ejes omitidos seleccionan subarrays en copias y en `MAT PRINT`.
 - `MAT A = B` copia otra matriz o vector. También admite escalares (`MAT A = 5`) que rellenan todas las posiciones del array.
+  • `MAT A = RND` o `MAT A = RND()` genera un número aleatorio por elemento activo del array numérico, recorriendo las filas en orden. Con `MAT BASE 1`, conserva las posiciones con algún índice 0. Con la misma semilla de `RANDOMIZE`, produce la misma secuencia que un bucle que recorra los elementos en ese orden. Para repetir una sola muestra en todo el array, usa `R=RND:MAT A=R`.
   • Las palabras clave `CON`, `ZER` e `IDN` rellenan con 1, 0 o con la identidad (matrices cuadradas); `IDN` usa `MAT BASE` para situar la diagonal.
 - `MAT A = TRN(B)` calcula la traspuesta de una matriz o un vector numérico. Un vector de `n` elementos activos se trata como una columna y da una matriz fila de dos dimensiones, de forma `1×n`. El argumento puede ser una expresión matricial como `TRN(B+C)`.
-- `MAT A = INV(B)` invierte una matriz numérica cuadrada y también admite expresiones como `INV(B+C)`. Un vector con exactamente un elemento activo se trata como una matriz `1×1` y da un resultado bidimensional de forma `1×1`. Una matriz singular produce "Valor no válido". Un bloque activo no cuadrado produce "Número de dimensiones no válido".
+- `MAT A = INV(B)` invierte una matriz numérica cuadrada y también admite expresiones como `INV(B+C)`. Un vector con exactamente un elemento activo se trata como una matriz `1×1` y da un resultado bidimensional de forma `1×1`. Una matriz singular produce "Valor no válido". Un bloque activo no cuadrado produce "Dimensiones del array no válidas".
+- `MAP(función,array)` aplica una función numérica de un argumento a cada elemento activo de un vector, matriz o expresión matricial numéricos. Escribe el nombre de la función sin paréntesis, como en `MAT A=MAP(INT,A*10)`. El resultado tiene las mismas dimensiones que el argumento evaluado.
+  • Admite `ABS`, `INT`, `FIX`, `SGN`, `FRAC`, `ROUND` (un argumento), `SQR`, `LOG`, `LOG10`, `EXP`, `SIN`, `COS`, `TAN`, `COT`, `ASN`, `ACS`, `ATN`, `RTD` y `DTR`. Se aplican las mismas reglas numéricas que en las llamadas escalares, incluido el modo angular `DEG` o `RAD` para las funciones trigonométricas. Un error en un elemento activo interrumpe la asignación sin escribir un resultado parcial.
+  • `MAT BASE 0` recorre todos los elementos almacenados. Con `MAT BASE 1`, el resultado conserva el elemento 0 del vector o la fila y la columna 0 de la matriz del argumento evaluado. Por ejemplo, `MAP(LOG,A)` admite ceros en ese borde.
 - `+` y `-` suman o restan arrays compatibles o los combinan con escalares. `*` realiza el producto matricial o multiplica cada elemento por un escalar. `/` divide un array por un escalar, un escalar por un array o dos arrays compatibles elemento a elemento. `^` permite potencias elemento a elemento (`array ^ escalar` o `escalar ^ array`).
 - `MAT C = A @ B` multiplica los elementos correspondientes de dos arrays numéricos con la misma forma efectiva. `@` tiene la misma precedencia que `*` y `/` y se asocia de izquierda a derecha. El operador solo se admite en expresiones MAT.
 - Salvo la división por un array, las operaciones elemento a elemento sobre arrays con las mismas dimensiones o entre un array y un escalar recorren todos los elementos almacenados, incluido el índice 0 con `MAT BASE 1`. El producto matricial, `TRN` e `INV` utilizan el bloque activo de `MAT BASE`. Con base 1, el borde del resultado es determinista. El producto matricial y `TRN` dejan la fila y la columna 0 a cero. `INV` conserva la fila y la columna 0 del argumento matricial.
@@ -378,10 +388,10 @@ Notas detalladas (`MAT PRINT`)
 - Una entrada de impresión también puede seleccionar un subarray directamente, por ejemplo `A(2,)` para una fila, `A(,1:2)` para un bloque de columnas o `A(2,3)` para una sola celda. Los selectores siguen las reglas de las copias de subarrays, incluidos los rangos inclusivos, descendentes y vacíos. Los ejes omitidos empiezan en `MAT BASE`. Los índices explícitos permiten seleccionar el índice 0 incluso con `MAT BASE 1`. La orientación `ROW` o `COL` se aplica a la selección, como en `COL A(,1:2)`.
 - La lista admite esas referencias de array y los modificadores `USING formato$;`, `COLOR(fg[,bg])` y `COLOR()`. Para imprimir un array calculado como `TRN(A)` o `A+B`, asígnalo antes con `MAT B = ...` y luego imprime `B`.
 - Los modificadores pueden aparecer en cualquier posición de la lista. Cada máscara o color se aplica a los arrays posteriores hasta otro modificador del mismo tipo o hasta terminar la instrucción. Los modificadores no cuentan como arrays ni producen salida. Un modificador después de `|` se aplica a los arrays que siguen, incluidos los del mismo grupo.
-- `USING` emplea las mismas máscaras que `PRINT USING` y exige `;` después de la expresión de formato. Siguen siendo válidas las formas MAT existentes `USING "##";`, `USING"##";` y `USING("##");`.
+- `USING` emplea las mismas máscaras que `PRINT USING` y exige `;` después de la expresión de formato. Siguen siendo válidas las formas MAT existentes `USING "##";`, `USING"##";` y `USING("##");`. Una cadena vacía quita la máscara de los arrays posteriores de la misma instrucción. Por ejemplo, `MAT PRINT COLOR("cyan");USING "0.00";A;USING "";B` imprime ambos arrays en cian, con la máscara en `A` y el formato normal en `B`.
 - Tras un array, `;` separa las columnas con espacios y `,` selecciona campos de al menos 22 caracteres para ese array. Tras `COLOR`, ambos separadores solo separan elementos de la lista, sin avanzar una zona de impresión ni seleccionar campos anchos para un array.
 - Usa `|` entre arrays para imprimirlos uno al lado del otro, en una línea por cada fila mostrada. Puedes encadenar separadores como en `A | B | C`. Solo se interpreta como separador un `|` situado fuera de las cadenas entre comillas y de los paréntesis.
-- Las entradas de un grupo deben tener el mismo número de filas mostradas tras aplicar `MAT BASE`, los selectores que haya y la orientación `ROW` o `COL`. Si difieren, se produce el error "Número de dimensiones no válido". Los bloques se unen de forma independiente en cada fila.
+- Las entradas de un grupo deben tener el mismo número de filas mostradas tras aplicar `MAT BASE`, los selectores que haya y la orientación `ROW` o `COL`. Si difieren, se produce el error "Dimensiones del array no válidas". Los bloques se unen de forma independiente en cada fila.
 - El separador implícito en `A | B` sigue el espaciado de dos columnas contiguas en un mismo array. Añade dos espacios para campos estrechos y une directamente los campos anchos. Si los formatos de campo difieren, el array de la derecha determina el espaciado. Las selecciones vacías de cero columnas no añaden separaciones implícitas.
 - Coloca un literal de cadena directamente entre dos barras para sustituir el separador implícito. Usa `A | "  /  " | B` para una barra inclinada con espacios o `A | "    " | B` para cuatro espacios. Una cadena vacía une directamente las filas ya formateadas y conserva los espacios propios de sus campos.
 - Escribe las variables y expresiones de cadena entre paréntesis para distinguirlas de las referencias a arrays, como en `A | (sep$) | B` y `A | (SPACE$(n)) | B`. La expresión del separador se evalúa una sola vez en el orden de la lista. El separador usa los colores predeterminados.
@@ -494,8 +504,8 @@ Notas detalladas (PRINT)
   • `+` solo funciona para forzar el signo si es el primer carácter de la máscara; en cualquier otra posición es meramente un literal
   • Números más largos que la parte entera de la máscara no desbordan: se muestran completos creciendo hacia la izquierda.
   • En máscaras fijas (sin `^^^^`), esa expansión usa el valor real almacenado en coma flotante. Con magnitudes enormes puede revelar la aproximación IEEE-754 completa; usa una máscara exponencial (`#.##^^^^`) para una salida compacta.
-  • El formato acepta máscara literal o variable de cadena no vacía; en caso contrario → error de formato.
-  • La plantilla de `USING` se separa de la lista formateada con `;`. Dentro de esa lista posterior, `,` y `;` separan y encadenan igual que en `PRINT` normal.
+  • `USING` toma una expresión de cadena seguida de `;`. Una cadena no vacía se valida como máscara de formato. Dentro de la lista de impresión, `,` y `;` conservan su significado habitual.
+  • `USING "";` o una expresión de formato que da una cadena vacía quita la máscara de los elementos posteriores de la misma instrucción. Restablece el formato y el espaciado normales y conserva el color activo. Funciona en `PRINT`, `PRINT #`, `GPRINT` y `MAT PRINT`. Por ejemplo, `PRINT USING "0.00";12.5;USING "";7` imprime `12.50 7`.
 - `COLOR(fg[,bg])` es una función de lista de impresión para `PRINT` y `MAT PRINT` que selecciona colores para los siguientes elementos de la misma instrucción. `COLOR(fg)` cambia el primer plano y conserva el fondo seleccionado. `COLOR(fg,bg)` cambia ambos y `COLOR()` selecciona el primer plano y el fondo predeterminados del terminal. Al terminar la instrucción se restauran los atributos seleccionados, incluso si acaba en `;` o `,` o si ocurre un error.
   • Cada argumento admite un valor de color de AVL BASIC, como un índice de paleta, un número RGB empaquetado, un nombre de color o una cadena `"r,g,b"`. Los argumentos se evalúan una vez, primero el primer plano, y ambos se validan antes de aplicar una pareja nueva. Por ejemplo, `PRINT "Estado ";COLOR("white","darkred");" ERROR ";COLOR();" continuar"` resalta parte de una línea.
   • `COLOR` es un elemento aislado de la lista de impresión. No devuelve un valor para asignaciones ni expresiones mayores. Puede aparecer antes o después de `USING`, por ejemplo `PRINT USING "0.00";COLOR(RGB(40,180,240));12.5`. En `PRINT`, `;` no añade espacios después de `COLOR` y `,` avanza a la siguiente zona. En `MAT PRINT`, ambos separadores solo separan el elemento de color del siguiente elemento. La forma sin paréntesis no es válida.
@@ -964,9 +974,9 @@ Notas rápidas (figuras)
 - `asp` controla la relación de aspecto del círculo (Y/X).
 - El radio `r` está en unidades de usuario (si hay `SCALE`, se adapta automáticamente).
 - `RECTANGLE/TRIANGLE` respetan `MASK` y `PENWIDTH` como `DRAW`.
-- `TRECTANGLE/TTRIANGLE/TQUAD` usan una textura `gscr$`, normalmente cargada con `BLOAD "img.png",T$` o capturada con `SPRITE$`.
+- `TRECTANGLE/TTRIANGLE/TQUAD` usan una cadena gráfica RGB, normalmente cargada con `BLOAD "img.png",T$` o capturada con `SPRITE$`.
 - Todas las formas admiten un color transparente final opcional `t`, resuelto igual que en `SPRITE`: índice de paleta, RGB empaquetado, nombre de color o cadena RGB. Omite `t` para una textura opaca; `t=0` hace transparente el negro. Por ejemplo, `TRECTANGLE T$,20,20,180,140,6` usa el magenta como color transparente, mientras que `TRECTANGLE T$,20,20,180,140,0,0,64,64,6` también indica las coordenadas UV.
-- La transparencia compara el RGB original del texel muestreado antes de aplicar la modulación RGB de los vértices. Los texels que coinciden dejan intactos tanto el color de destino como `D`, de modo que la geometría lejana se ve por los huecos incluso si se dibuja después. Es transparencia por coincidencia exacta de color; las cadenas gráficas almacenan RGB, no el alfa del PNG. Estas órdenes texturadas no registran identidades de colisión de sprites.
+- La transparencia compara el RGB original del texel muestreado antes de aplicar la modulación RGB de los vértices. Los texels que coinciden dejan intactos tanto el color de destino como `D`, de modo que la geometría lejana se ve por los huecos incluso si se dibuja después. Estas órdenes texturadas no registran identidades de colisión de sprites.
 - En `TRECTANGLE`, `(u0,v0)` se asigna a `(x0,y0)` y `(u1,v1)` a `(x1,y1)`; las otras dos esquinas usan `(u1,v0)` y `(u0,v1)`.
 - En las formas originales de `TTRIANGLE/TQUAD` sin array de profundidad, cada vértice combina una posición de pantalla `(x,y)` con una posición de textura `(u,v)`. El motor interpola linealmente las `u,v` dentro de cada triángulo, así que el escalado, giro, espejo o inclinación se deducen de esas correspondencias.
 - `SCALE` afecta solo a las coordenadas de pantalla `x,y`. Las coordenadas `u,v` siguen estando en texels de la textura y no se escalan con el sistema de usuario.
@@ -979,7 +989,7 @@ Opacidad 2D con ALPHA
 `FRECTANGLE`, `FTRIANGLE`, `FCIRCLE`, `FCIRCLER`, `TRECTANGLE` y las formas afines de `TTRIANGLE/TQUAD` admiten una cláusula final opcional `ALPHA a`. `SPRITE` y `SPRITE MOVE` utilizan la misma cláusula (6.7). Se aplica solo a esa llamada de dibujo; no cambia un ajuste gráfico global. `ALPHA` es una palabra reservada, como `TO` y `STEP`; utiliza otro nombre de variable, por ejemplo `OPACITY`.
 
 - `a` es una expresión numérica evaluada una vez y debe ser finita, entre 0 y 1 inclusive. Omitir la cláusula equivale a 1 (opaco); 0 deja intactos los colores de destino. Una opacidad incorrecta produce un error antes de dibujar.
-- Cada canal RGB se redondea a partir de `a*origen+(1-a)*destino`. El color transparente de una textura sigue creando huecos completos; solo se mezclan los demás texels originales. No se importa el alfa del PNG y la opacidad es uniforme en toda la llamada.
+- Cada canal RGB se redondea a partir de `a*origen+(1-a)*destino`. El color transparente de una textura crea huecos. En los sprites RGBA, el `a` efectivo es el alfa del píxel dividido entre 255 y multiplicado por la opacidad de la orden (véase 6.7).
 - Dibuja primero el fondo y después los objetos y paneles en el orden de superposición 2D deseado. Reconstruye o restaura la escena en cada fotograma al desvanecer o mover un objeto translúcido: mezclar repetidamente sobre el fotograma anterior acumula color.
 - Las primitivas rellenas mezclan cada píxel cubierto una sola vez, incluida la diagonal compartida de un `TQUAD` afín. Conservan sus reglas de recorte, coordenadas y cursor gráfico. La opacidad no cambia `INK`.
 - La cláusula se limita a las órdenes 2D enumeradas. Las formas de `TTRIANGLE/TQUAD` con buffer de profundidad y `GTRIANGLE` no admiten `ALPHA`, ni siquiera `ALPHA 1`; conservan su comportamiento de profundidad y color transparente. Tampoco la admiten contornos, `PLOT`, `DRAW`, `FILL`, texto ni `CLG`.
@@ -1207,17 +1217,23 @@ Ejemplo
 + gscr$ = SCREEN$               Función. Ventana gráfica actual → variable
 + BSAVE "img.png"[,gscr$]       Pantalla o variable → PNG
 + BLOAD "img.png"[,gscr$]       PNG → pantalla o variable
++ BLOAD "img.png",gscr$ AS RGBA   PNG → variable con alfa por píxel
++ recorte$ = CROP$(gscr$,x,y,w,h)   Extrae un rectángulo de una imagen como cadena gráfica
 
 Notas rápidas
-- `SCREEN$` captura el búfer gráfico en una cadena; `SCREEN gscr$` restaura la imagen opaca completa en ese búfer.
+- `SCREEN$` captura el búfer gráfico ya compuesto en RGB. `SCREEN gscr$` restaura una imagen RGB completa en ese búfer.
 - Durante un programa, `SCREEN gscr$` no muestra la imagen inmediatamente. Añade texto u otros dibujos y usa después `FRAME` para presentar la imagen terminada. En modo inmediato se muestra automáticamente, como las demás órdenes de dibujo. `SCREEN` sin argumentos sigue restaurando el estado gráfico por defecto.
 - Ejemplo: `SCREEN gscr$ : LOCATE 2,2 : GPRINT "ESTADO" : FRAME 30` muestra juntos la imagen restaurada y el texto superpuesto.
 - `BSAVE "img.png",gscr$` usa las dimensiones codificadas en la cadena gráfica; `BLOAD "img.png",gscr$` carga el PNG en la cadena conservando sus propias dimensiones. Estas formas no modifican la pantalla principal.
+- `BLOAD "img.png",gscr$ AS RGBA` almacena cuatro canales de 8 bits por píxel. La transparencia del PNG puede proceder de un canal alfa o de la información de transparencia de la imagen, como una entrada transparente de la paleta. Los píxeles opacos tienen alfa 255. `AS RGBA` exige un destino de cadena. `BSAVE "img.png",gscr$` guarda un PNG con alfa si recibe una cadena RGBA. `BSAVE "img.png"` guarda en RGB la pantalla ya compuesta.
+- `CROP$(gscr$,x,y,w,h)` admite una cadena gráfica RGB o RGBA y devuelve otra del mismo formato. Las coordenadas son píxeles de la imagen, con `(0,0)` en la esquina superior izquierda, independientemente de `MODE`, `ORIGIN` y `SCALE`. Usa coordenadas enteras no negativas y tamaños enteros positivos. El rectángulo debe caber completo en la imagen. Las coordenadas o tamaños inválidos dan `Invalid argument` y una cadena gráfica mal formada da `Invalid value`.
 - `BLOAD "img.png"` y `SCREEN gscr$` exigen que las dimensiones de la imagen/cadena coincidan exactamente con el `MODE` activo; en caso contrario dan `Invalid value` sin modificar la pantalla.
 - Los nombres de fichero PNG son expresiones de cadena, como `"img.png"`, `P$` o `P$+".png"`. Las comillas delimitan los literales de cadena; el nombre resultante debe tener la extensión `.png`.
 - BLOAD/BSAVE usan el mismo sistema virtual lógico que los ficheros de programa, incluidos los alias de directorio permitidos (ver 9.3). Se rechazan las rutas absolutas del sistema y las UNC; `..` se limita en la raíz virtual.
 - En modo inmediato, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio virtual actual.
 - Dentro de un programa cargado desde disco, las rutas relativas de `BLOAD/BSAVE` se resuelven desde el directorio del propio programa. Esto no cambia el `CD` actual del usuario.
+
+Con dos fotogramas de 32×32 uno junto al otro, `F$=CROP$(Hoja$,32,0,32,32)` extrae el fotograma derecho para usarlo con `SPRITE F$,x,y`.
 
 Ejemplo (medición de restauración rápida de pantallas)
 Alterna las imágenes a la máxima velocidad posible y muestra la tasa medida. Ambos PNG están incluidos en `samples/assets`. La textura se dibuja en el búfer de 640x480 y se captura con `SCREEN$`, de modo que ambas cadenas gráficas coinciden con el modo activo. Usa la preparación en la carpeta raíz del paquete indicada en la sección 1. `SCREEN a$` restaura cada imagen en el búfer; `FRAME` la muestra. El ejemplo distribuido `samples/g-swap.bas` utiliza la misma técnica.
@@ -1255,25 +1271,27 @@ Funciones de colisión
 + HITID                         Id interno del primer sprite con el que hubo colisión (0 si no hubo).
 
 Notas generales
-- Las cadenas de sprites y `SCREEN$` utilizan el formato en memoria `anchoxalto:datoshex`. `BSAVE` convierte estas cadenas en ficheros PNG y `BLOAD` convierte los PNG en cadenas gráficas. Puedes guardar las cadenas en variables o los PNG en disco para reutilizarlos.
+- `SPRITE`, `SPRITE MOVE` y `SPRITE HITTEST` admiten cadenas de sprites RGB y RGBA. Las cadenas gráficas RGB usan `anchoxalto:datoshex` con seis dígitos hexadecimales por píxel. Las cadenas RGBA usan `anchoxalto@RGBA:datoshex` con ocho dígitos por píxel en orden rojo, verde, azul y alfa.
 - `SPRITE$` aplica `ORIGIN` y la ventana lógica. Si la captura se sale de la pantalla, mantiene el tamaño solicitado rellenando con negro las zonas fuera de los límites físicos.
 - `SPRITE` respeta `ORIGIN`, la ventana gráfica y el clipping del canvas. No fuerza refresco; llama a `FRAME` cuando quieras mostrar el resultado.
 - Recuerda el anclaje: `SPRITE ... ,X,Y` usa `Y` como borde inferior. Si vienes de un `LABEL` con `MOVE X,Y` (borde superior), convierte `Y` con `Ysprite = Ytexto - (alto - 1)`.
 - `SPRITE HITTEST` usa exactamente las mismas reglas de clipping y transparencia que `SPRITE`, pero no altera ni el buffer gráfico ni el mapa de propietarios.
-- `SPRITE ... ALPHA a` mezcla los píxeles distintos del color transparente con el fondo actual; si se omite, la opacidad es 1. `SPRITE MOVE ... ALPHA a` sustituye la opacidad del sprite registrado; sin cláusula, reutiliza la guardada. El color transparente y la opacidad se guardan por separado.
-- La opacidad es solo visual: incluso `ALPHA 0` mantiene la huella original de colisión de los píxeles distintos del color transparente y los resultados de colisión. `SPRITE HITTEST` comprueba esa huella y no admite `ALPHA`. En `COLMODE 2/3`, los píxeles ocupados por otro sprite siguen bloqueando el dibujo, así que utiliza `COLMODE 0` para superposiciones visuales; si hace falta, detecta colisiones por separado con `SPRITE HITTEST`.
+- En los sprites RGBA, los píxeles con alfa cero son huecos tanto al dibujar como en las colisiones. Los píxeles con alfa positivo intervienen en las colisiones salvo que su RGB original coincida con el color transparente opcional. Para dibujar, se divide el alfa del píxel entre 255 y se multiplica por `ALPHA a`, que por defecto vale 1. `SPRITE MOVE ... ALPHA a` sustituye la opacidad guardada. Si se omite la cláusula, se reutiliza ese valor. El color transparente y esta opacidad se guardan por separado.
+- El `ALPHA` de la orden solo afecta al dibujo. Incluso `ALPHA 0` conserva la huella de colisión que definen la imagen y el color transparente. `SPRITE HITTEST` comprueba esa huella. En `COLMODE 2/3`, los píxeles ocupados por otro sprite bloquean el dibujo.
 - La colisión por color sigue comprobando el RGB actual del destino. Los píxeles ya mezclados por una llamada anterior se comprueban con su color mostrado resultante, no con el color original de origen.
 - `samples/g-sprite-alpha.bas` restaura `assets/anime.png` cada fotograma y mueve un hada anime grande y multicolor. Su opacidad varía entre el 0% y el 100% exactos, manteniendo brevemente ambos extremos; el exterior del personaje permanece transparente. ESPACIO pausa, C alterna el límite de FPS y ESC sale. Los paneles muestran `FRECTANGLE ... ALPHA`.
+- `samples/g-sprite-layers.bas` dibuja un único sprite RGBA del hada con el cuerpo opaco y las alas semitransparentes. El PNG aporta la opacidad de cada parte.
 - El parámetro `t` acepta cualquier formato de color (`INK`, `RGB`, índices de paleta). Los píxeles de ese color se dejan intactos.
 - Si no pasas `id`, la detección sprite-sprite usa un identificador interno según el orden de dibujo del frame (`CLG/COLRESET` reinician ese mapa).
 - Si pasas `id`, ese valor se usa como identificador de sprite para las colisiones (permite controlar grupos o "mismo objeto" entre fotogramas).
+- Para indicar un `id` sin color transparente, deja `t` vacío, como en `SPRITE F$,x,y,,1` o `SPRITE HITTEST F$,x,y,,1`.
 - Redibujar un mismo `id` en otra posición actualiza su huella de colisión (evita colisiones fantasma por posiciones antiguas).
 - Con `COLMODE 2` o `3`, `SPRITE` no sobreescribe píxeles que ya pertenezcan a otro sprite: detecta la colisión y mantiene el sprite previo.
 - `SPRITE DEL id` elimina la huella de `id` del mapa de colisiones sin modificar lo que ya se ve en pantalla.
 - `SPRITE MOVE id,x,y[,t]` requiere que antes se haya dibujado al menos un `SPRITE ... ,id` para conocer su imagen.
 
 Notas de uso
-- Puedes utilizar `SCREEN var$` para cambiar rápidamente entre varias pantallas capturadas previamente, pero todo lo que dibujes debe hacerse en la ventana real; las variables solo se pueden modificar a mano manipulando la cadena que almacena la pantalla.
+- Usa `SCREEN var$` para cambiar rápido entre pantallas capturadas. Usa `CROP$` para extraer un sprite directamente de una cadena gráfica (véase 6.6).
 - Los sprites capturados pueden guardarse en arrays de cadenas, `DATA`, etc., para tener catálogos precargados, por ejemplo con los distintos fotogramas de una animación.
 
 Patrones recomendados (claridad vs rendimiento)
@@ -1698,7 +1716,7 @@ Los manejadores locales y el global siguen la misma regla: primero se busca un
 manejador en la rutina actual y después en sus llamadores, hasta el ámbito raíz.
 La ejecución se reanuda dentro del ámbito del manejador que captura el error.
 
-- Sin procesador: ante un error, la ejecución se detiene e informa: “Línea <n>. <mensaje>”.
+- Si el error queda sin manejar, la ejecución se detiene y muestra el mensaje. Cuando se conoce la posición, el diagnóstico muestra la línea de código y subraya la instrucción que falló en las líneas con varias instrucciones y en las rutinas importadas. En un `IF` en línea, se subraya `IF ... THEN` si falla la condición y la instrucción ejecutada de `THEN` o `ELSE` si falla la rama. Si el fallo se originó en una biblioteca importada, el mensaje incluye el fichero.
 - Con manejador: al producirse el error, `ERR` y `ERL` identifican su código y la línea original. Un `RESUME` explícito correcto limpia el error procesado; al volver a un manejador exterior activo, se restauran los `ERR`/`ERL` pendientes de ese manejador.
 - Dentro de un `DEF SUB` o `DEF FN` multilínea, `ON ERROR` pertenece a esa invocación. Cada llamada empieza sin manejador local; al retornar, se descarta su manejador y se restaura el estado de error del llamador. `ON ERROR GOTO 0` desactiva solo el manejador de la invocación actual, dejando disponibles los de sus llamadores.
 - Toda instrucción local `ON ERROR` válida limpia los `ERR`/`ERL` visibles. Cambiar la política dentro de un manejador activo conserva su estado pendiente de `RESUME` por separado, incluido `ON ERROR GOTO 0`: desactiva futuras capturas en esa invocación sin cancelar el error que ya se está procesando. `RESUME` requiere un contexto de manejador activo; recordar un error de continuación implícita no basta para permitir `RESUME`.
@@ -1708,6 +1726,14 @@ La ejecución se reanuda dentro del ámbito del manejador que captura el error.
 - Un `ON ERROR RESUME NEXT`, local o del ámbito raíz, omite la instrucción que falla, o la instrucción que realiza la llamada cuando el error se propaga desde una rutina más profunda, sin entrar en un manejador. `ERR` y `ERL` siguen disponibles para consultarlos; utiliza `ON ERROR GOTO 0` para limpiarlos y desactivar este modo.
 - Ámbito raíz: si ningún manejador local captura el error, se abandonan todas las llamadas pendientes antes de ejecutar el manejador global. Su `RESUME` repite la instrucción raíz que inició la llamada y su `RESUME NEXT` continúa después de ella; no reanudan la invocación abandonada. Esto sustituye al comportamiento anterior, que conservaba la rutina suspendida. Instalar o desactivar un manejador local no sustituye al global. `ON ERROR GOTO 0` en el nivel superior sigue limpiando el manejador global y su estado pendiente de `RESUME`. `GOSUB` no crea un ámbito de errores de procedimiento.
 - ERROR n: si el error `n` no está entre los predefinidos por el intérprete, se considera un número de error personalizado.
+
+Así se ve un error sin manejar en la segunda instrucción de la línea.
+
+```output error=1,2,3
+Line 10. Division by zero.
+10 A=1 : PRINT 10/(A-1) : PRINT "FIN"
+         ^^^^^^^^^^^^^^
+```
 
 Ejemplo (error procesado seguido de un error deliberadamente sin procesar)
 El primer error es el error personalizado 200 y se procesa en las líneas 60–70. La línea 30 desactiva después el manejador. La línea 40 salta deliberadamente a la línea 100, que no existe, para mostrar el aviso normal de error; el destino ausente es parte de este ejemplo.
@@ -1823,7 +1849,7 @@ Tabla completa de códigos de error
 49 IF sin END IF correspondiente.
 50 ELSE sin IF correspondiente.
 51 END IF sin IF correspondiente.
-52 Número de dimensiones no válido.
+52 Dimensiones del array no válidas.
 53 MAT IDN requiere una matriz cuadrada bidimensional.
 54 Instrucción no permitida dentro de una subrutina.
 55 Subrutina mal formada.
@@ -1839,7 +1865,7 @@ Tabla completa de códigos de error
 
 9. Comandos “solo inmediato”
 
-+ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | QUIT | RENUM | RUN | SAVE | SYSTEM
++ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | PACK | QUIT | RENUM | RUN | SAVE | SYSTEM
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
@@ -1847,7 +1873,7 @@ Notas
 
 9.1 Comandos prohibidos en inmediato:
 
-+ DATA | ERROR | FRAME | GOSUB | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
++ DATA | ERROR | FRAME | GOSUB | IMPORT | ON ERROR | ON GOSUB | ON GOTO | ON MOUSE | ON SQ | RESUME | RETURN | STOP
 
 Formato de rangos
 1 `n`        Solo la línea n
@@ -1878,7 +1904,7 @@ Notas sobre EDIT
 Notas sobre DEBUG
 - `DEBUG` no admite parámetros. Abre el programa almacenado en un depurador a pantalla completa y se detiene inicialmente justo antes de la primera instrucción. El texto del programa es de solo lectura; los valores de las variables existentes se pueden editar en el inspector. Cuando la ejecución termina o se aborta, vuelve al modo inmediato.
 - Un `●` rojo en el margen señala un breakpoint. Mientras la ejecución está detenida, un `▶` amarillo brillante aparece inmediatamente antes de la próxima instrucción (naranja rojizo con el tema claro), y un `●` esmeralda junto al número identifica la línea de ejecución; un `▶` rojo en el margen señala la línea mostrada cuando es distinta de la línea de ejecución.
-- Con el foco en el código, F5 continúa (F1 es un alias), F2 activa o desactiva un breakpoint en la línea mostrada, F3 establece la próxima instrucción, F4 muestra la consola de salida, F6 entra en la rutina, F7 avanza por encima, F8 sale de ella y F9 reinicia la depuración. Las teclas de función no tienen efecto mientras el foco está en el inspector. Esc o Ctrl+C aborta la ejecución desde cualquiera de los dos paneles.
+- Con el foco en el código, F5 continúa (F1 es un alias), F2 activa o desactiva un breakpoint en la línea mostrada, F3 establece la próxima instrucción, F4 muestra la consola de salida y F9 reinicia la depuración. F6 entra en la rutina, F7 avanza por encima y F8 sale de ella desde el código, el inspector o el visor de arrays. Estas teclas de paso se suspenden mientras se edita un valor, se introducen coordenadas con G o se consulta la salida. Esc aborta la ejecución desde el código o el inspector. Ctrl+C aborta la ejecución desde cualquier panel.
 - En el panel de código, Arriba/Abajo selecciona una línea e Izquierda/Derecha una instrucción completa de nivel superior dentro de ella; Ctrl+Izquierda/Derecha desplaza el texto horizontalmente. La instrucción candidata aparece subrayada cuando el estilo ANSI está activado; el `▶` de ejecución sigue señalando la próxima instrucción real. F3 traslada la ejecución a la candidata sin ejecutarla. Las instrucciones de nivel superior separadas por `:` son destinos independientes; un `IF` en línea es un destino completo, no sus instrucciones `THEN`/`ELSE`.
 - Establecer la próxima instrucción conserva los valores actuales y requiere una región compatible con la rutina y los bucles activos. También funciona dentro del `GOSUB` o manejador de temporizador, ratón o error actual, conservando su contexto de retorno y, en un manejador de error, `ERR`, `ERL` y el estado pendiente de `RESUME`. Se conserva la espera suspendida del llamador; no se permite abandonar el propio `PAUSE`/`FRAME` suspendido.
 - Las comprobaciones rechazan entrar en un bucle no iniciado, salir de un bucle activo y cruzar límites de rutinas o manejadores conocidos. Estas comprobaciones son conservadoras, no un análisis completo de cada `GOTO` o destino calculado. Un destino rechazado mantiene el programa en la misma pausa y muestra un mensaje del depurador, sin invocar `ON ERROR`.
@@ -1886,10 +1912,16 @@ Notas sobre DEBUG
 - Tab o Shift+Tab alterna el foco del teclado entre el código y el inspector. En el inspector, Arriba/Abajo selecciona cabeceras o entradas que se puedan fijar, Izquierda/Derecha cambia de columna e Inicio/Fin selecciona la primera/última entrada accionable de esa columna. RePág/AvPág desplaza todo el contenido, incluidas las pilas largas. Espacio pliega o despliega la cabecera seleccionada; una selección fuera de la página visible no se puede activar. Las cabeceras plegadas conservan el número de entradas. La cabecera seleccionada aparece subrayada (entre corchetes sin ANSI); la variable seleccionada lleva un `▶`.
 - Espacio sobre una variable de `VARIABLES` la añade a `PINNED`; Espacio sobre una variable ya fijada la retira. `PINNED` aparece al principio, conserva el orden de incorporación y también se puede plegar. Un `[+]` junto a una variable de `VARIABLES` indica que está fijada; no se repite en `PINNED`. Los valores se actualizan en cada pausa del depurador y muestran `<unavailable>` cuando ese nombre no está visible en el ámbito actual. Una variable local con el mismo nombre sustituye temporalmente el valor global mostrado en la entrada fijada.
 - Fijar una entrada de array sigue su último elemento modificado, no una celda fija: tras `A(7)=9` y después `A(12)=8`, la entrada fijada cambia de `A(7)` a `A(12)`. El escalar `A` y el array `A()` se fijan por separado. Cuando no hay un último elemento modificado disponible, el array fijado muestra `A() = <unavailable>`. Fijar variables nunca evalúa expresiones BASIC.
-- Enter sobre un valor numérico o literal existente en `VARIABLES` o `PINNED` permite editarlo en el mismo lugar. En un array se modifica exactamente el elemento mostrado, con los índices fijados al iniciar la edición. El valor inicial aparece seleccionado, por lo que escribir lo sustituye. Las flechas e Inicio/Fin mueven el cursor de texto; los valores largos se desplazan horizontalmente. Enter aplica el cambio y actualiza ambas listas sin avanzar BASIC. Esc cancela la edición; Ctrl+C sigue abortando la depuración. Durante la edición, Espacio introduce un espacio y Tab/las teclas de función no cambian de panel ni ejecutan el programa. Enter sobre una cabecera o valor no disponible no tiene efecto.
+- Selecciona una entrada en `ARRAYS` y pulsa Enter para abrir el visor del array en lugar del inspector. Cuando los paneles están uno junto al otro, sus anchos se intercambian para que el visor disponga del panel más ancho. En terminales estrechos, los paneles se apilan y el visor dispone de más filas. El visor ajusta la ventana al espacio disponible y lee solo las celdas visibles. Un vector se muestra como una lista. Para tres o más dimensiones, la cuadrícula usa las dos primeras y la cabecera muestra los índices fijos de las demás. Se muestran los índices reales de BASIC, incluido el índice 0 con `MAT BASE 1`.
+- Con el visor abierto, Tab o Shift+Tab alterna el foco entre el visor y el código. Al avanzar un paso, se conserva el foco y el visor se actualiza en la siguiente pausa. Si el array sale de ámbito, se vuelve al inspector.
+- Usa las flechas para moverte, RePág/AvPág para avanzar por páginas de filas y Ctrl+Izquierda/Derecha para avanzar por páginas de columnas. Pulsa G, introduce un índice entero por dimensión separado por comas y pulsa Enter para saltar a esa coordenada. En un array de tres dimensiones, `2,3,4` muestra el corte con el tercer índice en 4 y selecciona la fila 2, columna 3. El valor seleccionado aparece bajo la cuadrícula. Usa `[` y `]` para recorrer un valor largo. Con el foco en el visor, Esc cancela un salto en curso o cierra el visor y vuelve al inspector.
+- Con estilo ANSI, las etiquetas de filas y columnas tienen un color propio. Con `MAT BASE 1`, el elemento 0 de un vector y la fila y la columna 0 de una matriz de dos dimensiones tienen fondo gris y se pueden seguir seleccionando. El visor resalta las celdas escritas por la última instrucción BASIC, incluidas las asignaciones individuales y las operaciones `MAT`. Pulsa J para saltar a una celda escrita por esa instrucción, aunque esté en otro corte. Si se escribieron varias celdas del array, J elige la más cercana al origen por distancia euclídea en todas las dimensiones. En caso de empate, elige la primera coordenada en orden lexicográfico. Si la instrucción no escribió en ese array, se conserva la selección.
+- El seguimiento automático está activo por defecto. Pulsa T con el foco en el visor para activarlo o desactivarlo. El visor muestra el estado y conserva el ajuste durante la sesión `DEBUG` actual, incluso al abrir otro array o reiniciar con F9. Con el seguimiento activo, al avanzar con F6, F7 o F8 desde cualquiera de los dos paneles, el visor salta a la misma celda que J, aunque la siguiente pausa sea un breakpoint. Se conserva la selección dentro de los límites actuales del array al avanzar con el seguimiento desactivado, al dar un paso sin escrituras en el array o al continuar con F5. J está disponible en ambos modos.
+- Espacio en el visor fija la coordenada seleccionada, por ejemplo `A(7,2)`. En cada pausa se lee esa misma celda, incluso tras una asignación `MAT` al array completo. Si el array elegido sale de ámbito o la coordenada queda fuera de sus límites, se muestra `<unavailable>`. Para quitar la celda fijada, pulsa Espacio sobre ella en el visor o sobre su entrada en `PINNED`.
+- Enter sobre un escalar existente o el último elemento escrito de un array en `VARIABLES` o `PINNED` permite editarlo en el mismo lugar. En un array se modifica exactamente el elemento mostrado, con los índices fijados al iniciar la edición. El valor inicial aparece seleccionado, por lo que escribir lo sustituye. Las flechas e Inicio/Fin mueven el cursor de texto; los valores largos se desplazan horizontalmente. Enter aplica el cambio y actualiza ambas listas sin avanzar BASIC. Esc cancela la edición; Ctrl+C sigue abortando la depuración. Durante la edición, Espacio introduce un espacio y Tab/las teclas de función no cambian de panel ni ejecutan el programa. Enter sobre una cabecera o valor no disponible no tiene efecto.
 - La edición numérica admite literales decimales finitos, con signo o notación exponencial opcionales, pero no expresiones. Las cadenas no necesitan comillas delimitadoras; las comillas son caracteres ordinarios. Se usan `\\`, `\n`, `\r`, `\t`, `\0`, `\xNN` o `\u{...}` para barras inversas y caracteres de control. Los caracteres Unicode de ancho variable también se muestran mediante escapes reversibles durante la edición para mantener el cursor alineado. Una entrada inválida permanece editable sin cambiar la variable ni invocar `ON ERROR`. Los temporizadores permanecen detenidos durante toda la edición.
 - Las variables fijadas, las categorías plegadas, el foco, la selección y el desplazamiento se conservan entre pausas de la sesión `DEBUG` actual. No se guardan en el archivo `.bas` y se reinician en el siguiente `DEBUG`. El inspector se maneja exclusivamente con el teclado.
-- Desde el panel de código, F4 muestra la pantalla de salida existente mientras el programa sigue detenido, sin añadir ningún aviso. Pulsa F4 de nuevo o Esc para volver a la misma pausa con el foco en el código, conservando la línea mostrada y el estado del inspector sin ejecutar ninguna instrucción. Durante la consulta, Ctrl+C sigue abortando; las demás teclas se ignoran. Vuelve al panel de código antes de usar F5/F6/F7/F8.
+- Desde el panel de código, F4 muestra la pantalla de salida existente mientras el programa sigue detenido, sin añadir ningún aviso. Pulsa F4 de nuevo o Esc para volver a la misma pausa con el foco en el código, conservando la línea mostrada y el estado del inspector sin ejecutar ninguna instrucción. Durante la consulta, Ctrl+C sigue abortando; las demás teclas se ignoran. Cierra la vista de salida antes de continuar o avanzar un paso.
 - Con F6/F7/F8, la pantalla del depurador se conserva durante los pasos que no necesitan la consola. La pantalla normal de salida se recupera justo antes de producir salida de consola (por ejemplo, `PRINT` o `CLS`) o de solicitar entrada con `INPUT`, `LINE INPUT` o `MAT INPUT`. `INKEY$`, `KEYDOWN` y `PAUSE` también recuperan esa pantalla antes de consultar o esperar entrada. La siguiente pausa vuelve a mostrar el depurador. F5 sigue abandonando inmediatamente la pantalla del depurador.
 - La preparación de la ventana gráfica, el dibujo, la presentación y las lecturas del búfer gráfico (por ejemplo, `TEST`, `TESTCHR$`, `SCREEN$` o `SPRITE$`) no cambian la pantalla de la consola. `GINPUT` usa sólo la ventana gráfica y tampoco muestra la consola de salida. La E/S de archivos por sí sola no cambia de pantalla.
 - Cuando el programa está usando la ventana gráfica, el contenido actual del búfer gráfico se presenta automáticamente al entrar en cada pausa del depurador. Por tanto, tras F6, la siguiente pausa muestra los cambios gráficos realizados por el paso anterior sin necesidad de añadir `FRAME`. Con F7/F8, el resultado acumulado se presenta en el siguiente alto del depurador. Esta actualización de inspección no ejecuta `FRAME`, no aplica su limitador FPS ni espera por `SCREEN SYNC`; las llamadas explícitas a `FRAME` y `FRAME fps` conservan su comportamiento normal.
@@ -1985,6 +2017,18 @@ Notas
 - Si el programa actual no proviene de un fichero cargado desde disco, las rutas relativas usadas dentro del programa se resuelven desde el directorio virtual actual.
 - Para continuar tras `STOP` o `CTRL+C`, usa `CONT`. Si la interrupción vino de cerrar una ventana gráfica, `CONT` no es válido.
 
+9.5 Empaquetar programas para Windows (`PACK`)
+
++ PACK "programa.bas" TO "juego.exe" ID "id-del-juego" [INCLUDE "ruta"] [PERSIST "ruta"] [GUI]
+
+- Ejecuta `PACK` como comando inmediato en Windows x64. Lee el programa principal del disco y crea un ejecutable nativo para Windows x64 que lo arranca con el intérprete y los recursos integrados. El jugador puede abrir directamente el ejecutable. El código BASIC incorporado se puede extraer.
+- El programa principal y el ejecutable de salida se resuelven desde el directorio virtual actual. `INCLUDE` y `PERSIST` se resuelven desde la carpeta del programa principal. Puedes repetir ambas opciones. `INCLUDE` admite ficheros o carpetas. Termina las carpetas de `PERSIST` con `/`.
+- Usa `GUI` para que un programa gráfico se abra sin ventana de consola. El modo predeterminado proporciona una consola para programas que usan `PRINT` o `INPUT`.
+- `PACK` incluye las bibliotecas declaradas con `IMPORT` y verifica las referencias conocidas contra los ficheros seleccionados para el paquete. Si falta un fichero obligatorio, se cancela la exportación. Las rutas calculadas durante la ejecución generan avisos. Prueba esos recorridos en el programa empaquetado antes de distribuirlo.
+- Las escrituras del programa empaquetado usan las rutas declaradas con `PERSIST` bajo `%LOCALAPPDATA%\AVL BASIC\id-del-juego`. Conserva el mismo `ID` entre versiones para mantener los datos del jugador. Al incluir una carpeta se omiten sus ficheros persistentes. Para distribuir un fichero inicial, añádelo explícitamente con `INCLUDE`. La lectura usa primero la copia del jugador y, si todavía no existe, la copia inicial incluida.
+
++ PACK "samples/g-dustline.bas" TO "Dustline.exe" INCLUDE "assets/dustline/" PERSIST "g-dustline-best.csv" ID "avl-basic.dustline" GUI
+
 10. Funciones integradas
 
 Las de cero argumentos se usan sin paréntesis.
@@ -2068,6 +2112,7 @@ Color & pantalla
 + XMIN | XMAX | YMIN | YMAX | BORDER  Parámetros de escala actuales
 + XPOS | YPOS | HPOS | VPOS  Coordenadas del cursor gráfico y del cursor de texto
 + TEST(x,y)  Devuelve el color del píxel en las coordenadas `(x,y)`
++ CROP$(gscr$,x,y,w,h)  Extrae un rectángulo de una cadena gráfica RGB o RGBA (véase 6.6)
 
 - `XMIN/XMAX/YMIN/YMAX/BORDER` devuelven la escala activa de la ventana gráfica.
 - Si no hay ventana gráfica activa, devuelven la escala física: `XMIN=0`, `XMAX=WIDTH-1`, `YMIN=0`, `YMAX=HEIGHT-1`, `BORDER=0`.
@@ -2279,6 +2324,21 @@ Ejemplo de subrutina
 100 PRINT Y       : REM -> 4
 110 PRINT Z(1)    : REM -> 9
 ```
+
+11.1 Importación de bibliotecas de rutinas
+
++ IMPORT "biblioteca.bas" AS Alias  Permite usar las funciones y subrutinas de otro fichero mediante un alias.
+
+- Escribe `IMPORT` en una línea numerada propia, en el nivel principal del programa. Cada alias es único dentro del programa. Los alias y los nombres de rutina se comparan sin distinguir mayúsculas y minúsculas.
+- `RUN` y `DEBUG` localizan y validan las bibliotecas antes de ejecutar el programa principal. La ruta entre comillas se interpreta respecto al directorio del fichero principal o al directorio virtual actual si has tecleado el programa en el indicador. Se aplican las reglas habituales de la raíz virtual. `CONT` usa las bibliotecas ya cargadas en la ejecución detenida.
+- En el nivel principal de una biblioteca se admiten comentarios numerados y definiciones `DEF FN` o `DEF SUB`. La importación tiene un solo nivel. Cada biblioteca tiene su propia numeración y puede repetir números de línea del programa principal. Dentro de la biblioteca, llama a sus otras rutinas por su nombre habitual, sin alias.
+- Usa `Alias.FNnombre(...)` en expresiones y `CALL Alias.Nombre(...)` para las subrutinas. Las funciones calificadas llevan paréntesis aunque carezcan de argumentos. Como en las demás llamadas, los escalares y las cadenas se pasan por valor, y los arrays completos se pasan por referencia a las rutinas multilínea.
+- Cada biblioteca tiene sus propias variables, arrays y secuencia `DATA`. Las variables compartidas por sus rutinas se inicializan al usarlas por primera vez y conservan sus valores entre llamadas de la misma ejecución. Si una rutina necesita datos del llamador, pásale explícitamente el valor o el array.
+- `LIST`, `EDIT` y `SAVE` en el programa principal trabajan con la línea `IMPORT`. Abre el fichero de la biblioteca por separado para editar sus rutinas. Al entrar paso a paso en una biblioteca con `DEBUG`, el depurador muestra el código y el nombre de ese fichero. Los breakpoints que marques allí pertenecen a ese fichero durante la sesión de depuración.
+- Cada invocación de un `DEF SUB` o `DEF FN` multilínea importado puede instalar un manejador `ON ERROR`. El destino del manejador y el de `RESUME n` deben estar en la misma rutina. Si el fallo ocurrió en esa invocación, `RESUME` repite la instrucción que falló y `RESUME NEXT` avanza a la siguiente.
+- Si el error se propaga, el manejador del llamador reintenta su `CALL` o la instrucción que llamó a la función con `RESUME` y la omite con `RESUME NEXT`. `ERL` indica la línea BASIC original del fallo en la biblioteca. Si el error queda sin manejar, el diagnóstico incluye el fichero de origen (véase 8.2). Si el fichero está mal formado, el mensaje indica la línea física, contando las líneas en blanco.
+- Los manejadores asíncronos del programa principal esperan hasta que se regrese de la biblioteca. Las rutinas importadas no pueden ejecutar `STOP`, `CLEAR` sin argumentos ni `ON MOUSE`. Ctrl+C durante una llamada importada interrumpe la ejecución sin dejar una continuación para `CONT`.
+- Ejecuta `samples/rule30.bas` para ver un patrón en texto o `samples/g-cellular-automata.bas` para comparar gráficamente las reglas 30 y 90. Ambos importan `samples/lib/automata.bas`, cuya función calcula una celda y cuya subrutina actualiza un array completo pasado por referencia.
 
 12. Hexadecimal/Binario y lógica bit a bit
 

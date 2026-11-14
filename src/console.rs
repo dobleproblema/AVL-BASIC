@@ -1,3 +1,5 @@
+use crate::error::BasicError;
+use crate::help;
 #[cfg(unix)]
 use crate::keyboard::TerminalInputDecoder;
 use crate::language;
@@ -19,9 +21,11 @@ use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::rc::Rc;
 
+mod array_view;
 mod inspector;
 mod navigation;
 mod print_color;
+use array_view::{ArrayView, ArrayViewAction};
 use inspector::InspectorState;
 use navigation::DebugCodeSelection;
 pub(crate) use print_color::{
@@ -51,6 +55,7 @@ const COMMENT_STYLE: &str = GREEN;
 const LINE_NUMBER_STYLE: &str = TAN;
 const VARIABLE_STYLE: &str = "\x1b[1m\x1b[38;5;39m";
 const LABEL_STYLE: &str = "\x1b[1m\x1b[38;5;220m";
+const IMPORT_ALIAS_STYLE: &str = "\x1b[1m\x1b[38;5;80m";
 const NUMBER_STYLE: &str = TAN;
 const CURSOR_MARKER: char = '\u{E000}';
 
@@ -69,6 +74,7 @@ const LIGHT_COMMENT_STYLE: &str = VIVID_GREEN;
 const LIGHT_LINE_NUMBER_STYLE: &str = VIVID_ORANGE;
 const LIGHT_VARIABLE_STYLE: &str = "\x1b[1m\x1b[38;5;33m";
 const LIGHT_LABEL_STYLE: &str = "\x1b[1m\x1b[38;5;178m";
+const LIGHT_IMPORT_ALIAS_STYLE: &str = "\x1b[1m\x1b[38;5;23m";
 const LIGHT_NUMBER_STYLE: &str = VIVID_ORANGE;
 const LIGHT_STRING_STYLE: &str = ORCHID;
 const LIGHT_HEX_STYLE: &str = VIVID_GOLD;
@@ -91,6 +97,7 @@ struct SyntaxPalette {
     line_number: &'static str,
     variable: &'static str,
     label: &'static str,
+    import_alias: &'static str,
     number: &'static str,
     string: &'static str,
     hex: &'static str,
@@ -107,6 +114,7 @@ const DARK_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
     line_number: LINE_NUMBER_STYLE,
     variable: VARIABLE_STYLE,
     label: LABEL_STYLE,
+    import_alias: IMPORT_ALIAS_STYLE,
     number: NUMBER_STYLE,
     string: STRING_STYLE,
     hex: HEX_STYLE,
@@ -123,6 +131,7 @@ const LIGHT_SYNTAX_PALETTE: SyntaxPalette = SyntaxPalette {
     line_number: LIGHT_LINE_NUMBER_STYLE,
     variable: LIGHT_VARIABLE_STYLE,
     label: LIGHT_LABEL_STYLE,
+    import_alias: LIGHT_IMPORT_ALIAS_STYLE,
     number: LIGHT_NUMBER_STYLE,
     string: LIGHT_STRING_STYLE,
     hex: LIGHT_HEX_STYLE,
@@ -310,6 +319,21 @@ pub fn error_text(ansi: bool, text: &str) -> String {
     }
 }
 
+pub(crate) fn error_diagnostic_text(ansi: bool, error: &BasicError) -> String {
+    if !ansi {
+        return error.display_diagnostic();
+    }
+    let header = error_text(true, &error.display_for_basic());
+    match error.diagnostic_context() {
+        Some((source, underline)) => {
+            let source = syntax_highlight_raw_with_cases(&source, true, None);
+            let underline = error_text(true, &underline);
+            format!("{header}\n{source}\n{underline}")
+        }
+        None => header,
+    }
+}
+
 pub fn trace_text(ansi: bool, line: i32) -> String {
     let text = format!("[{line}]");
     if ansi {
@@ -340,7 +364,7 @@ pub fn normalize_code(code: &str) -> String {
             code.trim_end().to_string()
         };
     }
-    let contextual_immediate = contextual_immediate_command(code);
+    let contextual_help = is_help_immediate_line(code);
     let (main, comment) = split_single_quote_comment(code);
     let mut result = normalize_main_code(main.trim_end());
     result = add_bas_extension_to_leading_file_command(&result);
@@ -355,9 +379,8 @@ pub fn normalize_code(code: &str) -> String {
         result.push('\'');
         result.push_str(comment);
     }
-    match contextual_immediate {
-        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut result),
-        None => {}
+    if contextual_help {
+        uppercase_leading_help(&mut result);
     }
     result
 }
@@ -403,15 +426,23 @@ fn highlight_normalized_code(
     if let Some(cases) = cases {
         line = apply_identifier_case_for_display(&line, cases);
     }
-    let contextual_immediate = contextual_immediate_command(&line);
-    match contextual_immediate {
-        Some(ContextualImmediateCommand::Help) => uppercase_leading_help(&mut line),
-        None => {}
+    if is_help_immediate_line(&line) {
+        uppercase_leading_help(&mut line);
     }
     if !ansi {
         return line;
     }
-    let (main, comment) = split_single_quote_comment(&line);
+    highlight_ansi_line(&line, palette)
+}
+
+fn highlight_ansi_line(line: &str, palette: SyntaxPalette) -> String {
+    let contextual_immediate = contextual_immediate_command(line);
+    if contextual_immediate == Some(ContextualImmediateCommand::Help) {
+        if let Some(highlighted) = highlight_help_topic(line, palette) {
+            return highlighted;
+        }
+    }
+    let (main, comment) = split_single_quote_comment(line);
     let mut out = String::new();
     let mut rest = main;
     if let Some((line_no, after)) = split_line_number(rest) {
@@ -420,7 +451,7 @@ fn highlight_normalized_code(
         out.push_str(RESET);
         rest = after;
     }
-    if is_label_declaration(&line) {
+    if is_label_declaration(line) {
         push_styled(&mut out, palette.label, rest);
     } else {
         out.push_str(&highlight_main(rest, palette, contextual_immediate));
@@ -483,30 +514,7 @@ pub fn syntax_highlight_raw_with_cases(
     if !ansi {
         return line;
     }
-    let contextual_immediate = contextual_immediate_command(&line);
-    let (main, comment) = split_single_quote_comment(&line);
-    let mut out = String::new();
-    let mut rest = main;
-    let palette = current_syntax_palette();
-    if let Some((line_no, after)) = split_line_number(rest) {
-        out.push_str(palette.line_number);
-        out.push_str(line_no);
-        out.push_str(RESET);
-        rest = after;
-    }
-    if is_label_declaration(&line) {
-        push_styled(&mut out, palette.label, rest);
-    } else {
-        out.push_str(&highlight_main(rest, palette, contextual_immediate));
-    }
-    if let Some((spaces, comment)) = comment {
-        out.push_str(&" ".repeat(spaces));
-        out.push('\'');
-        out.push_str(palette.comment);
-        out.push_str(comment);
-        out.push_str(RESET);
-    }
-    out
+    highlight_ansi_line(&line, current_syntax_palette())
 }
 
 fn syntax_highlight_window_with_cases(
@@ -1096,6 +1104,104 @@ pub(crate) struct DebugInspectionHistory {
     previous: Option<DebugInspectionState>,
     inspector: InspectorState,
     view_keys: DebugViewKeys,
+    array_panel: DebugArrayPanel,
+}
+
+#[derive(Debug, Default)]
+struct DebugArrayPanel {
+    active: Option<(ArrayView, crate::debugger::DebugArrayPin)>,
+    previous: Option<(ArrayView, crate::debugger::DebugArrayPin)>,
+    follow_disabled: bool,
+    follow_after_step: bool,
+}
+
+impl DebugArrayPanel {
+    fn binding(
+        access: &dyn crate::debugger::DebugPauseAccess,
+        summary: &crate::debugger::DebugArraySummary,
+    ) -> Result<crate::debugger::DebugArrayPin, String> {
+        // Zero is a valid stored index even under MAT BASE 1.
+        access.pin_array_cell(&summary.name, &vec![0; summary.dimensions.len()])
+    }
+
+    fn same_binding(
+        left: &crate::debugger::DebugArrayPin,
+        right: &crate::debugger::DebugArrayPin,
+    ) -> bool {
+        left.binding == right.binding && left.scope == right.scope
+    }
+
+    fn open(
+        &mut self,
+        summary: crate::debugger::DebugArraySummary,
+        access: &dyn crate::debugger::DebugPauseAccess,
+    ) -> Result<(), String> {
+        let binding = Self::binding(access, &summary)?;
+        let view = match self.previous.take() {
+            Some((mut view, previous))
+                if view.summary().name.eq_ignore_ascii_case(&summary.name)
+                    && Self::same_binding(&previous, &binding) =>
+            {
+                view.reopen(summary);
+                view
+            }
+            _ => ArrayView::new(summary),
+        };
+        self.active = Some((view, binding));
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.previous = self.active.take();
+    }
+
+    fn view(&mut self) -> Option<&mut ArrayView> {
+        self.active.as_mut().map(|(view, _)| view)
+    }
+
+    fn is_open(&self) -> bool {
+        self.active.is_some()
+    }
+
+    fn is_jumping(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|(view, _)| view.is_jumping())
+    }
+
+    fn refresh(
+        &mut self,
+        snapshot: &crate::debugger::DebugSnapshot,
+        access: &dyn crate::debugger::DebugPauseAccess,
+        layout: DebugLayout,
+    ) -> Option<String> {
+        let follow = std::mem::take(&mut self.follow_after_step) && !self.follow_disabled;
+        let (view, binding) = self.active.as_mut()?;
+        let name = &view.summary().name;
+        let current = snapshot
+            .arrays
+            .iter()
+            .find(|summary| summary.name.eq_ignore_ascii_case(name))
+            .filter(|summary| {
+                Self::binding(access, summary)
+                    .is_ok_and(|current| Self::same_binding(binding, &current))
+            });
+        if let Some(summary) = current {
+            // Keep the selection and scroll origin but discard data cached
+            // during the previous pause, even if the window did not move.
+            view.reopen(summary.clone());
+            if follow {
+                if let Some(indexes) = access.last_array_write(&summary.name) {
+                    view.follow_write(indexes, layout.panel_cols, layout.panel_rows);
+                }
+            }
+            None
+        } else {
+            let message = format!("{name}() is out of scope");
+            self.active = None;
+            Some(message)
+        }
+    }
 }
 
 impl DebugInspectionHistory {
@@ -1170,6 +1276,7 @@ where
         &mut inspector,
         &mut access,
         &mut view_keys,
+        &mut DebugArrayPanel::default(),
     )
 }
 
@@ -1214,11 +1321,16 @@ pub(crate) fn debug_fullscreen_editable_with_history(
         &mut history.inspector,
         access,
         &mut history.view_keys,
+        &mut history.array_panel,
     );
     if matches!(result, Ok(crate::debugger::DebugAction::Restart)) {
         // Keep pins, folding and inspector navigation, but not comparisons
         // against values belonging to the execution we are abandoning.
         history.previous = None;
+        history.array_panel = DebugArrayPanel {
+            follow_disabled: history.array_panel.follow_disabled,
+            ..DebugArrayPanel::default()
+        };
     } else if result.is_ok() {
         history.remember(&snapshot);
     }
@@ -1236,6 +1348,7 @@ fn debug_fullscreen_with_idle_and_changes(
     inspector: &mut InspectorState,
     access: &mut dyn crate::debugger::DebugPauseAccess,
     view_keys: &mut DebugViewKeys,
+    array_panel: &mut DebugArrayPanel,
 ) -> io::Result<crate::debugger::DebugAction> {
     if !interactive_terminal() {
         return Err(io::Error::new(
@@ -1246,6 +1359,11 @@ fn debug_fullscreen_with_idle_and_changes(
 
     let _runtime_raw_suspend = suspend_runtime_raw_mode()?;
     let guard = terminal.enter_pause()?;
+    let mut status_message = array_panel.refresh(
+        snapshot,
+        access,
+        terminal_debug_layout(array_panel.is_open()),
+    );
     let mut editor = BasicEditor::with_breakpoints(lines, breakpoints.clone());
     if let Some(line_index) = editor
         .lines
@@ -1254,7 +1372,7 @@ fn debug_fullscreen_with_idle_and_changes(
     {
         editor.cursor_line = line_index;
         let (cols, rows) = size().unwrap_or((80, 24));
-        let layout = debug_layout(cols.max(1) as usize, rows.max(1) as usize);
+        let layout = debug_layout(cols as usize, rows as usize, array_panel.is_open());
         if let Some(statement_col) = reveal_debug_statement(
             &mut editor,
             line_index,
@@ -1277,7 +1395,7 @@ fn debug_fullscreen_with_idle_and_changes(
     );
     let mut output_visible = false;
     let mut edit_paste = DebugEditPasteGuard::default();
-    let mut status_message = None;
+    inspector.refresh_cell_pins(access);
     render_fullscreen_debugger(
         &mut editor,
         snapshot,
@@ -1287,6 +1405,8 @@ fn debug_fullscreen_with_idle_and_changes(
         inspector,
         changes,
         &navigation,
+        array_panel,
+        access,
     )?;
 
     loop {
@@ -1306,7 +1426,69 @@ fn debug_fullscreen_with_idle_and_changes(
                 if !view_keys.accepts_with_edit(event, inspector.is_editing()) {
                     continue;
                 }
-                if inspector.is_editing() {
+                let layout = terminal_debug_layout(array_panel.is_open());
+                let array_focused =
+                    inspector.focused && layout.has_inspector() && array_panel.is_open();
+                let array_jumping = array_focused && array_panel.is_jumping();
+                let array_receives_key = array_focused
+                    && (array_jumping || !matches!(event.code, KeyCode::Tab | KeyCode::BackTab));
+                let action = if output_visible
+                    || inspector.is_editing()
+                    || array_jumping
+                    || (array_focused && event.code == KeyCode::Esc)
+                {
+                    None
+                } else {
+                    debug_action_for_panel(event.code, event.modifiers, inspector.focused)
+                };
+                if let Some(action) = action {
+                    if is_debugger_ctrl_c(event.code, event.modifiers) {
+                        clear_interrupt_requested();
+                    }
+                    *breakpoints = editor.breakpoints;
+                    guard.finish(action)?;
+                    array_panel.follow_after_step = matches!(
+                        action,
+                        crate::debugger::DebugAction::StepInto
+                            | crate::debugger::DebugAction::StepOver
+                            | crate::debugger::DebugAction::StepOut
+                    );
+                    return Ok(action);
+                } else if let Some(view) = array_panel.view().filter(|_| array_receives_key) {
+                    if is_debugger_ctrl_c(event.code, event.modifiers) {
+                        clear_interrupt_requested();
+                        *breakpoints = editor.breakpoints;
+                        let action = crate::debugger::DebugAction::Abort;
+                        guard.finish(action)?;
+                        return Ok(action);
+                    }
+                    status_message = None;
+                    match view.handle_key(event, layout.panel_cols, layout.panel_rows) {
+                        ArrayViewAction::Stay => {}
+                        ArrayViewAction::Close => array_panel.close(),
+                        ArrayViewAction::ToggleFollow => {
+                            array_panel.follow_disabled = !array_panel.follow_disabled;
+                        }
+                        ArrayViewAction::JumpToWrite => {
+                            let indexes = access.last_array_write(&view.summary().name);
+                            view.jump_to_write(indexes, layout.panel_cols, layout.panel_rows);
+                        }
+                        ArrayViewAction::TogglePin(indexes) => {
+                            let name = &view.summary().name;
+                            match access.pin_array_cell(name, &indexes) {
+                                Ok(pin) => {
+                                    let pinned = inspector.toggle_cell_pin(pin, access);
+                                    view.set_message(if pinned {
+                                        "Cell pinned"
+                                    } else {
+                                        "Cell unpinned"
+                                    });
+                                }
+                                Err(message) => view.set_message(message),
+                            }
+                        }
+                    }
+                } else if inspector.is_editing() {
                     // Editing is a subview of this same synchronous pause. No
                     // execution key, panel navigation or output toggle escapes it.
                     if is_debugger_ctrl_c(event.code, event.modifiers) {
@@ -1316,7 +1498,6 @@ fn debug_fullscreen_with_idle_and_changes(
                         guard.finish(action)?;
                         return Ok(action);
                     }
-                    let layout = terminal_debug_layout();
                     if layout.has_inspector() || event.code == KeyCode::Esc {
                         if let Some((target, value)) = inspector.handle_edit_key(event) {
                             match access.set_variable(&target, value) {
@@ -1324,6 +1505,7 @@ fn debug_fullscreen_with_idle_and_changes(
                                     record_debug_edit_changes(changes, snapshot, &updated);
                                     *snapshot = updated;
                                     inspector.edit_committed();
+                                    inspector.refresh_cell_pins(access);
                                 }
                                 Err(message) => inspector.edit_failed(message),
                             }
@@ -1356,28 +1538,43 @@ fn debug_fullscreen_with_idle_and_changes(
                         DebugOutputKey::Ignore => {}
                     }
                 } else {
-                    if let Some(action) =
-                        debug_action_for_panel(event.code, event.modifiers, inspector.focused)
-                    {
-                        if is_debugger_ctrl_c(event.code, event.modifiers) {
-                            clear_interrupt_requested();
-                        }
-                        *breakpoints = editor.breakpoints;
-                        guard.finish(action)?;
-                        return Ok(action);
-                    }
                     status_message = None;
-                    let layout = terminal_debug_layout();
                     if matches!(event.code, KeyCode::Tab | KeyCode::BackTab) {
                         inspector.focused = layout.has_inspector() && !inspector.focused;
+                        if array_panel.is_open() && !inspector.focused {
+                            reveal_debug_selection(&mut editor, &navigation, layout.code_cols);
+                        }
                     } else if inspector.focused {
                         if event.code == KeyCode::Enter && event.modifiers.is_empty() {
-                            inspector.begin_edit(
+                            let summary = inspector.open_array(
                                 snapshot,
                                 changes,
                                 layout.panel_cols,
                                 layout.panel_rows,
                             );
+                            if let Some(summary) = summary {
+                                status_message = array_panel.open(summary, access).err();
+                                if array_panel.is_open()
+                                    && editor.current_line_number() == Some(snapshot.location.line)
+                                {
+                                    let cursor_line = editor.cursor_line;
+                                    reveal_debug_statement(
+                                        &mut editor,
+                                        cursor_line,
+                                        snapshot.location.statement,
+                                        snapshot.location.source_span.as_ref(),
+                                        terminal_debug_layout(true).code_cols,
+                                        false,
+                                    );
+                                }
+                            } else {
+                                inspector.begin_edit(
+                                    snapshot,
+                                    changes,
+                                    layout.panel_cols,
+                                    layout.panel_rows,
+                                );
+                            }
                         } else {
                             inspector.handle_key(
                                 event.code,
@@ -1462,7 +1659,7 @@ fn debug_fullscreen_with_idle_and_changes(
                 }
             }
             Event::Resize(cols, rows) => {
-                let layout = debug_layout(cols.max(1) as usize, rows.max(1) as usize);
+                let layout = debug_layout(cols as usize, rows as usize, array_panel.is_open());
                 if editor.current_line_number() == Some(snapshot.location.line) {
                     let cursor_line = editor.cursor_line;
                     reveal_debug_statement(
@@ -1482,14 +1679,24 @@ fn debug_fullscreen_with_idle_and_changes(
                 }
                 status_message = None;
             }
-            Event::Paste(text) if inspector.is_editing() => {
-                if terminal_debug_layout().has_inspector() {
-                    inspector.handle_edit_paste(&text);
+            Event::Paste(text) => {
+                let layout = terminal_debug_layout(array_panel.is_open());
+                if !output_visible && layout.has_inspector() {
+                    if inspector.focused {
+                        if let Some(view) = array_panel.view() {
+                            view.handle_paste(&text);
+                        }
+                    }
+                    if inspector.is_editing() {
+                        inspector.handle_edit_paste(&text);
+                    }
                 }
             }
             _ => {}
         }
-        edit_paste.set_enabled(inspector.is_editing())?;
+        edit_paste.set_enabled(
+            inspector.is_editing() || (inspector.focused && array_panel.is_jumping()),
+        )?;
         if !output_visible {
             render_fullscreen_debugger(
                 &mut editor,
@@ -1500,6 +1707,8 @@ fn debug_fullscreen_with_idle_and_changes(
                 inspector,
                 changes,
                 &navigation,
+                array_panel,
+                access,
             )?;
         }
     }
@@ -1635,8 +1844,17 @@ fn debug_action_for_panel(
     modifiers: KeyModifiers,
     inspector_focused: bool,
 ) -> Option<crate::debugger::DebugAction> {
-    debug_action_for_key(code, modifiers)
-        .filter(|action| !inspector_focused || *action == crate::debugger::DebugAction::Abort)
+    use crate::debugger::DebugAction;
+    debug_action_for_key(code, modifiers).filter(|action| {
+        !inspector_focused
+            || matches!(
+                action,
+                DebugAction::StepInto
+                    | DebugAction::StepOver
+                    | DebugAction::StepOut
+                    | DebugAction::Abort
+            )
+    })
 }
 
 fn debug_action_for_key(
@@ -1668,17 +1886,30 @@ fn debug_location_status(snapshot: &crate::debugger::DebugSnapshot) -> String {
     let label = crate::labels::label_definition(code)
         .map(|name| format!(" ({name})"))
         .unwrap_or_default();
-    format!(
+    let location = format!(
         "Ln {}{label} Stmt {}",
         snapshot.location.line,
         snapshot.location.statement + 1
-    )
+    );
+    match snapshot
+        .location
+        .source_path
+        .as_deref()
+        .and_then(Path::file_name)
+    {
+        Some(filename) => {
+            let filename = filename.to_string_lossy().replace(char::is_control, "?");
+            format!("{filename} | {location}")
+        }
+        None => location,
+    }
 }
 
 fn debug_status(
     snapshot: &crate::debugger::DebugSnapshot,
     has_inspector: bool,
     inspector: &InspectorState,
+    array_visible: bool,
     width: usize,
 ) -> String {
     if inspector.is_editing() {
@@ -1702,6 +1933,22 @@ fn debug_status(
     }
     let location = debug_location_status(snapshot);
     let reason = debug_pause_reason_label(snapshot.reason);
+    if array_visible && inspector.focused {
+        let keys = "ARRAY | Tab Code F6/F7/F8 Step Esc Arrays";
+        let full = format!("{reason} | {location} | {keys}");
+        return if full.chars().count() <= width {
+            full
+        } else {
+            keys.into()
+        };
+    }
+    let tab = if array_visible {
+        "Tab Array "
+    } else if has_inspector {
+        "Tab Inspect "
+    } else {
+        ""
+    };
     let focus = if has_inspector && inspector.focused {
         let hint = inspector.status_hint();
         let hint = if hint.is_empty() {
@@ -1709,12 +1956,14 @@ fn debug_status(
         } else {
             format!("{hint} ")
         };
-        let inspect = format!("INSPECT | Tab Code {hint}↑↓←→ PgUp/PgDn Scroll Esc Abort");
+        let inspect =
+            format!("INSPECT | Tab Code {hint}↑↓←→ PgUp/PgDn Scroll F6/F7/F8 Step Esc Abort");
         let full = format!("{reason} | {location} | {inspect}");
         for status in [
             full,
             inspect,
-            format!("INSPECT | Tab Code {hint}↑↓←→ PgUp/PgDn Esc"),
+            format!("INSPECT | Tab Code {hint}↑↓←→ F6/F7/F8 Step Esc"),
+            format!("Tab Code F6/F7/F8 Step Esc"),
             format!("Tab Code {hint}Esc"),
         ] {
             if status.chars().count() <= width {
@@ -1722,10 +1971,8 @@ fn debug_status(
             }
         }
         return String::from("Tab Code Esc");
-    } else if has_inspector {
-        String::from("CODE | Tab Inspect F2 Break")
     } else {
-        String::from("CODE | F2 Break")
+        format!("CODE | {tab}F2 Break")
     };
     let full = format!(
         "{reason} | {location} | {focus} | F3 Set next F4 Output F5 Go F6 Into F7 Over F8 Out F9 Restart Esc Abort"
@@ -1734,7 +1981,6 @@ fn debug_status(
         return full;
     }
     let compact_actions = "F2 Brk F3 Set F4 Out F5 Go F6/F7/F8 Step F9 Restart Esc";
-    let tab = if has_inspector { "Tab Inspect " } else { "" };
     for status in [
         format!("{location} | CODE | {tab}{compact_actions}"),
         format!("{location} | {tab}F2 Brk F3 Set F4 Out F5 Go F6/7/8 F9 Rst Esc"),
@@ -3694,7 +3940,7 @@ impl DebugLayout {
     }
 }
 
-fn debug_layout(cols: usize, rows: usize) -> DebugLayout {
+fn debug_layout(cols: usize, rows: usize, array_open: bool) -> DebugLayout {
     let cols = cols.max(1);
     let rows = rows.max(1);
     let usable_rows = rows.saturating_sub(1);
@@ -3708,8 +3954,11 @@ fn debug_layout(cols: usize, rows: usize) -> DebugLayout {
     let (code_rows, panel_rows, code_region_cols, panel_cols, panel_x, panel_y) =
         match panel_placement {
             DebugPanelPlacement::Right => {
-                let panel_cols = (cols / 3).clamp(36, 48);
-                let code_region_cols = cols.saturating_sub(panel_cols + 1).max(1);
+                let mut panel_cols = (cols / 3).clamp(36, 48);
+                let mut code_region_cols = cols - panel_cols - 1;
+                if array_open {
+                    std::mem::swap(&mut panel_cols, &mut code_region_cols);
+                }
                 (
                     usable_rows.max(1),
                     usable_rows,
@@ -3720,15 +3969,12 @@ fn debug_layout(cols: usize, rows: usize) -> DebugLayout {
                 )
             }
             DebugPanelPlacement::Below => {
-                let panel_rows = (usable_rows / 3).clamp(4, 10);
-                (
-                    usable_rows.saturating_sub(panel_rows).max(1),
-                    panel_rows,
-                    cols,
-                    cols,
-                    0,
-                    usable_rows.saturating_sub(panel_rows),
-                )
+                let mut panel_rows = (usable_rows / 3).clamp(4, 10);
+                let mut code_rows = usable_rows - panel_rows;
+                if array_open {
+                    std::mem::swap(&mut panel_rows, &mut code_rows);
+                }
+                (code_rows, panel_rows, cols, cols, 0, code_rows)
             }
             DebugPanelPlacement::Hidden => (usable_rows.max(1), 0, cols, 0, 0, 0),
         };
@@ -3747,9 +3993,9 @@ fn debug_layout(cols: usize, rows: usize) -> DebugLayout {
     }
 }
 
-fn terminal_debug_layout() -> DebugLayout {
+fn terminal_debug_layout(array_open: bool) -> DebugLayout {
     let (cols, rows) = size().unwrap_or((80, 24));
-    debug_layout(cols.max(1) as usize, rows.max(1) as usize)
+    debug_layout(cols as usize, rows as usize, array_open)
 }
 
 fn render_fullscreen_debugger(
@@ -3761,15 +4007,16 @@ fn render_fullscreen_debugger(
     inspector: &mut InspectorState,
     changes: &DebugPanelChanges,
     navigation: &DebugCodeSelection,
+    array_panel: &mut DebugArrayPanel,
+    access: &dyn crate::debugger::DebugPauseAccess,
 ) -> io::Result<()> {
     let (cols, rows) = size().unwrap_or((80, 24));
     let cols = cols.max(1) as usize;
     let rows = rows.max(1) as usize;
-    let layout = debug_layout(cols, rows);
+    let layout = debug_layout(cols, rows, array_panel.is_open());
     if !layout.has_inspector() && !inspector.is_editing() {
         inspector.focused = false;
     }
-    let panel = inspector.panel(snapshot, changes, layout.panel_cols, layout.panel_rows);
     let view_line_len = debug_viewed_line_len(editor, snapshot);
     editor.ensure_debug_view_visible(layout.code_cols, layout.code_rows, view_line_len);
     let render_cases = editor_identifier_cases(&editor.lines, cases);
@@ -3860,23 +4107,37 @@ fn render_fullscreen_debugger(
         }
     }
 
-    if layout.has_inspector() {
+    let array_visible = array_panel.is_open() && layout.has_inspector();
+    let follow_writes = !array_panel.follow_disabled;
+    let mut panel_cursor = None;
+    if layout.panel_placement == DebugPanelPlacement::Right {
+        for row in 0..layout.panel_rows {
+            queue!(stdout, MoveTo(layout.code_region_cols as u16, row as u16))?;
+            write!(stdout, "│")?;
+        }
+    }
+    if let Some(view) = array_panel.view().filter(|_| array_visible) {
+        panel_cursor = view.render_panel(
+            &mut stdout,
+            access,
+            ansi,
+            (
+                layout.panel_x as u16,
+                layout.panel_y as u16,
+                layout.panel_cols as u16,
+                layout.panel_rows as u16,
+            ),
+            inspector.focused,
+            follow_writes,
+        )?;
+    } else if layout.has_inspector() {
+        let panel = inspector.panel(snapshot, changes, layout.panel_cols, layout.panel_rows);
         let panel_lines = panel.render_lines(ansi, current_syntax_theme());
         let blank = " ".repeat(layout.panel_cols);
         for panel_row in 0..layout.panel_rows {
             let screen_row = layout.panel_y + panel_row;
             if screen_row >= layout.status_row {
                 break;
-            }
-            if layout.panel_placement == DebugPanelPlacement::Right {
-                queue!(
-                    stdout,
-                    MoveTo(
-                        layout.code_region_cols.min(u16::MAX as usize) as u16,
-                        screen_row.min(u16::MAX as usize) as u16
-                    )
-                )?;
-                write!(stdout, "│")?;
             }
             queue!(
                 stdout,
@@ -3890,6 +4151,11 @@ fn render_fullscreen_debugger(
                 .map_or(blank.as_str(), String::as_str);
             write!(stdout, "{line}")?;
         }
+        panel_cursor = panel.edit_cursor().and_then(|(x, y)| {
+            let row = y.checked_sub(inspector.scroll)?;
+            (x < layout.panel_cols && row < layout.panel_rows)
+                .then_some(((layout.panel_x + x) as u16, (layout.panel_y + row) as u16))
+        });
     }
 
     queue!(
@@ -3899,7 +4165,13 @@ fn render_fullscreen_debugger(
     let status = if let Some(message) = status_message.filter(|_| !inspector.is_editing()) {
         debug_status_message(snapshot, message)
     } else {
-        debug_status(snapshot, layout.has_inspector(), inspector, cols)
+        debug_status(
+            snapshot,
+            layout.has_inspector(),
+            inspector,
+            array_visible,
+            cols,
+        )
     };
     let status_text = fit_plain_text(&status, cols);
     if ansi {
@@ -3908,22 +4180,8 @@ fn render_fullscreen_debugger(
     } else {
         write!(stdout, "{status_text}")?;
     }
-    if layout.has_inspector() {
-        if let Some((x, y)) = panel.edit_cursor() {
-            if x < layout.panel_cols
-                && y >= inspector.scroll
-                && y - inspector.scroll < layout.panel_rows
-            {
-                let screen_y = layout.panel_y + y - inspector.scroll;
-                if screen_y < layout.status_row {
-                    queue!(
-                        stdout,
-                        MoveTo((layout.panel_x + x) as u16, screen_y as u16),
-                        Show
-                    )?;
-                }
-            }
-        }
+    if let Some((x, y)) = panel_cursor {
+        queue!(stdout, MoveTo(x, y), Show)?;
     }
     stdout.flush()
 }
@@ -4945,14 +5203,21 @@ fn normalize_main_code_for_editing_marked(code: &str) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextualImmediateCommand {
     Help,
+    Pack,
 }
 
 fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand> {
     if is_help_immediate_line(line) {
-        Some(ContextualImmediateCommand::Help)
-    } else {
-        None
+        return Some(ContextualImmediateCommand::Help);
     }
+    let line = line.trim();
+    if !line.get(..4)?.eq_ignore_ascii_case("PACK") {
+        return None;
+    }
+    let rest = &line[4..];
+    (rest.is_empty()
+        || (rest.starts_with(char::is_whitespace) && rest.trim_start().starts_with('"')))
+    .then_some(ContextualImmediateCommand::Pack)
 }
 
 pub(crate) fn is_help_immediate_line(line: &str) -> bool {
@@ -4975,6 +5240,39 @@ pub(crate) fn is_help_immediate_line(line: &str) -> bool {
         return true;
     }
     !topic.contains(['=', ':', '\''])
+}
+
+fn highlight_help_topic(line: &str, palette: SyntaxPalette) -> Option<String> {
+    let command_start = line.len() - line.trim_start().len();
+    let command_end = command_start + "HELP".len();
+    let topic_start = line.len() - line[command_end..].trim_start().len();
+    let topic_end = line.trim_end().len();
+    let topic = line.get(topic_start..topic_end)?;
+    let key = help::normalized_key(topic);
+    let entry = language::topic(&key)?;
+    let style = if matches!(
+        entry.kind,
+        language::TopicKind::Statement | language::TopicKind::Metacommand
+    ) || language::is_keyword(&key)
+    {
+        palette.keyword
+    } else {
+        palette.other
+    };
+    let topic_upper = topic.to_ascii_uppercase();
+    let mut out = String::new();
+    for (text, style) in [
+        (&line[..command_start], palette.other),
+        ("HELP", palette.keyword),
+        (&line[command_end..topic_start], palette.other),
+        (topic_upper.as_str(), style),
+        (&line[topic_end..], palette.other),
+    ] {
+        if !text.is_empty() {
+            push_styled(&mut out, style, text);
+        }
+    }
+    Some(out)
 }
 
 fn uppercase_leading_help(line: &mut String) {
@@ -5000,10 +5298,14 @@ fn uppercase_leading_help(line: &mut String) {
         .collect();
 }
 
-fn is_contextual_screen_keyword(word: &str, chars: &[char], start: usize) -> bool {
-    if !word.eq_ignore_ascii_case("FULL") && !word.eq_ignore_ascii_case("SYNC") {
+fn is_contextual_subcommand(word: &str, chars: &[char], start: usize) -> bool {
+    let command = if word.eq_ignore_ascii_case("FULL") || word.eq_ignore_ascii_case("SYNC") {
+        "SCREEN"
+    } else if word.eq_ignore_ascii_case("DEL") {
+        "SPRITE"
+    } else {
         return false;
-    }
+    };
     let skip_space = |mut end: usize| {
         while end > 0 && (chars[end - 1].is_whitespace() || chars[end - 1] == CURSOR_MARKER) {
             end -= 1;
@@ -5022,12 +5324,12 @@ fn is_contextual_screen_keyword(word: &str, chars: &[char], start: usize) -> boo
             .filter(|ch| **ch != CURSOR_MARKER)
             .collect::<String>()
     };
-    let screen_end = skip_space(start);
-    let screen_start = word_start(screen_end);
-    if !word(screen_start, screen_end).eq_ignore_ascii_case("SCREEN") {
+    let command_end = skip_space(start);
+    let command_start = word_start(command_end);
+    if !word(command_start, command_end).eq_ignore_ascii_case(command) {
         return false;
     }
-    let before = skip_space(screen_start);
+    let before = skip_space(command_start);
     if before == 0 || chars[before - 1] == ':' {
         return true;
     }
@@ -5036,17 +5338,55 @@ fn is_contextual_screen_keyword(word: &str, chars: &[char], start: usize) -> boo
         return true;
     }
     // A line number is also a statement boundary. The caller already excludes
-    // strings, DATA and comments; FULL and SYNC remain identifiers elsewhere.
+    // strings, DATA and comments; these words remain identifiers elsewhere.
     chars[..before]
         .iter()
         .filter(|ch| **ch != CURSOR_MARKER)
         .all(|ch| ch.is_ascii_digit() || ch.is_whitespace())
 }
 
+fn is_contextual_import_keyword(word: &str, chars: &[char], start: usize, end: usize) -> bool {
+    word.eq_ignore_ascii_case("IMPORT")
+        && chars[..start]
+            .iter()
+            .all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || *ch == CURSOR_MARKER)
+        && matches!(
+            chars[end..]
+                .iter()
+                .copied()
+                .find(|ch| !ch.is_whitespace() && *ch != CURSOR_MARKER),
+            None | Some('"')
+        )
+}
+
+pub(crate) fn import_alias_offset(source: &str) -> Option<usize> {
+    let code = split_line_number(source).map_or(source, |(_, code)| code);
+    let code = code.trim_start();
+    if !code.get(..6)?.eq_ignore_ascii_case("IMPORT") {
+        return None;
+    }
+    let path = code[6..].trim_start().strip_prefix('"')?;
+    let (_, tail) = path.split_once('"')?;
+    let tail = tail.strip_prefix(char::is_whitespace)?.trim_start();
+    if !tail.get(..2)?.eq_ignore_ascii_case("AS") {
+        return None;
+    }
+    let alias = tail[2..].strip_prefix(char::is_whitespace)?.trim_start();
+    alias
+        .starts_with(is_ident_start)
+        .then_some(source.len() - alias.len())
+}
+
+fn qualified_member_start(chars: &[char], end: usize) -> Option<usize> {
+    (chars.get(end) == Some(&'.') && chars.get(end + 1).copied().is_some_and(is_ident_start))
+        .then_some(end + 1)
+}
+
 fn normalize_main_code_inner(code: &str, editing: bool) -> String {
     let mut out = String::new();
     let chars: Vec<char> = code.chars().collect();
-    let label_spans = control_label_spans(&chars);
+    let code_spans = contextual_code_spans(&chars);
+    let import_alias = import_alias_offset(code).map(|offset| code[..offset].chars().count());
     let mut i = 0usize;
     while i < chars.len() {
         let ch = chars[i];
@@ -5098,7 +5438,10 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                 .map(|ch| ch.to_ascii_uppercase())
                 .collect();
             let displayed_word = if editing { &word } else { &upper };
-            if label_spans.contains(&(start, i)) {
+            if code_spans.labels.contains(&(start, i))
+                || import_alias == Some(start)
+                || qualified_member_start(&chars, i).is_some()
+            {
                 out.push_str(&word);
             } else if upper == "REM" && token_boundary(&chars, start, i) {
                 out.push_str(displayed_word);
@@ -5124,7 +5467,11 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                     out.push(ch);
                     i += 1;
                 }
-            } else if (is_known_word(&upper) || is_contextual_screen_keyword(&upper, &chars, start))
+            } else if (is_known_word(&upper)
+                || code_spans.rgba.contains(&start)
+                || code_spans.map_calls.contains(&start)
+                || is_contextual_subcommand(&upper, &chars, start)
+                || is_contextual_import_keyword(&upper, &chars, start, i))
                 && token_boundary(&chars, start, i)
             {
                 out.push_str(displayed_word);
@@ -5133,6 +5480,7 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                     "LOAD"
                         | "SAVE"
                         | "RUN"
+                        | "IMPORT"
                         | "CHAIN"
                         | "MERGE"
                         | "CAT"
@@ -5620,11 +5968,12 @@ fn increment_fixed_decimal(int_part: &str, frac_part: &str, frac_width: usize) -
 fn highlight_main(
     text: &str,
     palette: SyntaxPalette,
-    contextual_immediate: Option<ContextualImmediateCommand>,
+    mut contextual_immediate: Option<ContextualImmediateCommand>,
 ) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
-    let label_spans = control_label_spans(&chars);
+    let code_spans = contextual_code_spans(&chars);
+    let import_alias = import_alias_offset(text).map(|offset| text[..offset].chars().count());
     let mut i = 0usize;
     let mut after_def = false;
     let mut expect_sub_name = false;
@@ -5655,13 +6004,46 @@ fn highlight_main(
             }
             let word: String = chars[start..i].iter().collect();
             let upper = word.to_ascii_uppercase();
-            if contextual_immediate == Some(ContextualImmediateCommand::Help)
-                && upper == "HELP"
-                && chars[..start].iter().all(|ch| ch.is_whitespace())
-            {
-                push_styled(&mut out, palette.keyword, "HELP");
-            } else if label_spans.contains(&(start, i)) {
+            let contextual_keyword = match contextual_immediate {
+                Some(ContextualImmediateCommand::Help) => {
+                    upper == "HELP" && chars[..start].iter().all(|ch| ch.is_whitespace())
+                }
+                Some(ContextualImmediateCommand::Pack) => {
+                    matches!(upper.as_str(), "ID" | "INCLUDE" | "PERSIST" | "GUI")
+                        || (upper == "PACK" && chars[..start].iter().all(|ch| ch.is_whitespace()))
+                }
+                None => false,
+            };
+            if contextual_keyword {
+                push_styled(&mut out, palette.keyword, &upper);
+            } else if code_spans.labels.contains(&(start, i)) {
                 push_styled(&mut out, palette.label, &word);
+                after_def = false;
+            } else if import_alias == Some(start) {
+                push_styled(&mut out, palette.import_alias, &word);
+            } else if let Some(member_start) = qualified_member_start(&chars, i)
+                .filter(|_| !word.contains('$'))
+                .filter(|&member_start| {
+                    expect_sub_name || matches!(chars[member_start..], ['F' | 'f', 'N' | 'n', ..])
+                })
+            {
+                push_styled(&mut out, palette.import_alias, &word);
+                push_styled(&mut out, palette.other, ".");
+                i = member_start + 1;
+                while i < chars.len() && is_ident_char(chars[i]) {
+                    i += 1;
+                }
+                let member: String = chars[member_start..i]
+                    .iter()
+                    .map(char::to_ascii_uppercase)
+                    .collect();
+                let style = if expect_sub_name {
+                    palette.keyword
+                } else {
+                    palette.other
+                };
+                push_styled(&mut out, style, &member);
+                expect_sub_name = false;
                 after_def = false;
             } else if expect_sub_name {
                 push_styled(&mut out, palette.keyword, &upper);
@@ -5711,7 +6093,9 @@ fn highlight_main(
                 }
                 after_def = false;
             } else if language::is_keyword(&upper)
-                || is_contextual_screen_keyword(&upper, &chars, start)
+                || code_spans.rgba.contains(&start)
+                || is_contextual_subcommand(&upper, &chars, start)
+                || is_contextual_import_keyword(&upper, &chars, start, i)
             {
                 push_styled(&mut out, palette.keyword, &upper);
                 if upper == "DEF" {
@@ -5722,7 +6106,10 @@ fn highlight_main(
                 } else if after_def {
                     after_def = false;
                 }
-            } else if is_non_reserved_known_word(&upper) || upper.starts_with("FN") {
+            } else if is_non_reserved_known_word(&upper)
+                || code_spans.map_calls.contains(&start)
+                || upper.starts_with("FN")
+            {
                 push_styled(&mut out, palette.other, &upper);
                 after_def = false;
             } else {
@@ -5783,6 +6170,9 @@ fn highlight_main(
                 );
             }
             continue;
+        }
+        if ch == ':' && contextual_immediate == Some(ContextualImmediateCommand::Pack) {
+            contextual_immediate = None;
         }
         let other = ch.to_string();
         push_styled(&mut out, palette.other, &other);
@@ -5896,7 +6286,35 @@ fn is_label_declaration(source: &str) -> bool {
     crate::labels::label_definition(code).is_some()
 }
 
-fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
+#[derive(Default)]
+struct ContextualCodeSpans {
+    labels: Vec<(usize, usize)>,
+    rgba: Vec<usize>,
+    map_calls: Vec<usize>,
+}
+
+fn mat_expression_start(after_mat: &str) -> Option<usize> {
+    let target = after_mat.strip_prefix(char::is_whitespace)?.trim_start();
+    if !target.starts_with(is_ident_start) {
+        return None;
+    }
+    let after_target = target.trim_start_matches(is_ident_char).trim_start();
+    let expression = after_target.strip_prefix('=')?;
+    Some(after_mat.len() - expression.len())
+}
+
+fn is_mat_map_call(after_map: &str) -> bool {
+    let Some(args) = after_map.trim_start().strip_prefix('(') else {
+        return false;
+    };
+    let args = args.trim_start();
+    let after_selector = args.trim_start_matches(is_ident_char);
+    let selector = &args[..args.len() - after_selector.len()];
+    after_selector.trim_start().starts_with(',')
+        && crate::interpreter::is_mat_map_function(&selector.to_ascii_uppercase())
+}
+
+fn contextual_code_spans(chars: &[char]) -> ContextualCodeSpans {
     // Resolve the same operand ranges as the interpreter. Keep a map back to
     // the editor's character coordinates: its invisible caret is not syntax.
     let positions: Vec<_> = chars
@@ -5908,10 +6326,21 @@ fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
     let (_, code) = split_line_number(&source).unwrap_or(("", &source));
     let mut start = source.len() - code.len();
     let mut shorthand = false;
-    let mut spans = Vec::new();
-    let mut add_command = |start: usize, end: usize, shorthand: bool| {
+    let mut spans = ContextualCodeSpans::default();
+    let mut add_command = |start: usize, end: usize, shorthand: bool, as_end: Option<usize>| {
         let command = &source[start..end];
         let trimmed = command.trim();
+        if let Some(as_end) = as_end {
+            let suffix = source[as_end..end].trim_start();
+            if suffix.trim_end().eq_ignore_ascii_case("RGBA")
+                && trimmed
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|word| word.eq_ignore_ascii_case("BLOAD"))
+            {
+                spans.rgba.push(positions[source[..end - suffix.len()].chars().count()]);
+            }
+        }
         let ranges = if shorthand && crate::labels::label_identifier(trimmed) {
             let left = command.len() - command.trim_start().len();
             vec![left..left + trimmed.len()]
@@ -5926,7 +6355,7 @@ fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
             let last = first + command[range].chars().count();
             if let Some(&first) = positions.get(first) {
                 let last = positions.get(last).copied().unwrap_or(chars.len());
-                spans.push((first, last));
+                spans.labels.push((first, last));
             }
         }
     };
@@ -5934,6 +6363,8 @@ fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
     let mut index = start;
     let mut depth = 0usize;
     let mut data = false;
+    let mut as_end = None;
+    let mut mat_expression = None;
     while index < bytes.len() {
         match bytes[index] {
             b'\'' => break,
@@ -5948,12 +6379,13 @@ fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
                 }
             }
             b':' if data || depth == 0 => {
-                add_command(start, index, shorthand);
+                add_command(start, index, shorthand, as_end.take());
                 index += 1;
                 start = index;
                 shorthand = false;
                 data = false;
                 depth = 0;
+                mat_expression = None;
             }
             b'(' | b'[' if !data => {
                 depth += 1;
@@ -5982,15 +6414,33 @@ fn control_label_spans(chars: &[char]) -> Vec<(usize, usize)> {
                 if word == "DATA" {
                     data = true;
                 } else if depth == 0 && matches!(word.as_str(), "THEN" | "ELSE") {
-                    add_command(start, word_start, shorthand);
+                    add_command(start, word_start, shorthand, as_end.take());
                     start = index;
                     shorthand = true;
+                    mat_expression = None;
+                } else if word == "MAT" && source[start..word_start].trim().is_empty() {
+                    mat_expression =
+                        mat_expression_start(&source[index..]).map(|relative| index + relative);
+                } else if word == "MAP"
+                    && mat_expression.is_some_and(|rhs| word_start >= rhs)
+                    && bytes.get(word_start.wrapping_sub(1)) != Some(&b'.')
+                    && is_mat_map_call(&source[index..])
+                {
+                    spans
+                        .map_calls
+                        .push(positions[source[..word_start].chars().count()]);
+                } else if depth == 0
+                    && word == "AS"
+                    && source[..word_start].ends_with(char::is_whitespace)
+                    && source[index..].starts_with(char::is_whitespace)
+                {
+                    as_end.get_or_insert(index);
                 }
             }
             _ => index += 1,
         }
     }
-    add_command(start, index, shorthand);
+    add_command(start, index, shorthand, as_end);
     spans
 }
 
@@ -6000,12 +6450,9 @@ fn split_single_quote_comment(text: &str) -> (&str, Option<(usize, &str)>) {
         if ch == '"' {
             in_string = !in_string;
         } else if ch == '\'' && !in_string {
-            let spaces = text[..idx]
-                .chars()
-                .rev()
-                .take_while(|ch| ch.is_whitespace())
-                .count();
-            return (&text[..idx - spaces], Some((spaces, &text[idx + 1..])));
+            let main = text[..idx].trim_end_matches(char::is_whitespace);
+            let spaces = text[main.len()..idx].chars().count();
+            return (main, Some((spaces, &text[idx + 1..])));
         }
     }
     (text, None)
@@ -6035,7 +6482,8 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
     }
     let mut out = String::with_capacity(source.len());
     let chars: Vec<char> = source.chars().collect();
-    let label_spans = control_label_spans(&chars);
+    let code_spans = contextual_code_spans(&chars);
+    let import_alias = import_alias_offset(source).map(|offset| source[..offset].chars().count());
     let mut i = 0usize;
     let mut in_string = false;
     let mut in_data = false;
@@ -6068,9 +6516,17 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
             } else if word.eq_ignore_ascii_case("DATA") && token_boundary(&chars, start, i) {
                 out.push_str(&word);
                 in_data = true;
-            } else if label_spans.contains(&(start, i)) {
+            } else if code_spans.labels.contains(&(start, i))
+                || import_alias == Some(start)
+                || chars.get(start.wrapping_sub(1)) == Some(&'.')
+                || chars.get(i) == Some(&'.')
+            {
                 out.push_str(&word);
-            } else if is_contextual_screen_keyword(&word, &chars, start) {
+            } else if is_contextual_subcommand(&word, &chars, start)
+                || is_contextual_import_keyword(&word, &chars, start, i)
+                || code_spans.rgba.contains(&start)
+                || code_spans.map_calls.contains(&start)
+            {
                 out.push_str(&word);
             } else if let Some(display) = cases.get(&word.to_ascii_uppercase()) {
                 out.push_str(display);
@@ -6145,6 +6601,29 @@ mod tests {
             }
         }
         result
+    }
+
+    #[test]
+    fn numbered_diagnostic_highlights_source_separately_from_error_and_underline() {
+        let source = "120\tPRINT \"é\" : PRINT 1/0 ' comment";
+        let start = source.find("PRINT 1/0").unwrap();
+        let mut error = BasicError::new(crate::ErrorCode::DivisionByZero)
+            .at_line(120)
+            .with_statement(source, start..start + "PRINT 1/0".len());
+        error.source_path = Some("library.bas".into());
+        let plain = error.display_diagnostic();
+        assert_eq!(error_diagnostic_text(false, &error), plain);
+
+        let rendered = error_diagnostic_text(true, &error);
+        let lines: Vec<_> = rendered.lines().collect();
+        let plain_lines: Vec<_> = plain.lines().collect();
+        assert_eq!(lines[0], error_text(true, plain_lines[0]));
+        assert_eq!(
+            lines[1],
+            syntax_highlight_raw_with_cases(plain_lines[1], true, None)
+        );
+        assert!(!lines[1].contains(current_syntax_palette().error));
+        assert_eq!(lines[2], error_text(true, plain_lines[2]));
     }
 
     #[test]
@@ -6369,7 +6848,7 @@ mod tests {
             for position in 0..=original.len() {
                 let mut editing = original.clone();
                 editing.insert(position, CURSOR_MARKER);
-                let spans = control_label_spans(&editing);
+                let spans = contextual_code_spans(&editing).labels;
                 let names: String = spans
                     .into_iter()
                     .flat_map(|(start, end)| editing[start..end].iter().copied())
@@ -7364,6 +7843,128 @@ mod tests {
     }
 
     #[test]
+    fn help_argument_uses_the_catalog_topic_style() {
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            for (topic, style) in [
+                ("goto", palette.keyword),
+                ("import", palette.keyword),
+                ("pack", palette.keyword),
+                ("screen   full", palette.keyword),
+                ("screen sync", palette.keyword),
+                ("else if", palette.keyword),
+                ("'", palette.keyword),
+                ("and", palette.other),
+                ("crop$", palette.other),
+                ("@", palette.other),
+                ("missingtopic", palette.variable),
+            ] {
+                let source = format!("  help {topic}");
+                let displayed = if style == palette.variable {
+                    topic.to_owned()
+                } else {
+                    topic.to_ascii_uppercase()
+                };
+                let token = format!("{style}{displayed}{RESET}");
+                let raw = highlight_ansi_line(&source, palette);
+                let normalized = syntax_highlight_with_theme_for_test(&source, theme);
+                assert!(raw.contains(&token), "{theme:?}: {source}: {raw:?}");
+                assert!(normalized.contains(&token), "{theme:?}: {source}: {normalized:?}");
+            }
+        }
+        assert!(!is_known_basic_word("PACK"));
+        assert!(!is_known_basic_word("IMPORT"));
+    }
+
+    #[test]
+    fn pack_highlights_contextual_keywords_in_the_prompt() {
+        let source = r#"  pack "samples/Target ID.bas" to "Dustline.exe" include "Persist/" persist "scores.csv" id "dustline" gui"#;
+        let keywords = ["PACK", "TO", "INCLUDE", "PERSIST", "ID", "GUI"];
+        let palette = current_syntax_palette();
+        let raw = syntax_highlight_raw_with_cases(source, true, None);
+        for keyword in keywords {
+            assert!(raw.contains(&format!("{}{keyword}{RESET}", palette.keyword)));
+        }
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let rendered = syntax_highlight_with_theme_for_test(source, theme);
+            for keyword in keywords {
+                assert!(rendered.contains(&format!("{}{keyword}{RESET}", palette.keyword)));
+            }
+            assert!(rendered.contains(&format!(
+                "{}\"samples/Target ID.bas\"{RESET}",
+                palette.string
+            )));
+        }
+
+        for source in [
+            "pack = id",
+            "10 pack \"program.bas\" include \"assets/\"",
+            "PRINT pack; target; include; persist; id; gui",
+        ] {
+            let rendered = syntax_highlight_raw_with_cases(source, true, None);
+            for keyword in keywords {
+                assert!(!rendered.contains(&format!("{}{keyword}{RESET}", palette.keyword)));
+            }
+        }
+        let partial = syntax_highlight_raw_with_cases("pack \"program.bas\" include", true, None);
+        assert!(partial.contains(&format!("{}INCLUDE{RESET}", palette.keyword)));
+        let removed = syntax_highlight_raw_with_cases("pack \"program.bas\" target", true, None);
+        assert!(removed.contains(&format!("{}target{RESET}", palette.variable)));
+        let separated =
+            syntax_highlight_raw_with_cases("pack \"program.bas\": PRINT include", true, None);
+        assert!(separated.contains(&format!("{}include{RESET}", palette.variable)));
+    }
+
+    #[test]
+    fn mat_map_has_function_style_inside_mat_expressions() {
+        let source =
+            r#"10 if name$="π" then mat a=trn(map(abs, map(int,a*10)))*2 else mat a=map(sin,b)"#;
+        let normalized =
+            r#"10 IF name$="π" THEN MAT a=TRN(MAP(ABS, MAP(INT,a*10)))*2 ELSE MAT a=MAP(SIN,b)"#;
+        assert_eq!(normalize_code(source), normalized);
+        let cases = HashMap::from([("MAP".to_string(), "Map".to_string())]);
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let mat = format!("{}MAT{RESET}", palette.keyword);
+            let map = format!("{}MAP{RESET}", palette.other);
+            let int = format!("{}INT{RESET}", palette.other);
+            assert_eq!(
+                highlight_ansi_line(source, palette).matches(&mat).count(),
+                2
+            );
+            for code in [source, &apply_identifier_case_for_display(source, &cases)] {
+                let highlighted = highlight_ansi_line(code, palette);
+                assert_eq!(highlighted.matches(&map).count(), 3, "{highlighted:?}");
+                assert!(highlighted.contains(&int), "{highlighted:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn mat_map_highlighting_keeps_other_map_identifiers() {
+        let palette = DARK_SYNTAX_PALETTE;
+        let map = format!("{}MAP{RESET}", palette.other);
+        let variable = format!("{}map{RESET}", palette.variable);
+        for source in [
+            "dim map(2) : print map(1)",
+            "mat map=a : mat a=map",
+            "mat a=int(map(1))",
+            "mat a=map(int,b) : print map(1)",
+            "print map(1) : rem mat a=map(int,b)",
+            "data mat a=map(int,b) : print map(1)",
+        ] {
+            let highlighted = highlight_ansi_line(source, palette);
+            assert!(highlighted.contains(&variable), "{source}: {highlighted:?}");
+            assert_eq!(
+                highlighted.matches(&map).count(),
+                usize::from(source.starts_with("mat a=map(int,b)")),
+                "{source}: {highlighted:?}"
+            );
+        }
+    }
+
+    #[test]
     fn screen_subcommands_are_contextual_keywords_in_both_syntax_themes() {
         for name in ["full", "sync"] {
             let keyword = name.to_ascii_uppercase();
@@ -7505,6 +8106,50 @@ mod tests {
     }
 
     #[test]
+    fn rgba_is_contextual_to_the_bload_suffix() {
+        let source = r#"10 IF ready THEN bload "ñ:AS.png",image$ as rgba ELSE PRINT rgba"#;
+        assert_eq!(
+            normalize_code(source),
+            r#"10 IF ready THEN BLOAD "ñ:AS.png",image$ AS RGBA ELSE PRINT rgba"#
+        );
+        let palette = current_syntax_palette();
+        let cases = HashMap::from([("RGBA".to_owned(), "Rgba".to_owned())]);
+        let styled = syntax_highlight_raw_with_cases(source, true, Some(&cases));
+        let keyword = format!("{}RGBA{RESET}", palette.keyword);
+        assert_eq!(styled.matches(&keyword).count(), 1, "{styled:?}");
+        assert!(styled.contains(&format!("{}Rgba{RESET}", palette.variable)));
+
+        let after_data = r#"10 DATA BLOAD image$,AS rgba : BLOAD image$,image$ AS rgba ' AS rgba"#;
+        let styled = syntax_highlight_raw_with_cases(after_data, true, None);
+        assert_eq!(styled.matches(&keyword).count(), 1, "{styled:?}");
+        for source in [
+            r#"BLOAD "AS RGBA",image$ : PRINT rgba"#,
+            "BLOAD image$,PIC$(AS rgba)",
+            "rgba = 5",
+        ] {
+            assert!(
+                !syntax_highlight_raw_with_cases(source, true, None).contains(&keyword),
+                "{source}"
+            );
+        }
+        assert!(!language::is_reserved_base_name("RGBA"));
+    }
+
+    #[test]
+    fn del_is_contextual_to_the_sprite_subcommand() {
+        let source = "10 IF expired THEN sprite del id ELSE PRINT del";
+        assert_eq!(
+            normalize_code(source),
+            "10 IF expired THEN SPRITE DEL id ELSE PRINT del"
+        );
+        let palette = current_syntax_palette();
+        let styled = syntax_highlight_raw_with_cases(source, true, None);
+        assert!(styled.contains(&format!("{}DEL{RESET}", palette.keyword)));
+        assert!(styled.contains(&format!("{}del{RESET}", palette.variable)));
+        assert!(!language::is_reserved_base_name("DEL"));
+    }
+
+    #[test]
     fn alpha_is_highlighted_and_normalized_as_a_reserved_keyword() {
         let source = "10 FRECTANGLE 0,0,20,20 alpha Opacity:PRINT \"alpha\" ' alpha";
         for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
@@ -7525,6 +8170,112 @@ mod tests {
         );
         assert_eq!(normalize_code("alphabet=7"), "alphabet=7");
         assert!(is_known_basic_word("ALPHA"));
+    }
+
+    #[test]
+    fn import_is_normalized_only_in_a_declaration() {
+        assert_eq!(normalize_code("10 import=5"), "10 import=5");
+        assert_eq!(normalize_code("10 import"), "10 IMPORT");
+        assert_eq!(
+            normalize_code("10 import \"Timing.bas\" as Timing"),
+            "10 IMPORT \"Timing.bas\" AS Timing"
+        );
+    }
+
+    #[test]
+    fn import_is_highlighted_before_its_filename_is_typed() {
+        let palette = current_syntax_palette();
+        let keyword = format!("{}IMPORT{RESET}", palette.keyword);
+        for source in ["import", "10 iMpOrT", "10 import ", "10 import \""] {
+            let rendered = syntax_highlight_raw_with_cases(source, true, None);
+            assert!(rendered.contains(&keyword), "{source}: {rendered:?}");
+        }
+        for source in [
+            "10 iMpOrT=5",
+            "10 iMpOrT = 5",
+            "10 iMpOrT$=\"value\"",
+            "10 PRINT iMpOrT",
+            "10 DATA iMpOrT",
+            "10 REM iMpOrT",
+        ] {
+            let rendered = syntax_highlight_raw_with_cases(source, true, None);
+            assert!(!rendered.contains(&keyword), "{source}: {rendered:?}");
+        }
+        let assignment = syntax_highlight_raw_with_cases("10 iMpOrT = 5", true, None);
+        assert!(assignment.contains(&format!("{}iMpOrT{RESET}", palette.variable)));
+    }
+
+    #[test]
+    fn import_alias_and_qualified_routines_have_distinct_styles_in_both_themes() {
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            assert_ne!(palette.import_alias, palette.variable);
+            assert_ne!(palette.import_alias, palette.keyword);
+            assert_ne!(palette.import_alias, palette.other);
+            assert_ne!(palette.import_alias, palette.label);
+            let alias = format!("{}Automata{RESET}", palette.import_alias);
+
+            let declaration = syntax_highlight_with_theme_for_test(
+                r#"10 import "automata.bas" as Automata"#,
+                theme,
+            );
+            assert!(declaration.contains(&alias), "{declaration:?}, {theme:?}");
+
+            let call = syntax_highlight_with_theme_for_test(
+                "20 IF X THEN CALL Automata.NextGeneration(A)",
+                theme,
+            );
+            let ordinary_call =
+                syntax_highlight_with_theme_for_test("20 CALL NextGeneration(A)", theme);
+            let subroutine = format!("{}NEXTGENERATION{RESET}", palette.keyword);
+            assert!(call.contains(&alias), "{call:?}, {theme:?}");
+            assert!(call.contains(&subroutine), "{call:?}, {theme:?}");
+            assert!(ordinary_call.contains(&subroutine));
+
+            let expression = syntax_highlight_with_theme_for_test(
+                r#"30 PRINT Automata.FnCell(1);"Automata.FnCell(1)" ' Automata.FnCell(1)"#,
+                theme,
+            );
+            let ordinary_function =
+                syntax_highlight_with_theme_for_test("30 PRINT FnCell(1)", theme);
+            let function = format!("{}FNCELL{RESET}", palette.other);
+            assert!(expression.contains(&alias), "{expression:?}, {theme:?}");
+            assert!(expression.contains(&function), "{expression:?}, {theme:?}");
+            assert!(ordinary_function.contains(&function));
+            assert!(
+                expression.contains(&format!("{}\"Automata.FnCell(1)\"{RESET}", palette.string))
+            );
+            assert!(expression.contains(&format!("{} Automata.FnCell(1){RESET}", palette.comment)));
+        }
+    }
+
+    #[test]
+    fn import_alias_spelling_is_independent_of_same_named_variables() {
+        let lines = [
+            r#"10 IMPORT "automata.bas" AS Automata"#,
+            "20 CALL Automata.NextGeneration(Grid)",
+            "30 PRINT aUtOmAtA.FNCELL(1,1)",
+            "40 automata=1",
+        ]
+        .map(String::from);
+        let editor = BasicEditor::new(&lines);
+        let cases = editor_identifier_cases(&editor.lines, None);
+
+        assert_eq!(cases.get("AUTOMATA").map(String::as_str), Some("automata"));
+        for source in &lines[..3] {
+            assert_eq!(
+                syntax_highlight_raw_with_cases(source, false, Some(&cases)),
+                *source
+            );
+            assert_eq!(
+                syntax_highlight_with_cases(source, false, Some(&cases)),
+                *source
+            );
+        }
+        assert_eq!(
+            syntax_highlight_with_cases("50 PRINT AUTOMATA", false, Some(&cases)),
+            "50 PRINT automata"
+        );
     }
 
     #[test]
@@ -8261,6 +9012,7 @@ mod tests {
         DebugSnapshot {
             reason: DebugPauseReason::Breakpoint,
             location: DebugLocation {
+                source_path: None,
                 line: 20,
                 statement: 1,
                 source_span: None,
@@ -8692,7 +9444,7 @@ mod tests {
 
     #[test]
     fn debugger_layout_hides_inspector_only_on_very_short_terminals() {
-        let wide = debug_layout(120, 30);
+        let wide = debug_layout(120, 30, false);
         assert_eq!(wide.panel_placement, DebugPanelPlacement::Right);
         assert_eq!(wide.gutter_width, EDITOR_GUTTER_WIDTH);
         assert_eq!(wide.code_rows, 29);
@@ -8700,14 +9452,14 @@ mod tests {
         assert_eq!(wide.code_region_cols + 1 + wide.panel_cols, 120);
         assert_eq!(wide.panel_x, wide.code_region_cols + 1);
 
-        let normal = debug_layout(100, 30);
+        let normal = debug_layout(100, 30, false);
         assert_eq!(normal.panel_placement, DebugPanelPlacement::Below);
         assert!(normal.code_rows > normal.panel_rows);
         assert!(normal.panel_rows >= 4);
         assert_eq!(normal.code_rows + normal.panel_rows, 29);
         assert_eq!(normal.panel_y, normal.code_rows);
 
-        let short = debug_layout(40, 7);
+        let short = debug_layout(40, 7, false);
         assert_eq!(short.panel_placement, DebugPanelPlacement::Hidden);
         assert_eq!(short.panel_rows, 0);
         assert_eq!(short.status_row, 6);
@@ -8715,10 +9467,108 @@ mod tests {
     }
 
     #[test]
+    fn debugger_array_panel_swaps_space_with_the_code_without_hiding_it() {
+        let wide = debug_layout(120, 30, false);
+        let wide_with_array = debug_layout(120, 30, true);
+        assert_eq!(wide_with_array.code_region_cols, wide.panel_cols);
+        assert_eq!(wide_with_array.panel_cols, wide.code_region_cols);
+        assert_eq!(
+            wide_with_array.panel_x,
+            wide_with_array.code_region_cols + 1
+        );
+        assert_eq!(wide_with_array.code_rows, wide.code_rows);
+
+        let narrow = debug_layout(80, 24, false);
+        let narrow_with_array = debug_layout(80, 24, true);
+        assert_eq!(narrow_with_array.code_rows, narrow.panel_rows);
+        assert_eq!(narrow_with_array.panel_rows, narrow.code_rows);
+        assert_eq!(narrow_with_array.panel_y, narrow_with_array.code_rows);
+        assert_eq!(narrow_with_array.panel_cols, 80);
+        assert_eq!(debug_layout(80, 6, true), debug_layout(80, 6, false));
+    }
+
+    #[test]
+    fn debugger_array_panel_refreshes_the_same_binding_and_rejects_a_namesake() {
+        use crate::debugger::{
+            DebugArrayPin, DebugEditTarget, DebugPauseAccess, DebugSnapshot, DebugValue,
+        };
+
+        #[derive(Default)]
+        struct BindingAccess(u64, std::cell::Cell<usize>);
+
+        impl DebugPauseAccess for BindingAccess {
+            fn idle(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn set_variable(
+                &mut self,
+                _: &DebugEditTarget,
+                _: DebugValue,
+            ) -> Result<DebugSnapshot, String> {
+                unreachable!()
+            }
+
+            fn pin_array_cell(&self, name: &str, indexes: &[i32]) -> Result<DebugArrayPin, String> {
+                let mut pin = DebugArrayPin::test_pin(name, indexes.to_vec());
+                pin.binding = self.0;
+                Ok(pin)
+            }
+
+            fn last_array_write(&self, _: &str) -> Option<Vec<i32>> {
+                self.1.set(self.1.get() + 1);
+                Some(vec![2, 3])
+            }
+        }
+
+        let mut snapshot = sample_debug_snapshot();
+        let summary = snapshot.arrays.first_mut().unwrap();
+        let name = summary.name.clone();
+        let mut panel = DebugArrayPanel::default();
+        let access = BindingAccess(1, Default::default());
+        let layout = debug_layout(120, 30, true);
+        panel.open(summary.clone(), &access).unwrap();
+        summary.dimensions = vec![2, 3];
+        summary.elements = 12;
+        assert_eq!(panel.refresh(&snapshot, &access, layout), None);
+        assert_eq!(access.1.get(), 0, "opening the array is not a step");
+        assert_eq!(panel.view().unwrap().summary().dimensions, [2, 3]);
+
+        // This snapshot reports a breakpoint. Follow still applies when it
+        // was reached through a step, and consumes the request only once.
+        panel.follow_after_step = true;
+        assert_eq!(panel.refresh(&snapshot, &access, layout), None);
+        assert_eq!(panel.refresh(&snapshot, &access, layout), None);
+        assert_eq!(access.1.get(), 1);
+        panel.follow_disabled = true;
+        panel.follow_after_step = true;
+        assert_eq!(panel.refresh(&snapshot, &access, layout), None);
+        assert_eq!(access.1.get(), 1);
+
+        assert_eq!(
+            panel.refresh(&snapshot, &BindingAccess(2, Default::default()), layout),
+            Some(format!("{name}() is out of scope")),
+        );
+        assert!(!panel.is_open());
+    }
+
+    #[test]
+    fn debugger_array_panel_advertises_tab_in_both_focus_states() {
+        let snapshot = sample_debug_snapshot();
+        let mut inspector = InspectorState::default();
+        let status = debug_status(&snapshot, true, &inspector, true, 120);
+        assert!(status.contains("Tab Array"));
+        assert!(status.contains("F6"));
+        inspector.focused = true;
+        let status = debug_status(&snapshot, true, &inspector, true, 120);
+        assert!(status.contains("ARRAY | Tab Code F6/F7/F8 Step Esc Arrays"));
+    }
+
+    #[test]
     fn debugger_status_starts_with_pause_reason_and_only_advertises_visible_inspector() {
         let snapshot = sample_debug_snapshot();
         let mut inspector = InspectorState::default();
-        let with_panel = debug_status(&snapshot, true, &inspector, 200);
+        let with_panel = debug_status(&snapshot, true, &inspector, false, 200);
         assert!(with_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 | CODE | Tab Inspect"));
         assert!(with_panel.contains("Ln 20 Stmt 2"));
         assert!(with_panel.contains("F4 Output"));
@@ -8728,19 +9578,20 @@ mod tests {
         assert!(with_panel.contains("Tab Inspect"));
         assert!(!with_panel.contains("Shift+Tab"));
 
-        let without_panel = debug_status(&snapshot, false, &inspector, 200);
+        let without_panel = debug_status(&snapshot, false, &inspector, false, 200);
         assert!(without_panel.starts_with("BREAKPOINT | Ln 20 Stmt 2 | CODE | F2 Break"));
         assert!(!without_panel.contains("Tab Inspect"));
         inspector.focused = true;
         inspector.panel(&snapshot, &DebugPanelChanges::default(), 40, 20);
-        let inspecting = debug_status(&snapshot, true, &inspector, 200);
+        let inspecting = debug_status(&snapshot, true, &inspector, false, 200);
         assert!(inspecting.contains("INSPECT | Tab Code Space Collapse ↑↓←→"));
-        let compact = debug_status(&snapshot, true, &inspector, 80);
+        let compact = debug_status(&snapshot, true, &inspector, false, 80);
         assert!(compact.chars().count() <= 80);
         assert!(compact.contains("Tab Code Space Collapse ↑↓←→"));
         for status in [&inspecting, &compact] {
-            assert!(status.contains("PgUp/PgDn Scroll Esc Abort"));
-            for action in ["F1", "F2", "F4", "F5", "F6", "F7", "F8", "Enter"] {
+            assert!(status.contains("F6/F7/F8 Step"));
+            assert!(status.contains("Esc"));
+            for action in ["F1", "F2", "F4", "F5", "F9", "Enter"] {
                 assert!(
                     !status.contains(action),
                     "{action} was advertised in {status}"
@@ -8748,7 +9599,7 @@ mod tests {
             }
         }
         for width in [60, 40, 30, 12] {
-            let status = debug_status(&snapshot, true, &inspector, width);
+            let status = debug_status(&snapshot, true, &inspector, false, width);
             assert!(status.chars().count() <= width, "{width}: {status}");
             assert!(status.contains("Tab Code"));
             assert!(status.ends_with("Esc"));
@@ -8779,6 +9630,11 @@ mod tests {
         }
         snapshot.location.source = "100 PRINT 1".to_string();
         assert_eq!(debug_location_status(&snapshot), "Ln 100 Stmt 1");
+        snapshot.location.source_path = Some(Path::new("libs").join("timing.bas"));
+        assert_eq!(
+            debug_location_status(&snapshot),
+            "timing.bas | Ln 100 Stmt 1"
+        );
     }
 
     #[test]
@@ -8786,19 +9642,19 @@ mod tests {
         let snapshot = sample_debug_snapshot();
         let mut inspector = InspectorState::default();
         for width in [80, 100, 120, 200] {
-            let status = debug_status(&snapshot, true, &inspector, width);
+            let status = debug_status(&snapshot, true, &inspector, false, width);
             assert!(status.chars().count() <= width, "{width}: {status}");
             for text in ["Ln 20 Stmt 2", "Tab Inspect", "F3", "F9", "Esc"] {
                 assert!(status.contains(text), "Missing {text}: {status}");
             }
             for has_inspector in [true, false] {
-                let status = debug_status(&snapshot, has_inspector, &inspector, width);
+                let status = debug_status(&snapshot, has_inspector, &inspector, false, width);
                 assert!(!status.contains("View"), "{status}");
                 assert!(!status.contains("Sel"), "{status}");
             }
         }
         inspector.focused = true;
-        let status = debug_status(&snapshot, true, &inspector, 120);
+        let status = debug_status(&snapshot, true, &inspector, false, 120);
         for text in ["View", "Sel", "F3", "F9"] {
             assert!(
                 !status.contains(text),
@@ -8871,7 +9727,7 @@ mod tests {
     fn debugger_status_advertises_scrolling_when_no_visible_entry_has_an_action() {
         let mut inspector = InspectorState::default();
         inspector.focused = true;
-        let status = debug_status(&sample_debug_snapshot(), true, &inspector, 80);
+        let status = debug_status(&sample_debug_snapshot(), true, &inspector, false, 80);
         assert!(status.contains("PgUp/PgDn Scroll"));
         assert!(status.chars().count() <= 80);
         assert!(!status.contains("Enter"));
@@ -8897,16 +9753,9 @@ mod tests {
     }
 
     #[test]
-    fn debugger_inspector_cannot_resume_or_show_output_but_can_always_abort() {
+    fn debugger_inspector_can_step_and_abort_but_cannot_continue_restart_or_show_output() {
         use crate::debugger::DebugAction;
-        for code in [
-            KeyCode::F(1),
-            KeyCode::F(5),
-            KeyCode::F(6),
-            KeyCode::F(7),
-            KeyCode::F(8),
-            KeyCode::F(9),
-        ] {
+        for code in [KeyCode::F(1), KeyCode::F(5), KeyCode::F(9)] {
             for modifiers in [
                 KeyModifiers::NONE,
                 KeyModifiers::SHIFT,
@@ -8922,6 +9771,16 @@ mod tests {
                     debug_action_for_key(code, modifiers),
                 );
             }
+        }
+        for (key, action) in [
+            (6, DebugAction::StepInto),
+            (7, DebugAction::StepOver),
+            (8, DebugAction::StepOut),
+        ] {
+            assert_eq!(
+                debug_action_for_panel(KeyCode::F(key), KeyModifiers::NONE, true),
+                Some(action)
+            );
         }
         for (code, modifiers) in [
             (KeyCode::Esc, KeyModifiers::NONE),
@@ -9379,25 +10238,25 @@ mod tests {
         }
         assert!(inspector.is_editing());
         for width in [12, 40, 80, 120] {
-            let status = debug_status(&snapshot, true, &inspector, width);
+            let status = debug_status(&snapshot, true, &inspector, false, width);
             assert!(status.contains("Enter"));
             assert!(status.contains("Esc"));
             assert!(!status.contains("Tab"));
             assert!(!status.contains("Abort"));
             assert!(!status.contains("F6"));
             assert!(status.chars().count() <= width);
-            let hidden = debug_status(&snapshot, false, &inspector, width);
+            let hidden = debug_status(&snapshot, false, &inspector, false, width);
             assert!(hidden.contains("Resize"));
             assert!(hidden.contains("Esc"));
             assert!(!hidden.contains("Enter"));
         }
         inspector.edit_failed("Invalid number".into());
-        let status = debug_status(&snapshot, true, &inspector, 120);
+        let status = debug_status(&snapshot, true, &inspector, false, 120);
         assert!(status.contains("Invalid number"));
         assert!(status.contains("Esc Cancel"));
         inspector.handle_edit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!inspector.is_editing());
-        assert!(debug_status(&snapshot, true, &inspector, 200).contains("Esc Abort"));
+        assert!(debug_status(&snapshot, true, &inspector, false, 200).contains("Esc Abort"));
     }
 
     #[test]

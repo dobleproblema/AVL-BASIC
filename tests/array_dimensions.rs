@@ -19,6 +19,7 @@ fn text(interpreter: &mut Interpreter, expression: &str) -> String {
 fn invalid_bounds_report_basic_errors_without_replacing_existing_arrays() {
     for statement in ["DIM", "REDIM"] {
         for (bound, expected) in [
+            ("", ErrorCode::NoDimension),
             ("INF", ErrorCode::Overflow),
             ("1E309", ErrorCode::Overflow),
             ("2147483648", ErrorCode::Overflow),
@@ -51,6 +52,17 @@ fn invalid_bounds_report_basic_errors_without_replacing_existing_arrays() {
             assert_eq!(text(&mut interpreter, "A$(1)"), "last");
         }
     }
+}
+
+#[test]
+fn empty_local_array_bound_reports_a_missing_dimension() {
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .program
+        .load_text("10 CALL Work\n20 END\n100 DEF SUB Work\n110 LOCAL A(1,)\n120 SUBEND")
+        .unwrap();
+    let error = interpreter.run_loaded().unwrap_err();
+    assert_eq!(error.code, ErrorCode::NoDimension);
 }
 
 #[test]

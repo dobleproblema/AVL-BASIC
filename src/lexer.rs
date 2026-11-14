@@ -304,11 +304,11 @@ impl<'a> Lexer<'a> {
             self.bump();
         }
         if self.pos == start {
-            return Err(BasicError::new(ErrorCode::InvalidValue));
+            return Err(BasicError::new(ErrorCode::Syntax));
         }
         let raw = &self.src[start..self.pos];
-        let value = i64::from_str_radix(raw, radix)
-            .map_err(|_| BasicError::new(ErrorCode::InvalidValue))?;
+        let value =
+            i64::from_str_radix(raw, radix).map_err(|_| BasicError::new(ErrorCode::Overflow))?;
         Ok(Token::Number(value as f64))
     }
 
@@ -316,6 +316,17 @@ impl<'a> Lexer<'a> {
         let start = self.pos;
         while matches!(self.peek_char(), Some(c) if is_ident_char(c)) {
             self.bump();
+        }
+        let rest = &self.src.as_bytes()[self.pos..];
+        if rest
+            .get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b".FN"))
+            && !self.src[start..self.pos].contains('$')
+        {
+            self.pos += 3;
+            while matches!(self.peek_char(), Some(c) if is_ident_char(c)) {
+                self.bump();
+            }
         }
         Token::Ident(self.src[start..self.pos].to_ascii_uppercase())
     }
@@ -339,7 +350,45 @@ pub fn is_ident_char(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{split_command_ranges, split_commands};
+    use super::{split_command_ranges, split_commands, Lexer, Token};
+    use crate::ErrorCode;
+
+    #[test]
+    fn distinguishes_missing_radix_digits_from_numeric_overflow() {
+        for source in ["&H", "&HG", "&X", "&X2"] {
+            let error = Lexer::new(source).tokenize().unwrap_err();
+            assert_eq!(error.code, ErrorCode::Syntax, "{source}");
+        }
+
+        let binary_overflow = format!("&X1{}", "0".repeat(63));
+        for source in ["&H8000000000000000", binary_overflow.as_str()] {
+            let error = Lexer::new(source).tokenize().unwrap_err();
+            assert_eq!(error.code, ErrorCode::Overflow, "{source}");
+        }
+
+        for source in ["&H7FFFFFFFFFFFFFFF", "&X101"] {
+            assert!(Lexer::new(source).tokenize().is_ok(), "{source}");
+        }
+    }
+
+    #[test]
+    fn lexes_qualified_functions_without_changing_decimal_literals() {
+        assert_eq!(
+            Lexer::new("Timing.FnFormat$(LapTime + .25)")
+                .tokenize()
+                .unwrap(),
+            vec![
+                Token::Ident("TIMING.FNFORMAT$".into()),
+                Token::LParen,
+                Token::Ident("LAPTIME".into()),
+                Token::Op("+".into()),
+                Token::Number(0.25),
+                Token::RParen,
+                Token::Eof,
+            ],
+        );
+        assert!(Lexer::new("Timing.Format$(LapTime)").tokenize().is_err());
+    }
 
     #[test]
     fn command_offsets_follow_the_same_top_level_splitting_rules() {
