@@ -245,7 +245,7 @@ pub trait DebugPauseAccess {
         Err("Array inspection is not supported.".into())
     }
 
-    /// The cell nearest the origin among those written by the last BASIC statement.
+    /// The cell nearest the origin whose value differs from the previous pause.
     fn last_array_write(&self, _name: &str) -> Option<Vec<i32>> {
         None
     }

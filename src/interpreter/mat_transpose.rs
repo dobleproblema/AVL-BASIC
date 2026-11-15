@@ -74,7 +74,7 @@ fn transpose(input: &[f64], rows: usize, cols: usize, border: usize) -> BasicRes
         dims,
         data: ArrayData::Number(output),
         last_debug_write: None,
-        debug_writes: None,
+        debug_before: Default::default(),
         debug_binding_id: Cell::new(0),
     })
 }

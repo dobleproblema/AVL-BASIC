@@ -66,6 +66,7 @@ g-parametric3.bas	Fractals, curves, and procedural geometry		Lissajous 12:11	Den
 g-axis-labels.bas	Plotting, charts, and mathematical visualization		Adaptive Axis Labels	Demonstrates automatic tick spacing, dense explicit steps, fractional crossings, and label orientation.	XAXIS and YAXIS;CROSSAT;adaptive labels
 g-axis.bas	Plotting, charts, and mathematical visualization		Shifted Axes	Minimal shifted-axis example using SCALE and CROSSAT.	SCALE;CROSSAT;XAXIS and YAXIS
 g-bifurcation.bas	Plotting, charts, and mathematical visualization	17	Bifurcation Explorer	Explore chaos by clicking into a rainbow logistic-map bifurcation diagram.	logistic map;Lyapunov exponent;mouse zoom
+g-diffraction.bas	Plotting, charts, and mathematical visualization		Light Diffraction Bench	Compare double-slit fringes, circular-aperture rings, and a triangular aperture's six-pointed star on a 1024 × 1024 grid, with separate matrix and drawing times.	MAT;TRN;MAP;Hadamard product;Fourier optics
 g-function.bas	Plotting, charts, and mathematical visualization		Sine Plot	Plots sine from a string expression with axes.	GRAPH;string expression;axes
 g-function2.bas	Plotting, charts, and mathematical visualization		Tangent Plot	Plots tangent directly across multiple discontinuities.	GRAPH;discontinuities;SCALE
 g-function2b.bas	Plotting, charts, and mathematical visualization		Manual Tangent Plot	Manually plots tangent while skipping discontinuity jumps.	DEF FN;error handling;discontinuity filtering

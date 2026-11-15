@@ -47,6 +47,7 @@ impl LocalArrayPool {
 
     fn recycle_with_limits(&mut self, mut array: ArrayValue, max_bytes: usize, max_arrays: usize) {
         array.clear_debug_write();
+        array.debug_before = Default::default();
         array.debug_binding_id.set(0);
         let retained_bytes = array_retained_bytes(&array);
         if retained_bytes > max_bytes || max_arrays == 0 {
@@ -108,7 +109,7 @@ mod tests {
             }
             _ => unreachable!(),
         };
-        array.remember_debug_write("TEMP", &[2, 1], 0);
+        array.remember_debug_write("TEMP", &[2, 1]);
         pool.recycle(array);
 
         // Storage is independent of the LOCAL's source name.

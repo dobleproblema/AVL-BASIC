@@ -3,7 +3,6 @@
 //! MAT arithmetic shares the scalar parser's tokens, precedence and grouping.
 //! Array names remain dynamically resolved; scalar calls use the ordinary
 //! evaluator, while TRN/INV, MAP and arithmetic operate on whole matrices.
-use super::debug_arrays::DebugArrayChange;
 use super::mat_subarrays::CopyReference;
 use super::*;
 use crate::expr::compile_mat_expression;
@@ -718,9 +717,6 @@ impl Interpreter {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
                 matrix.clear_debug_write();
-                if let Some(stamp) = self.debug_array_write_stamp() {
-                    matrix.remember_debug_array_change(stamp, DebugArrayChange::All);
-                }
                 self.arrays.insert(target_key.into_owned(), matrix);
                 self.return_array_for_active_function(target);
                 Ok(())

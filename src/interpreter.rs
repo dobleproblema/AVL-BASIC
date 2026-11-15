@@ -68,6 +68,7 @@ use crate::expr::{
 use crate::fonts::FontKind;
 use crate::graphics::{rgb_number, Graphics, Texture};
 use crate::help;
+use crate::keyboard::{BACKSPACE, DELETE, END, ENTER, ESCAPE, HOME, LEFT, RIGHT};
 use crate::language;
 use crate::lexer::{split_command_ranges, split_commands, split_top_level, strip_comment};
 use crate::program::Program;
@@ -404,8 +405,11 @@ impl ArrayVariables {
 
     #[inline(always)]
     fn insert_resolved(&mut self, index: usize, value: ArrayValue) -> Option<ArrayValue> {
-        if let Some(previous) = &self.slots[index] {
+        let mut value = value;
+        if let Some(previous) = &mut self.slots[index] {
             value.debug_binding_id.set(previous.debug_binding_id.get());
+            previous.remember_debug_array_before();
+            value.debug_before = std::mem::take(&mut previous.debug_before);
         }
         self.slots[index].replace(value)
     }
@@ -418,6 +422,13 @@ impl ArrayVariables {
 
     #[inline]
     fn get_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
+        let array = self.get_cell_mut(name)?;
+        array.remember_debug_array_before();
+        Some(array)
+    }
+
+    #[inline]
+    fn get_cell_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
         let index = self.names.get(name).copied()?;
         self.slots[index].as_mut()
     }
@@ -557,30 +568,31 @@ impl GraphicsLineEditor {
                 self.characters.insert(self.cursor, ch);
                 self.cursor += 1;
             }
-            GraphicsInputEvent::Enter => return true,
-            GraphicsInputEvent::Escape => {
+            GraphicsInputEvent::Special(ENTER) => return true,
+            GraphicsInputEvent::Special(ESCAPE) => {
                 self.characters.clear();
                 self.cursor = 0;
             }
-            GraphicsInputEvent::Backspace => {
+            GraphicsInputEvent::Special(BACKSPACE) => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     self.characters.remove(self.cursor);
                 }
             }
-            GraphicsInputEvent::Delete => {
+            GraphicsInputEvent::Special(DELETE) => {
                 if self.cursor < self.characters.len() {
                     self.characters.remove(self.cursor);
                 }
             }
-            GraphicsInputEvent::Left => {
+            GraphicsInputEvent::Special(LEFT) => {
                 self.cursor = self.cursor.saturating_sub(1);
             }
-            GraphicsInputEvent::Right => {
+            GraphicsInputEvent::Special(RIGHT) => {
                 self.cursor = (self.cursor + 1).min(self.characters.len());
             }
-            GraphicsInputEvent::Home => self.cursor = 0,
-            GraphicsInputEvent::End => self.cursor = self.characters.len(),
+            GraphicsInputEvent::Special(HOME) => self.cursor = 0,
+            GraphicsInputEvent::Special(END) => self.cursor = self.characters.len(),
+            GraphicsInputEvent::Special(_) => {}
         }
         false
     }
@@ -732,7 +744,7 @@ struct ArrayValue {
     dims: Vec<usize>,
     data: ArrayData,
     last_debug_write: Option<DebugArrayWrite>,
-    debug_writes: Option<Box<debug_arrays::DebugArrayWrites>>,
+    debug_before: std::rc::Weak<RefCell<debug_arrays::DebugArrayBefore>>,
     // Assigned lazily when a paused debugger pins this storage.
     debug_binding_id: Cell<u64>,
 }
@@ -743,7 +755,7 @@ impl Clone for ArrayValue {
             dims: self.dims.clone(),
             data: self.data.clone(),
             last_debug_write: self.last_debug_write.clone(),
-            debug_writes: None,
+            debug_before: Default::default(),
             debug_binding_id: Cell::new(0),
         }
     }
@@ -773,7 +785,7 @@ impl ArrayValue {
             dims,
             data,
             last_debug_write: None,
-            debug_writes: None,
+            debug_before: Default::default(),
             debug_binding_id: Cell::new(0),
         }
     }
@@ -799,7 +811,7 @@ impl ArrayValue {
             dims,
             data,
             last_debug_write: None,
-            debug_writes: None,
+            debug_before: Default::default(),
             debug_binding_id: Cell::new(0),
         })
     }
@@ -854,20 +866,15 @@ impl ArrayValue {
         result
     }
 
-    fn remember_debug_write(&mut self, written_as: &str, indexes: &[i32], stamp: u64) {
+    fn remember_debug_write(&mut self, written_as: &str, indexes: &[i32]) {
         self.last_debug_write = Some(DebugArrayWrite {
             written_as: written_as.to_string(),
             indexes: indexes.to_vec(),
         });
-        if stamp != 0 {
-            let flat = self.flat_index(indexes).expect("the cell was just written");
-            self.remember_debug_array_change(stamp, debug_arrays::DebugArrayChange::Cell(flat));
-        }
     }
 
     fn clear_debug_write(&mut self) {
         self.last_debug_write = None;
-        self.debug_writes = None;
     }
 
     fn data_len(&self) -> usize {
@@ -951,38 +958,27 @@ impl ArrayValue {
             return self.set_number_direct_2d(indexes[0], indexes[1], value);
         }
         let idx = self.flat_index(indexes)?;
-        match &mut self.data {
-            ArrayData::Number(values) => {
-                values[idx] = value;
-                Ok(())
-            }
-            ArrayData::Str(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
-        }
+        self.set_number_at(idx, value)
     }
 
     fn set_number_direct_1d(&mut self, index: i32, value: f64) -> BasicResult<()> {
         if self.dims.len() != 1 {
             return Err(BasicError::new(ErrorCode::InvalidIndex));
         }
-        match &mut self.data {
-            ArrayData::Number(values) => {
-                let target = values
-                    .get_mut(index as usize)
-                    .ok_or_else(|| BasicError::new(ErrorCode::IndexOutOfRange))?;
-                *target = value;
-                Ok(())
-            }
-            ArrayData::Str(_) => {
-                if index < 0 || index as usize > self.dims[0] {
-                    return Err(BasicError::new(ErrorCode::IndexOutOfRange));
-                }
-                Err(BasicError::new(ErrorCode::TypeMismatch))
-            }
+        if index < 0 || index as usize > self.dims[0] {
+            return Err(BasicError::new(ErrorCode::IndexOutOfRange));
         }
+        self.set_number_at(index as usize, value)
     }
 
     fn set_number_direct_2d(&mut self, index0: i32, index1: i32, value: f64) -> BasicResult<()> {
         let idx = self.flat_index_direct_2d(index0, index1)?;
+        self.set_number_at(idx, value)
+    }
+
+    #[inline]
+    fn set_number_at(&mut self, idx: usize, value: f64) -> BasicResult<()> {
+        self.remember_debug_cell_before(idx);
         match &mut self.data {
             ArrayData::Number(values) => {
                 values[idx] = value;
@@ -1011,17 +1007,7 @@ impl ArrayValue {
             return self.set_direct_2d(indexes[0], indexes[1], value);
         }
         let idx = self.flat_index(indexes)?;
-        match (&mut self.data, value) {
-            (ArrayData::Number(values), Value::Number(n)) => {
-                values[idx] = n;
-                Ok(())
-            }
-            (ArrayData::Str(values), Value::Str(s)) => {
-                values[idx] = s;
-                Ok(())
-            }
-            _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
-        }
+        self.set_value_at(idx, value)
     }
 
     fn set_direct_1d(&mut self, index: i32, value: Value) -> BasicResult<()> {
@@ -1031,21 +1017,17 @@ impl ArrayValue {
         if index < 0 || index as usize > self.dims[0] {
             return Err(BasicError::new(ErrorCode::IndexOutOfRange));
         }
-        match (&mut self.data, value) {
-            (ArrayData::Number(values), Value::Number(n)) => {
-                values[index as usize] = n;
-                Ok(())
-            }
-            (ArrayData::Str(values), Value::Str(s)) => {
-                values[index as usize] = s;
-                Ok(())
-            }
-            _ => Err(BasicError::new(ErrorCode::TypeMismatch)),
-        }
+        self.set_value_at(index as usize, value)
     }
 
     fn set_direct_2d(&mut self, index0: i32, index1: i32, value: Value) -> BasicResult<()> {
         let idx = self.flat_index_direct_2d(index0, index1)?;
+        self.set_value_at(idx, value)
+    }
+
+    #[inline]
+    fn set_value_at(&mut self, idx: usize, value: Value) -> BasicResult<()> {
+        self.remember_debug_cell_before(idx);
         match (&mut self.data, value) {
             (ArrayData::Number(values), Value::Number(n)) => {
                 values[idx] = n;
@@ -1097,7 +1079,7 @@ impl ArrayValue {
                 dims,
                 data: ArrayData::Number(data),
                 last_debug_write: None,
-                debug_writes: None,
+                debug_before: Default::default(),
                 debug_binding_id: Cell::new(0),
             });
         }
@@ -1120,7 +1102,7 @@ impl ArrayValue {
                 dims,
                 data: ArrayData::Number(data),
                 last_debug_write: None,
-                debug_writes: None,
+                debug_before: Default::default(),
                 debug_binding_id: Cell::new(0),
             });
         }
@@ -1501,9 +1483,7 @@ struct ActiveDebugRoutineFrame {
 #[derive(Debug, Default)]
 struct InterpreterDebuggerState {
     debugger: Option<Debugger>,
-    next_array_command: u64,
-    active_array_command: u64,
-    last_array_command: u64,
+    array_baselines: Option<Vec<Rc<RefCell<debug_arrays::DebugArrayBefore>>>>,
     terminal: Option<console::DebugTerminalSession>,
     resume_guards: Vec<(Cursor, usize)>,
     resume_relocated: Option<(Cursor, usize)>,
@@ -1543,7 +1523,7 @@ impl DebugPauseAccess for InterpreterDebugPause<'_> {
     }
 
     fn last_array_write(&self, name: &str) -> Option<Vec<i32>> {
-        self.interpreter.debug_last_array_write(name)
+        self.interpreter.debug_nearest_array_change(name)
     }
 
     fn pin_array_cell(&self, name: &str, indexes: &[i32]) -> Result<DebugArrayPin, String> {
@@ -2914,6 +2894,7 @@ impl Interpreter {
                 .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()));
             let previous_terminal = state.terminal.take();
             state.debugger = Some(debugger);
+            state.array_baselines = None;
             state.terminal = terminal;
             state.resume_guards.clear();
             state.resume_relocated = None;
@@ -2939,6 +2920,7 @@ impl Interpreter {
             state.control_scopes.clear();
             state.refocus_graphics_on_use = false;
             state.graphics_focus_on_input_only = false;
+            state.array_baselines = None;
             let debugger = state.debugger.take();
             let terminal = state.terminal.take();
             (debugger, terminal, state.editor_breakpoints.is_empty())
@@ -4836,15 +4818,13 @@ impl Interpreter {
                         result => result?,
                     }
                 } else {
-                    self.with_debug_array_command(debugger_boundary, |interpreter| {
-                        interpreter.execute_cached_command_debug(command, &mut cursor, &[])
-                    })
-                    .err()
-                    .map(|error| CachedExecutionFailure {
-                        error,
-                        retry: before,
-                        next,
-                    })
+                    self.execute_cached_command_debug(command, &mut cursor, &[])
+                        .err()
+                        .map(|error| CachedExecutionFailure {
+                            error,
+                            retry: before,
+                            next,
+                        })
                 };
                 if !Rc::ptr_eq(&lines, &self.line_numbers_cache) && !self.restart_run_loop {
                     merged_line = true;
@@ -5103,6 +5083,7 @@ impl Interpreter {
             }
         })?;
         if action == DebugAction::Restart {
+            self.debugger_state.as_mut().unwrap().array_baselines = None;
             return Err(
                 BasicError::new(ErrorCode::KeyboardInterrupt).with_detail(DEBUG_RESTART_DETAIL)
             );
@@ -5116,6 +5097,7 @@ impl Interpreter {
             }
             return Ok(DebugHookControl::Abort);
         }
+        self.begin_debug_array_interval();
         let state = self
             .debugger_state
             .as_mut()
@@ -5178,7 +5160,8 @@ impl Interpreter {
         value: DebugValue,
     ) -> Result<(), String> {
         let name = name.to_ascii_uppercase();
-        let Some(array) = self.array_mut(&name) else {
+        let key = self.array_lookup_key(&name);
+        let Some(array) = self.arrays.get_cell_mut(key.as_ref()) else {
             return Err("This array element is no longer available.".into());
         };
         if !array
@@ -6675,16 +6658,11 @@ impl Interpreter {
             _ => unreachable!("inline IF debug path requires a guard command"),
         };
 
-        let guard_boundary = metadata
-            .get(guard_idx)
-            .is_none_or(|metadata| metadata.debugger_boundary);
-        let condition_true = match self.with_debug_array_command(guard_boundary, |interpreter| {
-            condition.eval(interpreter).map_err(|mut error| {
-                if error.line.is_none() {
-                    error.line = interpreter.current_line;
-                }
-                error
-            })
+        let condition_true = match condition.eval(self).map_err(|mut error| {
+            if error.line.is_none() {
+                error.line = self.current_line;
+            }
+            error
         }) {
             Ok(value) => value != 0.0,
             Err(error) => {
@@ -6745,9 +6723,7 @@ impl Interpreter {
                 command,
                 CachedCommand::InlineIfGuard { .. } | CachedCommand::InlineJump { .. }
             );
-            let result = self.with_debug_array_command(debugger_boundary, |interpreter| {
-                interpreter.execute_cached_command_debug(command, cursor, &[])
-            });
+            let result = self.execute_cached_command_debug(command, cursor, &[]);
             if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
                 line_idx = self.merge_line_index(source_line);
                 before.line_idx = line_idx;
@@ -7612,7 +7588,7 @@ impl Interpreter {
         value: f64,
     ) -> BasicResult<()> {
         let current_line = self.current_line;
-        let debug_write = self.debug_array_write_stamp();
+        let debug_write = self.debugger().is_some();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -7628,8 +7604,8 @@ impl Interpreter {
                 } else {
                     array.set_number(raw_indexes, value)
                 };
-                if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
-                    array.remember_debug_write(name, raw_indexes, stamp);
+                if debug_write && result.is_ok() {
+                    array.remember_debug_write(name, raw_indexes);
                 }
                 return result.map_err(|mut e| {
                     if e.line.is_none() {
@@ -7652,8 +7628,8 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
         let result = array.set_number(&indexes, value);
-        if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
-            array.remember_debug_write(name, &indexes, stamp);
+        if debug_write && result.is_ok() {
+            array.remember_debug_write(name, &indexes);
         }
         result.map_err(|mut e| {
             if e.line.is_none() {
@@ -8396,9 +8372,13 @@ impl Interpreter {
 
     fn read_graphics_input_line(&mut self, prompt: &str, cursor: &Cursor) -> BasicResult<String> {
         self.ensure_graphics_window()?;
-        if self.graphics_window.is_none() {
+        let Some(window) = self.graphics_window.as_ref() else {
             return Err(self.err(ErrorCode::Unsupported));
-        }
+        };
+        #[cfg(target_os = "linux")]
+        let _repeat = window.allow_key_repeats();
+        #[cfg(not(target_os = "linux"))]
+        let _ = window;
 
         self.graphics.gprint(prompt, None, None);
         let row = self.graphics.vpos();
@@ -8547,7 +8527,7 @@ impl Interpreter {
             return self.assign_mid_string(&lhs, value);
         }
         if let Some(open) = lhs.find('(') {
-            let debug_write = self.debug_array_write_stamp();
+            let debug_write = self.debugger().is_some();
             let close = lhs.rfind(')').ok_or_else(|| self.err(ErrorCode::Syntax))?;
             let name = lhs[..open].trim().to_string();
             let indexes = split_arguments(&lhs[open + 1..close])
@@ -8562,7 +8542,7 @@ impl Interpreter {
                     .map_err(|error| self.with_current_line(error))?;
                 self.arrays.insert(key.to_string(), array);
             }
-            let array = self.arrays.get_mut(key.as_ref()).unwrap();
+            let array = self.arrays.get_cell_mut(key.as_ref()).unwrap();
             if array.is_string() != matches!(value, Value::Str(_)) {
                 return Err(self.err(ErrorCode::TypeMismatch));
             }
@@ -8572,8 +8552,8 @@ impl Interpreter {
                 }
                 e
             })?;
-            if let Some(stamp) = debug_write {
-                array.remember_debug_write(&name, &indexes, stamp);
+            if debug_write {
+                array.remember_debug_write(&name, &indexes);
             }
             Ok(())
         } else {
@@ -8653,7 +8633,7 @@ impl Interpreter {
         is_string: bool,
         value: Value,
     ) -> BasicResult<()> {
-        let debug_write = self.debug_array_write_stamp();
+        let debug_write = self.debugger().is_some();
         let resolved = if self.array_aliases.is_empty() {
             self.arrays.resolve_cached_slot(name, array_slot)
         } else {
@@ -8673,8 +8653,8 @@ impl Interpreter {
             } else {
                 array.set(raw_indexes, value)
             };
-            if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
-                array.remember_debug_write(name, raw_indexes, stamp);
+            if debug_write && result.is_ok() {
+                array.remember_debug_write(name, raw_indexes);
             }
             return result.map_err(|mut e| {
                 if e.line.is_none() {
@@ -8696,8 +8676,8 @@ impl Interpreter {
             return Err(self.err(ErrorCode::TypeMismatch));
         }
         let result = array.set(&indexes, value);
-        if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
-            array.remember_debug_write(name, &indexes, stamp);
+        if debug_write && result.is_ok() {
+            array.remember_debug_write(name, &indexes);
         }
         result.map_err(|mut e| {
             if e.line.is_none() {
@@ -8969,6 +8949,7 @@ impl Interpreter {
         }
     }
 
+    #[cfg(test)]
     fn array_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
         let key = self.array_lookup_key(name);
         self.arrays.get_mut(key.as_ref())
@@ -10096,7 +10077,7 @@ impl Interpreter {
     }
 
     fn execute_mat_read(&mut self, args: &str) -> BasicResult<()> {
-        let debug_write = self.debug_array_write_stamp();
+        let debug_write = self.debugger().is_some();
         for target in split_arguments(args) {
             let name = target.trim().to_ascii_uppercase();
             if !is_basic_identifier(&name) {
@@ -10116,7 +10097,7 @@ impl Interpreter {
                 }
                 let value = self.data[self.data_pointer].clone();
                 self.data_pointer += 1;
-                let array = self.arrays.get_mut(key.as_ref()).unwrap();
+                let array = self.arrays.get_cell_mut(key.as_ref()).unwrap();
                 if array.is_string() != matches!(value, Value::Str(_)) {
                     return Err(self.err(ErrorCode::TypeMismatch));
                 }
@@ -10126,8 +10107,8 @@ impl Interpreter {
                     }
                     e
                 })?;
-                if let Some(stamp) = debug_write {
-                    array.remember_debug_write(&name, &indexes, stamp);
+                if debug_write {
+                    array.remember_debug_write(&name, &indexes);
                 }
             }
         }
@@ -10253,7 +10234,7 @@ impl Interpreter {
         indexes: &[i32],
         raw_token: &str,
     ) -> BasicResult<()> {
-        let debug_write = self.debug_array_write_stamp();
+        let debug_write = self.debugger().is_some();
         let raw = raw_token.trim();
         let is_string = self
             .array_ref(name)
@@ -10277,7 +10258,8 @@ impl Interpreter {
         };
 
         let current_line = self.current_line;
-        let Some(array) = self.array_mut(name) else {
+        let key = self.array_lookup_key(name);
+        let Some(array) = self.arrays.get_cell_mut(key.as_ref()) else {
             return Err(self.err(ErrorCode::Undefined));
         };
         array.set(indexes, value).map_err(|mut e| {
@@ -10286,8 +10268,8 @@ impl Interpreter {
             }
             e
         })?;
-        if let Some(stamp) = debug_write {
-            array.remember_debug_write(name, indexes, stamp);
+        if debug_write {
+            array.remember_debug_write(name, indexes);
         }
         Ok(())
     }
@@ -10298,7 +10280,7 @@ impl Interpreter {
         start_entry: usize,
         start_position: usize,
     ) {
-        let debug_write = self.debug_array_write_stamp();
+        let debug_write = self.debugger().is_some();
         for (idx, entry) in entries.iter().enumerate().skip(start_entry) {
             let Some(array) = self.array_ref(&entry.name) else {
                 continue;
@@ -10315,10 +10297,10 @@ impl Interpreter {
             };
             let name = self.array_lookup_key(&entry.name);
             for indexes in entry.positions.iter().skip(position) {
-                if let Some(array) = self.arrays.get_mut(name.as_ref()) {
+                if let Some(array) = self.arrays.get_cell_mut(name.as_ref()) {
                     let result = array.set(indexes, default.clone());
-                    if let Some(stamp) = debug_write.filter(|_| result.is_ok()) {
-                        array.remember_debug_write(&entry.name, indexes, stamp);
+                    if debug_write && result.is_ok() {
+                        array.remember_debug_write(&entry.name, indexes);
                     }
                 }
             }
@@ -10720,7 +10702,6 @@ impl Interpreter {
     }
 
     fn mat_random_fill(&mut self, target: &str) -> BasicResult<()> {
-        let debug_write = self.debug_array_write_stamp();
         let Some(array) = self.arrays.get_mut(target) else {
             return Err(self.err(ErrorCode::Undefined));
         };
@@ -10732,20 +10713,11 @@ impl Interpreter {
             return Ok(());
         }
         self.rng.fill_matrix(values, &array.dims, base_one);
-        let change = if base_one {
-            debug_arrays::DebugArrayChange::BaseOne
-        } else {
-            debug_arrays::DebugArrayChange::All
-        };
         array.clear_debug_write();
-        if let Some(stamp) = debug_write {
-            array.remember_debug_array_change(stamp, change);
-        }
         Ok(())
     }
 
     fn mat_fill_array(&mut self, target: &str, value: Value) -> BasicResult<()> {
-        let debug_write = self.debug_array_write_stamp();
         let Some(array) = self.arrays.get_mut(target) else {
             return Err(self.err(ErrorCode::Undefined));
         };
@@ -10755,9 +10727,6 @@ impl Interpreter {
             }
             e
         })?;
-        if let Some(stamp) = debug_write {
-            array.remember_debug_array_change(stamp, debug_arrays::DebugArrayChange::All);
-        }
         Ok(())
     }
 
@@ -11602,24 +11571,18 @@ impl Interpreter {
 
     fn pause_user_input_ready(&mut self) -> BasicResult<bool> {
         if self.pause_uses_graphics_input() {
+            #[cfg(target_os = "linux")]
+            let _repeat = self
+                .graphics_window
+                .as_ref()
+                .and_then(GraphicsWindow::allow_key_repeats);
             self.resume_graphics_presentation()?;
             self.refocus_graphics_after_debug_if_needed();
             self.pump_graphics_window_now()?;
-            let key_ready = self
+            return Ok(self
                 .graphics_window
                 .as_mut()
-                .is_some_and(GraphicsWindow::consume_pause_key);
-            if key_ready {
-                // minifb can deliver the character callback one update after
-                // the physical key edge. Pump that tail now, including any
-                // simultaneous mouse event, and consume it before PAUSE ends.
-                self.pump_graphics_window_now()?;
-                if let Some(window) = self.graphics_window.as_mut() {
-                    window.clear_key_queue();
-                }
-                return Ok(true);
-            }
-            return Ok(false);
+                .is_some_and(GraphicsWindow::consume_pause_key));
         }
 
         if !self.key_queue.is_empty() {
@@ -15838,18 +15801,14 @@ impl Interpreter {
             let _ = self.resume_graphics_presentation();
             self.refocus_graphics_after_debug_if_needed();
             if let Some(window) = self.graphics_window.as_mut() {
-                if let Some(code) = window.take_key_code() {
-                    return char::from_u32(code as u32)
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default();
+                if let Some(character) = window.take_key_char() {
+                    return character.to_string();
                 }
             }
             let _ = self.pump_graphics_window_now();
             if let Some(window) = self.graphics_window.as_mut() {
-                if let Some(code) = window.take_key_code() {
-                    return char::from_u32(code as u32)
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default();
+                if let Some(character) = window.take_key_char() {
+                    return character.to_string();
                 }
             }
             return String::new();
@@ -18082,12 +18041,12 @@ mod interpreter_tests {
             GraphicsInputEvent::Character('a'),
             GraphicsInputEvent::Character('ñ'),
             GraphicsInputEvent::Character('o'),
-            GraphicsInputEvent::Left,
+            GraphicsInputEvent::Special(LEFT),
             GraphicsInputEvent::Character('i'),
-            GraphicsInputEvent::Home,
-            GraphicsInputEvent::Delete,
-            GraphicsInputEvent::End,
-            GraphicsInputEvent::Backspace,
+            GraphicsInputEvent::Special(HOME),
+            GraphicsInputEvent::Special(DELETE),
+            GraphicsInputEvent::Special(END),
+            GraphicsInputEvent::Special(BACKSPACE),
         ] {
             assert!(!editor.apply(event));
         }
@@ -22701,7 +22660,7 @@ fn set_string_binding_ref(variables: &mut FastHashMap<String, String>, name: &st
 }
 
 fn set_array_binding_ref(arrays: &mut ArrayVariables, name: &str, value: ArrayValue) {
-    if let Some(slot) = arrays.get_mut(name) {
+    if let Some(slot) = arrays.get_cell_mut(name) {
         *slot = value;
     } else {
         arrays.insert(name.to_string(), value);

@@ -173,6 +173,113 @@ RUN\n",
 }
 
 #[test]
+#[ignore = "opens a real graphics window and exercises the native keyboard message queue"]
+fn graphics_inkey_uses_translated_text_and_preserves_special_key_codes() {
+    let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))
+        .env("AVL_BASIC_WINDOW", "1")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(project_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn avl-basic");
+    let mut child = ChildGuard {
+        child,
+        finished: false,
+    };
+    let stdout = child.child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let mut stdin = child.child.stdin.take().expect("stdin");
+
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin
+        .write_all(
+            b"10 SCREEN : FRAME\n\
+20 PRINT \"WAITING-KEYS\"\n\
+30 K$=INKEY$\n\
+40 IF K$=\"\" THEN 30\n\
+50 PRINT \"KEY=\";DEC$(ASC(K$),\"0\")\n\
+60 IF K$<>CHR$(27) THEN 30\n\
+70 SCREEN CLOSE : END\n\
+RUN\n",
+        )
+        .unwrap();
+    let hwnd = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    wait_for_line(&rx, "WAITING-KEYS", Duration::from_secs(5));
+
+    const WM_KEYDOWN: u32 = 0x0100;
+    const WM_KEYUP: u32 = 0x0101;
+    const WM_CHAR: u32 = 0x0102;
+    const REPEAT: isize = 1 << 30;
+    let post = |message, value, params| {
+        assert_ne!(unsafe { PostMessageW(hwnd, message, value, params) }, 0);
+    };
+    let physical_key = |scan: isize, repeated: bool| {
+        let params = 1 | (scan << 16);
+        // WM_CHAR below supplies the translated character explicitly. Use a
+        // zero virtual key to avoid generating a second character depending
+        // on the machine's configured keyboard layout.
+        post(WM_KEYDOWN, 0, params);
+        if repeated {
+            post(WM_KEYDOWN, 0, params | REPEAT);
+        }
+        post(WM_KEYUP, 0, params | (0xc0000000u32 as isize));
+    };
+
+    physical_key(0x1b, true); // Spanish +, US ]
+    post(WM_CHAR, '+' as usize, 1);
+    post(WM_CHAR, '+' as usize, 1 | REPEAT);
+    physical_key(0x1b, false);
+    post(WM_CHAR, '+' as usize, 1);
+    physical_key(0x14b, true); // Left, with the extended flag
+    physical_key(0x35, false); // Spanish -, US /
+    post(WM_CHAR, '-' as usize, 1);
+    post(WM_CHAR, 'ñ' as usize, 1);
+    physical_key(0x58, false); // F12
+    physical_key(0x1c, false); // Enter must produce one event even with WM_CHAR.
+    post(WM_CHAR, '\r' as usize, 1);
+    physical_key(0x01, false); // Escape
+
+    let expected = [43, 43, 28, 45, 241, 139, 13, 27];
+    for code in expected {
+        let line = rx.recv_timeout(Duration::from_secs(5)).expect("key output");
+        assert_eq!(line, format!("KEY={code}"));
+    }
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin
+        .write_all(
+            b"NEW\n\
+10 SCREEN\n\
+20 PRINT \"WAITING-EDITOR\"\n\
+30 GINPUT \"VALUE: \",A$\n\
+40 PRINT \"TEXT=\";A$\n\
+50 SCREEN CLOSE : END\n\
+RUN\n",
+        )
+        .unwrap();
+    let editor = wait_for_graphics_window(child.child.id(), Duration::from_secs(5));
+    wait_for_line(&rx, "WAITING-EDITOR", Duration::from_secs(5));
+    thread::sleep(Duration::from_millis(100));
+    for params in [1, 1 | REPEAT, 1 | REPEAT] {
+        assert_ne!(unsafe { PostMessageW(editor, WM_CHAR, '+' as usize, params) }, 0);
+    }
+    let enter = 1 | (0x1c << 16);
+    assert_ne!(unsafe { PostMessageW(editor, WM_KEYDOWN, 0, enter) }, 0);
+    assert_ne!(unsafe { PostMessageW(editor, WM_KEYUP, 0, enter | (0xc0000000u32 as isize)) }, 0);
+    wait_for_line(&rx, "TEXT=+++", Duration::from_secs(5));
+    wait_for_line(&rx, "Ready", Duration::from_secs(5));
+    stdin.write_all(b"QUIT\n").unwrap();
+    assert!(child.child.wait().unwrap().success());
+    child.finished = true;
+}
+
+#[test]
 #[ignore = "opens a real graphics window and verifies graphical PAUSE input"]
 fn graphics_pause_ignores_click_and_exits_for_consumed_key() {
     let child = Command::new(env!("CARGO_BIN_EXE_avl-basic"))

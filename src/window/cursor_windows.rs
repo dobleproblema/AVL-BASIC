@@ -1,7 +1,9 @@
 //! Keep cursor visibility local to the graphics window. minifb's Windows
 //! visibility setter changes ShowCursor's counter instead of a boolean state.
-//! The same HWND-owned callback queues native maximize requests for fullscreen.
+//! The same HWND-owned callback queues maximize requests and exposes the
+//! keyboard repeat bit while minifb dispatches input.
 use minifb::Window;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +14,12 @@ mod confinement;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_NCDESTROY: u32 = 0x0082;
 const WM_NCHITTEST: u32 = 0x0084;
+const WM_KEYDOWN: u32 = 0x0100;
+const WM_CHAR: u32 = 0x0102;
+const WM_SYSKEYDOWN: u32 = 0x0104;
+const WM_SYSCHAR: u32 = 0x0106;
 const WM_SYSCOMMAND: u32 = 0x0112;
+const PREVIOUS_KEY_STATE: isize = 1 << 30;
 const SC_MAXIMIZE: usize = 0xf030;
 const WM_MOUSEMOVE: isize = 0x0200;
 const HTCLIENT: isize = 1;
@@ -45,6 +52,14 @@ const MAXIMIZE_REQUESTED: &[u16] = &[
     117, 101, 115, 116, 101, 100, 0,
 ];
 static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
+
+thread_local! {
+    static KEYBOARD_MESSAGE_REPEATED: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(super) fn keyboard_message_is_repeat() -> bool {
+    KEYBOARD_MESSAGE_REPEATED.with(Cell::get)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -266,12 +281,27 @@ unsafe extern "system" fn cursor_subclass(
     {
         SetWindowLongPtrW(window, GWLP_WNDPROC, previous as isize);
     }
-    let mut result = if previous.is_null() {
-        DefWindowProcW(window, message, wparam, lparam)
+    let forward = || {
+        if previous.is_null() {
+            DefWindowProcW(window, message, wparam, lparam)
+        } else {
+            // The previous value can be a Windows-internal procedure token.
+            // It must go through CallWindowProc, never a direct Rust call.
+            CallWindowProcW(previous, window, message, wparam, lparam)
+        }
+    };
+    let mut result = if matches!(message, WM_KEYDOWN | WM_CHAR | WM_SYSKEYDOWN | WM_SYSCHAR) {
+        // minifb calls its input callback while processing this message, but
+        // omits lParam. Scope the repeat bit to this dispatch, including
+        // when the native procedure processes another message recursively.
+        KEYBOARD_MESSAGE_REPEATED.with(|repeat| {
+            let prior = repeat.replace(lparam & PREVIOUS_KEY_STATE != 0);
+            let result = forward();
+            repeat.set(prior);
+            result
+        })
     } else {
-        // The previous value can be a Windows-internal procedure token. It
-        // must go through CallWindowProc, never a direct Rust function call.
-        CallWindowProcW(previous, window, message, wparam, lparam)
+        forward()
     };
     if message == WM_NCHITTEST && result == 0 && clipped_fullscreen_edge(window, lparam) {
         // The physical pointer is inside our owned clip, but Windows rounded

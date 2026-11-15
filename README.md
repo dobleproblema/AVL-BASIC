@@ -195,7 +195,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 150-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 151-program catalog →](samples/README.md)**
 
 ## Download
 

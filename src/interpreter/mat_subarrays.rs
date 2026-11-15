@@ -1,6 +1,5 @@
 //! HP-style subarray copies. Selections copy only their own elements and leave
 //! the destination unchanged until all bounds and shape checks have succeeded.
-use super::debug_arrays::DebugArrayChange;
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -112,11 +111,6 @@ impl CopyAxis {
         } else {
             self.start + offset
         }
-    }
-
-    fn ascending_range(self) -> std::ops::Range<usize> {
-        let end = self.at(self.len - 1);
-        self.start.min(end)..self.start.max(end) + 1
     }
 
     fn resolve(selector: &CopySelector, bound: usize, base: usize) -> BasicResult<Self> {
@@ -445,16 +439,6 @@ impl Interpreter {
         // Mutation starts only after all validation; values contain only K
         // selected elements, also when two names alias the same array.
         let key = self.array_lookup_key(&left.name).into_owned();
-        let debug_change = self
-            .debug_array_write_stamp()
-            .filter(|_| target_block.count() != 0)
-            .map(|stamp| {
-                let change = DebugArrayChange::Rectangle {
-                    rows: target_block.rows.ascending_range(),
-                    columns: target_block.cols.ascending_range(),
-                };
-                (stamp, change)
-            });
         if let Some(dims) = new_dims {
             let mut result = if base == 0 {
                 ArrayValue::checked_data_len(&dims)
@@ -463,7 +447,7 @@ impl Interpreter {
                     dims,
                     data: values,
                     last_debug_write: None,
-                    debug_writes: None,
+                    debug_before: Default::default(),
                     debug_binding_id: Cell::new(0),
                 }
             } else {
@@ -481,9 +465,6 @@ impl Interpreter {
                 array
             };
             result.clear_debug_write();
-            if let Some((stamp, change)) = debug_change {
-                result.remember_debug_array_change(stamp, change);
-            }
             self.arrays.insert(key, result);
         } else {
             let destination = self.arrays.get_mut(&key).unwrap();
@@ -497,9 +478,6 @@ impl Interpreter {
                 _ => unreachable!(),
             }
             destination.clear_debug_write();
-            if let Some((stamp, change)) = debug_change {
-                destination.remember_debug_array_change(stamp, change);
-            }
         }
         self.return_array_for_active_function(&left.name);
         Ok(())

@@ -1,68 +1,157 @@
-//! Bounded reads of live array storage during a debugger pause.
+//! Bounded array reads and exact change tracking between debugger pauses.
 use super::*;
 use crate::debugger::{
     DebugArrayPin, DebugArrayScope, DebugArrayWindow, DebugArrayWindowRequest,
     MAX_DEBUG_ARRAY_PREVIEW_WIDTH, MAX_DEBUG_ARRAY_WINDOW_CELLS,
 };
-use std::ops::Range;
 
 static NEXT_BINDING_ID: AtomicU64 = AtomicU64::new(1);
 
+// Record a small page only when an indexed write first touches it. Bulk
+// operations retain the complete original and fold in any pages already saved.
+const ARRAY_DEBUG_PAGE_CELLS: usize = 128;
+
 #[derive(Debug)]
-pub(super) enum DebugArrayChange {
-    Cell(usize),
-    Cells(HashSet<usize>),
-    Rectangle {
-        rows: Range<usize>,
-        columns: Range<usize>,
-    },
-    BaseOne,
-    All,
+pub(super) enum DebugArrayBefore {
+    Pages(HashMap<usize, ArrayData>),
+    Whole { dims: Vec<usize>, data: ArrayData },
 }
 
-impl DebugArrayChange {
-    fn contains(&self, array: &ArrayValue, flat: usize, row: usize, column: usize) -> bool {
-        match self {
-            Self::Cell(cell) => *cell == flat,
-            Self::Cells(cells) => cells.contains(&flat),
-            Self::Rectangle { rows, columns } => rows.contains(&row) && columns.contains(&column),
-            Self::BaseOne => {
-                let mut offset = flat;
-                array.dims.iter().rev().all(|bound| {
-                    let extent = bound + 1;
-                    let active = offset % extent != 0;
-                    offset /= extent;
-                    active
-                })
-            }
-            Self::All => true,
+impl DebugArrayBefore {
+    fn remember_cell(&mut self, data: &ArrayData, flat: usize) {
+        if let Self::Pages(pages) = self {
+            let start = flat / ARRAY_DEBUG_PAGE_CELLS * ARRAY_DEBUG_PAGE_CELLS;
+            pages.entry(start).or_insert_with(|| match data {
+                ArrayData::Number(values) => ArrayData::Number(
+                    values[start..(start + ARRAY_DEBUG_PAGE_CELLS).min(values.len())].to_vec(),
+                ),
+                ArrayData::Str(values) => ArrayData::Str(
+                    values[start..(start + ARRAY_DEBUG_PAGE_CELLS).min(values.len())].to_vec(),
+                ),
+            });
         }
     }
 
-    fn nearest_to_origin(&self, array: &ArrayValue) -> Option<Vec<i32>> {
-        let indexes = match self {
-            Self::Cell(flat) => array.indexes_for_flat(*flat),
-            Self::Cells(cells) => {
-                // Row-major offsets sort in the same order as the coordinates.
-                let flat = cells
-                    .iter()
-                    .copied()
-                    .min_by_key(|&flat| (squared_distance_to_origin(flat, &array.dims), flat))?;
-                array.indexes_for_flat(flat)
-            }
-            Self::Rectangle { rows, columns } => {
-                let mut indexes = vec![0; array.dims.len()];
-                *indexes.first_mut()? = rows.start as i32;
-                if let Some(index) = indexes.get_mut(1) {
-                    *index = columns.start as i32;
-                }
-                indexes
-            }
-            Self::BaseOne => vec![1; array.dims.len()],
-            Self::All => vec![0; array.dims.len()],
+    fn remember_whole(&mut self, array: &ArrayValue) {
+        let Self::Pages(pages) = self else {
+            return;
         };
-        Some(indexes)
+        let mut data = array.data.clone();
+        for (start, page) in pages.drain() {
+            match (&mut data, page) {
+                (ArrayData::Number(values), ArrayData::Number(mut page)) => {
+                    values[start..start + page.len()].swap_with_slice(&mut page);
+                }
+                (ArrayData::Str(values), ArrayData::Str(mut page)) => {
+                    values[start..start + page.len()].swap_with_slice(&mut page);
+                }
+                _ => unreachable!("recorded array pages retain their element type"),
+            }
+        }
+        *self = Self::Whole {
+            dims: array.dims.clone(),
+            data,
+        };
     }
+
+    fn differs(&self, array: &ArrayValue, flat: usize) -> bool {
+        match self {
+            Self::Pages(pages) => {
+                let start = flat / ARRAY_DEBUG_PAGE_CELLS * ARRAY_DEBUG_PAGE_CELLS;
+                pages
+                    .get(&start)
+                    .is_some_and(|page| array_cell_differs(page, flat - start, &array.data, flat))
+            }
+            Self::Whole { dims, data } => offset_in_previous_shape(flat, &array.dims, dims)
+                .map_or_else(
+                    || differs_from_default(&array.data, flat),
+                    |old| array_cell_differs(data, old, &array.data, flat),
+                ),
+        }
+    }
+
+    fn nearest_to_origin(before: Option<&Self>, array: &ArrayValue) -> Option<Vec<i32>> {
+        let mut nearest = None;
+        let mut consider = |flat| {
+            let key = (squared_distance_to_origin(flat, &array.dims), flat);
+            nearest = Some(nearest.map_or(key, |current| key.min(current)));
+        };
+        match before {
+            Some(Self::Pages(pages)) => {
+                for (&start, data) in pages {
+                    let len = match data {
+                        ArrayData::Number(values) => values.len(),
+                        ArrayData::Str(values) => values.len(),
+                    };
+                    for offset in 0..len {
+                        let flat = start + offset;
+                        if array_cell_differs(data, offset, &array.data, flat) {
+                            consider(flat);
+                        }
+                    }
+                }
+            }
+            _ => {
+                for flat in 0..array.data_len() {
+                    if cell_changed(before, array, flat) {
+                        consider(flat);
+                    }
+                }
+            }
+        }
+        nearest.map(|(_, flat)| array.indexes_for_flat(flat))
+    }
+}
+
+fn cell_changed(before: Option<&DebugArrayBefore>, array: &ArrayValue, flat: usize) -> bool {
+    match before {
+        Some(before) => before.differs(array, flat),
+        None => differs_from_default(&array.data, flat),
+    }
+}
+
+fn differs_from_default(data: &ArrayData, flat: usize) -> bool {
+    match data {
+        ArrayData::Number(values) => values[flat] != 0.0,
+        ArrayData::Str(values) => !values[flat].is_empty(),
+    }
+}
+
+fn array_cell_differs(before: &ArrayData, old: usize, current: &ArrayData, new: usize) -> bool {
+    match (before, current) {
+        (ArrayData::Number(previous), ArrayData::Number(values)) => {
+            let (before, after) = (previous[old], values[new]);
+            before != after && before.to_bits() != after.to_bits()
+        }
+        (ArrayData::Str(previous), ArrayData::Str(values)) => previous[old] != values[new],
+        _ => true,
+    }
+}
+
+fn offset_in_previous_shape(
+    mut flat: usize,
+    current: &[usize],
+    previous: &[usize],
+) -> Option<usize> {
+    if current == previous {
+        return Some(flat);
+    }
+    if current.len() != previous.len() {
+        return None;
+    }
+    let mut old = 0;
+    let mut stride = 1;
+    for (&bound, &old_bound) in current.iter().zip(previous).rev() {
+        let span = bound + 1;
+        let index = flat % span;
+        if index > old_bound {
+            return None;
+        }
+        old += index * stride;
+        stride *= old_bound + 1;
+        flat /= span;
+    }
+    Some(old)
 }
 
 fn squared_distance_to_origin(mut flat: usize, dimensions: &[usize]) -> u128 {
@@ -76,71 +165,40 @@ fn squared_distance_to_origin(mut flat: usize, dimensions: &[usize]) -> u128 {
     distance
 }
 
-#[derive(Debug)]
-pub(super) struct DebugArrayWrites {
-    stamp: u64,
-    change: DebugArrayChange,
-}
-
 impl ArrayValue {
-    pub(super) fn remember_debug_array_change(&mut self, stamp: u64, change: DebugArrayChange) {
-        if stamp == 0 {
-            return;
+    #[inline]
+    pub(super) fn remember_debug_cell_before(&self, flat: usize) {
+        if let Some(before) = self.debug_before.upgrade() {
+            before.borrow_mut().remember_cell(&self.data, flat);
         }
-        let Some(writes) = self.debug_writes.as_mut() else {
-            self.debug_writes = Some(Box::new(DebugArrayWrites { stamp, change }));
-            return;
-        };
-        if writes.stamp == stamp {
-            if let DebugArrayChange::Cell(cell) = change {
-                match &mut writes.change {
-                    DebugArrayChange::Cell(previous) if *previous != cell => {
-                        writes.change = DebugArrayChange::Cells(HashSet::from([*previous, cell]));
-                    }
-                    DebugArrayChange::Cells(cells) => {
-                        cells.insert(cell);
-                    }
-                    _ => {}
-                }
-                return;
-            }
+    }
+
+    #[inline]
+    pub(super) fn remember_debug_array_before(&self) {
+        if let Some(before) = self.debug_before.upgrade() {
+            before.borrow_mut().remember_whole(self);
         }
-        **writes = DebugArrayWrites { stamp, change };
     }
 }
 
 impl Interpreter {
-    #[inline(always)]
-    pub(super) fn debug_array_write_stamp(&self) -> Option<u64> {
-        let state = self.debugger_state.as_ref()?;
-        state.debugger.as_ref()?;
-        Some(state.active_array_command)
-    }
-
-    pub(super) fn with_debug_array_command<T>(
-        &mut self,
-        boundary: bool,
-        execute: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        if !boundary {
-            return execute(self);
-        }
-        let Some(state) = self
-            .debugger_state
-            .as_mut()
-            .filter(|state| state.debugger.is_some())
-        else {
-            return execute(self);
-        };
-        state.next_array_command += 1;
-        let stamp = state.next_array_command;
-        let previous = std::mem::replace(&mut state.active_array_command, stamp);
-        let result = execute(self);
-        if let Some(state) = self.debugger_state.as_mut() {
-            state.last_array_command = stamp;
-            state.active_array_command = previous;
-        }
-        result
+    #[cold]
+    pub(super) fn begin_debug_array_interval(&mut self) {
+        let baselines = self
+            .arrays
+            .slots
+            .iter_mut()
+            .flatten()
+            .map(|array| {
+                let before = Rc::new(RefCell::new(DebugArrayBefore::Pages(HashMap::new())));
+                array.debug_before = Rc::downgrade(&before);
+                before
+            })
+            .collect();
+        // The debugger owns the originals. Stopping DEBUG, restarting, or
+        // starting another interval drops them even for arrays moved between
+        // modules or temporarily hidden by a LOCAL binding.
+        self.debugger_state.as_mut().unwrap().array_baselines = Some(baselines);
     }
 
     pub(super) fn debug_array_window(
@@ -185,20 +243,18 @@ impl Interpreter {
             .preview_width
             .clamp(1, MAX_DEBUG_ARRAY_PREVIEW_WIDTH);
         let mut cells = Vec::with_capacity(count);
-        let recent = self.debug_recent_array_change(array);
+        let has_baseline = self
+            .debugger_state
+            .as_ref()
+            .is_some_and(|state| state.array_baselines.is_some());
+        let before = array.debug_before.upgrade();
+        let before = before.as_ref().map(|before| before.borrow());
         let mut changed = Vec::with_capacity(count);
         for row in 0..request.row_count {
             for col in 0..request.col_count {
                 let flat = start + row * row_stride + col * col_stride;
                 cells.push(cell_preview(array, flat, width));
-                changed.push(recent.is_some_and(|change| {
-                    change.contains(
-                        array,
-                        flat,
-                        request.first_row as usize + row,
-                        request.first_col as usize + col,
-                    )
-                }));
+                changed.push(has_baseline && cell_changed(before.as_deref(), array, flat));
             }
         }
         Ok(DebugArrayWindow {
@@ -208,16 +264,12 @@ impl Interpreter {
         })
     }
 
-    fn debug_recent_array_change<'a>(&self, array: &'a ArrayValue) -> Option<&'a DebugArrayChange> {
-        let state = self.debugger_state.as_ref()?;
-        let writes = array.debug_writes.as_ref()?;
-        (writes.stamp == state.last_array_command).then_some(&writes.change)
-    }
-
-    pub(super) fn debug_last_array_write(&self, name: &str) -> Option<Vec<i32>> {
+    pub(super) fn debug_nearest_array_change(&self, name: &str) -> Option<Vec<i32>> {
+        self.debugger_state.as_ref()?.array_baselines.as_ref()?;
         let array = self.debug_existing_array(&name.to_ascii_uppercase()).ok()?;
-        self.debug_recent_array_change(array)?
-            .nearest_to_origin(array)
+        let before = array.debug_before.upgrade();
+        let before = before.as_ref().map(|before| before.borrow());
+        DebugArrayBefore::nearest_to_origin(before.as_deref(), array)
     }
 
     pub(super) fn debug_array_cell(
@@ -411,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn window_highlights_only_writes_from_the_previous_statement() {
+    fn stepping_compares_with_the_previous_visible_pause() {
         let mut interpreter = Interpreter::new();
         interpreter
             .program
@@ -445,7 +497,7 @@ mod tests {
                 30 if location.command.trim() == "X=1" => (&[7], &[]),
                 50 => (&[4, 5, 7, 8], &[]),
                 60 => (&[], &[5, 8]),
-                70 | 110 => (&[0, 1, 2, 3, 4, 5, 6, 7, 8], &[]),
+                70 => (&[0, 1, 2, 3, 5, 6, 7, 8], &[]),
                 80 => (&[8], &[]),
                 120 => (&[4], &[]),
                 _ => (&[], &[]),
@@ -475,6 +527,70 @@ mod tests {
             Ok(DebugAction::StepInto)
         });
         debugger.set_breakpoint(30, true);
+        interpreter.set_debugger(debugger);
+        assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+    }
+
+    #[test]
+    fn step_out_tracks_net_changes_across_writes_and_bulk_operations() {
+        let mut interpreter = Interpreter::new();
+        interpreter
+            .program
+            .load_text(
+                "10 DIM A(2,200),S$(2)\n\
+                 20 A(0,2)=7 : A(1,0)=8 : S$(1)=\"old\"\n\
+                 30 GOSUB 100\n\
+                 40 END\n\
+                 100 A(0,0)=9 : A(0,1)=0 : S$(1)=\"temporary\"\n\
+                 110 A(0,0)=0 : A(0,2)=0 : S$(1)=\"old\"\n\
+                 120 MAT A=MAP(INT,A)\n\
+                 130 REDIM A(2,201)\n\
+                 140 A(0,201)=3 : A(1,0)=8 : S$(2)=\"new\" : B(3)=6\n\
+                 150 RETURN",
+            )
+            .unwrap();
+        let mut debugger = Debugger::interactive_editable(|snapshot, _, access| {
+            let window = |name, first_row, first_col, row_count, col_count| {
+                access
+                    .array_window(
+                        name,
+                        &DebugArrayWindowRequest {
+                            first_row,
+                            first_col,
+                            row_count,
+                            col_count,
+                            higher_indexes: vec![],
+                            preview_width: 10,
+                        },
+                    )
+                    .unwrap()
+            };
+            match snapshot.location.line {
+                100 => {
+                    assert_eq!(window("A", 0, 0, 1, 3).changed, [false; 3]);
+                    assert_eq!(access.last_array_write("A"), None);
+                }
+                150 => {
+                    assert_eq!(window("A", 0, 0, 1, 3).changed, [false, false, true]);
+                    assert_eq!(window("A", 0, 200, 1, 2).changed, [false, true]);
+                    assert_eq!(window("A", 1, 0, 1, 1).changed, [false]);
+                    assert_eq!(window("S$", 0, 0, 3, 1).changed, [false, false, true]);
+                    assert_eq!(window("B", 0, 0, 4, 1).changed, [false, false, false, true]);
+                    assert_eq!(access.last_array_write("A"), Some(vec![0, 2]));
+                    assert_eq!(access.last_array_write("S$"), Some(vec![2]));
+                    assert_eq!(access.last_array_write("B"), Some(vec![3]));
+                }
+                40 => {
+                    assert_eq!(window("A", 0, 0, 1, 3).changed, [false; 3]);
+                    assert_eq!(access.last_array_write("A"), None);
+                    return Ok(DebugAction::Continue);
+                }
+                line => panic!("unexpected debugger pause at {line}"),
+            }
+            Ok(DebugAction::StepOut)
+        });
+        debugger.set_breakpoint(100, true);
+        debugger.set_breakpoint(150, true);
         interpreter.set_debugger(debugger);
         assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
     }

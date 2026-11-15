@@ -216,7 +216,7 @@ impl ArrayView {
         if let Some(indexes) = indexes {
             self.go_to(indexes, cols, rows);
         } else {
-            self.set_message("No writes for this array.");
+            self.set_message("No changes for this array.");
         }
     }
 
@@ -523,7 +523,7 @@ impl ArrayView {
                 append_status_hint(&mut status, "[/] Value", cols);
             }
             for hint in [
-                "J Last write",
+                "J Nearest change",
                 "G Go to",
                 "Space Pin",
                 "Esc Arrays",
@@ -834,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn last_write_jump_reveals_the_cell_in_its_slice() {
+    fn nearest_change_jump_reveals_the_cell_in_its_slice() {
         let mut view = ArrayView::new(numeric_array(vec![99999, 79, 2]));
         let access = WindowAccess::default();
         assert_eq!(
@@ -844,7 +844,7 @@ mod tests {
         view.jump_to_write(Some(vec![50000, 12, 2]), 36, 14);
 
         let frame = view.read_frame(&access, 36, 14, GridPalette::default(), true, false);
-        assert!(frame.status.contains("J Last write"));
+        assert!(frame.status.contains("J Nearest change"));
         assert!(frame.detail.unwrap().starts_with("M(50000,12,2)"));
         let reads = access.window_reads.borrow();
         let request = &reads[0];
@@ -854,13 +854,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_stale_last_write_leaves_selection_in_place() {
+    fn missing_or_stale_change_leaves_selection_in_place() {
         let mut view = ArrayView::new(numeric_array(vec![3]));
         view.handle_key(key(KeyCode::Down), 36, 14);
         for indexes in [None, Some(vec![4])] {
             view.jump_to_write(indexes, 36, 14);
             assert_eq!(view.selected, [1]);
-            assert_eq!(view.message.as_deref(), Some("No writes for this array."));
+            assert_eq!(view.message.as_deref(), Some("No changes for this array."));
         }
     }
 

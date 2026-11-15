@@ -360,7 +360,6 @@ impl Interpreter {
                 function: plan.function,
             };
             let source_key = self.array_lookup_key(source);
-            let stamp = self.debug_array_write_stamp();
             let reusable = NamedMap::can_reuse_destination(plan.function)
                 .then(|| {
                     try_reuse_map_buffer(&mut self.arrays, source_key.as_ref(), target_key.as_ref())
@@ -374,9 +373,6 @@ impl Interpreter {
                     .transform(values, &array.dims, self.mat_base, self.angle_degrees)
                     .expect("reusing the destination requires an infallible function");
                 array.clear_debug_write();
-                if let Some(stamp) = stamp {
-                    array.remember_debug_array_change(stamp, super::DebugArrayChange::All);
-                }
                 self.return_array_for_active_function(target);
                 return Ok(());
             }
@@ -413,7 +409,11 @@ fn try_reuse_map_buffer<'a>(
     let target = *arrays.names.get(target)?;
     if target == source {
         let array = arrays.slots[target].as_mut()?;
-        return (matches!(array.dims.len(), 1 | 2) && !array.is_string()).then_some(array);
+        if !matches!(array.dims.len(), 1 | 2) || array.is_string() {
+            return None;
+        }
+        array.remember_debug_array_before();
+        return Some(array);
     }
     let (source, target) = if source < target {
         let (left, right) = arrays.slots.split_at_mut(target);
@@ -422,12 +422,17 @@ fn try_reuse_map_buffer<'a>(
         let (left, right) = arrays.slots.split_at_mut(source);
         (right[0].as_ref()?, left[target].as_mut()?)
     };
-    if !matches!(source.dims.len(), 1 | 2) || source.dims != target.dims {
+    if !matches!(source.dims.len(), 1 | 2)
+        || source.dims != target.dims
+        || source.is_string()
+        || target.is_string()
+    {
         return None;
     }
+    target.remember_debug_array_before();
     let (ArrayData::Number(source), ArrayData::Number(values)) = (&source.data, &mut target.data)
     else {
-        return None;
+        unreachable!("numeric arrays verified");
     };
     values.copy_from_slice(source);
     Some(target)

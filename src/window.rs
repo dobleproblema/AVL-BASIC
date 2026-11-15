@@ -23,6 +23,8 @@ mod fullscreen;
 use fullscreen::FullscreenController;
 #[cfg(target_os = "linux")]
 mod confinement_linux;
+#[cfg(target_os = "linux")]
+mod input_repeat_linux;
 #[cfg(all(windows, test))]
 mod confinement_tests;
 #[cfg(target_os = "linux")]
@@ -97,23 +99,82 @@ impl PresentationViewport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphicsInputEvent {
     Character(char),
-    Enter,
-    Escape,
-    Backspace,
-    Delete,
-    Left,
-    Right,
-    Home,
-    End,
+    Special(u8),
 }
 
-type InputEventQueue = Rc<RefCell<VecDeque<GraphicsInputEvent>>>;
+#[derive(Default)]
+struct GraphicsInputQueue {
+    events: VecDeque<(GraphicsInputEvent, bool)>,
+    high_surrogate: Option<(u32, bool)>,
+}
 
-fn has_pending_pause_key(
-    key_queue: &VecDeque<u8>,
-    input_events: &VecDeque<GraphicsInputEvent>,
-) -> bool {
-    !key_queue.is_empty() || !input_events.is_empty()
+impl GraphicsInputQueue {
+    fn push(&mut self, event: GraphicsInputEvent, is_repeat: bool) {
+        if self.events.len() >= INPUT_EVENT_QUEUE_LIMIT {
+            self.events.pop_front();
+        }
+        self.events.push_back((event, is_repeat));
+    }
+
+    fn take_event(&mut self) -> Option<GraphicsInputEvent> {
+        self.events.pop_front().map(|(event, _)| event)
+    }
+
+    fn take_press(&mut self) -> Option<GraphicsInputEvent> {
+        while let Some((event, is_repeat)) = self.events.pop_front() {
+            if !is_repeat {
+                return Some(event);
+            }
+        }
+        None
+    }
+
+    fn clear(&mut self) {
+        self.events.clear();
+        self.high_surrogate = None;
+    }
+
+    fn push_text(&mut self, codepoint: u32, is_repeat: bool) {
+        // Win32 WM_CHAR supplies UTF-16 code units. Other backends can
+        // supply a Unicode scalar directly.
+        let high_surrogate = self.high_surrogate.take();
+        let (scalar, is_repeat) = match codepoint {
+            0xd800..=0xdbff => {
+                self.high_surrogate = Some((codepoint, is_repeat));
+                return;
+            }
+            0xdc00..=0xdfff => {
+                let Some((high, high_is_repeat)) = high_surrogate else {
+                    return;
+                };
+                (
+                    0x10000 + ((high - 0xd800) << 10) + (codepoint - 0xdc00),
+                    is_repeat || high_is_repeat,
+                )
+            }
+            _ => (codepoint, is_repeat),
+        };
+        // Enter, Backspace and Tab can also generate text messages. They
+        // already enter the queue as special keys through set_key_state.
+        if let Some(character) = char::from_u32(scalar).filter(|ch| !ch.is_control()) {
+            self.push(GraphicsInputEvent::Character(character), is_repeat);
+        }
+    }
+}
+
+type SharedGraphicsInput = Rc<RefCell<GraphicsInputQueue>>;
+
+#[cfg(target_os = "linux")]
+struct LinuxEditorRepeat {
+    enabled: Rc<Cell<bool>>,
+    previous: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxEditorRepeat {
+    fn drop(&mut self) {
+        self.enabled.set(self.previous);
+    }
 }
 
 #[derive(Default)]
@@ -124,7 +185,7 @@ struct FullscreenShortcut {
 }
 
 struct GraphicsInputCallback {
-    events: InputEventQueue,
+    input: SharedGraphicsInput,
     shortcut: Rc<FullscreenShortcut>,
 }
 
@@ -145,30 +206,19 @@ fn callback_native_alt_down() -> bool {
     false
 }
 
-impl GraphicsInputCallback {
-    fn push(&self, event: GraphicsInputEvent) {
-        let mut events = self.events.borrow_mut();
-        if events.len() >= INPUT_EVENT_QUEUE_LIMIT {
-            events.pop_front();
-        }
-        events.push_back(event);
-    }
+#[cfg(windows)]
+use cursor_windows::keyboard_message_is_repeat;
+
+#[cfg(not(windows))]
+fn keyboard_message_is_repeat() -> bool {
+    false
 }
 
 impl InputCallback for GraphicsInputCallback {
     fn add_char(&mut self, codepoint: u32) {
-        if let Some(ch) = char::from_u32(codepoint) {
-            if matches!(ch, '\r' | '\n') {
-                if self.shortcut.alt_keys.get() != 0 || callback_native_alt_down() {
-                    return;
-                }
-                self.push(GraphicsInputEvent::Enter);
-                return;
-            }
-            if !ch.is_control() {
-                self.push(GraphicsInputEvent::Character(ch));
-            }
-        }
+        self.input
+            .borrow_mut()
+            .push_text(codepoint, keyboard_message_is_repeat());
     }
 
     fn set_key_state(&mut self, key: Key, pressed: bool) {
@@ -190,33 +240,21 @@ impl InputCallback for GraphicsInputCallback {
             return;
         }
         if matches!(key, Key::Enter | Key::NumPadEnter) {
-            if pressed
-                && !self.shortcut.enter_down.get()
-                && (self.shortcut.alt_keys.get() != 0 || callback_native_alt_down())
-            {
-                self.shortcut.requested.set(true);
+            let was_down = self.shortcut.enter_down.replace(pressed);
+            if pressed && (self.shortcut.alt_keys.get() != 0 || callback_native_alt_down()) {
+                if !was_down {
+                    self.shortcut.requested.set(true);
+                }
+                return;
             }
-            self.shortcut.enter_down.set(pressed);
         }
-        if !pressed {
-            return;
-        }
-        let event = match key {
-            Key::Enter | Key::NumPadEnter
-                if self.shortcut.alt_keys.get() == 0 && !callback_native_alt_down() =>
-            {
-                GraphicsInputEvent::Enter
+        if pressed {
+            if let Some(code) = special_key_code(key) {
+                self.input
+                    .borrow_mut()
+                    .push(GraphicsInputEvent::Special(code), keyboard_message_is_repeat());
             }
-            Key::Escape => GraphicsInputEvent::Escape,
-            Key::Backspace => GraphicsInputEvent::Backspace,
-            Key::Delete => GraphicsInputEvent::Delete,
-            Key::Left => GraphicsInputEvent::Left,
-            Key::Right => GraphicsInputEvent::Right,
-            Key::Home => GraphicsInputEvent::Home,
-            Key::End => GraphicsInputEvent::End,
-            _ => return,
-        };
-        self.push(event);
+        }
     }
 }
 
@@ -231,6 +269,9 @@ pub struct GraphicsWindow {
     linux_blit_pending: bool,
     #[cfg(target_os = "linux")]
     pointer_confinement: confinement_linux::State,
+    // Restore the wire converters before minifb closes their X11 display.
+    #[cfg(target_os = "linux")]
+    input_repeat_filter: Option<input_repeat_linux::InputRepeatFilter>,
     window: Window,
     width: usize,
     height: usize,
@@ -240,8 +281,7 @@ pub struct GraphicsWindow {
     // Whether the optional native request is armed, including a refused grab.
     pointer_confinement_requested: bool,
     pointer_confinement_failed: bool,
-    key_queue: VecDeque<u8>,
-    input_events: InputEventQueue,
+    input: SharedGraphicsInput,
     ctrl_c_down: bool,
     fullscreen: FullscreenController,
     fullscreen_requested: bool,
@@ -295,10 +335,10 @@ impl GraphicsWindow {
         // immediate mode). A minifb-side FPS cap here would sleep on every
         // event/buffer update and make PLOT-heavy programs unusably slow.
         window.set_target_fps(0);
-        let input_events = InputEventQueue::default();
+        let input = SharedGraphicsInput::default();
         let fullscreen_shortcut = Rc::new(FullscreenShortcut::default());
         window.set_input_callback(Box::new(GraphicsInputCallback {
-            events: input_events.clone(),
+            input: input.clone(),
             shortcut: fullscreen_shortcut.clone(),
         }));
         let mut graphics_window = Self {
@@ -311,6 +351,8 @@ impl GraphicsWindow {
             linux_blit_pending: true,
             #[cfg(target_os = "linux")]
             pointer_confinement: confinement_linux::State::default(),
+            #[cfg(target_os = "linux")]
+            input_repeat_filter: input_repeat_linux::InputRepeatFilter::new(&window),
             window,
             width: graphics.width,
             height: graphics.height,
@@ -319,8 +361,7 @@ impl GraphicsWindow {
             pointer_confinement_suspended: false,
             pointer_confinement_requested: false,
             pointer_confinement_failed: false,
-            key_queue: VecDeque::new(),
-            input_events,
+            input,
             ctrl_c_down: false,
             fullscreen: FullscreenController::default(),
             fullscreen_requested: false,
@@ -694,17 +735,12 @@ impl GraphicsWindow {
         self.update_pointer_confinement();
     }
 
-    pub fn clear_key_queue(&mut self) {
-        self.key_queue.clear();
-        self.input_events.borrow_mut().clear();
+    fn clear_key_queue(&mut self) {
+        self.input.borrow_mut().clear();
     }
 
     pub fn consume_pause_key(&mut self) -> bool {
-        let pending = {
-            let input_events = self.input_events.borrow();
-            has_pending_pause_key(&self.key_queue, &input_events)
-        };
-        if !pending {
+        if self.input.borrow().events.is_empty() {
             return false;
         }
         self.clear_key_queue();
@@ -712,17 +748,15 @@ impl GraphicsWindow {
     }
 
     pub fn clear_transient_input(&mut self) {
-        self.key_queue.clear();
-        self.input_events.borrow_mut().clear();
+        self.clear_key_queue();
         self.fullscreen_shortcut.alt_keys.set(0);
         self.fullscreen_shortcut.enter_down.set(false);
         self.fullscreen_shortcut.requested.set(false);
         if self.window.is_open() {
             self.window.update();
-            let _ = self.window.get_keys_pressed(KeyRepeat::No);
             self.ctrl_c_down = self.ctrl_c_state().down;
         }
-        self.input_events.borrow_mut().clear();
+        self.clear_key_queue();
     }
 
     #[cfg(any(windows, target_os = "linux"))]
@@ -748,12 +782,22 @@ impl GraphicsWindow {
         self.ctrl_c_down = self.ctrl_c_state().down;
     }
 
-    pub fn take_key_code(&mut self) -> Option<u8> {
-        self.key_queue.pop_front()
+    pub fn take_key_char(&mut self) -> Option<char> {
+        self.input.borrow_mut().take_press().map(|event| match event {
+            GraphicsInputEvent::Character(character) => character,
+            GraphicsInputEvent::Special(code) => char::from(code),
+        })
     }
 
     pub fn take_input_event(&mut self) -> Option<GraphicsInputEvent> {
-        self.input_events.borrow_mut().pop_front()
+        self.input.borrow_mut().take_event()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn allow_key_repeats(&self) -> Option<impl Drop> {
+        let enabled = self.input_repeat_filter.as_ref()?.allow_repeat();
+        let previous = enabled.replace(true);
+        Some(LinuxEditorRepeat { enabled, previous })
     }
 
     pub fn key_down_code(&self, code: u8) -> bool {
@@ -845,25 +889,16 @@ impl GraphicsWindow {
     }
 
     fn update_keyboard(&mut self) {
-        let fullscreen_key = self.update_fullscreen_shortcut();
+        self.update_fullscreen_shortcut();
         self.update_pointer_confinement();
         if self.update_ctrl_c_state() {
-            self.key_queue.clear();
-            self.input_events.borrow_mut().clear();
+            self.clear_key_queue();
             return;
         }
-        let ctrl_down = self.ctrl_down();
-        for key in self.window.get_keys_pressed(KeyRepeat::No) {
-            if fullscreen_key && matches!(key, Key::Enter | Key::NumPadEnter) {
-                continue;
-            }
-            if key == Key::C && ctrl_down {
-                console::request_interrupt();
-                continue;
-            }
-            if let Some(code) = key_to_code(key, self.shift_down()) {
-                self.key_queue.push_back(code);
-            }
+        if self.ctrl_down() && !self.alt_down() && self.window.is_key_pressed(Key::C, KeyRepeat::No)
+        {
+            console::request_interrupt();
+            self.clear_key_queue();
         }
     }
 
@@ -892,6 +927,7 @@ impl GraphicsWindow {
         const VK_CONTROL: i32 = 0x11;
         const VK_LCONTROL: i32 = 0xA2;
         const VK_RCONTROL: i32 = 0xA3;
+        const VK_MENU: i32 = 0x12;
         const VK_C: i32 = 0x43;
 
         unsafe {
@@ -899,10 +935,14 @@ impl GraphicsWindow {
             let ctrl = GetAsyncKeyState(VK_CONTROL) as u16;
             let left_ctrl = GetAsyncKeyState(VK_LCONTROL) as u16;
             let right_ctrl = GetAsyncKeyState(VK_RCONTROL) as u16;
+            let alt = GetAsyncKeyState(VK_MENU) as u16;
 
             CtrlCState {
                 foreground: GetForegroundWindow() == self.window.get_window_handle(),
-                down: c & 0x8000 != 0 && (ctrl | left_ctrl | right_ctrl) & 0x8000 != 0,
+                // Windows can report AltGr as Ctrl+Alt on layouts that use it.
+                down: c & 0x8000 != 0
+                    && (ctrl | left_ctrl | right_ctrl) & 0x8000 != 0
+                    && alt & 0x8000 == 0,
             }
         }
     }
@@ -911,16 +951,18 @@ impl GraphicsWindow {
     fn ctrl_c_state(&self) -> CtrlCState {
         CtrlCState {
             foreground: true,
-            down: self.ctrl_down() && self.window.is_key_down(Key::C),
+            down: self.ctrl_down() && !self.alt_down() && self.window.is_key_down(Key::C),
         }
-    }
-
-    fn shift_down(&self) -> bool {
-        self.window.is_key_down(Key::LeftShift) || self.window.is_key_down(Key::RightShift)
     }
 
     fn ctrl_down(&self) -> bool {
         self.window.is_key_down(Key::LeftCtrl) || self.window.is_key_down(Key::RightCtrl)
+    }
+
+    fn alt_down(&self) -> bool {
+        callback_native_alt_down()
+            || self.window.is_key_down(Key::LeftAlt)
+            || self.window.is_key_down(Key::RightAlt)
     }
 }
 
@@ -1089,45 +1131,8 @@ fn png_pixel_to_argb(pixels: &[u8], color_type: png::ColorType, index: usize) ->
 #[cfg(not(any(windows, target_os = "linux")))]
 fn set_embedded_window_icon(_window: &mut Window) {}
 
-fn key_to_code(key: Key, shifted: bool) -> Option<u8> {
+fn special_key_code(key: Key) -> Option<u8> {
     match key {
-        Key::A => Some(if shifted { b'A' } else { b'a' }),
-        Key::B => Some(if shifted { b'B' } else { b'b' }),
-        Key::C => Some(if shifted { b'C' } else { b'c' }),
-        Key::D => Some(if shifted { b'D' } else { b'd' }),
-        Key::E => Some(if shifted { b'E' } else { b'e' }),
-        Key::F => Some(if shifted { b'F' } else { b'f' }),
-        Key::G => Some(if shifted { b'G' } else { b'g' }),
-        Key::H => Some(if shifted { b'H' } else { b'h' }),
-        Key::I => Some(if shifted { b'I' } else { b'i' }),
-        Key::J => Some(if shifted { b'J' } else { b'j' }),
-        Key::K => Some(if shifted { b'K' } else { b'k' }),
-        Key::L => Some(if shifted { b'L' } else { b'l' }),
-        Key::M => Some(if shifted { b'M' } else { b'm' }),
-        Key::N => Some(if shifted { b'N' } else { b'n' }),
-        Key::O => Some(if shifted { b'O' } else { b'o' }),
-        Key::P => Some(if shifted { b'P' } else { b'p' }),
-        Key::Q => Some(if shifted { b'Q' } else { b'q' }),
-        Key::R => Some(if shifted { b'R' } else { b'r' }),
-        Key::S => Some(if shifted { b'S' } else { b's' }),
-        Key::T => Some(if shifted { b'T' } else { b't' }),
-        Key::U => Some(if shifted { b'U' } else { b'u' }),
-        Key::V => Some(if shifted { b'V' } else { b'v' }),
-        Key::W => Some(if shifted { b'W' } else { b'w' }),
-        Key::X => Some(if shifted { b'X' } else { b'x' }),
-        Key::Y => Some(if shifted { b'Y' } else { b'y' }),
-        Key::Z => Some(if shifted { b'Z' } else { b'z' }),
-        Key::Key0 | Key::NumPad0 => Some(b'0'),
-        Key::Key1 | Key::NumPad1 => Some(b'1'),
-        Key::Key2 | Key::NumPad2 => Some(b'2'),
-        Key::Key3 | Key::NumPad3 => Some(b'3'),
-        Key::Key4 | Key::NumPad4 => Some(b'4'),
-        Key::Key5 | Key::NumPad5 => Some(b'5'),
-        Key::Key6 | Key::NumPad6 => Some(b'6'),
-        Key::Key7 | Key::NumPad7 => Some(b'7'),
-        Key::Key8 | Key::NumPad8 => Some(b'8'),
-        Key::Key9 | Key::NumPad9 => Some(b'9'),
-        Key::Space => Some(b' '),
         Key::Enter | Key::NumPadEnter => Some(ENTER),
         Key::Left => Some(LEFT),
         Key::Right => Some(RIGHT),
@@ -1154,16 +1159,6 @@ fn key_to_code(key: Key, shifted: bool) -> Option<u8> {
         Key::F10 => function_key_code(10),
         Key::F11 => function_key_code(11),
         Key::F12 => function_key_code(12),
-        Key::Comma => Some(b','),
-        Key::Period | Key::NumPadDot => Some(b'.'),
-        Key::Minus | Key::NumPadMinus => Some(b'-'),
-        Key::Equal => Some(b'='),
-        Key::Slash | Key::NumPadSlash => Some(b'/'),
-        Key::Semicolon => Some(b';'),
-        Key::Apostrophe => Some(b'\''),
-        Key::LeftBracket => Some(b'['),
-        Key::RightBracket => Some(b']'),
-        Key::Backslash => Some(b'\\'),
         _ => None,
     }
 }
@@ -1410,11 +1405,10 @@ fn focus_window_handle(_hwnd: *mut std::ffi::c_void) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        code_to_key, console_activation_target, has_pending_pause_key, key_to_code,
-        GraphicsInputCallback, GraphicsInputEvent, InputEventQueue, PresentationViewport,
+        code_to_key, console_activation_target, special_key_code, GraphicsInputCallback,
+        GraphicsInputEvent, PresentationViewport, SharedGraphicsInput, ENTER, LEFT,
     };
     use minifb::{InputCallback, Key};
-    use std::collections::VecDeque;
     use std::ffi::c_void;
 
     #[test]
@@ -1611,10 +1605,11 @@ mod tests {
             assert_eq!(window.position_for_recreation(), original_position);
             assert!(window.matches_size(&graphics));
             assert!(window
-                .input_events
+                .input
                 .borrow()
+                .events
                 .iter()
-                .all(|event| !matches!(event, GraphicsInputEvent::Enter)));
+                .all(|(event, _)| !matches!(event, GraphicsInputEvent::Special(ENTER))));
             assert!(
                 !window.update_fullscreen_shortcut(),
                 "a maximize command consumed an ordinary Enter key"
@@ -1685,9 +1680,9 @@ mod tests {
 
     #[test]
     fn fullscreen_shortcut_does_not_leak_enter_into_graphical_input() {
-        let events = InputEventQueue::default();
+        let input = SharedGraphicsInput::default();
         let mut callback = GraphicsInputCallback {
-            events: events.clone(),
+            input: input.clone(),
             shortcut: Default::default(),
         };
         callback.set_key_state(Key::LeftAlt, true);
@@ -1695,16 +1690,20 @@ mod tests {
         callback.add_char('\r' as u32);
         callback.set_key_state(Key::Enter, false);
         callback.set_key_state(Key::LeftAlt, false);
-        assert!(events.borrow().is_empty());
+        assert!(input.borrow().events.is_empty());
         assert!(callback.shortcut.requested.get());
         assert!(!callback.shortcut.enter_down.get());
         callback.set_key_state(Key::Enter, true);
+        callback.add_char('\r' as u32);
         assert_eq!(
-            events.borrow().iter().copied().collect::<Vec<_>>(),
-            vec![GraphicsInputEvent::Enter]
+            input
+                .borrow()
+                .events
+                .iter()
+                .map(|&(event, _)| event)
+                .collect::<Vec<_>>(),
+            vec![GraphicsInputEvent::Special(ENTER)]
         );
-        assert_eq!(key_to_code(Key::Escape, false), Some(27));
-        assert_eq!(key_to_code(Key::F11, false), Some(138));
     }
 
     #[cfg(target_os = "linux")]
@@ -1762,12 +1761,12 @@ mod tests {
 
     #[test]
     fn gui_arrow_codes_match_python_keydown_values() {
-        assert_eq!(key_to_code(Key::Left, false), Some(28));
-        assert_eq!(key_to_code(Key::Right, false), Some(29));
-        assert_eq!(key_to_code(Key::Up, false), Some(30));
-        assert_eq!(key_to_code(Key::Down, false), Some(31));
-        assert_eq!(key_to_code(Key::F1, false), Some(128));
-        assert_eq!(key_to_code(Key::F12, false), Some(139));
+        assert_eq!(special_key_code(Key::Left), Some(28));
+        assert_eq!(special_key_code(Key::Right), Some(29));
+        assert_eq!(special_key_code(Key::Up), Some(30));
+        assert_eq!(special_key_code(Key::Down), Some(31));
+        assert_eq!(special_key_code(Key::F1), Some(128));
+        assert_eq!(special_key_code(Key::F12), Some(139));
         assert_eq!(code_to_key(28), Some(Key::Left));
         assert_eq!(code_to_key(29), Some(Key::Right));
         assert_eq!(code_to_key(30), Some(Key::Up));
@@ -1778,39 +1777,84 @@ mod tests {
 
     #[test]
     fn graphical_input_callback_preserves_unicode_and_edit_event_order() {
-        let events = InputEventQueue::default();
+        let input = SharedGraphicsInput::default();
         let mut callback = GraphicsInputCallback {
-            events: events.clone(),
+            input: input.clone(),
             shortcut: Default::default(),
         };
 
-        callback.add_char('ñ' as u32);
+        // These are the physical keys on Windows with the Spanish layout.
+        callback.set_key_state(Key::RightBracket, true);
+        callback.add_char('+' as u32);
+        callback.set_key_state(Key::RightBracket, false);
         callback.set_key_state(Key::Left, true);
+        callback.set_key_state(Key::Slash, true);
+        callback.add_char('-' as u32);
+        callback.add_char('ñ' as u32);
         callback.add_char('á' as u32);
         callback.set_key_state(Key::Enter, true);
+        callback.add_char('\r' as u32);
 
         assert_eq!(
-            events.borrow().iter().copied().collect::<Vec<_>>(),
+            input
+                .borrow()
+                .events
+                .iter()
+                .map(|&(event, _)| event)
+                .collect::<Vec<_>>(),
             vec![
+                GraphicsInputEvent::Character('+'),
+                GraphicsInputEvent::Special(LEFT),
+                GraphicsInputEvent::Character('-'),
                 GraphicsInputEvent::Character('ñ'),
-                GraphicsInputEvent::Left,
                 GraphicsInputEvent::Character('á'),
-                GraphicsInputEvent::Enter,
+                GraphicsInputEvent::Special(ENTER),
             ]
         );
     }
 
     #[test]
-    fn pause_detects_canonical_and_unicode_graphics_keys() {
-        let mut keys = VecDeque::new();
-        let mut events = VecDeque::new();
+    fn graphical_input_combines_utf16_units_and_clears_partial_text() {
+        let input = SharedGraphicsInput::default();
+        let mut callback = GraphicsInputCallback {
+            input: input.clone(),
+            shortcut: Default::default(),
+        };
 
-        assert!(!has_pending_pause_key(&keys, &events));
-        keys.push_back(b'A');
-        assert!(has_pending_pause_key(&keys, &events));
-        keys.clear();
-        events.push_back(GraphicsInputEvent::Character('ñ'));
-        assert!(has_pending_pause_key(&keys, &events));
+        callback.add_char(0xd83d);
+        assert!(input.borrow().events.is_empty());
+        callback.add_char(0xde00);
+        assert_eq!(
+            input.borrow_mut().take_press(),
+            Some(GraphicsInputEvent::Character('😀'))
+        );
+        callback.add_char(0xd83d);
+        input.borrow_mut().clear();
+        callback.add_char(0xde00);
+        assert!(input.borrow().events.is_empty());
+    }
+
+    #[test]
+    fn graphical_inkey_consumes_new_presses_and_the_editor_can_read_repeats() {
+        use super::GraphicsInputQueue;
+
+        let mut input = GraphicsInputQueue::default();
+        let plus = GraphicsInputEvent::Character('+');
+        let left = GraphicsInputEvent::Special(LEFT);
+        input.push_text('+' as u32, false);
+        input.push_text('+' as u32, true);
+        input.push_text('+' as u32, false);
+        input.push(left, false);
+        input.push(left, true);
+        assert_eq!(input.take_press(), Some(plus));
+        assert_eq!(input.take_press(), Some(plus));
+        assert_eq!(input.take_press(), Some(left));
+        assert_eq!(input.take_press(), None);
+
+        input.push_text('+' as u32, true);
+        input.push(left, true);
+        assert_eq!(input.take_event(), Some(plus));
+        assert_eq!(input.take_event(), Some(left));
     }
 
     #[cfg(target_os = "linux")]

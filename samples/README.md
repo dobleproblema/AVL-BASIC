@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **150 runnable programs**. They are not filler or API
+AVL BASIC ships with **151 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-150-program catalog. On GitHub, select any image or program name
+151-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -242,7 +242,7 @@ Every image above was captured from the real Rust runtime.
 - **Save and recover data:** `f-scores.bas` â†’ `f-text.bas` â†’ `f-records.bas`.
 - **Reuse routines across programs.** Run [`rule30.bas`](rule30.bas) for a text pattern, then [`g-cellular-automata.bas`](g-cellular-automata.bas) for an interactive comparison of Rules 30 and 90. Both import [`lib/automata.bas`](lib/automata.bas). `Automata.FNCell(L,C,R,RuleNo)` computes one cell, and `CALL Automata.NextGeneration(Cells,RuleNo)` updates the caller's whole array.
 
-## Full catalog — 150 programs
+## Full catalog — 151 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
@@ -332,13 +332,14 @@ demo.
 | <a id="sample-g-parametric2"></a>[`g-parametric2.bas`](g-parametric2.bas) | Rainbow Lissajous curve traces a three-by-four ratio. | DEF FN, Lissajous curve, RGB |
 | <a id="sample-g-parametric3"></a>[`g-parametric3.bas`](g-parametric3.bas) | Dense rainbow Lissajous curve uses adjacent frequencies. | DEF FN, Lissajous curve, RGB |
 
-### Plotting, charts, and mathematical visualization (21)
+### Plotting, charts, and mathematical visualization (22)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-axis-labels"></a>[`g-axis-labels.bas`](g-axis-labels.bas) | Demonstrates automatic tick spacing, dense explicit steps, fractional crossings, and label orientation. | XAXIS and YAXIS, CROSSAT, adaptive labels |
 | <a id="sample-g-axis"></a>[`g-axis.bas`](g-axis.bas) | Minimal shifted-axis example using SCALE and CROSSAT. | SCALE, CROSSAT, XAXIS and YAXIS |
 | <a id="sample-g-bifurcation"></a>[`g-bifurcation.bas`](g-bifurcation.bas) [★](#highlight-g-bifurcation) | Explore chaos by clicking into a rainbow logistic-map bifurcation diagram. | logistic map, Lyapunov exponent, mouse zoom |
+| <a id="sample-g-diffraction"></a>[`g-diffraction.bas`](g-diffraction.bas) | Compare double-slit fringes, circular-aperture rings, and a triangular aperture's six-pointed star on a 1024 × 1024 grid, with separate matrix and drawing times. | MAT, TRN, MAP, Hadamard product, Fourier optics |
 | <a id="sample-g-function"></a>[`g-function.bas`](g-function.bas) | Plots sine from a string expression with axes. | GRAPH, string expression, axes |
 | <a id="sample-g-function2"></a>[`g-function2.bas`](g-function2.bas) | Plots tangent directly across multiple discontinuities. | GRAPH, discontinuities, SCALE |
 | <a id="sample-g-function2b"></a>[`g-function2b.bas`](g-function2b.bas) | Manually plots tangent while skipping discontinuity jumps. | DEF FN, error handling, discontinuity filtering |
