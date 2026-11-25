@@ -4,6 +4,7 @@ mod audio_commands;
 mod color_lut;
 mod debug_arrays;
 mod fused_leaves;
+pub(crate) mod profile;
 mod gouraud_ops;
 mod imports;
 mod local_array_pool;
@@ -17,14 +18,19 @@ mod mat_compiled_tests;
 mod mat_divide;
 #[cfg(target_arch = "x86_64")]
 mod mat_rng_avx2;
+mod mat_solve;
 mod mat_stats;
 mod mat_subarrays;
 mod mat_transpose;
+#[cfg(test)]
+mod mouse_wheel_tests;
+mod numeric_block;
 #[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
 mod pack_validation;
 mod packed_files;
 #[cfg(test)]
 mod presentation_tests;
+mod string_variables;
 mod sub_bindings;
 #[cfg(test)]
 mod sub_call_cache_tests;
@@ -44,6 +50,7 @@ use mat_compiled::CompiledMatAssignment;
 use mat_subarrays::{CopyReference, MatPrintSource};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub(crate) use pack_validation::validate_pack;
+use string_variables::StringVariables;
 use sub_bindings::{SubBindingPlan, SubCallBindings};
 use texture_ops::{
     compile_textured_quad_statement, compile_textured_triangle_statement, CompiledTexturedQuad,
@@ -72,12 +79,14 @@ use crate::keyboard::{BACKSPACE, DELETE, END, ENTER, ESCAPE, HOME, LEFT, RIGHT};
 use crate::language;
 use crate::lexer::{split_command_ranges, split_commands, split_top_level, strip_comment};
 use crate::program::Program;
-use crate::reserved::is_reserved_identifier_name;
+use crate::reserved::{
+    is_reserved_identifier_name, is_reserved_uppercase_identifier_name, uppercase_name,
+};
 use crate::using_format::{format_using, valid_using_format};
 use crate::value::{format_basic_number, logical_round, round_half_away, Value};
 use crate::window::{
     focus_console_window, focus_console_window_for_debugger, GraphicsInputEvent, GraphicsWindow,
-    MouseSnapshot,
+    MouseSnapshot, MouseWheelEvent,
 };
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -628,6 +637,8 @@ struct GosubFrame {
     // IF frames below this depth belong to suspended callers. Source ranges
     // alone cannot identify them when calls are nested or recursive.
     if_depth: usize,
+    for_depth: usize,
+    while_depth: usize,
 }
 
 #[derive(Debug)]
@@ -660,6 +671,7 @@ struct ForFrame {
     end: f64,
     step: f64,
     resume: Cursor,
+    call_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -667,6 +679,7 @@ struct WhileFrame {
     expr: Rc<CompiledNumberExpr>,
     header: Cursor,
     resume: Cursor,
+    call_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1482,7 +1495,7 @@ struct ActiveDebugRoutineFrame {
 
 #[derive(Debug, Default)]
 struct InterpreterDebuggerState {
-    debugger: Option<Debugger>,
+    observer: Option<ExecutionObserver>,
     array_baselines: Option<Vec<Rc<RefCell<debug_arrays::DebugArrayBefore>>>>,
     terminal: Option<console::DebugTerminalSession>,
     resume_guards: Vec<(Cursor, usize)>,
@@ -1494,6 +1507,34 @@ struct InterpreterDebuggerState {
     refocus_graphics_on_use: bool,
     // Stepping and inspection keep drawing passive, without blocking input focus.
     graphics_focus_on_input_only: bool,
+}
+
+#[derive(Debug)]
+enum ExecutionObserver {
+    Debug(Debugger),
+    Profile(Rc<profile::Session>),
+}
+
+impl InterpreterDebuggerState {
+    fn debugger(&self) -> Option<&Debugger> {
+        match self.observer.as_ref()? {
+            ExecutionObserver::Debug(debugger) => Some(debugger),
+            ExecutionObserver::Profile(_) => None,
+        }
+    }
+    fn debugger_mut(&mut self) -> Option<&mut Debugger> {
+        match self.observer.as_mut()? {
+            ExecutionObserver::Debug(debugger) => Some(debugger),
+            ExecutionObserver::Profile(_) => None,
+        }
+    }
+    fn take_debugger(&mut self) -> Option<Debugger> {
+        self.debugger()?;
+        match self.observer.take()? {
+            ExecutionObserver::Debug(debugger) => Some(debugger),
+            ExecutionObserver::Profile(_) => unreachable!(),
+        }
+    }
 }
 
 struct InterpreterDebugPause<'a> {
@@ -1750,6 +1791,7 @@ struct CompiledMidAssignment {
     start: Expr,
     count: Option<Expr>,
     rhs: Expr,
+    first_variable_char: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2086,6 +2128,21 @@ enum CallbackId {
     Sound(usize),
 }
 
+#[derive(Debug)]
+enum QueuedMouseEvent {
+    Pointer(String),
+    Wheel(MouseWheelEvent),
+}
+
+impl QueuedMouseEvent {
+    fn name(&self) -> &str {
+        match self {
+            Self::Pointer(name) => name,
+            Self::Wheel(_) => "WHEEL",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SymbolicCallback {
     name: String,
@@ -2165,10 +2222,15 @@ enum CachedCommand {
     Local,
     Read(Rc<[String]>),
     Next(Option<String>),
+    Continue,
     While(Rc<CompiledNumberExpr>),
     Wend,
     NumericAssignment(Rc<CompiledNumericAssignment>),
     InlineSubCall(Rc<str>),
+    NumericBlock {
+        first: Rc<CompiledNumericAssignment>,
+        plan: Rc<numeric_block::Plan>,
+    },
 }
 
 impl CachedCommand {
@@ -2273,6 +2335,23 @@ impl CompiledColorExpr {
 }
 
 impl FastNumberExpr {
+    #[inline(always)]
+    fn eval_operand(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
+        // The Windows x64 PGO benefits from resolving these children directly.
+        // Other targets continue through the recursive evaluator.
+        #[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
+        match self {
+            Self::Var { name, slot } => return interpreter.get_fast_number_variable(name, slot),
+            Self::Number(value) => return Ok(*value),
+            Self::BinaryLeaves(node) => return node.eval(interpreter),
+            Self::Array1 { name, slot, index } => {
+                return interpreter.read_fast_array_1d(name, slot, index);
+            }
+            _ => {}
+        }
+        self.eval(interpreter)
+    }
+
     // Keep the emitted recursive body independent of unrelated .text growth.
     // SAFETY: this function-only PE section is read/execute, never writable.
     #[cfg_attr(
@@ -2315,8 +2394,7 @@ impl FastNumberExpr {
                 FastZeroArgFunction::Vpos => interpreter.graphics.vpos() as f64,
             }),
             FastNumberExpr::Array1 { name, slot, index } => {
-                let index = eval_fast_index(interpreter, index)?;
-                interpreter.get_array_number_cached_1d(name, slot, index)
+                interpreter.read_fast_array_1d(name, slot, index)
             }
             FastNumberExpr::Array2 {
                 name,
@@ -2331,11 +2409,11 @@ impl FastNumberExpr {
                 interpreter.get_array_number_cached_2d(name, slot, indexes[0], indexes[1])
             }
             FastNumberExpr::Function1 { function, arg } => {
-                let arg = arg.eval(interpreter)?;
+                let arg = arg.eval_operand(interpreter)?;
                 eval_fast_number_function(*function, arg, interpreter.angle_degrees)
             }
             FastNumberExpr::Unary { op, expr } => {
-                let value = expr.eval(interpreter)?;
+                let value = expr.eval_operand(interpreter)?;
                 Ok(eval_fast_unary(*op, value))
             }
             FastNumberExpr::Min(args) => {
@@ -2353,8 +2431,8 @@ impl FastNumberExpr {
                 Ok(value)
             }
             FastNumberExpr::Binary { op, left, right } => {
-                let left = left.eval(interpreter)?;
-                let right = right.eval(interpreter)?;
+                let left = left.eval_operand(interpreter)?;
+                let right = right.eval_operand(interpreter)?;
                 eval_fast_binary(*op, left, right)
             }
             FastNumberExpr::BinaryConst {
@@ -2363,7 +2441,7 @@ impl FastNumberExpr {
                 constant,
                 constant_left,
             } => {
-                let value = expr.eval(interpreter)?;
+                let value = expr.eval_operand(interpreter)?;
                 if *constant_left {
                     eval_fast_binary(*op, *constant, value)
                 } else {
@@ -2533,7 +2611,7 @@ fn eval_fast_binary(op: BinaryOp, left: f64, right: f64) -> BasicResult<f64> {
             if right == 0.0 {
                 Err(BasicError::new(ErrorCode::DivisionByZero))
             } else {
-                checked_number(left % right)
+                checked_number(crate::expr::scalar_remainder(left, right))
             }
         }
         BinaryOp::Pow => checked_number(left.powf(right)),
@@ -2613,7 +2691,7 @@ pub struct Interpreter {
     sound_isr_markers: Vec<(usize, bool)>,
     pending_sounds: Vec<(Cursor, SoundNote)>,
     command_cache: HashMap<i32, Vec<Rc<str>>>,
-    compiled_command_cache: HashMap<i32, Vec<Rc<CachedCommand>>>,
+    prepared_block_lines: HashSet<usize>,
     execution_source_cache: HashMap<i32, Vec<ExecutionMetadata>>,
     compiled_line_cache: Rc<[Rc<[Rc<CachedCommand>]>]>,
     line_index_cache: HashMap<i32, usize>,
@@ -2634,7 +2712,7 @@ pub struct Interpreter {
     pub program_dir: Option<PathBuf>,
     packed_files: Option<packed_files::PackedFiles>,
     numeric_variables: NumericVariables,
-    string_variables: FastHashMap<String, String>,
+    string_variables: StringVariables,
     texture_cache: FastHashMap<String, CachedTexture>,
     identifier_case: HashMap<String, String>,
     arrays: ArrayVariables,
@@ -2678,7 +2756,8 @@ pub struct Interpreter {
     current_interrupt_priority: i32,
     mouse_handlers: HashMap<String, i32>,
     mouse_state: MouseSnapshot,
-    mouse_event_queue: VecDeque<String>,
+    mouse_event_queue: VecDeque<QueuedMouseEvent>,
+    mouse_wheel_event: Option<MouseWheelEvent>,
     mouse_event_consumed: bool,
     interrupts_enabled: bool,
     handling_mouse_event: bool,
@@ -2754,7 +2833,7 @@ impl Interpreter {
             sound_isr_markers: Vec::new(),
             pending_sounds: Vec::new(),
             command_cache: HashMap::new(),
-            compiled_command_cache: HashMap::new(),
+            prepared_block_lines: HashSet::new(),
             execution_source_cache: HashMap::new(),
             compiled_line_cache: Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice()),
             line_index_cache: HashMap::new(),
@@ -2775,7 +2854,7 @@ impl Interpreter {
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             pack_export_enabled: false,
             numeric_variables: NumericVariables::default(),
-            string_variables: FastHashMap::default(),
+            string_variables: StringVariables::default(),
             texture_cache: FastHashMap::default(),
             identifier_case: HashMap::new(),
             arrays: ArrayVariables::default(),
@@ -2816,6 +2895,7 @@ impl Interpreter {
             mouse_handlers: HashMap::new(),
             mouse_state: MouseSnapshot::default(),
             mouse_event_queue: VecDeque::new(),
+            mouse_wheel_event: None,
             mouse_event_consumed: false,
             interrupts_enabled: true,
             handling_mouse_event: false,
@@ -2893,7 +2973,7 @@ impl Interpreter {
                 .debugger_state
                 .get_or_insert_with(|| Box::new(InterpreterDebuggerState::default()));
             let previous_terminal = state.terminal.take();
-            state.debugger = Some(debugger);
+            state.observer = Some(ExecutionObserver::Debug(debugger));
             state.array_baselines = None;
             state.terminal = terminal;
             state.resume_guards.clear();
@@ -2921,9 +3001,13 @@ impl Interpreter {
             state.refocus_graphics_on_use = false;
             state.graphics_focus_on_input_only = false;
             state.array_baselines = None;
-            let debugger = state.debugger.take();
+            let debugger = state.take_debugger();
             let terminal = state.terminal.take();
-            (debugger, terminal, state.editor_breakpoints.is_empty())
+            (
+                debugger,
+                terminal,
+                state.observer.is_none() && state.editor_breakpoints.is_empty(),
+            )
         };
         if let Some(terminal) = terminal {
             let _ = terminal.reveal_runtime_console();
@@ -2944,13 +3028,13 @@ impl Interpreter {
     pub fn debugger(&self) -> Option<&Debugger> {
         self.debugger_state
             .as_ref()
-            .and_then(|state| state.debugger.as_ref())
+            .and_then(|state| state.debugger())
     }
 
     pub fn debugger_mut(&mut self) -> Option<&mut Debugger> {
         self.debugger_state
             .as_mut()
-            .and_then(|state| state.debugger.as_mut())
+            .and_then(|state| state.debugger_mut())
     }
 
     fn clear_program_breakpoints(&mut self) {
@@ -2958,10 +3042,10 @@ impl Interpreter {
             return;
         };
         state.editor_breakpoints.clear();
-        if let Some(debugger) = state.debugger.as_mut() {
+        if let Some(debugger) = state.debugger_mut() {
             debugger.clear_breakpoints();
         }
-        if state.debugger.is_none() {
+        if state.observer.is_none() {
             self.debugger_state = None;
         }
     }
@@ -2973,14 +3057,14 @@ impl Interpreter {
         state
             .editor_breakpoints
             .retain(|line| *line < start || *line > end);
-        if let Some(debugger) = state.debugger.as_mut() {
+        if let Some(debugger) = state.debugger_mut() {
             let retained = debugger
                 .breakpoints()
                 .filter(|line| *line < start || *line > end)
                 .collect::<Vec<_>>();
             debugger.replace_breakpoints(retained);
         }
-        if state.debugger.is_none() && state.editor_breakpoints.is_empty() {
+        if state.observer.is_none() && state.editor_breakpoints.is_empty() {
             self.debugger_state = None;
         }
     }
@@ -2989,7 +3073,7 @@ impl Interpreter {
         if breakpoints.is_empty() {
             if let Some(state) = self.debugger_state.as_mut() {
                 state.editor_breakpoints.clear();
-                if state.debugger.is_none() {
+                if state.observer.is_none() {
                     self.debugger_state = None;
                 }
             }
@@ -3441,7 +3525,7 @@ impl Interpreter {
             return Ok(true);
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "LOAD") {
-            let path = self.resolve_bas_literal_arg(arg)?;
+            let path = self.resolve_load_literal_arg(arg)?;
             self.load_file(&path)?;
             return Ok(true);
         }
@@ -3472,6 +3556,10 @@ impl Interpreter {
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "EDIT") {
             self.execute_edit(arg)?;
+            return Ok(true);
+        }
+        if upper == "PROFILE" {
+            self.execute_profile()?;
             return Ok(true);
         }
         if let Some(arg) = immediate_arg(trimmed, &upper, "DEBUG") {
@@ -3613,7 +3701,7 @@ impl Interpreter {
 
     fn execute_immediate_goto(&mut self, arg: &str) -> BasicResult<()> {
         let line = self.line_reference(arg, true, ErrorCode::InvalidLineNumber)?;
-        if self.command_cache.is_empty() || self.compiled_command_cache.is_empty() {
+        if self.command_cache.is_empty() || self.compiled_line_cache.is_empty() {
             self.rebuild_command_cache();
         }
         let line_idx = self
@@ -3918,7 +4006,7 @@ impl Interpreter {
                 .drain()
                 .map(|line| mapping.get(&line).copied().unwrap_or(line))
                 .collect();
-            if let Some(debugger) = state.debugger.as_mut() {
+            if let Some(debugger) = state.debugger_mut() {
                 let breakpoints = debugger
                     .breakpoints()
                     .map(|line| mapping.get(&line).copied().unwrap_or(line))
@@ -4231,7 +4319,13 @@ impl Interpreter {
         if self.packed_files.is_some() {
             return Err(self.err(ErrorCode::InvalidArgument));
         }
-        fs::write(path, self.program.list())
+        if self.program.is_empty() {
+            return Err(self
+                .err(ErrorCode::InvalidArgument)
+                .with_detail("No program in memory."));
+        }
+        let backup = Self::match_existing_case(path.with_extension("bak"));
+        write_program_file(path, &backup, self.program.list().as_bytes())
             .map_err(|e| self.err(ErrorCode::InvalidValue).with_detail(e.to_string()))
     }
 
@@ -4343,6 +4437,7 @@ impl Interpreter {
         self.mouse_handlers.clear();
         self.mouse_state = MouseSnapshot::default();
         self.mouse_event_queue.clear();
+        self.mouse_wheel_event = None;
         self.mouse_event_consumed = false;
         self.key_queue.clear();
         if let Some(window) = self.graphics_window.as_mut() {
@@ -4416,8 +4511,14 @@ impl Interpreter {
         } else {
             None
         };
-        let mut result = if self.debugger().is_some() {
-            self.run_from_inner_debug(cursor)
+        let mut result = if self
+            .debugger_state
+            .as_ref()
+            .is_some_and(|state| state.observer.is_some())
+        {
+            self.run_with_observer(cursor)
+        } else if !self.prepared_block_lines.is_empty() && self.function_call_stack.is_empty() {
+            self.run_from_inner_prepared(cursor)
         } else {
             self.run_from_inner(cursor)
         };
@@ -4476,7 +4577,17 @@ impl Interpreter {
         all(windows, target_arch = "x86_64", target_env = "msvc"),
         unsafe(link_section = ".avlrun")
     )]
-    fn run_from_inner(&mut self, mut cursor: Cursor) -> BasicResult<RunOutcome> {
+    fn run_from_inner(&mut self, cursor: Cursor) -> BasicResult<RunOutcome> {
+        self.run_loop(cursor, ())
+    }
+
+    // The unit observer specializes to the original fast path at compile time.
+    #[inline(always)]
+    fn run_loop(
+        &mut self,
+        mut cursor: Cursor,
+        mut observer: impl profile::Observer,
+    ) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();
         #[cfg(windows)]
@@ -4520,18 +4631,11 @@ impl Interpreter {
                 self.active_line_plan = returning;
             }
             if cursor.cmd_idx >= commands_len {
-                #[cfg(windows)]
-                {
-                    cursor.line_idx = if merged_line {
-                        lines.partition_point(|number| *number <= line_no)
-                    } else {
-                        cursor.line_idx + 1
-                    };
-                }
-                #[cfg(not(windows))]
-                {
-                    cursor.line_idx = lines.partition_point(|number| *number <= line_no);
-                }
+                cursor.line_idx = if merged_line {
+                    lines.partition_point(|number| *number <= line_no)
+                } else {
+                    cursor.line_idx + 1
+                };
                 cursor.cmd_idx = 0;
                 continue;
             }
@@ -4539,6 +4643,7 @@ impl Interpreter {
             if self.trace {
                 self.write_trace_line(line_no);
             }
+            let mut entering_line = true;
             while cursor.cmd_idx < commands_len {
                 let poll_now = runtime_poll_skip == 0
                     || self.test_interrupt_requested
@@ -4567,6 +4672,10 @@ impl Interpreter {
                     self.present_dirty_graphics_at_run_boundary()?;
                     return Ok(RunOutcome::Stop);
                 }
+                if entering_line {
+                    observer.visit(cursor.line_idx, self.active_line_plan.as_deref());
+                    entering_line = false;
+                }
                 let command = line_commands[cursor.cmd_idx].as_ref();
                 let inline_if = matches!(command, CachedCommand::InlineIfGuard { .. });
                 let mut before = cursor;
@@ -4577,14 +4686,15 @@ impl Interpreter {
                 let mut failure = if inline_if {
                     #[cfg(windows)]
                     {
-                        self.execute_cached_inline_if_fast(line_commands, &mut cursor)?
+                        self.execute_cached_inline_if_fast(line_commands, &mut cursor, &observer)?
                     }
                     #[cfg(not(windows))]
                     {
-                        self.execute_cached_inline_if_fast(&line_commands, &mut cursor)?
+                        self.execute_cached_inline_if_fast(&line_commands, &mut cursor, &observer)?
                     }
                 } else {
-                    self.execute_cached_command(command, &mut cursor, &[])
+                    observer
+                        .execute(self, command, &mut cursor)
                         .err()
                         .map(|error| CachedExecutionFailure {
                             error,
@@ -4601,6 +4711,7 @@ impl Interpreter {
                         failure.next.line_idx = before.line_idx;
                     }
                     lines = self.line_numbers_cache.clone();
+                    observer.set_catalog(self);
                     #[cfg(windows)]
                     {
                         refresh_compiled_lines = true;
@@ -4643,6 +4754,7 @@ impl Interpreter {
                 if self.restart_run_loop {
                     self.restart_run_loop = false;
                     lines = self.line_numbers_cache.clone();
+                    observer.set_catalog(self);
                     #[cfg(windows)]
                     {
                         refresh_compiled_lines = true;
@@ -4667,12 +4779,14 @@ impl Interpreter {
                     {
                         continue 'run_loop;
                     }
+                    entering_line = cursor.cmd_idx <= before.cmd_idx;
                     continue;
                 }
                 if cursor != before {
                     if cursor.line_idx != before.line_idx || merged_line {
                         continue 'run_loop;
                     }
+                    entering_line = cursor.cmd_idx <= before.cmd_idx;
                     continue;
                 }
                 cursor = next;
@@ -4999,7 +5113,7 @@ impl Interpreter {
             let Some(debugger) = self
                 .debugger_state
                 .as_mut()
-                .and_then(|state| state.debugger.as_mut())
+                .and_then(|state| state.debugger_mut())
             else {
                 return Ok(DebugHookControl::Run);
             };
@@ -5050,7 +5164,7 @@ impl Interpreter {
         let Some(mut debugger) = self
             .debugger_state
             .as_mut()
-            .and_then(|state| state.debugger.take())
+            .and_then(|state| state.take_debugger())
         else {
             return Ok(DebugHookControl::Run);
         };
@@ -5073,7 +5187,7 @@ impl Interpreter {
         self.debugger_state
             .as_mut()
             .expect("active debugger state must survive a synchronous pause")
-            .debugger = Some(debugger);
+            .observer = Some(ExecutionObserver::Debug(debugger));
 
         let action = pause_result.map_err(|err| {
             if err.kind() == io::ErrorKind::Interrupted {
@@ -5105,7 +5219,7 @@ impl Interpreter {
         if !state.resume_guards.contains(&(resume_cursor, depth)) {
             state.resume_guards.push((resume_cursor, depth));
         }
-        if let Some(debugger) = state.debugger.as_mut() {
+        if let Some(debugger) = state.debugger_mut() {
             debugger.arm_step(action, depth);
         }
         // A stepped routine may create its graphics window later. Keep the
@@ -5195,7 +5309,7 @@ impl Interpreter {
         let Some(state) = self.debugger_state.as_mut() else {
             return;
         };
-        if state.debugger.is_none() {
+        if state.debugger().is_none() {
             return;
         }
 
@@ -5985,6 +6099,7 @@ impl Interpreter {
             "EXIT" if upper == "EXIT SUB" => self.execute_subexit(),
             "EXIT" if upper == "EXIT FOR" => self.execute_exit_for(cursor),
             "EXIT" if upper == "EXIT WHILE" => self.execute_exit_while(cursor),
+            "CONTINUE" if upper == "CONTINUE" => self.execute_continue(cursor),
             "END" if upper == "END IF" => self.execute_end_if(cursor),
             "ENDIF" => self.execute_end_if(cursor),
             "END" => {
@@ -6124,7 +6239,7 @@ impl Interpreter {
             }
             "GPRINT" => self.execute_gprint(command[6..].trim()),
             "LABEL" => self.execute_label(command[5..].trim()),
-            "FRAME" => self.execute_frame(command[5..].trim(), cursor),
+            "FRAME" => self.execute_frame(command[5..].trim(), cursor, ()),
             "MASK" => {
                 self.ensure_graphics_window()?;
                 let arg = command[4..].trim();
@@ -6311,6 +6426,7 @@ impl Interpreter {
                 self.execute_cached_on(selector.as_ref(), targets, true, cursor)
             }
             CachedCommand::For(compiled) => self.execute_compiled_for(compiled.as_ref(), cursor),
+            CachedCommand::Continue => self.execute_continue(cursor),
             CachedCommand::GotoConst { line, target } => {
                 self.jump_to_cached_line_checked(*line, target.as_ref(), cursor, false)
             }
@@ -6334,7 +6450,8 @@ impl Interpreter {
                 self.execute_compiled_while(condition.clone(), cursor)
             }
             CachedCommand::Wend => self.execute_wend(cursor),
-            CachedCommand::NumericAssignment(compiled) => match compiled.as_ref() {
+            CachedCommand::NumericAssignment(compiled)
+            | CachedCommand::NumericBlock { first: compiled, .. } => match compiled.as_ref() {
                 CompiledNumericAssignment::Scalar {
                     target,
                     target_slot,
@@ -6423,6 +6540,8 @@ impl Interpreter {
             return_cursor,
             return_plan,
             if_depth: self.if_stack.len(),
+            for_depth: self.for_stack.len(),
+            while_depth: self.while_stack.len(),
         });
     }
 
@@ -6792,6 +6911,7 @@ impl Interpreter {
         &mut self,
         commands: &[Rc<CachedCommand>],
         cursor: &mut Cursor,
+        observer: &impl profile::Observer,
     ) -> BasicResult<Option<CachedExecutionFailure>> {
         let mut line_idx = cursor.line_idx;
         let source_line = self.current_line;
@@ -6935,7 +7055,7 @@ impl Interpreter {
                 line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
             };
-            let result = self.execute_cached_command(command, cursor, &[]);
+            let result = observer.execute(self, command, cursor);
             if !Rc::ptr_eq(&old_lines, &self.line_numbers_cache) && !self.restart_run_loop {
                 if let Some(line) = source_line {
                     line_idx = self.merge_line_index(line);
@@ -7695,14 +7815,30 @@ impl Interpreter {
         &mut self,
         compiled: &CompiledMidAssignment,
     ) -> BasicResult<()> {
-        let replacement = eval_compiled(self, &compiled.rhs)
-            .and_then(|value| value.into_string())
-            .map_err(|mut e| {
-                if e.line.is_none() {
-                    e.line = self.current_line;
-                }
-                e
-            })?;
+        let mut utf8 = [0; 4];
+        let replacement = match &compiled.rhs {
+            Expr::Str(literal) => Cow::Borrowed(literal.as_str()),
+            Expr::Var(name) if compiled.first_variable_char && self.active_functions.is_empty() => {
+                // The start expression can change either variable. Snapshot the observable character.
+                let first = self.string_variables.get(name).and_then(|s| s.chars().next());
+                let text: &str = match first {
+                    Some(ch) => ch.encode_utf8(&mut utf8),
+                    None => "",
+                };
+                Cow::Borrowed(text)
+            }
+            rhs => {
+                let text = eval_compiled(self, rhs)
+                    .and_then(|value| value.into_string())
+                    .map_err(|mut e| {
+                        if e.line.is_none() {
+                            e.line = self.current_line;
+                        }
+                        e
+                    })?;
+                Cow::Owned(text)
+            }
+        };
         let start = eval_compiled_number(self, &compiled.start).map_err(|mut e| {
             if e.line.is_none() {
                 e.line = self.current_line;
@@ -8104,14 +8240,7 @@ impl Interpreter {
         if let Some(alpha) = &compiled.alpha {
             let alpha = self.eval_alpha(alpha)?;
             self.graphics.textured_rect_with_alpha(
-                &texture,
-                x0,
-                y0,
-                x1,
-                y1,
-                uv,
-                transparent,
-                alpha,
+                &texture, x0, y0, x1, y1, uv, transparent, alpha,
             )?;
         } else {
             self.graphics.textured_rect_with_transparency(
@@ -8196,10 +8325,7 @@ impl Interpreter {
         })? as isize
             - 1;
         let start = start.max(0) as usize;
-        let value = self
-            .string_variables
-            .get(source)
-            .and_then(|text| string_char_at(text, start));
+        let value = self.string_variables.char_at(source, start);
         self.invalidate_texture_cache_for(target);
         if let Some(existing) = self.string_variables.get_mut(target) {
             existing.clear();
@@ -8736,12 +8862,8 @@ impl Interpreter {
         replacement: &str,
     ) {
         self.invalidate_texture_cache_for(target);
-        let Some(original) = self.string_variables.get_mut(target) else {
-            return;
-        };
-        if !replace_mid_ascii(original, start, count, replacement) {
-            replace_mid_general(original, start, count, replacement);
-        }
+        self.string_variables
+            .replace_mid(target, start, count, replacement);
     }
 
     fn execute_swap(&mut self, args: &str) -> BasicResult<()> {
@@ -8953,6 +9075,17 @@ impl Interpreter {
     fn array_mut(&mut self, name: &str) -> Option<&mut ArrayValue> {
         let key = self.array_lookup_key(name);
         self.arrays.get_mut(key.as_ref())
+    }
+
+    #[inline(always)]
+    fn read_fast_array_1d(
+        &mut self,
+        name: &str,
+        slot: &CachedArraySlot,
+        index: &FastIndexExpr,
+    ) -> BasicResult<f64> {
+        let index = eval_fast_index(self, index)?;
+        self.get_array_number_cached_1d(name, slot, index)
     }
 
     #[inline(always)]
@@ -9330,11 +9463,7 @@ impl Interpreter {
         if target_line == 0 {
             self.set_callback_binding(key, None);
             self.mouse_handlers.remove(event);
-            self.mouse_event_queue
-                .retain(|queued_event| queued_event != event);
-            if self.mouse_state.event == event {
-                self.mouse_event_consumed = true;
-            }
+            self.discard_pending_mouse_events(event);
             return Ok(());
         }
         if self.line_index(target_line).is_none() {
@@ -9345,16 +9474,25 @@ impl Interpreter {
         }
         self.set_callback_binding(key, binding);
         self.mouse_handlers.insert(event.to_string(), target_line);
-        self.mouse_event_queue
-            .retain(|queued_event| queued_event != event);
-        if self.mouse_state.event == event {
-            self.mouse_event_consumed = true;
-        }
+        self.discard_pending_mouse_events(event);
         if self.graphics_window.is_some() && self.graphics_window_enabled {
             self.prepare_graphics_window_use_by_current_run()?;
             self.refocus_graphics_after_debug_if_needed();
         }
         Ok(())
+    }
+
+    fn discard_pending_mouse_events(&mut self, event: &str) {
+        self.mouse_event_queue
+            .retain(|queued| queued.name() != event);
+        if self.mouse_state.event == event {
+            self.mouse_event_consumed = true;
+        }
+        if event == "WHEEL" {
+            if let Some(window) = self.graphics_window.as_mut() {
+                window.discard_wheel_events();
+            }
+        }
     }
 
     fn execute_inline_gosub(&mut self, target_expr: &str, mouse_event: bool) -> BasicResult<()> {
@@ -9382,7 +9520,7 @@ impl Interpreter {
         let saved_transfer_generation = self.program_transfer_generation;
         let saved_mouse_marker_len = mouse_event.then(|| {
             self.debugger_state.as_mut().and_then(|state| {
-                state.debugger.as_ref()?;
+                state.debugger()?;
                 let saved_len = state.mouse_isr_markers.len();
                 state.mouse_isr_markers.push(saved_gosub_len);
                 Some(saved_len)
@@ -9694,6 +9832,7 @@ impl Interpreter {
             var_slot,
             end,
             step,
+            call_depth: self.loop_call_depth(),
             resume: Cursor {
                 line_idx: cursor.line_idx,
                 cmd_idx: cursor.cmd_idx + 1,
@@ -9823,6 +9962,76 @@ impl Interpreter {
         Ok(())
     }
 
+    fn loop_call_depth(&self) -> usize {
+        self.gosub_stack.len() + self.active_subs.len() + self.active_functions.len()
+    }
+
+    fn execute_continue(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
+        let call_depth = self.loop_call_depth();
+        let (for_base, while_base) = self
+            .gosub_stack
+            .get(self.if_gosub_base..)
+            .and_then(|frames| frames.last())
+            .map_or((0, 0), |frame| (frame.for_depth, frame.while_depth));
+        let enclosing_loop =
+            |index, resume: Cursor, find_end: fn(&Self, &Cursor) -> BasicResult<Cursor>| {
+                if cursor_before(cursor, &resume) {
+                    return None;
+                }
+                // MERGE may remove an active loop's header while retaining its frame.
+                let header = resume.cmd_idx.checked_sub(1).map(|cmd_idx| Cursor {
+                    line_idx: resume.line_idx,
+                    cmd_idx,
+                });
+                let mut end = find_end(self, header.as_ref().unwrap_or(cursor)).ok()?;
+                end.cmd_idx -= 1;
+                cursor_before(cursor, &end).then_some((resume, end, index))
+            };
+        let for_loop = self
+            .for_stack
+            .iter()
+            .enumerate()
+            .skip(for_base)
+            .rev()
+            .filter(|(_, frame)| frame.call_depth == call_depth)
+            .find_map(|(index, frame)| {
+                enclosing_loop(index, frame.resume, Self::find_after_matching_next)
+            });
+        let while_loop = self
+            .while_stack
+            .iter()
+            .enumerate()
+            .skip(while_base)
+            .rev()
+            .filter(|(_, frame)| frame.call_depth == call_depth)
+            .find_map(|(index, frame)| {
+                enclosing_loop(index, frame.resume, Self::find_after_matching_wend)
+            });
+        let (target, index, is_for) = match (for_loop, while_loop) {
+            (Some((for_start, _, _)), Some((while_start, target, index)))
+                if cursor_after(&while_start, &for_start) =>
+            {
+                (target, index, false)
+            }
+            (Some((_, target, index)), _) => (target, index, true),
+            (None, Some((_, target, index))) => (target, index, false),
+            (None, None) => {
+                return Err(self
+                    .err(ErrorCode::InvalidArgument)
+                    .with_static_detail(StaticErrorDetail::ContinueWithoutLoop));
+            }
+        };
+
+        self.reconcile_if_stack_for_jump(&target)?;
+        if is_for {
+            self.for_stack.truncate(index + 1);
+        } else {
+            self.while_stack.truncate(index + 1);
+        }
+        *cursor = target;
+        Ok(())
+    }
+
     fn execute_exit_for(&mut self, cursor: &mut Cursor) -> BasicResult<()> {
         let Some(frame) = self.for_stack.pop() else {
             return Err(self
@@ -9871,6 +10080,7 @@ impl Interpreter {
             self.while_stack.push(WhileFrame {
                 expr,
                 header,
+                call_depth: self.loop_call_depth(),
                 resume: Cursor {
                     line_idx: cursor.line_idx,
                     cmd_idx: cursor.cmd_idx + 1,
@@ -10765,14 +10975,7 @@ impl Interpreter {
     }
 
     fn parse_mat_expr(&self, source: &str) -> BasicResult<mat_compiled::CompiledMatExpr> {
-        mat_compiled::CompiledMatExpr::parse(source)
-            .map_err(|error| {
-                if error.code == ErrorCode::Syntax && mat_compiled::has_array_slice(source, self) {
-                    self.err(ErrorCode::ForbiddenExpression)
-                } else {
-                    self.with_current_line(error)
-                }
-            })
+        mat_compiled::CompiledMatExpr::parse(source).map_err(|error| self.with_current_line(error))
     }
 
     fn mat_unary_minus(&mut self, value: MatExprValue) -> BasicResult<MatExprValue> {
@@ -12761,10 +12964,14 @@ impl Interpreter {
     }
 
     fn present_graphics_window(&mut self) -> BasicResult<()> {
-        self.present_graphics_window_impl(false)
+        self.present_graphics_window_impl(false, ())
     }
 
-    fn present_graphics_window_impl(&mut self, synchronized: bool) -> BasicResult<()> {
+    fn present_graphics_window_impl(
+        &mut self,
+        synchronized: bool,
+        wait: impl profile::FrameWait,
+    ) -> BasicResult<()> {
         if self.graphics_window_blocked() {
             return Ok(());
         }
@@ -12788,7 +12995,7 @@ impl Interpreter {
                 user_closed = true;
             } else {
                 let presentation = if synchronized {
-                    window.present_synchronized(&self.graphics)
+                    window.present_synchronized(&self.graphics, wait)
                 } else {
                     window.present(&self.graphics)
                 };
@@ -12804,7 +13011,9 @@ impl Interpreter {
                 };
                 self.graphics.clear_buffer_dirty();
                 user_closed = !window.is_open();
+                let wheel_events = window.take_wheel_events();
                 self.update_mouse_state(mouse_state);
+                self.queue_mouse_wheel_events(wheel_events);
             }
         }
         if user_closed {
@@ -12819,12 +13028,17 @@ impl Interpreter {
         Ok(())
     }
 
-    fn execute_frame(&mut self, arg: &str, cursor: &mut Cursor) -> BasicResult<()> {
+    fn execute_frame(
+        &mut self,
+        arg: &str,
+        cursor: &mut Cursor,
+        wait: impl profile::FrameWait,
+    ) -> BasicResult<()> {
         let arg = arg.trim();
         if arg.is_empty() {
             self.graphics_window_dirty = true;
             self.record_frame_command_present_at(Instant::now());
-            self.present_graphics_window_impl(self.graphics_sync_enabled)?;
+            self.present_graphics_window_impl(self.graphics_sync_enabled, wait)?;
             return Ok(());
         }
 
@@ -12832,7 +13046,7 @@ impl Interpreter {
         let before_wait = *cursor;
         let frame_time = match parts.len() {
             1 => self
-                .wait_for_frame_rate(&parts[0], cursor)?
+                .wait_for_frame_rate(&parts[0], cursor, wait)?
                 .unwrap_or_else(Instant::now),
             _ => return Err(self.err(ErrorCode::ArgumentMismatch)),
         };
@@ -12842,7 +13056,7 @@ impl Interpreter {
 
         self.graphics_window_dirty = true;
         self.record_frame_command_present_at(frame_time);
-        self.present_graphics_window_impl(self.graphics_sync_enabled)?;
+        self.present_graphics_window_impl(self.graphics_sync_enabled, wait)?;
         Ok(())
     }
 
@@ -12859,6 +13073,7 @@ impl Interpreter {
         &mut self,
         fps_arg: &str,
         cursor: &mut Cursor,
+        wait: impl profile::FrameWait,
     ) -> BasicResult<Option<Instant>> {
         let fps = self.eval_number(fps_arg)?;
         if !fps.is_finite() || fps <= 0.0 {
@@ -12880,7 +13095,7 @@ impl Interpreter {
         };
         while Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            std::thread::sleep(remaining.min(Duration::from_millis(2)));
+            wait.during(|| std::thread::sleep(remaining.min(Duration::from_millis(2))));
             self.check_user_interrupt(cursor)?;
             if self.process_timers(cursor)? {
                 return Ok(Some(Instant::now()));
@@ -12955,6 +13170,7 @@ impl Interpreter {
 
         let mut user_closed = false;
         let mut mouse_state = None;
+        let mut wheel_events = Vec::new();
         if let Some(window) = self.graphics_window.as_mut() {
             mouse_state = Some(window.pump_events());
             if window.is_open() && window.presentation_needs_refresh() {
@@ -12962,12 +13178,14 @@ impl Interpreter {
                 // image even while BASIC is waiting without executing FRAME.
                 mouse_state = Some(window.present(&self.graphics)?);
             }
+            wheel_events = window.take_wheel_events();
             if !window.is_open() {
                 user_closed = true;
             }
         }
         if let Some(mouse_state) = mouse_state {
             self.update_mouse_state(mouse_state);
+            self.queue_mouse_wheel_events(wheel_events);
         }
         if user_closed {
             self.mark_graphics_window_user_closed();
@@ -12989,18 +13207,26 @@ impl Interpreter {
         let event = if let Some(event) = self.mouse_event_queue.pop_front() {
             event
         } else if !self.mouse_state.event.is_empty() && !self.mouse_event_consumed {
-            self.mouse_state.event.clone()
+            QueuedMouseEvent::Pointer(self.mouse_state.event.clone())
         } else {
             return Ok(());
         };
-        let Some(target) = self.mouse_handlers.get(&event).copied() else {
+        let Some(target) = self.mouse_handlers.get(event.name()).copied() else {
             return Ok(());
         };
-        let target = self.callback_target(&CallbackId::Mouse(event.clone()), target)?;
+        let target = self.callback_target(&CallbackId::Mouse(event.name().to_string()), target)?;
+        let wheel = match event {
+            QueuedMouseEvent::Wheel(wheel) => Some(wheel),
+            QueuedMouseEvent::Pointer(_) => None,
+        };
+        self.mouse_wheel_event = wheel;
         self.handling_mouse_event = true;
         let result = self.execute_inline_gosub(&target.to_string(), true);
         self.handling_mouse_event = false;
-        self.mouse_event_consumed = true;
+        self.mouse_wheel_event = None;
+        if wheel.is_none() {
+            self.mouse_event_consumed = true;
+        }
         result
     }
 
@@ -13015,7 +13241,19 @@ impl Interpreter {
             && self.current_run_uses_graphics_window()
             && self.mouse_handlers.contains_key(&event)
         {
-            self.mouse_event_queue.push_back(event);
+            self.mouse_event_queue
+                .push_back(QueuedMouseEvent::Pointer(event));
+        }
+    }
+
+    fn queue_mouse_wheel_events(&mut self, events: Vec<MouseWheelEvent>) {
+        if !events.is_empty()
+            && self.run_depth > 0
+            && self.current_run_uses_graphics_window()
+            && self.mouse_handlers.contains_key("WHEEL")
+        {
+            self.mouse_event_queue
+                .extend(events.into_iter().map(QueuedMouseEvent::Wheel));
         }
     }
 
@@ -13111,6 +13349,16 @@ impl Interpreter {
             self.refocus_graphics_after_debug_if_needed();
         }
         Ok(())
+    }
+
+    fn mouse_read_position(&mut self) -> BasicResult<(f64, f64)> {
+        let (x, y) = if let Some(wheel) = self.mouse_wheel_event {
+            (wheel.x, wheel.y)
+        } else {
+            self.prepare_mouse_read()?;
+            (self.mouse_state.x, self.mouse_state.y)
+        };
+        Ok(self.graphics.logical_screen_to_user(x, y))
     }
 
     fn mark_graphics_window_used_by_current_run(&mut self) {
@@ -14500,6 +14748,7 @@ impl Interpreter {
         self.current_interrupt_priority = -1;
         self.mouse_handlers.clear();
         self.mouse_event_queue.clear();
+        self.mouse_wheel_event = None;
         self.mouse_event_consumed = false;
         self.handling_mouse_event = false;
         self.interrupts_enabled = true;
@@ -14832,7 +15081,7 @@ impl Interpreter {
         self.routines_prepared = false;
         self.routine_definition_skips.clear();
         self.command_cache.clear();
-        self.compiled_command_cache.clear();
+        self.prepared_block_lines.clear();
         self.execution_source_cache.clear();
         self.compiled_line_cache =
             Rc::from(Vec::<Rc<[Rc<CachedCommand>]>>::new().into_boxed_slice());
@@ -14876,12 +15125,12 @@ impl Interpreter {
                 );
             }
             self.command_cache.insert(line, commands);
-            self.compiled_command_cache.insert(line, compiled.clone());
             self.execution_source_cache.insert(line, execution_sources);
             compiled_lines.push(Rc::from(compiled.into_boxed_slice()));
             self.line_index_cache.insert(line, idx);
         }
         self.compiling_line = None;
+        self.prepared_block_lines = numeric_block::prepare(&mut compiled_lines, &self.line_numbers_cache);
         self.compiled_line_cache = Rc::from(compiled_lines.into_boxed_slice());
         self.rebuild_block_target_caches();
     }
@@ -15237,6 +15486,7 @@ impl Interpreter {
                 .map(|condition| CachedCommand::BlockElseIf(Rc::new(condition)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
             "ELSE" if upper == "ELSE" => CachedCommand::Else,
+            "CONTINUE" if upper == "CONTINUE" => CachedCommand::Continue,
             "FOR" => compile_for_statement(trimmed[3..].trim())
                 .map(|compiled| CachedCommand::For(Rc::new(compiled)))
                 .unwrap_or_else(|_| CachedCommand::Raw(Rc::<str>::from(trimmed))),
@@ -15480,6 +15730,20 @@ impl Interpreter {
     fn resolve_bas_literal_arg(&self, arg: &str) -> BasicResult<PathBuf> {
         let path = extract_quoted_path_text(arg)?;
         self.resolve_bas_path_text(&path, &self.effective_base_dir())
+    }
+
+    fn resolve_load_literal_arg(&self, arg: &str) -> BasicResult<PathBuf> {
+        let path = extract_quoted_path_text(arg)?;
+        let base = self.effective_base_dir();
+        let filename = path.rsplit(['/', '\\']).next().unwrap_or_default();
+        if Path::new(filename)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bak"))
+        {
+            let resolved = self.resolve_virtual_path_text(&path, &base)?;
+            return Ok(Self::match_existing_case(resolved));
+        }
+        self.resolve_bas_path_text(&path, &base)
     }
 
     fn resolve_bas_path_expr(&mut self, expr: &str) -> BasicResult<PathBuf> {
@@ -16264,22 +16528,8 @@ impl EvalContext for Interpreter {
             "YPOS" if args.is_empty() => Ok(Value::number(self.graphics.ypos())),
             "HPOS" if args.is_empty() => Ok(Value::number(self.graphics.hpos() as f64)),
             "VPOS" if args.is_empty() => Ok(Value::number(self.graphics.vpos() as f64)),
-            "MOUSEX" if args.is_empty() => {
-                self.prepare_mouse_read()?;
-                Ok(Value::number(
-                    self.graphics
-                        .logical_screen_to_user(self.mouse_state.x, self.mouse_state.y)
-                        .0,
-                ))
-            }
-            "MOUSEY" if args.is_empty() => {
-                self.prepare_mouse_read()?;
-                Ok(Value::number(
-                    self.graphics
-                        .logical_screen_to_user(self.mouse_state.x, self.mouse_state.y)
-                        .1,
-                ))
-            }
+            "MOUSEX" if args.is_empty() => Ok(Value::number(self.mouse_read_position()?.0)),
+            "MOUSEY" if args.is_empty() => Ok(Value::number(self.mouse_read_position()?.1)),
             "MOUSELEFT" if args.is_empty() => {
                 self.prepare_mouse_read()?;
                 Ok(Value::number(if self.mouse_state.left {
@@ -16296,7 +16546,13 @@ impl EvalContext for Interpreter {
                     0.0
                 }))
             }
+            "MOUSEWHEEL" if args.is_empty() => Ok(Value::number(
+                self.mouse_wheel_event.map_or(0.0, |wheel| wheel.delta),
+            )),
             "MOUSEEVENT$" if args.is_empty() => {
+                if self.mouse_wheel_event.is_some() {
+                    return Ok(Value::string("WHEEL".to_string()));
+                }
                 self.prepare_mouse_read()?;
                 Ok(Value::string(self.mouse_state.event.clone()))
             }
@@ -16394,10 +16650,7 @@ impl EvalContext for Interpreter {
         count: Option<usize>,
     ) -> Option<BasicResult<String>> {
         let name = simple_string_variable_name(name)?;
-        let Some(text) = self.string_variables.get(&name) else {
-            return Some(Ok(String::new()));
-        };
-        Some(Ok(basic_string_slice(text, start, count)))
+        Some(Ok(self.string_variables.slice(&name, start, count)))
     }
 }
 
@@ -21827,7 +22080,7 @@ fn is_non_immediate_command(first: &str) -> bool {
 
 fn is_immediate_only_command(first: &str, upper_command: &str) -> bool {
     language::is_immediate_command_word(first)
-        || (matches!(first, "HELP" | "PACK") && !is_assignment(upper_command))
+        || (matches!(first, "HELP" | "PACK" | "PROFILE") && !is_assignment(upper_command))
         || (first == "EXIT"
             && !matches!(
                 upper_command,
@@ -22048,62 +22301,13 @@ fn axis_tics_token_is_scientific(token: &str) -> bool {
     exponent_digits > 0 && chars.next().is_none()
 }
 
-fn simple_string_variable_name(name: &str) -> Option<String> {
-    let trimmed = name.trim();
-    (trimmed.ends_with('$') && is_basic_identifier(trimmed)).then(|| trimmed.to_ascii_uppercase())
-}
-
-fn basic_string_slice(text: &str, start: usize, count: Option<usize>) -> String {
-    if text.is_ascii() {
-        if start >= text.len() {
-            return String::new();
-        }
-        let end = count
-            .map_or(text.len(), |count| start.saturating_add(count))
-            .min(text.len());
-        return text[start..end].to_string();
+fn simple_string_variable_name(name: &str) -> Option<Cow<'_, str>> {
+    let name = name.trim();
+    if !name.ends_with('$') || !is_basic_identifier_shape(name) {
+        return None;
     }
-
-    let chars: Vec<_> = text.chars().collect();
-    if start >= chars.len() {
-        return String::new();
-    }
-    let end = count
-        .map_or(chars.len(), |count| start.saturating_add(count))
-        .min(chars.len());
-    chars[start..end].iter().collect()
-}
-
-fn string_char_at(text: &str, start: usize) -> Option<char> {
-    if text.is_ascii() {
-        return text.as_bytes().get(start).map(|byte| *byte as char);
-    }
-    text.chars().nth(start)
-}
-
-fn replace_mid_ascii(
-    original: &mut String,
-    start: usize,
-    count: Option<usize>,
-    replacement: &str,
-) -> bool {
-    if !original.is_ascii() || !replacement.is_ascii() {
-        return false;
-    }
-    if start >= original.len() {
-        return true;
-    }
-    let max_count = original.len() - start;
-    let count = count.unwrap_or(max_count).min(max_count);
-    let replacement_len = replacement.len().min(count);
-    if replacement_len == 0 {
-        return true;
-    }
-    original.replace_range(
-        start..start + replacement_len,
-        &replacement[..replacement_len],
-    );
-    true
+    let upper = uppercase_name(name);
+    (!is_reserved_uppercase_identifier_name(&upper)).then_some(upper)
 }
 
 fn replace_mid_general(
@@ -22112,19 +22316,20 @@ fn replace_mid_general(
     count: Option<usize>,
     replacement: &str,
 ) {
-    let mut chars: Vec<char> = original.chars().collect();
-    if start >= chars.len() {
+    let mut remaining = original.char_indices().skip(start).peekable();
+    let Some(&(first, _)) = remaining.peek() else {
         return;
+    };
+    let mut end = first;
+    let mut bytes = 0;
+    for ((at, old), new) in remaining
+        .zip(replacement.chars())
+        .take(count.unwrap_or(usize::MAX))
+    {
+        end = at + old.len_utf8();
+        bytes += new.len_utf8();
     }
-    let max_count = chars.len() - start;
-    let count = count.unwrap_or(max_count).min(max_count);
-    if count == 0 {
-        return;
-    }
-    for (offset, ch) in replacement.chars().take(count).enumerate() {
-        chars[start + offset] = ch;
-    }
-    *original = chars.into_iter().collect();
+    original.replace_range(first..end, &replacement[..bytes]);
 }
 
 fn parse_call_statement(args: &str) -> BasicResult<(String, Vec<String>)> {
@@ -22391,6 +22596,7 @@ pub(crate) fn record_identifier_case_forms(
 
         let chars: Vec<char> = command.chars().collect();
         let symbolic_ranges = crate::labels::symbolic_name_ranges(&command);
+        let contextual_offsets = console::contextual_keyword_byte_offsets(&command);
         let mut i = 0usize;
         let mut in_string = false;
         let mut after_def = false;
@@ -22450,7 +22656,10 @@ pub(crate) fn record_identifier_case_forms(
                     }
                     continue;
                 }
-                if upper.starts_with("FN") || console::is_known_basic_word(&upper) {
+                if upper.starts_with("FN")
+                    || console::is_known_basic_word(&upper)
+                    || contextual_offsets.contains(&byte_start)
+                {
                     continue;
                 }
                 if is_basic_identifier(&ident) {
@@ -22550,6 +22759,7 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
     let mut out = String::with_capacity(source.len());
     let symbolic_ranges = crate::labels::symbolic_name_ranges(source);
     let import_alias = console::import_alias_offset(source);
+    let contextual_offsets = console::contextual_keyword_byte_offsets(source);
     let mut chars = source.char_indices().peekable();
     let mut in_string = false;
     let mut in_data = false;
@@ -22580,6 +22790,7 @@ fn apply_identifier_case(source: &str, cases: &HashMap<String, String>) -> Strin
             let ident = &source[start..end];
             if symbolic_ranges.iter().any(|range| range.contains(&start))
                 || import_alias == Some(start)
+                || contextual_offsets.contains(&start)
                 || source.as_bytes().get(start.wrapping_sub(1)) == Some(&b'.')
                 || source.as_bytes().get(end) == Some(&b'.')
             {
@@ -22625,7 +22836,14 @@ fn is_basic_identifier_char(ch: char) -> bool {
 fn is_mouse_event_name(name: &str) -> bool {
     matches!(
         name,
-        "MOVE" | "LEFTDOWN" | "LEFTUP" | "LEFTDRAG" | "RIGHTDOWN" | "RIGHTUP" | "RIGHTDRAG"
+        "MOVE"
+            | "LEFTDOWN"
+            | "LEFTUP"
+            | "LEFTDRAG"
+            | "RIGHTDOWN"
+            | "RIGHTUP"
+            | "RIGHTDRAG"
+            | "WHEEL"
     )
 }
 
@@ -22651,7 +22869,7 @@ fn set_numeric_binding_ref(variables: &mut NumericVariables, name: &str, value: 
     }
 }
 
-fn set_string_binding_ref(variables: &mut FastHashMap<String, String>, name: &str, value: String) {
+fn set_string_binding_ref(variables: &mut StringVariables, name: &str, value: String) {
     if let Some(slot) = variables.get_mut(name) {
         *slot = value;
     } else {
@@ -22679,7 +22897,7 @@ fn save_numeric_binding_ref<'a>(
 }
 
 fn save_string_binding_ref<'a>(
-    variables: &FastHashMap<String, String>,
+    variables: &StringVariables,
     saved: &mut Vec<(&'a str, Option<String>)>,
     name: &'a str,
 ) {
@@ -22727,7 +22945,7 @@ fn restore_numeric_bindings_ref(variables: &mut NumericVariables, saved: Vec<(&s
 }
 
 fn restore_string_bindings_ref(
-    variables: &mut FastHashMap<String, String>,
+    variables: &mut StringVariables,
     saved: Vec<(&str, Option<String>)>,
 ) {
     for (name, value) in saved {
@@ -22792,6 +23010,77 @@ fn console_read_key_code() -> Option<u8> {
 #[cfg(not(windows))]
 fn console_read_key_code() -> Option<u8> {
     console::read_runtime_key_code()
+}
+
+fn write_program_file(path: &Path, backup: &Path, content: &[u8]) -> io::Result<()> {
+    use std::io::Read;
+
+    let link_target;
+    let path = if path
+        .symlink_metadata()
+        .is_ok_and(|entry| entry.is_symlink())
+    {
+        link_target = path.canonicalize()?;
+        link_target.as_path()
+    } else {
+        path
+    };
+    let parent = path.parent().expect("resolved program path has a parent");
+    let mut original = match fs::OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let staged = stage_program_file(parent, content, None)?;
+            return staged
+                .persist_noclobber(path)
+                .map(|_| ())
+                .map_err(|error| error.error);
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = original.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SAVE requires a regular file.",
+        ));
+    }
+    let mut previous = Vec::new();
+    original.read_to_end(&mut previous)?;
+    drop(original);
+    if previous == content {
+        return Ok(());
+    }
+
+    let permissions = metadata.permissions();
+    let staged = stage_program_file(parent, content, Some(&permissions))?;
+    let backup_parent = backup.parent().expect("resolved backup path has a parent");
+    let staged_backup = stage_program_file(backup_parent, &previous, Some(&permissions))?;
+    staged_backup.persist(backup).map_err(|error| error.error)?;
+    staged
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+fn stage_program_file(
+    parent: &Path,
+    content: &[u8],
+    permissions: Option<&fs::Permissions>,
+) -> io::Result<tempfile::NamedTempFile> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".avl-save-");
+    #[cfg(unix)]
+    if permissions.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    let mut staged = builder.tempfile_in(parent)?;
+    staged.write_all(content)?;
+    if let Some(permissions) = permissions {
+        staged.as_file().set_permissions(permissions.clone())?;
+    }
+    staged.as_file().sync_all()?;
+    Ok(staged)
 }
 
 fn read_program_file(path: &Path) -> BasicResult<Program> {
@@ -23050,7 +23339,7 @@ fn expression_uses_numeric_variable(expr: &Expr, variable: &str) -> bool {
             expression_uses_numeric_variable(left, variable)
                 || expression_uses_numeric_variable(right, variable)
         }
-        Expr::Number(_) | Expr::Str(_) => false,
+        Expr::Number(_) | Expr::Str(_) | Expr::ArraySlice { .. } => false,
     }
 }
 
@@ -23562,14 +23851,23 @@ fn compile_mid_assignment_statement(source: &str) -> BasicResult<CompiledMidAssi
     }
     let target = simple_string_variable_name(args[0].trim())
         .ok_or_else(|| BasicError::new(ErrorCode::Syntax))?;
+    let start = compile_expression(args[1].trim())?;
+    let count = args
+        .get(2)
+        .map(|arg| compile_expression(arg.trim()))
+        .transpose()?;
+    let rhs = compile_expression(rhs)?;
+    let first_variable_char = matches!(&count, Some(Expr::Number(n)) if *n == 1.0)
+        && matches!(&rhs, Expr::Var(name) if name.ends_with('$')
+            && !name.starts_with("FN")
+            && !is_zero_arg_function(name)
+            && !is_reserved_uppercase_identifier_name(name));
     Ok(CompiledMidAssignment {
-        target,
-        start: compile_expression(args[1].trim())?,
-        count: args
-            .get(2)
-            .map(|arg| compile_expression(arg.trim()))
-            .transpose()?,
-        rhs: compile_expression(rhs)?,
+        target: target.into_owned(),
+        start,
+        count,
+        rhs,
+        first_variable_char,
     })
 }
 
@@ -24161,7 +24459,7 @@ fn expr_simple_string_variable_name(expr: &Expr) -> Option<String> {
     let Expr::Var(name) = expr else {
         return None;
     };
-    simple_string_variable_name(name)
+    simple_string_variable_name(name).map(Cow::into_owned)
 }
 
 fn compile_assignment_statement(source: &str) -> BasicResult<CompiledAssignment> {

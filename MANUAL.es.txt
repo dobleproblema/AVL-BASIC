@@ -1,5 +1,5 @@
 # AVL BASIC — Manual Completo  
-*(Manual de usuario del intérprete Rust, edición 2026)*
+*(Manual de usuario de AVL BASIC 1.7, edición Rust, 2026)*
 Licencia: MIT. Ver `COPYING`.
 
 ---
@@ -8,7 +8,7 @@ Licencia: MIT. Ver `COPYING`.
 
 0.  - Requisitos e instalación
 0.1 - Motivación del diseño
-0.2 - Limitaciones de fuentes
+0.2 - Caracteres de las fuentes gráficas
 1.  - Arranque rápido
 1.1 - Normalización del código
 2.  - Sintaxis esencial
@@ -84,12 +84,16 @@ AVL BASIC es un intérprete nativo Rust con un runtime deliberadamente autocont
 - Reproducibilidad: las fuentes bitmap están embebidas en el binario Rust, de modo que el texto de la ventana gráfica no depende de fuentes del sistema.
 - Mantenibilidad: la fuente editable de los bitmaps vive en `assets/fonts/avl-basic-fonts.txt` y el build Rust la valida/genera.
 
-0.2 Limitaciones de las fuentes
+0.2 Caracteres de las fuentes gráficas
 
-El intérprete incluye sus propias fuentes bitmap para asegurar un aspecto homogéneo en todas las plataformas. Esto implica restricciones en el conjunto de caracteres disponibles:
-- Actualmente se soportan los caracteres de los alfabetos latinos de la mayoría de los idiomas de Europa occidental y central.
-- No se incluyen algunos caracteres especiales, acentos o diéresis de variantes menos comunes del alfabeto latino (idiomas de Europa del este, por ejemplo).
-- No se soportan alfabetos no latinos (griego, cirílico, hebreo, etc.) ni alfabetos orientales.
+`SMALLFONT` (8×16 píxeles) y `BIGFONT` (16×16) dibujan los mismos 320 caracteres. Cubren el ASCII imprimible y los repertorios gráficos completos de Latin-1, Latin-2, Latin-9 y Latin-10 (ISO-8859-1, -2, -15 y -16). Incluyen también ẞ, el cuadro de sustitución □ y los siguientes caracteres para escribir fórmulas.
+- Las letras griegas disponibles son Γ Δ Θ Λ Π Σ Φ Ω y α β γ δ ε ζ η θ κ λ μ ν ξ π ρ σ τ φ χ ψ ω.
+- Las ocho flechas son ← ↑ → ↓ ↔ ↕ ⇒ ⇔. Los símbolos matemáticos incluyen ∀ ∂ ∃ ∇ ∈ ∉ ∏ ∑ ∓ √ ∝ ∞ ∧ ∨ ∩ ∪ ∫ ≃ ≈ ≠ ≡ ≤ ≥.
+- Usa cadenas como `GPRINT "α ≤ β"` para mostrar fórmulas. Las cadenas usan UTF-8 y cada carácter conserva su código Unicode, incluso si la fuente lo muestra como □.
+- Escribe las letras directamente en el programa UTF-8, por ejemplo `GPRINT "Łódź, Dvořák, București"`. También puedes usar su código Unicode con `CHR$`. `PRINT` usa la fuente del terminal. `GPRINT`, `LABEL` y el campo de `GINPUT` usan las fuentes bitmap y muestran □ por cada carácter sin glifo. `GINPUT` conserva el carácter original al leer una cadena.
+- El texto gráfico ocupa una celda por punto de código Unicode. El intérprete conserva las secuencias combinantes tal como se introducen. Por ejemplo, é (U+00E9) ocupa una celda. Una e seguida de un acento agudo combinante (U+0301) ocupa dos celdas y se ve como e□. Para escribir letras acentuadas en la ventana gráfica, usa las formas precompuestas (Unicode NFC).
+- El espacio inseparable (U+00A0) y el guion discrecional (U+00AD) ocupan una celda sin tinta. `TESTCHR$` lee una celda de color uniforme como un espacio normal.
+- Ejecuta `samples/g-font-atlas.bas` para abrir un atlas de dos páginas en inglés. En la página de caracteres, pulsa F para alternar las fuentes. La vista SMALLFONT muestra los 320 glifos a la vez. Pulsa 2 para ver ejemplos en varios idiomas y fórmulas matemáticas.
 
 1. Arranque rápido
 
@@ -238,6 +242,7 @@ Edición y presentación
 + WHILE expresión                                              El bucle se ejecuta mientras `expresión` sea distinto de 0
 + WEND                                                         Cierra el bucle `WHILE`
 + EXIT WHILE                                                   Sale anticipadamente del bucle `WHILE` actual
++ CONTINUE                                                     Omite el resto de la iteración actual
 + ON n GOTO 100,120,140                                        Índice 1-based
 + ON n GOSUB 100,200,300                                      Llama a la subrutina seleccionada por el índice `n`, contado desde 1
 + ON ERROR GOTO línea                                        Activa un procesador de errores en la línea indicada
@@ -247,6 +252,7 @@ Edición y presentación
 
 Notas rápidas
 - THEN/ELSE admiten números de línea, etiquetas del ámbito actual e instrucciones completas.
+- `CONTINUE` pasa al `NEXT` o `WEND` del bucle activo más interno que lo contiene. `NEXT` avanza el contador y comprueba el límite, y `WEND` vuelve a evaluar la condición. La instrucción se usa sin argumentos y requiere un bucle activo de la llamada actual. En `samples/g-cloth.bas`, por ejemplo, `IF WeightA+WeightB=0 THEN CONTINUE` omite una restricción que no requiere corrección.
 - La forma en bloque se activa cuando `IF ... THEN` está sola en su línea: termina en `END IF` y puede intercalar `ELSEIF`/`ELSE`.
 - `ON ... GOTO/GOSUB` usa índice 1-based; si el índice está fuera de rango no hay salto.
 - `RESUME` repite la instrucción con error; `RESUME NEXT` continúa en la siguiente.
@@ -331,6 +337,7 @@ Funciones
 + MAP(función,array)               Aplica una función numérica a los elementos activos en una expresión MAT
 + MAXAB(expr) | MAXABCOL | MAXABROW  Mayor valor absoluto y su columna/fila asociada
 + RNORM(expr) | RNORMROW           Norma de fila y fila correspondiente
++ SOLVE(A,B)                       Resuelve el sistema lineal `A*X=B` dentro de `MAT`
 + SUM(expr)                        Suma algebraica de todos los elementos
 + UBOUND(array[,dimensión])        Límite superior inclusivo de cualquier dimensión existente del array
 
@@ -347,12 +354,18 @@ Notas detalladas (`MAT nombre = ...`)
 - Los cálculos puramente escalares conservan las comprobaciones de tipos, dominio y desbordamiento de BASIC. Un error en un operando impide evaluar los operandos posteriores que BASIC no alcanzaría.
 - Cada operando de array usa los valores que tiene al alcanzarlo durante la evaluación de izquierda a derecha. Si una función modifica un array, las apariciones anteriores conservan sus valores anteriores y las posteriores leen los valores modificados.
 - El resultado se asigna completo al terminar; `MAT A=A+B*A` utiliza los valores anteriores de A. Un error no escribe un resultado parcial, pero conserva la creación implícita del destino y los efectos de las funciones ya evaluadas.
-- Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión. Los rangos y ejes omitidos seleccionan subarrays en copias y en `MAT PRINT`.
+- Una referencia con índices individuales, como `A(2)` o `A(1,2)`, lee un elemento escalar y puede aparecer en la expresión.
+- Con un destino de array completo, los rangos y ejes omitidos también permiten usar subarrays como operandos. Por ejemplo, `MAT Z=TRN(Y)*U(,2)` multiplica la traspuesta de `Y` por la columna de índice 2 de `U`. Los subarrays se admiten en argumentos como `TRN(U(,2))` y `MAP(INT,U(,2))`.
+- Un subarray usado en una expresión empieza en `MAT BASE` y conserva el número de dimensiones del origen. Una fila o columna seleccionada de una matriz sigue siendo bidimensional.
 - `MAT A = B` copia otra matriz o vector. También admite escalares (`MAT A = 5`) que rellenan todas las posiciones del array.
   • `MAT A = RND` o `MAT A = RND()` genera un número aleatorio por elemento activo del array numérico, recorriendo las filas en orden. Con `MAT BASE 1`, conserva las posiciones con algún índice 0. Con la misma semilla de `RANDOMIZE`, produce la misma secuencia que un bucle que recorra los elementos en ese orden. Para repetir una sola muestra en todo el array, usa `R=RND:MAT A=R`.
   • Las palabras clave `CON`, `ZER` e `IDN` rellenan con 1, 0 o con la identidad (matrices cuadradas); `IDN` usa `MAT BASE` para situar la diagonal.
 - `MAT A = TRN(B)` calcula la traspuesta de una matriz o un vector numérico. Un vector de `n` elementos activos se trata como una columna y da una matriz fila de dos dimensiones, de forma `1×n`. El argumento puede ser una expresión matricial como `TRN(B+C)`.
 - `MAT A = INV(B)` invierte una matriz numérica cuadrada y también admite expresiones como `INV(B+C)`. Un vector con exactamente un elemento activo se trata como una matriz `1×1` y da un resultado bidimensional de forma `1×1`. Una matriz singular produce "Valor no válido". Un bloque activo no cuadrado produce "Dimensiones del array no válidas".
+- `MAT X=SOLVE(A,B)` resuelve `A*X=B` por eliminación con pivoteo parcial, sin calcular la inversa. `A` debe ser una matriz numérica cuadrada. Un vector `A` con un único elemento activo equivale a una matriz `1×1`.
+  • `B` es un vector o una matriz numérica con tantas filas activas como `A`. Con un vector, `X` es un vector. Con una matriz, `X` es una matriz con la solución de cada sistema en la columna correspondiente.
+  • Los argumentos pueden ser expresiones matriciales o selecciones, como en `SOLVE(A,B(,2))`. Usa el bloque activo de `MAT BASE`. Con base 1, las posiciones con índice 0 del resultado se inicializan a cero.
+  • Una forma incompatible produce "Dimensiones del array no válidas". Una matriz singular, valores activos no finitos o un resultado no finito producen "Valor no válido".
 - `MAP(función,array)` aplica una función numérica de un argumento a cada elemento activo de un vector, matriz o expresión matricial numéricos. Escribe el nombre de la función sin paréntesis, como en `MAT A=MAP(INT,A*10)`. El resultado tiene las mismas dimensiones que el argumento evaluado.
   • Admite `ABS`, `INT`, `FIX`, `SGN`, `FRAC`, `ROUND` (un argumento), `SQR`, `LOG`, `LOG10`, `EXP`, `SIN`, `COS`, `TAN`, `COT`, `ASN`, `ACS`, `ATN`, `RTD` y `DTR`. Se aplican las mismas reglas numéricas que en las llamadas escalares, incluido el modo angular `DEG` o `RAD` para las funciones trigonométricas. Un error en un elemento activo interrumpe la asignación sin escribir un resultado parcial.
   • `MAT BASE 0` recorre todos los elementos almacenados. Con `MAT BASE 1`, el resultado conserva el elemento 0 del vector o la fila y la columna 0 de la matriz del argumento evaluado. Por ejemplo, `MAP(LOG,A)` admite ceros en ese borde.
@@ -377,10 +390,10 @@ Notas detalladas (copia de subarrays)
 - La copia utiliza los valores originales del origen aunque se solape con el destino. Los límites no válidos o las formas o tipos incompatibles dejan el destino intacto.
 - Los rangos siguen la convención del HP-85: `primero:último` incluye ambos límites cuando `primero<=último`; `primero=último+1` no selecciona elementos. Si `primero>último+1`, selecciona desde `primero-1` hasta `último+1`, en orden descendente. Por ejemplo, `V(4:-1)` selecciona los índices 3,2,1,0 en ese orden. Deben existir los índices seleccionados, no necesariamente esos límites exteriores.
 - Una copia vacía en una selección existente no cambia nada. Un destino completo puede adquirir una dimensión activa vacía con `MAT BASE 1` (límite superior 0); con `MAT BASE 0`, un resultado completo vacío no es válido.
-- Las selecciones se admiten en copias y en `MAT PRINT`. Para usar un bloque seleccionado en aritmética matricial, cópialo primero a un array auxiliar. `MAT A=B` conserva el comportamiento anterior de copia del array completo. Con un destino completo, una referencia a la derecha que solo contenga índices individuales conserva las reglas anteriores para expresiones escalares; no solicita una copia de subarray. Usa un rango como `MAT A=B(2:2)` para copiar un subarray de un elemento.
+- Con un destino de array completo, usa un rango como `MAT A=B(2:2)` para copiar un subarray de un elemento. `MAT A=B(2)` rellena el destino con el valor escalar de `B(2)`.
 
 Notas detalladas (`MAT BASE`)
-- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), la división por un array, `MAT IDN`, `MAT TRN`, `MAT INV`, `DET` los ejes omitidos en las copias y selecciones de impresión, y los destinos redimensionados en las copias de subarrays.
+- Solo acepta 0 o 1. Cambia el índice inicial que utilizan `MAT PRINT`, `MAT INPUT`, `MAT READ`, el producto matricial (`MAT C=A*B`), la división por un array, `MAT IDN`, `MAT TRN`, `MAT INV`, `DET`, `SOLVE`, los ejes omitidos en las selecciones de subarrays y el primer índice de los subarrays usados en expresiones o copiados a un destino de array completo.
 - No modifica los datos almacenados: únicamente determina qué filas/columnas se recorren y dónde se traza la diagonal principal en `IDN`. Con `MAT BASE 1`, el producto matricial deja fuera la fila y columna 0 del cálculo.
 
 Notas detalladas (`MAT PRINT`)
@@ -417,6 +430,41 @@ Este ejemplo colorea filas directamente y después une cortes de columnas de dis
 170 MAT PRINT USING "0.000000";a(2:UBOUND(a,1),1) | COLOR(3);a(2:UBOUND(a,1),2) | COLOR();a(2:UBOUND(a,1),3:UBOUND(a,2))
 180 DATA 1,2,3,4,5,6,7,8,9
 ```
+
+Este programa calcula `A=TRN(U)*U` y `Z=TRN(U)*Y`. En cada `MAT PRINT`, `| "  =  " |` coloca el vector a la derecha de la matriz e inserta un signo `=` en cada fila.
+
+```basic
+10 MAT BASE 1
+20 DIM U(5,3),Y(5)
+30 MAT READ U,Y
+40 MAT A=TRN(U)*U
+50 MAT Z=TRN(U)*Y
+60 PRINT TAB(10);"U";TAB(27);"Y"
+70 MAT PRINT USING "###.#";U | "  =  " | Y
+80 PRINT
+90 PRINT TAB(10);"A";TAB(27);"Z"
+100 MAT PRINT USING "###.#";A | "  =  " | Z
+110 DATA 1,1,1,1,2,4,1,3,9,1,4,16,1,5,25
+120 DATA 2,4,6,8,10
+```
+
+Salida del programa
+
+```text
+         U                Y
+  1.0    1.0    1.0  =    2.0
+  1.0    2.0    4.0  =    4.0
+  1.0    3.0    9.0  =    6.0
+  1.0    4.0   16.0  =    8.0
+  1.0    5.0   25.0  =   10.0
+
+         A                Z
+  5.0   15.0   55.0  =   30.0
+ 15.0   55.0  225.0  =  110.0
+ 55.0  225.0  979.0  =  450.0
+```
+
+Añade `105 MAT C=SOLVE(A,Z)` para resolver `A*C=Z` y obtener los coeficientes del ajuste. El vector `C` contiene, en orden, los coeficientes de `1`, `x` y `x²`.
 
 Notas detalladas (`MAT INPUT` / `MAT READ`)
 - `MAT INPUT` recorre los elementos por filas y respeta la base actual. Para texto es obligatorio introducir comillas; ENTER vacío o CTRL+C completan el resto con `0` o `""`.
@@ -778,7 +826,7 @@ Notas rápidas
 - La ventana gráfica tiene un tamaño fijo correspondiente al `MODE` activo. Se puede minimizar; Alt+Enter alterna entre pantalla completa proporcional y el tamaño normal de la ventana. En Windows, el botón Maximizar de la barra de título también activa la pantalla completa; Alt+Enter o `SCREEN FULL OFF` recupera la ventana normal. Linux conserva sus controles de ventana habituales. Arrastrar los bordes no permite elegir un tamaño de presentación arbitrario.
 - `SCREEN FULL ON` y `SCREEN FULL OFF` seleccionan la presentación a pantalla completa o en ventana normal desde un programa o en modo inmediato; `ON` u `OFF` es obligatorio. Comparten el estado de pantalla completa con Alt+Enter. El escalado conserva las proporciones del lienzo, con márgenes negros si el monitor tiene otra relación de aspecto; no modifica `WIDTH`, `HEIGHT`, las coordenadas de dibujo ni el contenido gráfico.
 - En escritorios Linux que admitan la emulación de resolución compatible de XWayland dentro de una sesión Wayland, la pantalla completa utiliza automáticamente una superficie de presentación de 1280x720. Una sesión X11 pura mantiene la pantalla completa habitual; `SCREEN SYNC` sigue disponible si se admite X11 Present. El escritorio escala esa superficie al monitor, reduciendo el trabajo de presentación en escritorios de alta resolución. Nunca cambia el modo físico del monitor ni la resolución del escritorio de otras aplicaciones, y es independiente del `MODE` de dibujo. Linux utiliza la pantalla completa habitual si no está disponible la capacidad o un modo compatible; Windows mantiene su presentación habitual. Los errores nativos inesperados sí se notifican. `SCREEN FULL ON` y Alt+Enter utilizan la misma selección automática; no hay ningún parámetro adicional de resolución.
-- `MODE` y `SCREEN` sin argumentos conservan la pantalla completa y `SCREEN SYNC`; `SCREEN CLOSE` restablece ambos. En Linux, sitúa la ventana en el monitor deseado antes de entrar en pantalla completa; sal de ella antes de moverla a otro monitor. Cualquier modo de presentación emulado se libera al salir de pantalla completa o cerrar la ventana.
+- `MODE` y `SCREEN` sin argumentos conservan la pantalla completa y `SCREEN SYNC`. Cerrar la ventana gráfica restablece estos ajustes. En Linux, sitúa la ventana en el monitor deseado antes de entrar en pantalla completa; sal de ella antes de moverla a otro monitor. Cualquier modo de presentación emulado se libera al salir de pantalla completa o cerrar la ventana.
 - `INPUT`, `LINE INPUT` y `MAT INPUT` de consola, el fin del programa, `STOP`, los errores y las pausas del depurador devuelven el control a la consola. Los gráficos permanecen a pantalla completa solo cuando se puede identificar el terminal en otro monitor sin solaparse con la ventana gráfica a pantalla completa. En el mismo monitor, o cuando no se puede situar el terminal con fiabilidad, los gráficos vuelven temporalmente al tamaño normal de ventana para poder usar la consola; la siguiente operación gráfica explícita reanuda la presentación a pantalla completa solicitada. El simple procesamiento de eventos de la ventana no la reanuda. En las pausas del depurador, la selección de pantalla completa pendiente se aplica solo cuando se confirma que el terminal está en otro monitor, sin solicitar el foco gráfico. `SCREEN CLOSE` siempre cierra la ventana gráfica.
 - La detección de monitores utiliza la consola visible o su terminal anfitrión en Windows y la información de ventanas X11 en Linux. Una ventana gráfica X11/XWayland no siempre puede identificar un terminal Wayland nativo, un terminal remoto o el terminal de Windows que aloja WSL. Si no se puede situar el terminal con fiabilidad, tanto Windows como Linux devuelven temporalmente los gráficos a una ventana normal. Ejecutar el terminal mediante X11 puede hacerlo identificable en Linux sin cambiar la sesión del escritorio. Cuando se confirma un terminal visible fuera del monitor gráfico, que el escritorio rechace o retrase el foco del teclado no cancela por sí solo la pantalla completa; se puede activar el terminal manualmente. Ejecutar una ventana gráfica X11 no implica que el terminal o la sesión del escritorio utilicen X11. Las comprobaciones en WSL no sustituyen las pruebas en un escritorio Linux nativo con dos monitores.
 - Si un `BORDER` conservado no cabe en un modo menor (deben cumplirse `2*BORDER < WIDTH-1` y `2*BORDER < HEIGHT-1`), `MODE` da `Invalid argument` y deja intactos el modo y el estado gráfico anteriores. Usa antes `SCALE` o `SCREEN` cuando quieras restablecerlos.
@@ -817,7 +865,7 @@ Notas rápidas
   si el programa va más rápido que el objetivo. `fps` debe ser un número
   positivo. Ejemplo: usa `FRAME 60` en bucles de animación para limitar el
   dibujado a unos 60 FPS. `FRAME` sin argumentos elimina ese límite.
-- `SCREEN SYNC ON` sincroniza la presentación de las llamadas explícitas a `FRAME` con el refresco de pantalla, tanto en ventana como a pantalla completa; `SCREEN SYNC OFF` desactiva la petición y es el valor predeterminado. `ON` u `OFF` es obligatorio. La sincronización reduce el tearing y la irregularidad de presentación, pero puede añadir retardo entre la entrada y su imagen en pantalla. Utiliza el compositor del escritorio de Windows o X11 Present en Linux; al activarla con una ventana nativa se produce un error si falta el soporte necesario. Con las ventanas nativas desactivadas para ejecución sin pantalla, se acepta el ajuste sin esperar a un monitor físico. Si falla la presentación sincronizada, se notifica el error y se desactiva la sincronización; un `SCREEN SYNC ON` posterior permite solicitarla de nuevo.
+- `SCREEN SYNC ON` sincroniza la presentación de las llamadas explícitas a `FRAME` con el refresco de pantalla, tanto en ventana como a pantalla completa; `SCREEN SYNC OFF` desactiva la petición y es el valor predeterminado. `ON` u `OFF` es obligatorio. La sincronización reduce el tearing y la irregularidad de presentación, pero puede añadir retardo entre la entrada y su imagen en pantalla. En Windows, GDI se sincroniza con el compositor del escritorio. En Linux utiliza X11 Present. Al activarla con una ventana nativa se produce un error si falta el soporte necesario. Con las ventanas nativas desactivadas para ejecución sin pantalla, se acepta el ajuste sin esperar a un monitor físico. Si falla la presentación sincronizada, se notifica el error y se desactiva la sincronización; un `SCREEN SYNC ON` posterior permite solicitarla de nuevo.
 - La sincronización y el límite FPS son independientes: tanto `FRAME` sin argumentos como `FRAME fps` respetan `SCREEN SYNC ON`. Sin límite, la sincronización puede seguir esperando al refresco; con `FRAME 60` se aplican ambas restricciones. Ninguna garantiza 60 FPS: si el dibujo no llega a un refresco, la imagen anterior permanece visible durante otro refresco y el movimiento puede ser menos regular. Un límite adicional inferior a la frecuencia del monitor también puede dejar imágenes repetidas. `SCREEN SYNC` no sincroniza `CLG`, el dibujo inmediato, las actualizaciones de inspección del depurador ni la actualización final al terminar el programa.
 
 Elección entre límite FPS y sincronización
@@ -1454,12 +1502,13 @@ Comandos
 
 Repetir `MOUSE ON` o `MOUSE OFF` mantiene el estado elegido. La visibilidad se conserva al cambiar de `MODE`, ejecutar `SCREEN` o alternar pantalla completa con Alt+Enter. `SCREEN CLOSE` restablece el puntero visible para la siguiente ventana. Ocultar el puntero no desactiva las coordenadas, los botones ni los eventos del ratón.
 
-Eventos disponibles: `MOVE`, `LEFTDOWN`, `LEFTUP`, `LEFTDRAG`, `RIGHTDOWN`, `RIGHTUP`, `RIGHTDRAG`. Los eventos `DRAG` corresponden a los movimientos del ratón mientras el botón está pulsado (`<B1-Motion>` y `<B3-Motion>`).
+Eventos disponibles: `MOVE`, `LEFTDOWN`, `LEFTUP`, `LEFTDRAG`, `RIGHTDOWN`, `RIGHTUP`, `RIGHTDRAG`, `WHEEL`. Los eventos `DRAG` corresponden a los movimientos del ratón mientras el botón está pulsado (`<B1-Motion>` y `<B3-Motion>`).
 
 Funciones auxiliares
 + MOUSEX / MOUSEY                  Coordenadas lógicas del cursor (mismo sistema que `PLOT` y `DRAW`).
 + MOUSELEFT / MOUSERIGHT           -1 si el botón está pulsado, 0 si está liberado.
 + MOUSEEVENT$                      Nombre del último evento recibido (por ejemplo, `"LEFTUP"`).
++ MOUSEWHEEL                       Desplazamiento vertical de la rueda para el manejador `WHEEL` actual.
 
 Notas
 - Los eventos solo se generan cuando el puntero está sobre la ventana gráfica y el programa está en ejecución. No existen hooks globales fuera de la ventana.
@@ -1470,6 +1519,7 @@ Notas
 - Las rutinas registradas mediante `ON MOUSE` se despachan como interrupciones: respetan `DI`/`EI`, se apilan como un `GOSUB` y deben finalizar con `RETURN`.
 - El destino admite un número de línea o etiqueta raíz. Aunque se registre dentro de una subrutina, usa el espacio de nombres raíz y no captura el estado local de esa llamada.
 - Puedes cambiar o desactivar un evento en cualquier momento. `ON MOUSE ... GOSUB 0` también elimina las activaciones pendientes del evento indicado.
+- `ON MOUSE WHEEL GOSUB ZoomWheel` registra un manejador para el giro vertical de la rueda sobre el lienzo. Dentro del manejador, `MOUSEWHEEL` es positivo al girar hacia arriba y negativo al girar hacia abajo. La unidad es aproximadamente un paso de rueda y el valor puede ser fraccionario. Fuera de un manejador `WHEEL` devuelve 0. Durante el manejador, `MOUSEEVENT$` vale `"WHEEL"` y `MOUSEX` y `MOUSEY` dan la posición del puntero recogida junto al giro, incluso si `DI` aplazó su entrega. Prueba `samples/g-fmandelbrot.bas` para acercar y alejar alrededor del puntero.
 - Combina `LEFTDOWN` + `LEFTDRAG` + `LEFTUP` (o sus equivalentes de botón derecho) para implementar selecciones por arrastre. `MOVE` emite movimientos incluso sin botones pulsados.
 
 Ejemplos (el botón derecho finaliza)
@@ -1865,7 +1915,7 @@ Tabla completa de códigos de error
 
 9. Comandos “solo inmediato”
 
-+ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | PACK | QUIT | RENUM | RUN | SAVE | SYSTEM
++ CAT | CD | CONT | DEBUG | DELETE | EDIT | EXIT | FILES | HELP | LIST | LOAD | NEW | PACK | PROFILE | QUIT | RENUM | RUN | SAVE | SYSTEM
 
 Notas
 - Si aparecen dentro de un programa se produce IMMEDIATE_COMMAND.
@@ -1935,6 +1985,13 @@ Notas sobre DEBUG
 - Si un temporizador interrumpe un `PAUSE` o `FRAME` durante el recorrido paso a paso, al terminar la interrupción el depurador puede volver a detenerse sobre la instrucción suspendida. F7 ejecuta la interrupción completa sin mostrar su interior; continuar con F5 mantiene la ejecución normal.
 - `DEBUG` requiere soporte de terminal interactivo; en entornos sin este soporte no está disponible.
 
+Notas sobre PROFILE
+- Escribe `PROFILE` en el indicador para iniciar una ejecución limpia del programa en memoria. El informe aparece al llegar a END, STOP, Ctrl+C o un error BASIC. CONT reanuda normalmente el programa detenido. PROFILE también se puede usar como nombre de variable.
+- El listado alinea los recuentos, los milisegundos estimados y el porcentaje de tiempo. Un guion indica que no hubo muestras. En la consola usa los colores de LIST y recorta cada fila por el margen derecho. Al redirigir la salida se guarda el texto completo. Si se ejecutan varios módulos, la columna Mod remite a su ruta en MODULES.
+- El muestreador observa tiempo transcurrido a intervalos de unos 5 ms de media. El informe da el número real de muestras y la frecuencia efectiva en Hz. Los tiempos y porcentajes son estimaciones. Una línea ejecutada con cero muestras puede haber consumido menos tiempo del que resuelve el muestreo. Una ejecución representativa más larga aporta más observaciones.
+- Una visita es una entrada en una línea numerada, incluido un salto que vuelve a ella. Las sentencias unidas por dos puntos comparten la línea. Para las SUB y FN multilínea se muestran las llamadas, la suma de visitas a sus líneas y sus muestras propias. Una FN de una línea se evalúa dentro de la línea que la llama. El cuerpo de un GOSUB numerado aparece en sus propias líneas.
+- FRAME wait recoge el tiempo de espera del limitador de fotogramas y de la sincronización de pantalla. La presentación activa se atribuye a su línea BASIC. Otras esperas, como PAUSE, se atribuyen a su línea. El informe distingue los ficheros importados y conserva el texto de las líneas ejecutadas antes de MERGE o CHAIN.
+
 Notas sobre DELETE
 - Sin argumentos: borra todo el programa en memoria.
 - Rango: admite los formatos indicados en “Formato de rangos”.
@@ -1978,6 +2035,7 @@ Notas sobre `HELP`
 Notas sobre el patrón de FILES / CAT
 - Comillas obligatorias; solo comodines `*` y `?`; no se permiten rutas ni `..`.
 - Si no se indica, el patrón por defecto es `"*.bas"`.
+- Usa `FILES "*.bak"` o `CAT "*.bak"` para listar las copias de seguridad de programas.
 - Los subdirectorios se muestran siempre, terminados en `/`, para facilitar la navegación.
 - El patrón se aplica solo a los ficheros.
 
@@ -1993,7 +2051,7 @@ Notas sobre CD
 
 9.4 Guardar y cargar programas
 
-+ LOAD "prog.bas"            Solo en modo inmediato
++ LOAD "prog.bas" | LOAD "prog.bak"   Solo en modo inmediato
 + SAVE "prog.bas"            Solo en modo inmediato
 + RUN "prog.bas"             Carga y ejecuta el fichero con arranque “limpio” (variables y pilas se reinician)
 + CHAIN "prog.bas" [,línea]  Sustituye el programa actual y lo ejecuta
@@ -2010,7 +2068,9 @@ Notas
 - Las definiciones de rutinas pertenecen al programa almacenado actual: `CHAIN` las sustituye por las del nuevo programa, mientras que `MERGE` y `CHAIN MERGE` las reconstruyen a partir del código combinado. Se permite reemplazar una definición en la misma línea; dos definiciones de la misma rutina en líneas distintas producen el error 63.
 - Antes de modificar el texto almacenado, incluido un rango `DELETE`, se comprueba que el fichero existe, contiene UTF-8 válido y que sus líneas físicas no vacías tienen formato de línea de programa. Si falla esta lectura o validación, se conservan el programa y una continuación pendiente. Los errores semánticos del código resultante o una línea de entrada inexistente o protegida pueden dejar ese código cargado y editable; no implican restaurar automáticamente el programa anterior.
 - Los nombres de fichero requieren comillas, también con `RUN`; un identificador sin comillas tras `RUN` selecciona una etiqueta raíz. Se admiten rutas relativas al directorio virtual actual y rutas absolutas virtuales con `/`.
-- Extensión: si falta en `SAVE/LOAD/CHAIN/MERGE`, se añade `.bas`; cualquier otra extensión da error.
+- Si el nombre carece de extensión, se añade `.bas`. `LOAD` también admite la extensión explícita `.bak` para recuperar una copia de seguridad.
+- `SAVE` requiere un programa en memoria. Al sobrescribir un programa modificado, conserva su versión anterior en un único fichero `.bak` de la misma carpeta y sustituye el `.bas` por el nuevo fichero completo en una sola operación. Por ejemplo, al guardar cambios en `juego.bas` se crea o se reemplaza `juego.bak`. Guardar contenido idéntico conserva la copia de seguridad existente.
+- Para recuperar una copia, usa `LOAD "juego.bak"`, revisa el programa con `LIST` o `EDIT` y usa `SAVE "juego-recuperado.bas"` para guardarlo con otro nombre.
 - Las rutas de programa usan el árbol virtual lógico descrito en 9.3: `..` se limita en su raíz y se rechazan las rutas absolutas del sistema y las UNC. OPEN de ficheros de datos produce el error 26 si `..` intenta subir por encima de la raíz virtual (sección 5.2).
 - Cuando cargas un programa con `LOAD`, `RUN "fichero"` o `CHAIN`, AVL BASIC recuerda el directorio de ese fichero como “directorio del programa”.
 - Ese directorio del programa solo sirve para resolver rutas relativas usadas desde dentro del programa, por ejemplo en `BLOAD/BSAVE` y en `CHAIN/MERGE` ejecutados por el propio programa. No modifica el `CD` actual.
@@ -2083,7 +2143,8 @@ Notas aclaratorias para algunas funciones
 - `MID$(cadena,inicio[,longitud])` usa un `inicio` 1-basado, que debe ser >=1. La `longitud` opcional debe ser >=0; si es cero devuelve una cadena vacía. Los valores inválidos dan `INVALID_ARGUMENT`; un inicio posterior al final devuelve una cadena vacía.
 - En `LEFT$(cadena,longitud)` y `RIGHT$(cadena,longitud)`, `longitud` es un número no negativo de caracteres, no una posición. Cero devuelve una cadena vacía; un valor negativo da `INVALID_ARGUMENT`.
 - `SPACE$(longitud)` y `STRING$(longitud,carácter)` siguen la misma regla de longitud no negativa. `STRING$` repite el primer carácter de una cadena no vacía o el carácter representado por un código numérico válido.
-- `ASC("")` da `INVALID_ARGUMENT`; `ASC` requiere una cadena no vacía.
+- `ASC(cadena)` devuelve el punto de código Unicode del primer carácter. `CHR$(código)` devuelve el carácter correspondiente. Por ejemplo, `ASC("ř")` devuelve 345 (U+0159) y `CHR$(345)` devuelve "ř". La letra ocupa dos bytes en UTF-8 (C5 99) y `LEN("ř")` devuelve 1.
+- `ASC("")` da `INVALID_ARGUMENT`.
 - `cadena$[n]`: extensión de AVL BASIC que devuelve el carácter individual situado en la posición `n` (desde 1).
   • Solo admite variables de cadena o elementos de arrays de cadenas a la izquierda.
   • `n` debe ser un entero positivo; `n<1` da `INVALID_INDEX` y `n>LEN(cadena$)` da `INDEX_OUT_OF_BOUNDS`.

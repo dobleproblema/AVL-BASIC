@@ -14,6 +14,7 @@ pub struct ErrorStatement {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum StaticErrorDetail {
+    ContinueWithoutLoop,
     ExitForWithoutLoop,
     ExitWhileWithoutLoop,
     ScreenFullToggle,
@@ -23,6 +24,7 @@ pub(crate) enum StaticErrorDetail {
 impl StaticErrorDetail {
     fn message(self) -> &'static str {
         match self {
+            Self::ContinueWithoutLoop => "CONTINUE outside an active loop.",
             Self::ExitForWithoutLoop => "EXIT FOR without an active FOR loop.",
             Self::ExitWhileWithoutLoop => "EXIT WHILE without an active WHILE loop.",
             Self::ScreenFullToggle => "SCREEN FULL expects ON or OFF.",

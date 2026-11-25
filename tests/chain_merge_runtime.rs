@@ -15,6 +15,16 @@ fn setup(source: &str, child: &str) -> (tempfile::TempDir, Interpreter) {
 }
 
 #[test]
+fn continue_reaches_next_after_merge_removes_the_active_loop_header() {
+    let (_directory, mut interpreter) = setup(
+        "20 FOR I=1 TO 3\n30 IF I=1 THEN MERGE \"child.bas\"\n40 IF I=1 THEN CONTINUE\n50 PRINT I\n60 NEXT I\n70 END",
+        "20\n",
+    );
+    assert_eq!(interpreter.run_loaded().unwrap(), RunOutcome::End);
+    assert_eq!(interpreter.take_output(), " 2\n 3\n");
+}
+
+#[test]
 fn chain_from_a_stopped_prompt_starts_the_child_and_discards_the_old_if() {
     for command in ["CHAIN", "CHAIN MERGE"] {
         let (_directory, mut interpreter) = setup(

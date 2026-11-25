@@ -238,6 +238,7 @@ impl LinuxPresenter {
         buffer: &[u32],
         logical: (usize, usize),
         physical: (usize, usize),
+        wait: impl crate::interpreter::profile::FrameWait,
     ) -> Result<(), String> {
         if self.pending {
             return Err("X11 Present cannot reuse a pixmap whose completion is unknown".into());
@@ -284,7 +285,7 @@ impl LinuxPresenter {
         )
         .map_err(describe)?;
         self.conn.flush().map_err(describe)?;
-        self.wait_complete_and_idle(Instant::now() + EVENT_TIMEOUT)?;
+        self.wait_complete_and_idle(Instant::now() + EVENT_TIMEOUT, wait)?;
         self.pending = false;
         Ok(())
     }
@@ -478,7 +479,11 @@ impl LinuxPresenter {
         Ok(())
     }
 
-    fn wait_complete_and_idle(&self, deadline: Instant) -> Result<CompleteNotifyEvent, String> {
+    fn wait_complete_and_idle(
+        &self,
+        deadline: Instant,
+        wait: impl crate::interpreter::profile::FrameWait,
+    ) -> Result<CompleteNotifyEvent, String> {
         let mut complete = None;
         let mut idle = false;
         loop {
@@ -519,7 +524,7 @@ impl LinuxPresenter {
                     return Err("X11 Present timed out while draining its event queue".into());
                 }
             }
-            wait_readable(self.conn.stream().as_raw_fd(), deadline)?;
+            wait.during(|| wait_readable(self.conn.stream().as_raw_fd(), deadline))?;
         }
     }
 }

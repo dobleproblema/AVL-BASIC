@@ -82,29 +82,6 @@ impl Iterator for Rows {
     }
 }
 
-#[inline]
-fn shade_pixel(values: [f64; 4], old_q: f64) -> Option<u32> {
-    let tolerance = 1e-9 * values[0].abs().max(old_q.abs()).max(1e-12);
-    // Negated <= also preserves comparisons against NaN and negative infinity.
-    if values.iter().all(|value| value.is_finite())
-        && values[0] > 0.0
-        && !(values[0] <= old_q + tolerance)
-    {
-        let inverse_q = 1.0 / values[0];
-        let channels = [
-            values[1] * inverse_q,
-            values[2] * inverse_q,
-            values[3] * inverse_q,
-        ];
-        if channels.iter().all(|channel| channel.is_finite()) {
-            let [red, green, blue] =
-                channels.map(|channel| (channel + 0.5).floor().clamp(0.0, 255.0) as u32);
-            return Some((red << 16) | (green << 8) | blue);
-        }
-    }
-    None
-}
-
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 
@@ -310,6 +287,12 @@ unsafe fn draw_spans(target: Target, spans: impl IntoIterator<Item = Span>, dx: 
     wrote
 }
 
+// Keep the Linux x86-64 Gouraud kernels together in their own executable section.
+#[cfg_attr(all(target_os = "linux", target_arch = "x86_64"), inline(never))]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "x86_64"),
+    unsafe(link_section = ".avlgouraud")
+)]
 #[target_feature(enable = "avx")]
 unsafe fn draw_span(target: Target, span: &Span, dx: &[f64; 4]) -> bool {
     use std::arch::x86_64::*;
@@ -427,23 +410,33 @@ unsafe fn draw_span(target: Target, span: &Span, dx: &[f64; 4]) -> bool {
         x += 4;
     }
 
-    if x <= end {
-        let mut tail = [0.0; 4];
-        unsafe { _mm256_storeu_pd(tail.as_mut_ptr(), values) };
-        for x in x..=end {
-            // SAFETY: all remaining pixels are in the same clipped scanline.
-            unsafe {
-                let depth = target.depth.add(x * target.height + y);
-                if let Some(pixel) = shade_pixel(tail, *depth) {
-                    *depth = tail[0];
-                    *target.color.add(canvas_row + x) = pixel;
-                    wrote = true;
+    while x <= end {
+        // Adjacent pixels retain the scalar addition order. The four lanes
+        // hold q and its three weighted color channels for a single pixel.
+        // SAFETY: this pixel lies inside the clipped span in both buffers.
+        let depth_ptr = unsafe { target.depth.add(x * target.height + y) };
+        let old_q = unsafe { *depth_ptr };
+        let q = _mm_cvtsd_f64(_mm256_castpd256_pd128(values));
+        let tolerance = 1e-9 * q.abs().max(old_q.abs()).max(1e-12);
+        if q > 0.0 && q.is_finite() && !(q <= old_q + tolerance) {
+            let rgbq = _mm256_mul_pd(values, _mm256_set1_pd(1.0 / q));
+            // Only the three RGB lanes contribute to the stored color.
+            const RGB_LANES: i32 = 0b1110;
+            if _mm256_movemask_pd(finite(rgbq, absolute, max_float)) & RGB_LANES == RGB_LANES {
+                let channels = color_channel(rgbq, half, zero, limit);
+                let words = _mm_packs_epi32(channels, channels);
+                let bytes = _mm_packus_epi16(words, words);
+                // Packing gives [q, R, G, B] in the low bytes on x86.
+                let rgb = (_mm_cvtsi128_si32(bytes) as u32).swap_bytes() & 0x00ffffff;
+                unsafe {
+                    *depth_ptr = q;
+                    *target.color.add(canvas_row + x) = rgb;
                 }
-            }
-            for component in 0..4 {
-                tail[component] += dx[component];
+                wrote = true;
             }
         }
+        values = _mm256_add_pd(values, delta);
+        x += 1;
     }
     wrote
 }

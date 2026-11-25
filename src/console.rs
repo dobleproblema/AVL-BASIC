@@ -25,6 +25,7 @@ mod array_view;
 mod inspector;
 mod navigation;
 mod print_color;
+pub(crate) mod profile;
 use array_view::{ArrayView, ArrayViewAction};
 use inspector::InspectorState;
 use navigation::DebugCodeSelection;
@@ -443,18 +444,34 @@ fn highlight_ansi_line(line: &str, palette: SyntaxPalette) -> String {
         }
     }
     let (main, comment) = split_single_quote_comment(line);
+    let (number, body) = split_line_number(main).unwrap_or(("", main));
     let mut out = String::new();
-    let mut rest = main;
-    if let Some((line_no, after)) = split_line_number(rest) {
-        out.push_str(palette.line_number);
-        out.push_str(line_no);
-        out.push_str(RESET);
-        rest = after;
+    if !number.is_empty() {
+        push_styled(&mut out, palette.line_number, number);
     }
-    if is_label_declaration(line) {
-        push_styled(&mut out, palette.label, rest);
+    highlight_line_body(
+        &mut out,
+        body,
+        comment,
+        is_label_declaration(line),
+        contextual_immediate,
+        palette,
+    );
+    out
+}
+
+fn highlight_line_body(
+    out: &mut String,
+    body: &str,
+    comment: Option<(usize, &str)>,
+    label: bool,
+    immediate: Option<ContextualImmediateCommand>,
+    palette: SyntaxPalette,
+) {
+    if label {
+        push_styled(out, palette.label, body);
     } else {
-        out.push_str(&highlight_main(rest, palette, contextual_immediate));
+        out.push_str(&highlight_main(body, palette, immediate));
     }
     if let Some((spaces, comment)) = comment {
         out.push_str(&" ".repeat(spaces));
@@ -463,7 +480,6 @@ fn highlight_ansi_line(line: &str, palette: SyntaxPalette) -> String {
         out.push_str(comment);
         out.push_str(RESET);
     }
-    out
 }
 
 #[cfg(test)]
@@ -5203,10 +5219,14 @@ fn normalize_main_code_for_editing_marked(code: &str) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContextualImmediateCommand {
     Help,
+    Profile,
     Pack,
 }
 
 fn contextual_immediate_command(line: &str) -> Option<ContextualImmediateCommand> {
+    if line.trim().eq_ignore_ascii_case("PROFILE") {
+        return Some(ContextualImmediateCommand::Profile);
+    }
     if is_help_immediate_line(line) {
         return Some(ContextualImmediateCommand::Help);
     }
@@ -5299,13 +5319,16 @@ fn uppercase_leading_help(line: &mut String) {
 }
 
 fn is_contextual_subcommand(word: &str, chars: &[char], start: usize) -> bool {
-    let command = if word.eq_ignore_ascii_case("FULL") || word.eq_ignore_ascii_case("SYNC") {
-        "SCREEN"
-    } else if word.eq_ignore_ascii_case("DEL") {
-        "SPRITE"
-    } else {
-        return false;
-    };
+    let command_words: &[&str] =
+        if word.eq_ignore_ascii_case("FULL") || word.eq_ignore_ascii_case("SYNC") {
+            &["SCREEN"]
+        } else if word.eq_ignore_ascii_case("DEL") {
+            &["SPRITE"]
+        } else if word.eq_ignore_ascii_case("WHEEL") {
+            &["MOUSE", "ON"]
+        } else {
+            return false;
+        };
     let skip_space = |mut end: usize| {
         while end > 0 && (chars[end - 1].is_whitespace() || chars[end - 1] == CURSOR_MARKER) {
             end -= 1;
@@ -5324,10 +5347,13 @@ fn is_contextual_subcommand(word: &str, chars: &[char], start: usize) -> bool {
             .filter(|ch| **ch != CURSOR_MARKER)
             .collect::<String>()
     };
-    let command_end = skip_space(start);
-    let command_start = word_start(command_end);
-    if !word(command_start, command_end).eq_ignore_ascii_case(command) {
-        return false;
+    let mut command_start = start;
+    for expected in command_words {
+        let command_end = skip_space(command_start);
+        command_start = word_start(command_end);
+        if !word(command_start, command_end).eq_ignore_ascii_case(expected) {
+            return false;
+        }
     }
     let before = skip_space(command_start);
     if before == 0 || chars[before - 1] == ':' {
@@ -5469,7 +5495,7 @@ fn normalize_main_code_inner(code: &str, editing: bool) -> String {
                 }
             } else if (is_known_word(&upper)
                 || code_spans.rgba.contains(&start)
-                || code_spans.map_calls.contains(&start)
+                || code_spans.mat_calls.contains(&start)
                 || is_contextual_subcommand(&upper, &chars, start)
                 || is_contextual_import_keyword(&upper, &chars, start, i))
                 && token_boundary(&chars, start, i)
@@ -6008,6 +6034,9 @@ fn highlight_main(
                 Some(ContextualImmediateCommand::Help) => {
                     upper == "HELP" && chars[..start].iter().all(|ch| ch.is_whitespace())
                 }
+                Some(ContextualImmediateCommand::Profile) => {
+                    upper == "PROFILE" && chars[..start].iter().all(|ch| ch.is_whitespace())
+                }
                 Some(ContextualImmediateCommand::Pack) => {
                     matches!(upper.as_str(), "ID" | "INCLUDE" | "PERSIST" | "GUI")
                         || (upper == "PACK" && chars[..start].iter().all(|ch| ch.is_whitespace()))
@@ -6107,7 +6136,7 @@ fn highlight_main(
                     after_def = false;
                 }
             } else if is_non_reserved_known_word(&upper)
-                || code_spans.map_calls.contains(&start)
+                || code_spans.mat_calls.contains(&start)
                 || upper.starts_with("FN")
             {
                 push_styled(&mut out, palette.other, &upper);
@@ -6290,7 +6319,65 @@ fn is_label_declaration(source: &str) -> bool {
 struct ContextualCodeSpans {
     labels: Vec<(usize, usize)>,
     rgba: Vec<usize>,
-    map_calls: Vec<usize>,
+    mat_calls: Vec<usize>,
+    metacommands: Vec<usize>,
+    help_topics: Vec<usize>,
+}
+
+pub(crate) fn contextual_keyword_byte_offsets(source: &str) -> Vec<usize> {
+    let chars: Vec<char> = source.chars().collect();
+    let spans = contextual_code_spans(&chars);
+    let mut starts: Vec<_> = spans
+        .rgba
+        .iter()
+        .chain(&spans.mat_calls)
+        .chain(&spans.metacommands)
+        .chain(&spans.help_topics)
+        .copied()
+        .collect();
+    let mut index = 0;
+    let mut in_data = false;
+    while index < chars.len() {
+        match chars[index] {
+            '"' => {
+                index += 1;
+                while index < chars.len() && chars[index] != '"' {
+                    index += 1;
+                }
+                index += usize::from(index < chars.len());
+            }
+            '\'' => break,
+            ':' => {
+                in_data = false;
+                index += 1;
+            }
+            ch if is_ident_start(ch) => {
+                let start = index;
+                index += 1;
+                while index < chars.len() && is_ident_char(chars[index]) {
+                    index += 1;
+                }
+                let word: String = chars[start..index].iter().collect();
+                if word.eq_ignore_ascii_case("REM") && !in_data {
+                    break;
+                }
+                if word.eq_ignore_ascii_case("DATA") {
+                    in_data = true;
+                }
+                if !in_data
+                    && (is_contextual_subcommand(&word, &chars, start)
+                        || is_contextual_import_keyword(&word, &chars, start, index))
+                {
+                    starts.push(start);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    let byte_offsets: Vec<_> = source.char_indices().map(|(offset, _)| offset).collect();
+    starts.into_iter().map(|start| byte_offsets[start]).collect()
 }
 
 fn mat_expression_start(after_mat: &str) -> Option<usize> {
@@ -6298,7 +6385,27 @@ fn mat_expression_start(after_mat: &str) -> Option<usize> {
     if !target.starts_with(is_ident_start) {
         return None;
     }
-    let after_target = target.trim_start_matches(is_ident_char).trim_start();
+    let mut after_target = target.trim_start_matches(is_ident_char).trim_start();
+    if after_target.starts_with(['(', '[']) {
+        let mut depth = 0usize;
+        let mut quoted = false;
+        let end = after_target.char_indices().find_map(|(offset, ch)| {
+            if ch == '"' {
+                quoted = !quoted;
+            } else if !quoted {
+                if matches!(ch, '(' | '[') {
+                    depth += 1;
+                } else if matches!(ch, ')' | ']') {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(offset + ch.len_utf8());
+                    }
+                }
+            }
+            None
+        })?;
+        after_target = after_target[end..].trim_start();
+    }
     let expression = after_target.strip_prefix('=')?;
     Some(after_mat.len() - expression.len())
 }
@@ -6314,6 +6421,43 @@ fn is_mat_map_call(after_map: &str) -> bool {
         && crate::interpreter::is_mat_map_function(&selector.to_ascii_uppercase())
 }
 
+fn is_matrix_operand(prefix: &str) -> bool {
+    let mut context = vec![true];
+    let mut word = None;
+    let mut chars = prefix.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch == '"' {
+            for (_, ch) in chars.by_ref() {
+                if ch == '"' {
+                    break;
+                }
+            }
+            word = None;
+        } else if is_ident_start(ch) {
+            let mut end = start + ch.len_utf8();
+            while let Some((offset, ch)) = chars.peek().copied().filter(|(_, ch)| is_ident_char(*ch)) {
+                end = offset + ch.len_utf8();
+                chars.next();
+            }
+            word = Some(&prefix[start..end]);
+        } else if matches!(ch, '(' | '[') {
+            let matrix_function = word.is_none_or(|name| {
+                matches!(name.to_ascii_uppercase().as_str(), "TRN" | "INV" | "MAP" | "SOLVE")
+            });
+            context.push(*context.last().unwrap() && ch == '(' && matrix_function);
+            word = None;
+        } else if matches!(ch, ')' | ']') {
+            if context.len() > 1 {
+                context.pop();
+            }
+            word = None;
+        } else if !ch.is_whitespace() {
+            word = None;
+        }
+    }
+    *context.last().unwrap()
+}
+
 fn contextual_code_spans(chars: &[char]) -> ContextualCodeSpans {
     // Resolve the same operand ranges as the interpreter. Keep a map back to
     // the editor's character coordinates: its invisible caret is not syntax.
@@ -6323,13 +6467,50 @@ fn contextual_code_spans(chars: &[char]) -> ContextualCodeSpans {
         .filter_map(|(index, ch)| (*ch != CURSOR_MARKER).then_some(index))
         .collect();
     let source: String = positions.iter().map(|index| chars[*index]).collect();
-    let (_, code) = split_line_number(&source).unwrap_or(("", &source));
+    let numbered = split_line_number(&source);
+    let (_, code) = numbered.unwrap_or(("", &source));
     let mut start = source.len() - code.len();
     let mut shorthand = false;
     let mut spans = ContextualCodeSpans::default();
     let mut add_command = |start: usize, end: usize, shorthand: bool, as_end: Option<usize>| {
         let command = &source[start..end];
         let trimmed = command.trim();
+        if numbered.is_none() && !(shorthand && crate::labels::label_identifier(trimmed)) {
+            if let Some(kind) = contextual_immediate_command(trimmed) {
+                let mut chars = command.char_indices().peekable();
+                while let Some((offset, ch)) = chars.next() {
+                    if ch == '"' {
+                        for (_, ch) in chars.by_ref() {
+                            if ch == '"' {
+                                break;
+                            }
+                        }
+                    } else if is_ident_start(ch) {
+                        let mut word_end = offset + ch.len_utf8();
+                        while let Some((index, ch)) =
+                            chars.peek().copied().filter(|(_, ch)| is_ident_char(*ch))
+                        {
+                            word_end = index + ch.len_utf8();
+                            chars.next();
+                        }
+                        let word = &command[offset..word_end];
+                        let first = offset == command.len() - command.trim_start().len();
+                        let char_start = positions[source[..start + offset].chars().count()];
+                        if first
+                            || (kind == ContextualImmediateCommand::Pack
+                                && matches!(
+                                    word.to_ascii_uppercase().as_str(),
+                                    "ID" | "INCLUDE" | "PERSIST" | "GUI"
+                                ))
+                        {
+                            spans.metacommands.push(char_start);
+                        } else if kind == ContextualImmediateCommand::Help {
+                            spans.help_topics.push(char_start);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(as_end) = as_end {
             let suffix = source[as_end..end].trim_start();
             if suffix.trim_end().eq_ignore_ascii_case("RGBA")
@@ -6421,13 +6602,15 @@ fn contextual_code_spans(chars: &[char]) -> ContextualCodeSpans {
                 } else if word == "MAT" && source[start..word_start].trim().is_empty() {
                     mat_expression =
                         mat_expression_start(&source[index..]).map(|relative| index + relative);
-                } else if word == "MAP"
+                } else if matches!(word.as_str(), "MAP" | "SOLVE")
                     && mat_expression.is_some_and(|rhs| word_start >= rhs)
                     && bytes.get(word_start.wrapping_sub(1)) != Some(&b'.')
-                    && is_mat_map_call(&source[index..])
+                    && is_matrix_operand(&source[mat_expression.unwrap()..word_start])
+                    && ((word == "MAP" && is_mat_map_call(&source[index..]))
+                        || (word == "SOLVE" && source[index..].trim_start().starts_with('(')))
                 {
                     spans
-                        .map_calls
+                        .mat_calls
                         .push(positions[source[..word_start].chars().count()]);
                 } else if depth == 0
                     && word == "AS"
@@ -6525,7 +6708,9 @@ fn apply_identifier_case_for_display(source: &str, cases: &HashMap<String, Strin
             } else if is_contextual_subcommand(&word, &chars, start)
                 || is_contextual_import_keyword(&word, &chars, start, i)
                 || code_spans.rgba.contains(&start)
-                || code_spans.map_calls.contains(&start)
+                || code_spans.mat_calls.contains(&start)
+                || code_spans.metacommands.contains(&start)
+                || code_spans.help_topics.contains(&start)
             {
                 out.push_str(&word);
             } else if let Some(display) = cases.get(&word.to_ascii_uppercase()) {
@@ -7961,6 +8146,119 @@ mod tests {
                 usize::from(source.starts_with("mat a=map(int,b)")),
                 "{source}: {highlighted:?}"
             );
+        }
+    }
+
+    #[test]
+    fn solve_syntax_preserves_scalar_identifiers_and_subarray_targets() {
+        for (source, expected) in [
+            ("10 Solve=7:PRINT Solve", "10 Solve=7 : PRINT Solve"),
+            ("10 MAT Solve=A", "10 MAT Solve=A"),
+            ("10 MAT X=INT(Solve(1))", "10 MAT X=INT(Solve(1))"),
+            (
+                "10 mat a(1:2)=solve(Solve,b)",
+                "10 MAT a(1:2)=SOLVE(Solve,b)",
+            ),
+            (
+                "10 mat a=trn(solve(b,c))+int(Solve(1))",
+                "10 MAT a=TRN(SOLVE(b,c))+INT(Solve(1))",
+            ),
+        ] {
+            assert_eq!(normalize_code(source), expected);
+        }
+        let cases = HashMap::from([("SOLVE".to_string(), "Solve".to_string())]);
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let source = "10 MAT x=SOLVE(Solve,b)+INT(Solve(1))";
+            let rendered = highlight_normalized_code(
+                normalize_code(source),
+                true,
+                Some(&cases),
+                palette,
+            );
+            assert_eq!(
+                rendered.matches(&format!("{}SOLVE{RESET}", palette.other)).count(),
+                1
+            );
+            assert_eq!(
+                rendered.matches(&format!("{}Solve{RESET}", palette.variable)).count(),
+                2
+            );
+            assert_eq!(
+                syntax_highlight_with_cases(source, false, Some(&cases)),
+                source
+            );
+        }
+    }
+
+    #[test]
+    fn contextual_byte_offsets_protect_syntax_without_capturing_identifiers() {
+        let source = r#"IF text$="π" THEN MAT map=MAP(INT,map):MAT x=SOLVE(solve,b):PRINT Solve(1)"#;
+        let offsets = contextual_keyword_byte_offsets(source);
+        let words: Vec<_> = offsets
+            .iter()
+            .map(|offset| {
+                source[*offset..]
+                    .split(|ch: char| !is_ident_char(ch))
+                    .next()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(words, ["MAP", "SOLVE"]);
+        for (source, expected) in [
+            ("HELP SCREEN FULL:PRINT Full", vec!["HELP", "SCREEN", "FULL"]),
+            (
+                r#"PACK "a.bas" TO "a.exe" ID "x" INCLUDE "a" PERSIST "b" GUI:PRINT Gui"#,
+                vec!["PACK", "ID", "INCLUDE", "PERSIST", "GUI"],
+            ),
+            ("PRINT Full:SCREEN FULL OFF", vec!["FULL"]),
+            ("MAT V=INT(Solve(1))", vec![]),
+            ("IF 1 THEN Wheel", vec![]),
+            (r#"PRINT "SCREEN FULL":DATA FULL:REM SCREEN FULL"#, vec![]),
+        ] {
+            let offsets = contextual_keyword_byte_offsets(source);
+            let words: Vec<_> = offsets
+                .iter()
+                .map(|offset| {
+                    source[*offset..]
+                        .split(|ch: char| !is_ident_char(ch))
+                        .next()
+                        .unwrap()
+                })
+                .collect();
+            assert_eq!(words, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn wheel_is_a_keyword_in_on_mouse_and_an_identifier_elsewhere() {
+        let code = "10 IF wheel=1 THEN on mouse wheel gosub Wheel";
+        assert_eq!(
+            normalize_code(code),
+            "10 IF wheel=1 THEN ON MOUSE WHEEL GOSUB Wheel"
+        );
+        assert_eq!(normalize_code("20 Wheel:"), "20 Wheel:");
+        assert!(!language::is_reserved_base_name("WHEEL"));
+
+        for theme in [SyntaxTheme::Dark, SyntaxTheme::Light] {
+            let palette = syntax_palette_for(theme);
+            let event = format!("{}WHEEL{RESET}", palette.keyword);
+            for rendered in [
+                syntax_highlight_with_theme_for_test(code, theme),
+                highlight_main(code, palette, None),
+            ] {
+                assert!(rendered.contains(&event));
+                assert!(rendered.contains(&format!("{}wheel{RESET}", palette.variable)));
+                assert!(rendered.contains(&format!("{}Wheel{RESET}", palette.label)));
+            }
+            for text in [
+                r#"PRINT "ON MOUSE WHEEL""#,
+                "10 REM ON MOUSE WHEEL GOSUB Wheel",
+                "10 DATA on mouse wheel",
+                "10 MOUSE WHEEL",
+            ] {
+                assert!(!highlight_main(text, palette, None).contains(&event));
+            }
         }
     }
 

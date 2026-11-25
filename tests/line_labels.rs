@@ -31,6 +31,21 @@ fn labels_have_separate_variable_and_routine_namespaces_and_preserve_spelling() 
 }
 
 #[test]
+fn wheel_event_and_same_named_variable_and_label_keep_their_spelling() {
+    let sources = ["10 on mouse wheel gosub Wheel", "20 wheel=1", "30 Wheel:"];
+    for lines in [sources, [sources[1], sources[2], sources[0]]] {
+        let mut interpreter = Interpreter::new();
+        for line in lines {
+            interpreter.process_immediate(line).unwrap();
+        }
+        assert_eq!(
+            interpreter.program.list(),
+            "10 ON MOUSE WHEEL GOSUB Wheel\n20 wheel=1\n30 Wheel:\n"
+        );
+    }
+}
+
+#[test]
 fn each_routine_and_root_can_define_the_same_label() {
     let source = "10 GOTO Done\n20 Done:\n30 CALL Work:PRINT FNValue:END\n100 DEF SUB Work\n110 GOTO Done\n120 Done:\n130 PRINT \"SUB\"\n140 SUBEND\n200 DEF FNValue\n210 GOTO Done\n220 Done:\n230 FNValue=7\n240 FNEND";
     for debug in [false, true] {

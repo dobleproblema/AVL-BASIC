@@ -30,7 +30,10 @@ pub(super) fn prepare() -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn wait(window: &Window) -> Result<(), String> {
+pub(super) fn wait(
+    window: &Window,
+    wait: impl crate::interpreter::profile::FrameWait,
+) -> Result<(), String> {
     if !window.is_open() {
         return Ok(());
     }
@@ -46,7 +49,7 @@ pub(super) fn wait(window: &Window) -> Result<(), String> {
     if unsafe { GdiFlush() } == 0 {
         return Err("GdiFlush failed during SCREEN SYNC".into());
     }
-    let result = unsafe { DwmFlush() };
+    let result = wait.during(|| unsafe { DwmFlush() });
     if result != 0 {
         return Err(format!(
             "DwmFlush failed during SCREEN SYNC (HRESULT 0x{:08X})",

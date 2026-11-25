@@ -106,6 +106,62 @@ fn immediate_loops_skip_false_bodies_and_repeat_finite_bodies() {
 }
 
 #[test]
+fn continue_at_the_prompt_advances_the_innermost_mixed_loop() {
+    let mut interpreter = Interpreter::new();
+    for source in [
+        "S=0:FOR I=1 TO 2:J=0:WHILE J<3:J=J+1:IF J=2 THEN CONTINUE ELSE S=S+I:WEND:NEXT I:PRINT S",
+        "S=0:J=0:WHILE J<2:J=J+1:FOR I=3 TO 1 STEP -1:IF I=2 THEN CONTINUE ELSE S=S+J:NEXT I:WEND:PRINT S",
+    ] {
+        command(&mut interpreter, source);
+        assert_eq!(interpreter.take_output(), " 6\n", "{source}");
+    }
+}
+
+#[test]
+fn continue_in_a_program_leaves_the_block_if_and_executes_next() {
+    let mut interpreter = loaded(
+        "10 FOR I=1 TO 3\n20 IF I=2 THEN\n30 CONTINUE\n40 ENDIF\n50 PRINT I\n60 NEXT I:PRINT I\n70 END",
+    );
+    interpreter.run_loaded().unwrap();
+    assert_eq!(interpreter.take_output(), " 1\n 3\n 4\n");
+}
+
+#[test]
+fn continue_requires_a_loop_in_the_current_call() {
+    let mut interpreter = loaded(
+        "10 FOR I=1 TO 2\n20 GOSUB Inside\n30 GOTO Done\n40 Inside:\n50 CONTINUE\n60 RETURN\n70 Done:\n80 NEXT I",
+    );
+    let err = interpreter.run_loaded().unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    assert!(err
+        .display_for_basic()
+        .contains("CONTINUE outside an active loop."));
+
+    let mut interpreter = Interpreter::new();
+    assert_eq!(
+        interpreter.process_immediate("CONTINUE").unwrap_err().code,
+        ErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        interpreter
+            .process_immediate("CONTINUE FOR")
+            .unwrap_err()
+            .code,
+        ErrorCode::Syntax
+    );
+}
+
+#[test]
+fn continue_cannot_resume_a_loop_left_by_an_earlier_gosub() {
+    let mut interpreter = loaded(
+        "10 P=P+1:GOSUB Work\n20 IF P<2 THEN GOTO 10\n30 END\n100 Work:\n105 IF P=2 THEN GOTO Body\n110 FOR J=1 TO 2\n120 RETURN\n130 Body:\n135 CONTINUE\n140 NEXT J\n150 RETURN",
+    );
+    let err = interpreter.run_loaded().unwrap_err();
+    assert_eq!(err.line, Some(135));
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+}
+
+#[test]
 fn immediate_loop_targets_do_not_come_from_loaded_program_caches() {
     for program in [
         "10 WHILE -1\n20 PRINT \"PROGRAM\"\n30 WEND\n40 END",

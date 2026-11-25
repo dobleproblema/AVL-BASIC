@@ -69,6 +69,7 @@ struct SpriteMemory {
     data: String,
     transparent: Option<u32>,
     alpha: f64,
+    // Canvas positions claimed by this sprite on its last draw.
     pixels: Vec<usize>,
 }
 
@@ -119,8 +120,13 @@ impl Texture {
     #[inline]
     fn sample_wrapped(&self, u: f64, v: f64) -> u32 {
         if u >= 0.0 && u < self.width as f64 && v >= 0.0 && v < self.height as f64 {
-            let row = self.height - 1 - v as usize;
-            return self.pixels[row * self.width + u as usize];
+            // A nonempty Vec<u32> occupies at most isize::MAX bytes, so each
+            // valid texture dimension is within the signed integer range.
+            // SAFETY: the range checks above reject negative and nonfinite UVs.
+            let col = unsafe { u.to_int_unchecked::<isize>() } as usize;
+            let logical_row = unsafe { v.to_int_unchecked::<isize>() } as usize;
+            let row = self.height - 1 - logical_row;
+            return self.pixels[row * self.width + col];
         }
         let col = Self::wrapped_coordinate(u, self.width);
         let logical_row = Self::wrapped_coordinate(v, self.height);
@@ -130,6 +136,13 @@ impl Texture {
 
     #[inline]
     fn wrapped_coordinate(value: f64, size: usize) -> usize {
+        // For positive repeating coordinates, truncation is already floor.
+        if size.is_power_of_two() && value >= 0.0 && value < -(i64::MIN as f64) {
+            // SAFETY: both comparisons exclude nonfinite values and bound the
+            // truncated coordinate to the nonnegative half of the i64 range.
+            let whole = unsafe { value.to_int_unchecked::<i64>() };
+            return (whole as usize) & (size - 1);
+        }
         let whole = value.floor();
         // Repeating power-of-two textures wrap exactly with an integer mask.
         if size.is_power_of_two() && whole >= i64::MIN as f64 && whole < -(i64::MIN as f64) {
@@ -1440,6 +1453,16 @@ impl Graphics {
         transparent: u32,
     ) {
         if Self::perspective_values_are_bounded::<MODULATE>(&raster) {
+            #[cfg(target_arch = "x86_64")]
+            if MODULATE && std::arch::is_x86_feature_detected!("avx") {
+                // SAFETY: the feature was checked once for this triangle.
+                unsafe {
+                    self.raster_perspective_texture_avx::<TRANSPARENT>(
+                        texture, raster, depth, depth_height, transparent,
+                    );
+                }
+                return;
+            }
             self.raster_perspective_texture_checked::<MODULATE, TRANSPARENT, true>(
                 texture,
                 raster,
@@ -1458,10 +1481,82 @@ impl Graphics {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
+    #[inline]
+    #[target_feature(enable = "avx")]
+    unsafe fn modulate_texture_rgb_avx(texel: u32, light: &[f64; 5]) -> u32 {
+        use std::arch::x86_64::*;
+        let zero = _mm_setzero_si128();
+        // BSWAP places red, green, and blue in the same lanes as the light.
+        let bytes = _mm_cvtsi32_si128(texel.swap_bytes() as i32);
+        let words = _mm_unpacklo_epi8(bytes, zero);
+        let samples = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(words, zero));
+        // SAFETY: entries 1..5 are in bounds. The first lane is discarded.
+        let light = unsafe { _mm256_loadu_pd(light.as_ptr().add(1)) };
+        let normalized = _mm256_min_pd(_mm256_max_pd(light, _mm256_setzero_pd()), _mm256_set1_pd(255.0));
+        let product = _mm256_mul_pd(samples, normalized);
+        let scaled = _mm256_mul_pd(product, _mm256_set1_pd(1.0 / 255.0));
+        let channels = _mm256_cvttpd_epi32(_mm256_add_pd(scaled, _mm256_set1_pd(0.5)));
+        let words = _mm_packs_epi32(channels, channels);
+        let bytes = _mm_packus_epi16(words, words);
+        (_mm_cvtsi128_si32(bytes) as u32).swap_bytes() & 0x00ff_ffff
+    }
+
+    #[inline(always)]
+    fn modulate_texture_rgb<const VECTOR_RGB: bool>(texel: u32, interpolated: &[f64; 5]) -> u32 {
+        #[cfg(target_arch = "x86_64")]
+        if VECTOR_RGB {
+            // SAFETY: only the AVX triangle entry point enables VECTOR_RGB.
+            return unsafe { Self::modulate_texture_rgb_avx(texel, interpolated) };
+        }
+        let channels: [u32; 3] = std::array::from_fn(|channel| {
+            let sample = ((texel >> (16 - 8 * channel)) & 255) as f64;
+            let light = interpolated[channel + 2].clamp(0.0, 255.0);
+            // After rounding to a byte, these two normalizations
+            // have identical transitions for every product in 0..=65025.
+            u32::from((sample * light * (1.0 / 255.0) + 0.5) as u8)
+        });
+        (channels[0] << 16) | (channels[1] << 8) | channels[2]
+    }
+
     fn raster_perspective_texture_checked<
         const MODULATE: bool,
         const TRANSPARENT: bool,
         const FINITE_VALUES: bool,
+    >(
+        &mut self,
+        texture: &Texture,
+        raster: PerspectiveTextureRaster,
+        depth: &mut [f64],
+        depth_height: usize,
+        transparent: u32,
+    ) {
+        self.raster_perspective_texture_kernel::<MODULATE, TRANSPARENT, FINITE_VALUES, false>(
+            texture, raster, depth, depth_height, transparent
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx")]
+    unsafe fn raster_perspective_texture_avx<const TRANSPARENT: bool>(
+        &mut self,
+        texture: &Texture,
+        raster: PerspectiveTextureRaster,
+        depth: &mut [f64],
+        depth_height: usize,
+        transparent: u32,
+    ) {
+        self.raster_perspective_texture_kernel::<true, TRANSPARENT, true, true>(
+            texture, raster, depth, depth_height, transparent
+        );
+    }
+
+    #[inline(always)]
+    fn raster_perspective_texture_kernel<
+        const MODULATE: bool,
+        const TRANSPARENT: bool,
+        const FINITE_VALUES: bool,
+        const VECTOR_RGB: bool,
     >(
         &mut self,
         texture: &Texture,
@@ -1524,7 +1619,10 @@ impl Graphics {
                 for x in start_x..=end_x {
                     let depth_index = x * depth_height + y;
                     let old_q = depth[depth_index];
-                    let tolerance = 1e-9 * values[0].abs().max(old_q.abs()).max(1e-12);
+                    // Only finite positive q reaches the depth decision. If
+                    // |old_q| dominates q and the floor, positive old_q already
+                    // occludes and negative old_q makes both thresholds negative.
+                    let tolerance = 1e-9 * values[0].max(1e-12);
                     if (FINITE_VALUES || values[..components].iter().all(|value| value.is_finite()))
                         && values[0] > 0.0
                         && !(values[0] <= old_q + tolerance)
@@ -1549,12 +1647,7 @@ impl Graphics {
                             // its RGB. Opaque instantiations remove this branch.
                             if !TRANSPARENT || texel != transparent {
                                 let color = if MODULATE {
-                                    let channels: [u32; 3] = std::array::from_fn(|channel| {
-                                        let sample = ((texel >> (16 - 8 * channel)) & 255) as f64;
-                                        let light = interpolated[channel + 2].clamp(0.0, 255.0);
-                                        (sample * light / 255.0 + 0.5) as u32
-                                    });
-                                    (channels[0] << 16) | (channels[1] << 8) | channels[2]
+                                    Self::modulate_texture_rgb::<VECTOR_RGB>(texel, &interpolated)
                                 } else {
                                     texel
                                 };
@@ -1767,6 +1860,12 @@ impl Graphics {
         Ok(())
     }
 
+    // Keep the Linux x86-64 Gouraud kernels together in their own executable section.
+    #[cfg_attr(all(target_os = "linux", target_arch = "x86_64"), inline(never))]
+    #[cfg_attr(
+        all(target_os = "linux", target_arch = "x86_64"),
+        unsafe(link_section = ".avlgouraud")
+    )]
     fn gouraud_triangle_raster<const ACCELERATED: bool>(
         &mut self,
         vertices: [[f64; 6]; 3],
@@ -1931,8 +2030,9 @@ impl Graphics {
                             values[3] * inverse_q,
                         ];
                         if channels.iter().all(|channel| channel.is_finite()) {
-                            let [red, green, blue] = channels
-                                .map(|channel| (channel + 0.5).floor().clamp(0.0, 255.0) as u32);
+                            // The saturating cast also clamps the rounded value to the byte range.
+                            let [red, green, blue] =
+                                channels.map(|channel| u32::from((channel + 0.5) as u8));
                             let rgb = (red << 16) | (green << 8) | blue;
                             depth[depth_index] = values[0];
                             self.buffer[canvas_row + x] = rgb;
@@ -2168,24 +2268,42 @@ impl Graphics {
     }
 
     pub fn gprint(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
+        if text.is_empty() {
+            return;
+        }
         let color = ink.map(resolve_color_number).unwrap_or(self.current_color);
         let paper = self.text_background_color(paper);
         let (cell_w, cell_h) = font_dimensions(self.font);
-        let mut x = self.text_col * cell_w;
-        let y = self.text_row * cell_h;
-        if !text.is_empty() {
-            self.buffer_dirty = true;
-        }
-        for ch in text.chars() {
-            self.draw_glyph(x as f64, y as f64, 1.0, 0.0, ch, color, paper, true);
-            x += cell_w;
-            self.text_col += 1;
-        }
+        let x = i64::from(self.text_col) * i64::from(cell_w);
+        let y = i64::from(self.text_row) * i64::from(cell_h);
+        self.buffer_dirty = true;
+        let end = self.draw_horizontal_text(text, x, y, color, paper, true);
+        self.text_col = (end / i64::from(cell_w)) as i32;
     }
 
     pub fn label(&mut self, text: &str, ink: Option<i32>, paper: Option<i32>) {
+        if text.is_empty() {
+            return;
+        }
         let color = ink.map(resolve_color_number).unwrap_or(self.current_color);
         let paper = self.text_background_color(paper);
+        let canvas_y = self.logical_y_to_canvas(self.cursor_y);
+        self.buffer_dirty = true;
+        if self.ldir == 0.0 {
+            let end = self.draw_horizontal_text(
+                text,
+                i64::from(self.cursor_x),
+                i64::from(canvas_y),
+                color,
+                paper,
+                false,
+            );
+            self.set_cursor_from_canvas(
+                end.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+                canvas_y,
+            );
+            return;
+        }
         let (cell_w, _) = font_dimensions(self.font);
         let radians = -self.ldir.to_radians();
         let cos_a = radians.cos();
@@ -2193,18 +2311,17 @@ impl Graphics {
         let dx = cell_w as f64 * cos_a;
         let dy = cell_w as f64 * sin_a;
         let mut x = self.cursor_x as f64;
-        let mut y = self.logical_y_to_canvas(self.cursor_y) as f64;
-        if !text.is_empty() {
-            self.buffer_dirty = true;
+        let mut y = f64::from(canvas_y);
+        if let Some(bg) = paper.filter(|_| self.ldir % 90.0 != 0.0) {
+            (x, y) = self.draw_opaque_rotated_label(text, (x, y), (cos_a, sin_a), color, bg);
+        } else {
+            for ch in text.chars() {
+                self.draw_rotated_glyph(x, y, cos_a, sin_a, ch, color, paper);
+                x += dx;
+                y += dy;
+            }
         }
-        for ch in text.chars() {
-            self.draw_glyph(x, y, cos_a, sin_a, ch, color, paper, false);
-            x += dx;
-            y += dy;
-        }
-        if !text.is_empty() {
-            self.set_cursor_from_canvas(x.round() as i32, y.round() as i32);
-        }
+        self.set_cursor_from_canvas(x.round() as i32, y.round() as i32);
     }
 
     pub fn capture_screen(&self) -> String {
@@ -2225,16 +2342,40 @@ impl Graphics {
             return None;
         }
 
+        // Read the two-color cell once. Either color can be the ink.
+        let origin = y as usize * self.width + x as usize;
+        let first_color = self.buffer[origin];
+        let mut other_color = None;
+        let mut pattern = [0u32; 16];
+        for (dy, bits) in pattern.iter_mut().enumerate() {
+            let start = origin + dy * self.width;
+            for &color in &self.buffer[start..start + cell_w as usize] {
+                *bits <<= 1;
+                if color != first_color {
+                    if *other_color.get_or_insert(color) != color {
+                        return None;
+                    }
+                    *bits |= 1;
+                }
+            }
+        }
+        if other_color.is_none() {
+            // SPACE, NBSP and soft hyphen all have blank bitmaps.
+            return Some(' ');
+        }
+
+        let row_mask = (1u32 << cell_w) - 1;
+        let inverse = pattern.map(|row| row ^ row_mask);
         let mut found = None;
-        for ch in glyph_chars(self.font) {
-            let Some(rows) = glyph_rows(self.font, *ch) else {
+        for &ch in glyph_chars(self.font) {
+            let Some(rows) = glyph_rows(self.font, ch) else {
                 continue;
             };
-            if self.cell_matches_glyph(x, y, cell_w, rows) {
+            if rows == pattern || rows == inverse {
                 if found.is_some() {
                     return None;
                 }
-                found = Some(*ch);
+                found = Some(ch);
             }
         }
         found
@@ -2469,19 +2610,13 @@ impl Graphics {
         if let Some(alpha) = alpha {
             alpha::validate_alpha(alpha)?;
         }
-        let Some(mem) = self.sprites.get(&id).cloned() else {
+        let Some(mem) = self.sprites.get(&id) else {
             return Err(BasicError::new(ErrorCode::InvalidArgument));
         };
         let transparent = transparent.or_else(|| mem.transparent.map(rgb_to_index_like));
-        self.draw_sprite_with_alpha(
-            &mem.data,
-            x,
-            y,
-            transparent,
-            Some(id),
-            false,
-            alpha.unwrap_or(mem.alpha),
-        )
+        let alpha = alpha.unwrap_or(mem.alpha);
+        let data = mem.data.clone();
+        self.draw_sprite_with_alpha(&data, x, y, transparent, Some(id), false, alpha)
     }
 
     pub fn sprite_delete(&mut self, id: i32) {
@@ -3053,24 +3188,22 @@ impl Graphics {
     fn draw_axis_label(&mut self, x: i32, y: i32, label: &str) {
         let saved_font = self.font;
         self.font = FontKind::Small;
-        let mut px = x;
-        for ch in label.chars() {
-            self.draw_glyph(
-                px as f64,
-                y as f64,
-                1.0,
-                0.0,
-                ch,
-                self.current_color,
-                None,
-                false,
-            );
-            px += 8;
-        }
+        self.draw_horizontal_text(
+            label,
+            i64::from(x),
+            i64::from(y),
+            self.current_color,
+            None,
+            false,
+        );
         self.font = saved_font;
     }
 
     fn draw_axis_label_at_angle(&mut self, x: i32, y: i32, label: &str, ldir: i32) {
+        if ldir == 0 {
+            self.draw_axis_label(x, y, label);
+            return;
+        }
         let saved_font = self.font;
         self.font = FontKind::Small;
         let (cell_w, _) = font_dimensions(self.font);
@@ -3082,7 +3215,7 @@ impl Graphics {
         let mut px = x as f64;
         let mut py = y as f64;
         for ch in label.chars() {
-            self.draw_glyph(px, py, cos_a, sin_a, ch, self.current_color, None, false);
+            self.draw_rotated_glyph(px, py, cos_a, sin_a, ch, self.current_color, None);
             px += dx;
             py += dy;
         }
@@ -3349,6 +3482,12 @@ impl Graphics {
             }
             return;
         }
+        if !TRANSPARENT
+            && right - left + 1 >= 32
+            && self.copy_unit_texture_rows(texture, points, uv, [(left, top), (right, bottom)])
+        {
+            return;
+        }
         for y in top..=bottom {
             let py = y as f64 + 0.5;
             let row = y as usize * self.width;
@@ -3400,6 +3539,45 @@ impl Graphics {
                 }
             }
         }
+    }
+
+    fn copy_unit_texture_rows(
+        &mut self,
+        texture: &Texture,
+        points: [(i32, i32); 2],
+        uv: (f64, f64, f64, f64),
+        visible: [(i32, i32); 2],
+    ) -> bool {
+        let [(x0, y0), (x1, y1)] = points;
+        if x1 <= x0 || y0 <= y1 {
+            return false;
+        }
+        let (u0, v0, u1, v1) = uv;
+        let (Some(u), Some(v)) = (
+            unit_texel_origin(u0, u1, x1 - x0),
+            unit_texel_origin(v0, v1, y0 - y1),
+        ) else {
+            return false;
+        };
+        let [(left, top), (right, bottom)] = visible;
+        let width = (right - left + 1) as usize;
+        let height = (bottom - top + 1) as usize;
+        let source_x = u + i64::from(left - x0);
+        // V increases upwards. Both pixel buffers store rows top to bottom.
+        let source_y = texture.height as i64 - v - i64::from(y0 - top);
+        if source_x < 0
+            || source_y < 0
+            || source_x + width as i64 > texture.width as i64
+            || source_y + height as i64 > texture.height as i64
+        {
+            return false;
+        }
+        for row in 0..height {
+            let src = (source_y as usize + row) * texture.width + source_x as usize;
+            let dst = (top as usize + row) * self.width + left as usize;
+            self.buffer[dst..dst + width].copy_from_slice(&texture.pixels[src..src + width]);
+        }
+        true
     }
 
     fn textured_triangle_canvas<const TRANSPARENT: bool>(
@@ -3644,7 +3822,158 @@ impl Graphics {
         );
     }
 
-    fn draw_glyph(
+    fn draw_opaque_rotated_label(
+        &mut self,
+        text: &str,
+        (origin_x, origin_y): (f64, f64),
+        (cos_a, sin_a): (f64, f64),
+        ink: u32,
+        paper: u32,
+    ) -> (f64, f64) {
+        let (w, h) = font_dimensions(self.font);
+        let advance_x = f64::from(w) * cos_a;
+        let advance_y = f64::from(w) * sin_a;
+        let down_x = -f64::from(h) * sin_a;
+        let down_y = f64::from(h) * cos_a;
+        // Font pixels are centred on integers, so the cell starts half a pixel
+        // before the first centre in both font coordinates.
+        let corner_x = (sin_a - cos_a) * 0.5;
+        let corner_y = -(sin_a + cos_a) * 0.5;
+        let min_x = corner_x + advance_x.min(0.0) + down_x.min(0.0);
+        let max_x = corner_x + advance_x.max(0.0) + down_x.max(0.0);
+        let min_y = corner_y + advance_y.min(0.0) + down_y.min(0.0);
+        let max_y = corner_y + advance_y.max(0.0) + down_y.max(0.0);
+
+        let (mut x, mut y) = (origin_x, origin_y);
+        let mut first_col = 0.0;
+        for ch in text.chars() {
+            let left = self.w_left.max((x + min_x).floor() as i32);
+            let right = self.w_right.min((x + max_x).ceil() as i32);
+            let top = self.w_top.max((y + min_y).floor() as i32);
+            let bottom = self.w_bottom.min((y + max_y).ceil() as i32);
+            if left <= right && top <= bottom {
+                if let Some(rows) = glyph_rows(self.font, ch).or_else(|| glyph_rows(self.font, '□'))
+                {
+                    // Map screen pixels back to the font. Using one origin for
+                    // the whole label makes adjacent cells share the same edge.
+                    for py in top..=bottom {
+                        let delta_y = f64::from(py) - origin_y;
+                        let offset = py as usize * self.width;
+                        for px in left..=right {
+                            let delta_x = f64::from(px) - origin_x;
+                            let col = (delta_x * cos_a + delta_y * sin_a + 0.5) - first_col;
+                            let row = -delta_x * sin_a + delta_y * cos_a + 0.5;
+                            if col >= 0.0 && col < f64::from(w) && row >= 0.0 && row < f64::from(h)
+                            {
+                                let mask = 1 << (w - 1 - col as i32);
+                                self.buffer[offset + px as usize] =
+                                    if rows[row as usize] & mask != 0 {
+                                        ink
+                                    } else {
+                                        paper
+                                    };
+                            }
+                        }
+                    }
+                }
+            }
+            x += advance_x;
+            y += advance_y;
+            first_col += f64::from(w);
+        }
+        (x, y)
+    }
+
+    fn draw_horizontal_text(
+        &mut self,
+        text: &str,
+        mut x: i64,
+        y: i64,
+        ink: u32,
+        paper: Option<u32>,
+        text_mode: bool,
+    ) -> i64 {
+        let bounds = if text_mode {
+            (0, self.width as i32 - 1, 0, self.height as i32 - 1)
+        } else {
+            (self.w_left, self.w_right, self.w_top, self.w_bottom)
+        };
+        let (left, right, top, bottom) = bounds;
+        let (w, h) = font_dimensions(self.font);
+        let advance = i64::from(w);
+        if y < i64::from(top - (h - 1)) || y > i64::from(bottom) || x > i64::from(right) {
+            return x + text.chars().count() as i64 * advance;
+        }
+
+        let full_height = y >= i64::from(top) && y <= i64::from(bottom - (h - 1));
+        let available = (i64::from(right) + 1 - x) as usize;
+        // Byte length is an upper bound on the number of Unicode cells.
+        // A label that passes this check needs no per-character clipping.
+        if full_height && x >= i64::from(left) && text.len().saturating_mul(w as usize) <= available
+        {
+            let row_start = y as usize * self.width;
+            for ch in text.chars() {
+                self.draw_whole_horizontal_glyph(
+                    row_start + x as usize,
+                    ch,
+                    w as usize,
+                    ink,
+                    paper,
+                );
+                x += advance;
+            }
+        } else {
+            for ch in text.chars() {
+                if full_height && x >= i64::from(left) && x <= i64::from(right - (w - 1)) {
+                    let start = y as usize * self.width + x as usize;
+                    self.draw_whole_horizontal_glyph(start, ch, w as usize, ink, paper);
+                } else if x >= i64::from(left - (w - 1)) && x <= i64::from(right) {
+                    if let Some(rows) =
+                        glyph_rows(self.font, ch).or_else(|| glyph_rows(self.font, '□'))
+                    {
+                        self.draw_clipped_glyph_rows(
+                            (x as i32, y as i32),
+                            bounds,
+                            w,
+                            rows,
+                            ink,
+                            paper,
+                        );
+                    }
+                }
+                x += advance;
+            }
+        }
+        x
+    }
+
+    #[inline]
+    fn draw_whole_horizontal_glyph(
+        &mut self,
+        start: usize,
+        ch: char,
+        width: usize,
+        ink: u32,
+        paper: Option<u32>,
+    ) {
+        let Some(rows) = glyph_rows(self.font, ch).or_else(|| glyph_rows(self.font, '□')) else {
+            return;
+        };
+        let dst = &mut self.buffer[start..];
+        if let Some(bg) = paper {
+            match self.font {
+                FontKind::Small => Self::write_opaque_rows::<8>(dst, self.width, rows, ink, bg),
+                FontKind::Big => Self::write_opaque_rows::<16>(dst, self.width, rows, ink, bg),
+            }
+        } else {
+            for (row, &bits) in rows.iter().enumerate() {
+                let offset = row * self.width;
+                Self::write_ink_bits(&mut dst[offset..offset + width], bits, ink);
+            }
+        }
+    }
+
+    fn draw_rotated_glyph(
         &mut self,
         x: f64,
         y: f64,
@@ -3653,7 +3982,6 @@ impl Graphics {
         ch: char,
         ink: u32,
         paper: Option<u32>,
-        text_mode: bool,
     ) {
         let (w, _) = font_dimensions(self.font);
         let Some(rows) = glyph_rows(self.font, ch).or_else(|| glyph_rows(self.font, '□')) else {
@@ -3675,46 +4003,74 @@ impl Graphics {
                 let col = col_idx as f64;
                 let px = (row_base_x + col * cos_a).round() as i32;
                 let py = (row_base_y + col * sin_a).round() as i32;
-                if text_mode {
-                    self.set_canvas_pixel_no_viewport(px, py, color);
-                } else {
-                    self.set_canvas_pixel(px, py, color);
-                }
+                self.set_canvas_pixel(px, py, color);
             }
         }
     }
 
-    fn cell_matches_glyph(&self, x: i32, y: i32, w: i32, rows: &[u32]) -> bool {
-        let mut ink = None;
-        let mut paper = None;
-        for (row_idx, bits) in rows.iter().enumerate() {
-            let py = y + row_idx as i32;
-            for col_idx in 0..w {
-                let px = x + col_idx;
-                let Some(color) = self.get_canvas_pixel(px, py) else {
-                    return false;
-                };
-                let on = (bits >> (w - 1 - col_idx)) & 1 != 0;
-                if on {
-                    match ink {
-                        Some(ink) if ink != color => return false,
-                        None => ink = Some(color),
-                        _ => {}
-                    }
-                } else {
-                    match paper {
-                        Some(paper) if paper != color => return false,
-                        None => paper = Some(color),
-                        _ => {}
-                    }
+    fn draw_clipped_glyph_rows(
+        &mut self,
+        (x, y): (i32, i32),
+        (left, right, top, bottom): (i32, i32, i32, i32),
+        width: i32,
+        rows: &[u32],
+        ink: u32,
+        paper: Option<u32>,
+    ) {
+        let x0 = x.max(left);
+        let x1 = x.saturating_add(width - 1).min(right);
+        let y0 = y.max(top);
+        let y1 = y.saturating_add(rows.len() as i32 - 1).min(bottom);
+        if x0 > x1 || y0 > y1 {
+            return;
+        }
+
+        let visible_width = (x1 - x0 + 1) as usize;
+        // Bit zero in the cropped row represents the rightmost visible pixel.
+        let shift = width - 1 - (x1 - x);
+        let mask = (1u32 << visible_width) - 1;
+        let start = y0 as usize * self.width + x0 as usize;
+        let visible_rows = &rows[(y0 - y) as usize..=(y1 - y) as usize];
+        for (row, &bits) in visible_rows.iter().enumerate() {
+            let offset = start + row * self.width;
+            let pixels = &mut self.buffer[offset..offset + visible_width];
+            let visible_bits = (bits >> shift) & mask;
+            if let Some(bg) = paper {
+                for (bit, pixel) in pixels.iter_mut().rev().enumerate() {
+                    *pixel = if visible_bits & (1 << bit) != 0 {
+                        ink
+                    } else {
+                        bg
+                    };
                 }
+            } else {
+                Self::write_ink_bits(pixels, visible_bits, ink);
             }
         }
-        match (ink, paper) {
-            (None, Some(_)) => true,
-            (Some(_), None) => true,
-            (Some(ink), Some(paper)) => ink != paper,
-            _ => false,
+    }
+
+    #[inline]
+    fn write_ink_bits(pixels: &mut [u32], mut bits: u32, ink: u32) {
+        while bits != 0 {
+            let col = pixels.len() - 1 - bits.trailing_zeros() as usize;
+            pixels[col] = ink;
+            bits &= bits - 1; // Clear the ink pixel just drawn.
+        }
+    }
+
+    fn write_opaque_rows<const WIDTH: usize>(
+        dst: &mut [u32],
+        stride: usize,
+        rows: &[u32],
+        ink: u32,
+        paper: u32,
+    ) {
+        for (row, &bits) in rows.iter().enumerate() {
+            let start = row * stride;
+            // The low bit is the rightmost pixel in each font row.
+            for (bit, pixel) in dst[start..start + WIDTH].iter_mut().rev().enumerate() {
+                *pixel = if bits & (1 << bit) != 0 { ink } else { paper };
+            }
         }
     }
 
@@ -3762,21 +4118,17 @@ impl Graphics {
         }
     }
 
-    fn set_canvas_pixel_no_viewport(&mut self, x: i32, y: i32, color: u32) {
-        if let Some(idx) = self.index(x, y) {
-            self.buffer[idx] = color;
-        }
-    }
-
     fn get_canvas_pixel(&self, x: i32, y: i32) -> Option<u32> {
         self.index(x, y).map(|idx| self.buffer[idx])
     }
 
     fn clear_owner_for_id(&mut self, id: i32) {
-        if id == 0 {
+        let Some(sprite) = self.sprites.get(&id) else {
             return;
-        }
-        for owner in &mut self.owner {
+        };
+        for &idx in &sprite.pixels {
+            // An overlapping sprite may have claimed this pixel since the draw.
+            let owner = &mut self.owner[idx];
             if *owner == id {
                 *owner = 0;
             }
@@ -3793,6 +4145,20 @@ pub fn rgb_number(r: i32, g: i32, b: i32) -> BasicResult<i32> {
 
 fn floor_div_i64(numerator: i64, denominator: i64) -> i64 {
     numerator.div_euclid(denominator)
+}
+
+/// Integer texel offset for a forward 1:1 mapping sampled at pixel centres.
+fn unit_texel_origin(start: f64, end: f64, extent: i32) -> Option<i64> {
+    if end != start + f64::from(extent) {
+        return None;
+    }
+    let offset = start.round();
+    // The rectangle rasterizer has exact edge numerators and area. Its three
+    // rounded weights, products and two sums can shift a sample across a texel
+    // boundary. Include rounding of the unit-scale endpoint in the margin.
+    let roundoff = 8.0 * f64::EPSILON * start.abs().max(end.abs()).max(1.0);
+    let distance_to_boundary = 0.5 - (start - offset).abs();
+    (distance_to_boundary > roundoff).then_some(offset as i64)
 }
 
 fn edge_function(a: TexturedVertex, b: TexturedVertex, x: f64, y: f64) -> f64 {
@@ -4198,8 +4564,17 @@ mod perspective_texture_tests;
 #[path = "graphics/texture_transparency_tests.rs"]
 mod texture_transparency_tests;
 
+#[cfg(test)]
+#[path = "graphics/textured_rect_copy_tests.rs"]
+mod textured_rect_copy_tests;
+
+#[cfg(test)]
+#[path = "graphics/sprite_move_tests.rs"]
+mod sprite_move_tests;
+
 #[path = "graphics/alpha.rs"]
 mod alpha;
+pub(crate) mod texture_rect_alpha;
 
 #[cfg(test)]
 #[path = "graphics/gouraud_tests.rs"]
@@ -5026,6 +5401,97 @@ mod tests {
             let error = graphics.set_ldir(angle).unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidArgument);
             assert_eq!(graphics.ldir, 90.0);
+        }
+    }
+
+    #[test]
+    fn offscreen_text_cells_advance_without_wrapping_onto_the_canvas() {
+        let mut graphics = Graphics::new_canvas(32, 32);
+        for (col, row) in [(536_870_912, 0), (-536_870_912, 0), (0, 268_435_456)] {
+            graphics.locate(col, row);
+            graphics.gprint("Aé", Some(0xffcccc), Some(0xffff00));
+            assert_eq!((graphics.text_col, graphics.text_row), (col + 2, row));
+            assert!(graphics.buffer.iter().all(|&pixel| pixel == 0));
+        }
+    }
+
+    #[test]
+    fn horizontal_glyph_clipping_preserves_the_visible_ink_and_paper() {
+        use crate::fonts::{font_dimensions, glyph_rows, FontKind};
+
+        let mut graphics = Graphics::new_canvas(32, 32);
+        graphics.set_origin(0, 0, Some((8, 23, 23, 8))).unwrap();
+        let background = 0x123456;
+        let ink = 0xfedcba;
+        for font in [FontKind::Small, FontKind::Big] {
+            graphics.set_font(font);
+            let (w, h) = font_dimensions(font);
+            let glyph = glyph_rows(font, 'R').unwrap();
+            for paper in [None, Some(0x086420)] {
+                for (x, y) in [(1, 3), (21, 3), (1, 22), (21, 22), (8 - w, 8), (8, 24)] {
+                    graphics.buffer.fill(background);
+                    graphics.draw_horizontal_text(
+                        "R",
+                        i64::from(x),
+                        i64::from(y),
+                        ink,
+                        paper,
+                        false,
+                    );
+                    for py in 0..32 {
+                        for px in 0..32 {
+                            let (col, row) = (px - x, py - y);
+                            let expected = if (8..=23).contains(&px)
+                                && (8..=23).contains(&py)
+                                && (0..w).contains(&col)
+                                && (0..h).contains(&row)
+                            {
+                                if glyph[row as usize] & (1 << (w - 1 - col)) != 0 {
+                                    ink
+                                } else {
+                                    paper.unwrap_or(background)
+                                }
+                            } else {
+                                background
+                            };
+                            assert_eq!(
+                                graphics.get_canvas_pixel(px, py),
+                                Some(expected),
+                                "{font:?}, glyph at ({x},{y}), pixel ({px},{py})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_diagonal_label_covers_the_entire_strip_up_to_the_viewport_edge() {
+        let mut graphics = Graphics::new(640);
+        graphics
+            .set_origin(0, 0, Some((200, 236, 320, 220)))
+            .unwrap();
+        graphics.move_to(200.0, 279.0);
+        graphics.set_ldir(45.0).unwrap();
+        graphics.label("        ", None, Some(0xabcdef));
+
+        // The anchor is (200, 200) on the canvas. At 45 degrees, moving
+        // along the label changes dx-dy, and moving down it changes dx+dy.
+        // A strip of 64 by 16 pixel centres spans 0..=89 and 0..=21 in
+        // these integer diagonals, including the joins between the spaces.
+        for py in 150..220 {
+            for px in 195..265 {
+                let (dx, dy) = (px - 200, py - 200);
+                let inside =
+                    (0..=89).contains(&(dx - dy)) && (0..=21).contains(&(dx + dy)) && px <= 236;
+                let expected = if inside { 0xabcdef } else { 0 };
+                assert_eq!(
+                    graphics.get_canvas_pixel(px, py),
+                    Some(expected),
+                    "({px}, {py})"
+                );
+            }
         }
     }
 

@@ -20,6 +20,81 @@ fn run(source: &str) -> Interpreter {
 }
 
 #[test]
+fn matrix_products_accept_column_slices() {
+    let mut interpreter = run("10 MAT BASE 1\n\
+20 DIM U(5,3),Y(5)\n\
+30 MAT READ U,Y\n\
+40 MAT Z=TRN(Y)*U(,2)\n\
+50 MAT C=TRN(U(,2:3))*Y\n\
+60 DATA 1,1,1,1,2,4,1,3,9,1,4,16,1,5,25,2,4,6,8,10");
+    assert_eq!(number(&mut interpreter, "UBOUND(Z,1)"), 1.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(Z,2)"), 1.0);
+    assert_eq!(number(&mut interpreter, "Z(1,1)"), 110.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(C)"), 2.0);
+    assert!(eval_expression(&mut interpreter, "UBOUND(C,2)").is_err());
+    assert_eq!(number(&mut interpreter, "C(1)"), 110.0);
+    assert_eq!(number(&mut interpreter, "C(2)"), 450.0);
+}
+
+#[test]
+fn mapped_slices_keep_shape_and_reads_of_single_cells_remain_scalar() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 1:DIM A(3,3):A(0,0)=99:A(1,2)=1.25:A(2,2)=2.375",
+    );
+    command(&mut interpreter, "MAT A=MAP(INT,A(3:0,2)*10)+A(1,2)");
+    assert_eq!(number(&mut interpreter, "UBOUND(A,1)"), 2.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(A,2)"), 1.0);
+    assert_eq!(number(&mut interpreter, "A(0,0)"), 1.25);
+    assert_eq!(number(&mut interpreter, "A(1,1)"), 24.25);
+    assert_eq!(number(&mut interpreter, "A(2,1)"), 13.25);
+}
+
+#[test]
+fn slice_operands_snapshot_values_in_evaluation_order() {
+    let mut interpreter = run("10 DIM V(3):V(1)=10:V(2)=20:CALLS=0\n\
+20 MAT V=V(1:2)+V(FNSTART():2)\n\
+30 END\n\
+100 DEF FNSTART()\n\
+110 V(1)=100:CALLS=CALLS+1\n\
+120 FNSTART=1\n\
+130 FNEND");
+    assert_eq!(number(&mut interpreter, "CALLS"), 1.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(V)"), 1.0);
+    assert_eq!(number(&mut interpreter, "V(0)"), 110.0);
+    assert_eq!(number(&mut interpreter, "V(1)"), 40.0);
+}
+
+#[test]
+fn empty_slice_operands_require_base_one() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, "MAT BASE 1:DIM A(2,3)");
+    command(&mut interpreter, "MAT C=MAP(INT,A(1:0,))");
+    assert_eq!(number(&mut interpreter, "UBOUND(C,1)"), 0.0);
+    assert_eq!(number(&mut interpreter, "UBOUND(C,2)"), 3.0);
+    command(&mut interpreter, "C(0,1)=45:MAT BASE 0");
+    assert_eq!(
+        interpreter
+            .process_immediate("MAT C=MAP(INT,A(1:0,))")
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDimensions
+    );
+    assert_eq!(number(&mut interpreter, "C(0,1)"), 45.0);
+}
+
+#[test]
+fn omitted_vector_axis_is_a_slice_operand() {
+    let mut interpreter = Interpreter::new();
+    command(&mut interpreter, "MAT BASE 1:DIM V(2):V(1)=1.5:V(2)=3.5");
+    command(&mut interpreter, "MAT W=MAP(INT,V())");
+    assert_eq!(number(&mut interpreter, "UBOUND(W)"), 2.0);
+    assert_eq!(number(&mut interpreter, "W(1)"), 1.0);
+    assert_eq!(number(&mut interpreter, "W(2)"), 3.0);
+}
+
+#[test]
 fn matrix_times_vector_preserves_vector_rank_and_index_aliases() {
     for base in [0, 1] {
         let bound = base + 1;
@@ -428,7 +503,7 @@ fn late_failures_preserve_destination_and_source_without_partial_assignment() {
     for (expression, error) in [
         ("A*2+B", ErrorCode::InvalidDimensions),
         ("A+A/0", ErrorCode::DivisionByZero),
-        ("A+A(0:1)", ErrorCode::ForbiddenExpression),
+        ("A+A(0:0)", ErrorCode::InvalidDimensions),
     ] {
         assert_eq!(
             interpreter
@@ -675,4 +750,148 @@ fn mat_map_preserves_existing_map_identifiers_outside_the_new_call_form() {
             .code,
         ErrorCode::ArgumentMismatch
     );
+}
+
+#[test]
+fn solve_composes_with_the_book_example_and_keeps_vector_rank() {
+    let mut interpreter = run("10 MAT BASE 1\n\
+20 DIM U(5,3),Y(5)\n\
+30 MAT READ U,Y\n\
+40 MAT X=SOLVE(TRN(U)*U,TRN(U)*Y)\n\
+50 DATA 1,1,1,1,2,4,1,3,9,1,4,16,1,5,25,2,4,6,8,10");
+    assert_eq!(number(&mut interpreter, "UBOUND(X)"), 3.0);
+    assert!(eval_expression(&mut interpreter, "UBOUND(X,2)").is_err());
+    assert_eq!(number(&mut interpreter, "X(1)"), 0.0);
+    assert_eq!(number(&mut interpreter, "X(2)"), 2.0);
+    assert_eq!(number(&mut interpreter, "X(3)"), 0.0);
+}
+
+#[test]
+fn solve_pivots_all_rhs_columns_and_accepts_an_aliased_destination() {
+    for base in [0, 1] {
+        let last_row = base + 1;
+        let last_col = base + 2;
+        let mut interpreter = run(&format!(
+            "10 MAT BASE {base}:DIM A({last_row},{last_row}),B({last_row},{last_col})\n\
+20 MAT READ A,B\n\
+30 DATA 0,2,1,3,-4,8,12,-5,14,21"
+        ));
+        if base == 1 {
+            command(&mut interpreter, "A(0,0)=1E309:B(0,1)=1E309:B(1,0)=1E309");
+        }
+        command(&mut interpreter, "MAT B=SOLVE(A,B)");
+        assert_eq!(number(&mut interpreter, "UBOUND(B,1)"), last_row as f64);
+        assert_eq!(number(&mut interpreter, "UBOUND(B,2)"), last_col as f64);
+        for (row, answers) in [[1.0, 2.0, 3.0], [-2.0, 4.0, 6.0]].iter().enumerate() {
+            for (col, expected) in answers.iter().enumerate() {
+                let cell = format!("B({},{})", base + row, base + col);
+                assert_eq!(number(&mut interpreter, &cell), *expected, "{cell}");
+            }
+        }
+        assert_eq!(number(&mut interpreter, &format!("A({base},{base})")), 0.0);
+        if base == 1 {
+            assert_eq!(number(&mut interpreter, "B(0,1)"), 0.0);
+            assert_eq!(number(&mut interpreter, "B(1,0)"), 0.0);
+            assert_eq!(number(&mut interpreter, "A(0,0)"), f64::INFINITY);
+        }
+        command(&mut interpreter, &format!("MAT C=SOLVE(A,B(,{base}))"));
+        assert_eq!(number(&mut interpreter, "UBOUND(C,2)"), base as f64);
+        assert_eq!(number(&mut interpreter, &format!("C({base},{base})")), -3.5);
+        assert_eq!(
+            number(&mut interpreter, &format!("C({last_row},{base})")),
+            0.5
+        );
+    }
+}
+
+#[test]
+fn solve_handles_a_subnormal_pivot_without_forming_an_inverse() {
+    for base in [0, 1] {
+        let mut interpreter = Interpreter::new();
+        command(
+            &mut interpreter,
+            &format!("MAT BASE {base}:DIM A({base}),B({base}):MAT A=1E-310:MAT B=1E-310"),
+        );
+        command(&mut interpreter, "MAT X=SOLVE(A,B)");
+        assert_eq!(number(&mut interpreter, "UBOUND(X)"), base as f64);
+        assert!(eval_expression(&mut interpreter, "UBOUND(X,2)").is_err());
+        assert_eq!(number(&mut interpreter, &format!("X({base})")), 1.0);
+        if base == 1 {
+            assert_eq!(number(&mut interpreter, "X(0)"), 0.0);
+        }
+    }
+}
+
+#[test]
+fn solve_balances_extreme_rows_without_losing_finite_solutions() {
+    for (coefficients, rhs, expected) in [
+        (
+            "A(0,0)=1E308:A(0,1)=1E308:A(1,0)=1E308:A(1,1)=-1E308",
+            "B(0)=1E308",
+            [0.5, 0.5],
+        ),
+        (
+            "A(0,0)=1E308:A(1,0)=1E-308:A(1,1)=1E-308",
+            "B(0)=1E308:B(1)=2E-308",
+            [1.0, 1.0],
+        ),
+    ] {
+        let mut interpreter = Interpreter::new();
+        command(&mut interpreter, "DIM A(1,1),B(1)");
+        command(&mut interpreter, coefficients);
+        command(&mut interpreter, rhs);
+        command(&mut interpreter, "MAT X=SOLVE(A,B)");
+        for (index, expected) in expected.iter().enumerate() {
+            let actual = number(&mut interpreter, &format!("X({index})"));
+            assert!(
+                (actual - expected).abs() < 1e-14,
+                "{coefficients}: {actual}"
+            );
+        }
+    }
+}
+
+#[test]
+fn solve_preserves_existing_identifiers_in_scalar_contexts() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "SOLVE=5:DIM SOLVE(1):SOLVE(0)=2.5:SOLVE(1)=3.5:RESULT=SOLVE+SOLVE(1)",
+    );
+    assert_eq!(number(&mut interpreter, "RESULT"), 8.5);
+    command(&mut interpreter, "MAT V=SOLVE:MAT W=INT(SOLVE(1))");
+    assert_eq!(number(&mut interpreter, "V(0)"), 2.5);
+    assert_eq!(number(&mut interpreter, "W(0)"), 3.0);
+}
+
+#[test]
+fn solve_errors_preserve_the_existing_destination() {
+    let mut interpreter = Interpreter::new();
+    command(
+        &mut interpreter,
+        "MAT BASE 1:DIM A(2,2),B(2),C(2),M(2,3),S(2,2),V(3),N(2),T$(2)\
+         :MAT A=IDN:MAT B=2:MAT C=37:MAT S=1:MAT N=1E309",
+    );
+    for (rhs, code) in [
+        ("SOLVE()", ErrorCode::ArgumentMismatch),
+        ("SOLVE(A)", ErrorCode::ArgumentMismatch),
+        ("SOLVE(A,B,C)", ErrorCode::ArgumentMismatch),
+        ("SOLVE(1,B)", ErrorCode::ForbiddenExpression),
+        ("SOLVE(A,1)", ErrorCode::ForbiddenExpression),
+        ("SOLVE(A,T$)", ErrorCode::ForbiddenExpression),
+        ("SOLVE(M,B)", ErrorCode::InvalidDimensions),
+        ("SOLVE(A,V)", ErrorCode::InvalidDimensions),
+        ("SOLVE(S,B)", ErrorCode::InvalidValue),
+        ("SOLVE(A,N)", ErrorCode::InvalidValue),
+        ("SOLVE(1E309*A,B)", ErrorCode::InvalidValue),
+    ] {
+        let error = interpreter
+            .process_immediate(&format!("MAT C={rhs}"))
+            .unwrap_err();
+        assert_eq!(error.code, code, "{rhs}");
+        assert_eq!(number(&mut interpreter, "UBOUND(C)"), 2.0);
+        for index in 0..=2 {
+            assert_eq!(number(&mut interpreter, &format!("C({index})")), 37.0);
+        }
+    }
 }

@@ -1,8 +1,20 @@
 use crate::language;
+use std::borrow::Cow;
+
+pub(crate) fn uppercase_name(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        Cow::Owned(name.to_ascii_uppercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
 
 pub(crate) fn is_reserved_identifier_name(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    let base_name = upper.strip_suffix('$').unwrap_or(&upper);
+    is_reserved_uppercase_identifier_name(&name.to_ascii_uppercase())
+}
+
+pub(crate) fn is_reserved_uppercase_identifier_name(upper: &str) -> bool {
+    let base_name = upper.strip_suffix('$').unwrap_or(upper);
     if is_legacy_short_variable_name(base_name) {
         return false;
     }

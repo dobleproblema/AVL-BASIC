@@ -1,6 +1,6 @@
 [package]
 name = "avl-basic"
-version = "1.6.31"
+version = "1.7.0"
 edition = "2021"
 license = "MIT"
 build = "build.rs"
@@ -21,6 +21,8 @@ png = "0.17"
 kira = { version = "=0.12.4", default-features = false, features = ["wav", "pcm", "ogg", "vorbis", "mp3", "flac"] }
 cpal = { version = "=0.18.2", default-features = false }
 tempfile = "3"
+unicode-width = { version = "0.2.3", default-features = false }
+unicode-segmentation = { version = "1", default-features = false }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -2,7 +2,7 @@ use crate::error::{BasicError, BasicResult, ErrorCode};
 use crate::graphics::Graphics;
 use crate::language;
 use crate::lexer::{Lexer, Token};
-use crate::reserved::is_reserved_identifier_name;
+use crate::reserved::{is_reserved_identifier_name, uppercase_name};
 use crate::using_format::format_using;
 use crate::value::{logical_round, round_half_away, Value};
 
@@ -29,6 +29,17 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    ArraySlice {
+        name: String,
+        selectors: Vec<SliceSelector>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum SliceSelector {
+    All,
+    Single(Expr),
+    Range(Expr, Expr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +181,7 @@ impl Expr {
                 let values = eval_call_args(ctx, name, args)?;
                 ctx.call_runtime_function(name, values)?.as_number()
             }
+            Expr::ArraySlice { .. } => Err(BasicError::new(ErrorCode::ForbiddenExpression)),
             Expr::StringIndex { .. } => self.eval(ctx)?.as_number(),
             Expr::Unary { op, expr } => {
                 let value = expr.eval_number(ctx)?;
@@ -206,7 +218,7 @@ impl Expr {
                     if r == 0.0 {
                         return Err(BasicError::new(ErrorCode::DivisionByZero));
                     }
-                    checked_number(l % r)
+                    checked_number(scalar_remainder(l, r))
                 }
                 BinaryOp::Pow => checked_power(left.eval_number(ctx)?, right.eval_number(ctx)?),
                 BinaryOp::Eq
@@ -270,7 +282,7 @@ impl Expr {
     pub(crate) fn is_statically_numeric(&self) -> bool {
         match self {
             Expr::Number(_) => true,
-            Expr::Str(_) | Expr::StringIndex { .. } => false,
+            Expr::Str(_) | Expr::StringIndex { .. } | Expr::ArraySlice { .. } => false,
             Expr::Var(name) => !name.ends_with('$'),
             Expr::ArrayOrCall { name, args, .. } => {
                 !name.ends_with('$') && args.iter().all(Expr::is_statically_numeric)
@@ -301,7 +313,7 @@ impl Expr {
     fn is_statically_string(&self) -> bool {
         match self {
             Expr::Str(_) | Expr::StringIndex { .. } => true,
-            Expr::Number(_) => false,
+            Expr::Number(_) | Expr::ArraySlice { .. } => false,
             Expr::Var(name) => name.ends_with('$'),
             Expr::ArrayOrCall { name, .. } => name.ends_with('$'),
             Expr::Unary { .. } => false,
@@ -317,6 +329,7 @@ impl Expr {
         match self {
             Expr::Number(n) => Ok(Value::number(*n)),
             Expr::Str(s) => Ok(Value::string(s.clone())),
+            Expr::ArraySlice { .. } => Err(BasicError::new(ErrorCode::ForbiddenExpression)),
             Expr::Var(name) => {
                 if is_pi_constant_name(name) {
                     return Ok(Value::number(std::f64::consts::PI));
@@ -335,7 +348,7 @@ impl Expr {
                 if *kind == ArrayOrCallKind::Array {
                     return eval_array_value(ctx, name, args);
                 }
-                match name.to_ascii_uppercase().as_str() {
+                match uppercase_name(name).as_ref() {
                     "IIF" => {
                         return match select_iif_branch(ctx, args)?.eval(ctx)? {
                             Value::ArrayRef(_) => Err(BasicError::new(ErrorCode::TypeMismatch)),
@@ -425,7 +438,7 @@ impl Expr {
                     if r == 0.0 {
                         return Err(BasicError::new(ErrorCode::DivisionByZero));
                     }
-                    Ok(Value::number(checked_number(l % r)?))
+                    Ok(Value::number(checked_number(scalar_remainder(l, r))?))
                 }
                 BinaryOp::Pow => Ok(Value::number(checked_power(
                     left.eval(ctx)?.as_number()?,
@@ -741,8 +754,20 @@ impl Parser {
         let mut expr = if self.consume_lparen() {
             let mat_map = self.allow_mat_operators && name == "MAP";
             let mut args = Vec::new();
-            if !matches!(self.peek(), Token::RParen) {
+            if matches!(self.peek(), Token::RParen) {
+                if self.allow_mat_operators
+                    && !is_contextual_mat_function(&name)
+                    && classify_array_or_call(&name) == ArrayOrCallKind::Array
+                {
+                    return self.parse_array_slice(name, args, None);
+                }
+            } else {
                 loop {
+                    if self.allow_mat_operators
+                        && matches!(self.peek(), Token::Comma | Token::RParen)
+                    {
+                        return self.parse_array_slice(name, args, None);
+                    }
                     // The first MAP argument names a function rather than calling it.
                     let arg = match self.peek() {
                         Token::Ident(selector)
@@ -759,6 +784,9 @@ impl Parser {
                         }
                         _ => self.parse_or()?,
                     };
+                    if self.allow_mat_operators && matches!(self.peek(), Token::Colon) {
+                        return self.parse_array_slice(name, args, Some(arg));
+                    }
                     args.push(arg);
                     if !matches!(self.peek(), Token::Comma) {
                         break;
@@ -798,6 +826,49 @@ impl Parser {
         }
         Ok(expr)
     }
+
+    #[cold]
+    fn parse_array_slice(
+        &mut self,
+        name: String,
+        indexes: Vec<Expr>,
+        mut first: Option<Expr>,
+    ) -> BasicResult<Expr> {
+        if is_contextual_mat_function(&name)
+            || classify_array_or_call(&name) != ArrayOrCallKind::Array
+        {
+            return Err(BasicError::new(ErrorCode::Syntax));
+        }
+        if is_reserved_identifier_name(&name) {
+            return Err(BasicError::new(ErrorCode::Undefined));
+        }
+        let mut selectors: Vec<_> = indexes.into_iter().map(SliceSelector::Single).collect();
+        loop {
+            selectors.push(match first {
+                Some(start) if matches!(self.peek(), Token::Colon) => {
+                    self.bump();
+                    SliceSelector::Range(start, self.parse_or()?)
+                }
+                Some(index) => SliceSelector::Single(index),
+                None => SliceSelector::All,
+            });
+            if !matches!(self.peek(), Token::Comma) {
+                break;
+            }
+            self.bump();
+            first = if matches!(self.peek(), Token::Comma | Token::RParen) {
+                None
+            } else {
+                Some(self.parse_or()?)
+            };
+        }
+        self.expect_rparen()?;
+        Ok(Expr::ArraySlice { name, selectors })
+    }
+}
+
+pub(crate) fn is_contextual_mat_function(name: &str) -> bool {
+    matches!(name, "MAP" | "SOLVE")
 }
 
 fn is_numeric_constant(name: &str) -> bool {
@@ -1454,7 +1525,7 @@ fn direct_string_variable_name(expr: &Expr) -> Option<&str> {
     let Expr::Var(name) = expr else {
         return None;
     };
-    let upper = name.to_ascii_uppercase();
+    let upper = uppercase_name(name);
     if upper.ends_with('$') && !upper.starts_with("FN") && !is_zero_arg_function(&upper) {
         Some(name)
     } else {
@@ -1478,6 +1549,9 @@ fn first_char_code(text: &str) -> BasicResult<u32> {
 }
 
 fn string_slice(text: &str, start: usize, count: Option<usize>) -> String {
+    if start == 0 {
+        return left_string(text, count.unwrap_or(usize::MAX));
+    }
     if text.is_ascii() {
         if start >= text.len() {
             return String::new();
@@ -1497,14 +1571,28 @@ fn string_slice(text: &str, start: usize, count: Option<usize>) -> String {
     text[byte_start..byte_end].to_string()
 }
 
-fn right_string(text: &str, count: usize) -> String {
-    if text.is_ascii() {
-        let start = text.len().saturating_sub(count);
-        text[start..].to_string()
+pub(crate) fn left_string(text: &str, count: usize) -> String {
+    let end = count.min(text.len());
+    let end = if end == text.len() || text.as_bytes()[..end].is_ascii() {
+        end
     } else {
-        let len = string_len(text);
-        string_slice(text, len.saturating_sub(count), None)
-    }
+        text.char_indices()
+            .nth(count)
+            .map_or(text.len(), |(i, _)| i)
+    };
+    text[..end].to_owned()
+}
+
+fn right_string(text: &str, count: usize) -> String {
+    let start = text.len().saturating_sub(count);
+    let start = if start == 0 || text.as_bytes()[start..].is_ascii() {
+        start
+    } else {
+        text.char_indices()
+            .nth_back(count)
+            .map_or(0, |(i, ch)| i + ch.len_utf8())
+    };
+    text[start..].to_owned()
 }
 
 fn byte_index_for_char_offset(text: &str, offset: usize) -> Option<usize> {
@@ -1809,4 +1897,76 @@ pub(crate) fn is_zero_arg_function(name: &str) -> bool {
 
 pub(crate) fn is_pi_constant_name(name: &str) -> bool {
     language::is_pi_constant_name(name)
+}
+
+#[inline]
+pub(crate) fn scalar_remainder(left: f64, right: f64) -> f64 {
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    {
+        const FRACTION_BITS: u32 = f64::MANTISSA_DIGITS - 1;
+        const SIGN: u64 = 1 << 63;
+        let a = left.to_bits() & !SIGN;
+        let b = right.to_bits() & !SIGN;
+        let a_exponent = (a >> FRACTION_BITS) as u32;
+        let b_exponent = (b >> FRACTION_BITS) as u32;
+        // Leave the long reduction to Rust before classifying its operands again.
+        if a_exponent >= b_exponent + 128 {
+            return left % right;
+        }
+        // Subtracting one maps zero and NaNs to infinity or above, and permits infinity.
+        if a >= f64::INFINITY.to_bits() || b.wrapping_sub(1) >= f64::INFINITY.to_bits() {
+            return left % right;
+        }
+        let sign = left.to_bits() & SIGN;
+        if a <= b {
+            return if a == b { f64::from_bits(sign) } else { left };
+        }
+        // Subnormals and the first normal binade share a common scale.
+        let a_scale = a_exponent.saturating_sub(1);
+        let b_scale = b_exponent.saturating_sub(1);
+        let shift = a_scale - b_scale;
+        let a_sig = a - (u64::from(a_scale) << FRACTION_BITS);
+        let b_sig = b - (u64::from(b_scale) << FRACTION_BITS);
+        let aligned = u128::from(a_sig) << (shift % 64);
+        let high = (aligned >> 64) as u64;
+        if high < b_sig {
+            // SAFETY: high < b_sig. The first remainder is also below b_sig,
+            // so appending one more word cannot overflow DIV's quotient.
+            let rem = unsafe {
+                let first = remainder_word(high, aligned as u64, b_sig);
+                if shift >= 64 {
+                    remainder_word(first, 0, b_sig)
+                } else {
+                    first
+                }
+            };
+            if rem == 0 {
+                return f64::from_bits(sign);
+            }
+            // Move the highest bit to the implicit position when the scale
+            // permits it. Stopping at scale zero preserves subnormal fractions.
+            let normalize = rem.leading_zeros() - (u64::BITS - f64::MANTISSA_DIGITS);
+            let normalize = normalize.min(b_scale);
+            let magnitude = (rem << normalize) + (u64::from(b_scale - normalize) << FRACTION_BITS);
+            return f64::from_bits(sign | magnitude);
+        }
+    }
+    left % right
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+#[inline]
+unsafe fn remainder_word(mut high: u64, low: u64, divisor: u64) -> u64 {
+    // SAFETY: caller supplies high < divisor. DIV's quotient fits in RAX and
+    // its remainder is returned in RDX. This instruction is present on x86-64.
+    unsafe {
+        std::arch::asm!(
+            "div {divisor}",
+            divisor = in(reg) divisor,
+            inout("rax") low => _,
+            inout("rdx") high,
+            options(pure, nomem, nostack),
+        );
+    }
+    high
 }

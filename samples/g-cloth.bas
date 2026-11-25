@@ -232,15 +232,15 @@
 2290 DEF SUB solveDistances
 2300   LOCAL SweepStart, SweepStop, SweepStep, Constraint, A, B, WeightA, WeightB, DeltaX, DeltaY
 2310   LOCAL DeltaZ, Length, ComplianceScale, DeltaLambda
-2320   ' Hot loops use early-out tail skips; AVL BASIC has no CONTINUE statement.
+2320   ' CONTINUE skips constraints that need no correction.
 2330   ' XPBD distance constraints; reverse sweeps reduce directional bias.
 2340   SweepStart=0 : SweepStop=EdgeCount-1 : SweepStep=1
 2350   IF Iteration MOD 2=0 THEN SweepStart=EdgeCount-1:SweepStop=0:SweepStep=-1
 2360   FOR Constraint=SweepStart TO SweepStop STEP SweepStep
 2370     A=EdgeA(Constraint) : B=EdgeB(Constraint) : WeightA=InvMass(A) : WeightB=InvMass(B)
-2380     IF WeightA+WeightB=0 THEN GOTO 2450
+2380     IF WeightA+WeightB=0 THEN CONTINUE
 2390     DeltaX=PosX(A)-PosX(B) : DeltaY=PosY(A)-PosY(B) : DeltaZ=PosZ(A)-PosZ(B)
-2400     Length=SQR(DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ) : IF Length<0.00000001 THEN GOTO 2450
+2400     Length=SQR(DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ) : IF Length<0.00000001 THEN CONTINUE
 2410     ComplianceScale=EdgeCompliance(Constraint)/StepDt2 : DeltaLambda=(-(Length-EdgeLength(Constraint))-ComplianceScale*EdgeLambda(Constraint))/(WeightA+WeightB+ComplianceScale)
 2420     EdgeLambda(Constraint)=EdgeLambda(Constraint)+DeltaLambda : DeltaX=DeltaX/Length : DeltaY=DeltaY/Length : DeltaZ=DeltaZ/Length
 2430     PosX(A)=PosX(A)+WeightA*DeltaLambda*DeltaX : PosY(A)=PosY(A)+WeightA*DeltaLambda*DeltaY : PosZ(A)=PosZ(A)+WeightA*DeltaLambda*DeltaZ
@@ -290,9 +290,9 @@
 2870   SweepStart=0 : SweepStop=EdgeCount-1 : SweepStep=1
 2880   IF Iteration MOD 2=0 THEN SweepStart=EdgeCount-1:SweepStop=0:SweepStep=-1
 2890   FOR Constraint=SweepStart TO SweepStop STEP SweepStep
-2900     A=EdgeA(Constraint):B=EdgeB(Constraint):WeightA=InvMass(A):WeightB=InvMass(B):IF WeightA+WeightB=0 THEN GOTO 2960
+2900     A=EdgeA(Constraint):B=EdgeB(Constraint):WeightA=InvMass(A):WeightB=InvMass(B):IF WeightA+WeightB=0 THEN CONTINUE
 2910     DeltaX=PosX(A)-PosX(B) : DeltaY=PosY(A)-PosY(B) : DeltaZ=PosZ(A)-PosZ(B) : MaxLength=EdgeLength(Constraint)*1.01
-2920     Length2=DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ:IF Length2<=MaxLength*MaxLength THEN GOTO 2960
+2920     Length2=DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ:IF Length2<=MaxLength*MaxLength THEN CONTINUE
 2930     Length=SQR(Length2) : Correction=(MaxLength-Length)/((WeightA+WeightB)*Length)
 2940     PosX(A)=PosX(A)+WeightA*Correction*DeltaX : PosY(A)=PosY(A)+WeightA*Correction*DeltaY : PosZ(A)=PosZ(A)+WeightA*Correction*DeltaZ
 2950     PosX(B)=PosX(B)-WeightB*Correction*DeltaX : PosY(B)=PosY(B)-WeightB*Correction*DeltaY : PosZ(B)=PosZ(B)-WeightB*Correction*DeltaZ
@@ -312,16 +312,17 @@
 3090   LOCAL Particle, DeltaX, DeltaY, DeltaZ, Length, Correction
 3100   ' Sphere and optional floor contacts with Coulomb friction.
 3110   FOR Particle=0 TO ParticleCount-1
-3120     IF InvMass(Particle)=0 THEN GOTO 3240
+3120     IF InvMass(Particle)=0 THEN CONTINUE
 3130     DeltaX=PosX(Particle)-BallX : DeltaY=PosY(Particle)-BallY : DeltaZ=PosZ(Particle)-BallZ
 3140     Length=SQR(DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ)
-3150     IF Length>=BallRadius+ContactThickness THEN GOTO 3210
-3160     IF Length<0.00000001 THEN DeltaX=0:DeltaY=0:DeltaZ=1:Length=1
-3170     DeltaX=DeltaX/Length : DeltaY=DeltaY/Length : DeltaZ=DeltaZ/Length
-3180     Correction=BallRadius+ContactThickness-SQR((PosX(Particle)-BallX)^2+(PosY(Particle)-BallY)^2+(PosZ(Particle)-BallZ)^2)
-3190     PosX(Particle)=BallX+DeltaX*(BallRadius+ContactThickness) : PosY(Particle)=BallY+DeltaY*(BallRadius+ContactThickness) : PosZ(Particle)=BallZ+DeltaZ*(BallRadius+ContactThickness)
-3200     ContactDepth(Particle)=ContactDepth(Particle)+Correction : ContactType(Particle)=1 : ContactNx(Particle)=DeltaX : ContactNy(Particle)=DeltaY : ContactNz(Particle)=DeltaZ
-3210     IF FloorContact=0 OR PosY(Particle)>=0.035+ContactThickness THEN GOTO 3240
+3150     IF NOT (Length>=BallRadius+ContactThickness) THEN
+3160       IF Length<0.00000001 THEN DeltaX=0:DeltaY=0:DeltaZ=1:Length=1
+3170       DeltaX=DeltaX/Length : DeltaY=DeltaY/Length : DeltaZ=DeltaZ/Length
+3180       Correction=BallRadius+ContactThickness-SQR((PosX(Particle)-BallX)^2+(PosY(Particle)-BallY)^2+(PosZ(Particle)-BallZ)^2)
+3190       PosX(Particle)=BallX+DeltaX*(BallRadius+ContactThickness) : PosY(Particle)=BallY+DeltaY*(BallRadius+ContactThickness) : PosZ(Particle)=BallZ+DeltaZ*(BallRadius+ContactThickness)
+3200       ContactDepth(Particle)=ContactDepth(Particle)+Correction : ContactType(Particle)=1 : ContactNx(Particle)=DeltaX : ContactNy(Particle)=DeltaY : ContactNz(Particle)=DeltaZ
+3205     ENDIF
+3210     IF FloorContact=0 OR PosY(Particle)>=0.035+ContactThickness THEN CONTINUE
 3220     ContactDepth(Particle)=ContactDepth(Particle)+0.035+ContactThickness-PosY(Particle) : PosY(Particle)=0.035+ContactThickness
 3230     ContactType(Particle)=2 : ContactNx(Particle)=0 : ContactNy(Particle)=1 : ContactNz(Particle)=0
 3240   NEXT Particle
@@ -331,12 +332,12 @@
 3280   LOCAL Particle, DeltaX, DeltaY, DeltaZ, NormalDelta, Length, Correction
 3290   ' One Coulomb-bounded tangential correction relative to the moving collider.
 3300   FOR Particle=0 TO ParticleCount-1
-3310     IF InvMass(Particle)=0 OR ContactDepth(Particle)<=0 THEN GOTO 3390
+3310     IF InvMass(Particle)=0 OR ContactDepth(Particle)<=0 THEN CONTINUE
 3320     DeltaX=PosX(Particle)-OldX(Particle) : DeltaY=PosY(Particle)-OldY(Particle) : DeltaZ=PosZ(Particle)-OldZ(Particle)
 3330     IF ContactType(Particle)=1 THEN DeltaX=DeltaX-BallDeltaX:DeltaY=DeltaY-BallDeltaY:DeltaZ=DeltaZ-BallDeltaZ
 3340     NormalDelta=DeltaX*ContactNx(Particle)+DeltaY*ContactNy(Particle)+DeltaZ*ContactNz(Particle)
 3350     DeltaX=DeltaX-NormalDelta*ContactNx(Particle) : DeltaY=DeltaY-NormalDelta*ContactNy(Particle) : DeltaZ=DeltaZ-NormalDelta*ContactNz(Particle)
-3360     Length=SQR(DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ):IF Length<0.00000001 THEN GOTO 3390
+3360     Length=SQR(DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ):IF Length<0.00000001 THEN CONTINUE
 3370     Correction=MIN(1,Friction*ContactDepth(Particle)/Length)
 3380     PosX(Particle)=PosX(Particle)-Correction*DeltaX : PosY(Particle)=PosY(Particle)-Correction*DeltaY : PosZ(Particle)=PosZ(Particle)-Correction*DeltaZ
 3390   NEXT Particle
@@ -390,7 +391,7 @@
 3870 ' ----------------------------------------------------------------------
 3880 DEF SUB solveSelfContact
 3890   LOCAL Particle, Hash, RowA, ColA, OffsetZ, OffsetY, OffsetX, BucketX, BucketY, BucketZ
-3900   LOCAL Other, RowB, ColB, WeightA, WeightB, DeltaX, DeltaY, DeltaZ, Length2, Length
+3900   LOCAL Other, NextOther, RowB, ColB, WeightA, WeightB, DeltaX, DeltaY, DeltaZ, Length2, Length
 3910   LOCAL Correction, BaseBucketX, BaseBucketY, BaseBucketZ, HashYTerm, HashZTerm
 3920   ' Repel nearby cloth particles; bucket coordinates stay fixed during a pass.
 3930   MAT HashHead=-1
@@ -411,20 +412,20 @@
 4050           BucketX=BaseBucketX+OffsetX
 4060           Hash=(BucketX*92837111+HashYTerm+HashZTerm) MOD HashSize
 4070           IF Hash<0 THEN Hash=Hash+HashSize
-4080           Other=HashHead(Hash)
-4090           WHILE Other>=0
-4100             IF Other<=Particle THEN GOTO 4210
-4110             IF HashX(Other)<>BucketX OR HashY(Other)<>BucketY OR HashZ(Other)<>BucketZ THEN GOTO 4210
+4080           NextOther=HashHead(Hash)
+4090           WHILE NextOther>=0
+4095             Other=NextOther : NextOther=HashNext(Other)
+4100             IF Other<=Particle THEN CONTINUE
+4110             IF HashX(Other)<>BucketX OR HashY(Other)<>BucketY OR HashZ(Other)<>BucketZ THEN CONTINUE
 4120             RowB=Other\ParticleStride : ColB=Other MOD ParticleStride
-4130             IF ABS(RowA-RowB)<=SelfNeighborSkip AND ABS(ColA-ColB)<=SelfNeighborSkip THEN GOTO 4210
-4140             WeightA=InvMass(Particle):WeightB=InvMass(Other):IF WeightA+WeightB=0 THEN GOTO 4210
+4130             IF ABS(RowA-RowB)<=SelfNeighborSkip AND ABS(ColA-ColB)<=SelfNeighborSkip THEN CONTINUE
+4140             WeightA=InvMass(Particle):WeightB=InvMass(Other):IF WeightA+WeightB=0 THEN CONTINUE
 4150             DeltaX=PosX(Particle)-PosX(Other) : DeltaY=PosY(Particle)-PosY(Other) : DeltaZ=PosZ(Particle)-PosZ(Other)
-4160             Length2=DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ:IF Length2>=SelfDistance*SelfDistance THEN GOTO 4210
+4160             Length2=DeltaX*DeltaX+DeltaY*DeltaY+DeltaZ*DeltaZ:IF Length2>=SelfDistance*SelfDistance THEN CONTINUE
 4170             Length=SQR(Length2):IF Length<0.00000001 THEN DeltaX=0.00000001:DeltaY=0:DeltaZ=0:Length=0.00000001
 4180             Correction=(SelfDistance-Length)/(WeightA+WeightB) : DeltaX=DeltaX/Length : DeltaY=DeltaY/Length : DeltaZ=DeltaZ/Length
 4190             PosX(Particle)=PosX(Particle)+WeightA*Correction*DeltaX : PosY(Particle)=PosY(Particle)+WeightA*Correction*DeltaY : PosZ(Particle)=PosZ(Particle)+WeightA*Correction*DeltaZ
 4200             PosX(Other)=PosX(Other)-WeightB*Correction*DeltaX : PosY(Other)=PosY(Other)-WeightB*Correction*DeltaY : PosZ(Other)=PosZ(Other)-WeightB*Correction*DeltaZ
-4210             Other=HashNext(Other)
 4220           WEND
 4230         NEXT OffsetX
 4240       NEXT OffsetY

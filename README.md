@@ -15,6 +15,22 @@ audio playback.
 The project is built around the Rust runtime: a fast native executable for
 daily use, packaged distribution, and source builds.
 
+## What's new in 1.7
+
+Enter `PROFILE` after loading a program to see which lines and routines take
+the most time. The report counts visits and estimates time by sampling. The
+interpreter now spends less time evaluating scalar expressions and extracting
+substrings. Try the [Hilbert curve](samples/g-fhilbert.bas), which displays
+its drawing time as you change the order with the mouse wheel.
+
+Use `CONTINUE` to skip to the next iteration of a `FOR` or `WHILE` loop, and
+`MAT X=SOLVE(A,B)` to solve a linear system directly. Graphics programs can
+handle scrolling with `ON MOUSE WHEEL`, as in the
+[Mandelbrot explorer](samples/g-fmandelbrot.bas). Drawing text, moving sprites,
+shading triangles and mapping textures also take advantage of faster CPU routines.
+
+## Language and graphics
+
 Save scores, settings and reports with `OPEN`, `PRINT #`, `WRITE #`, `INPUT #`,
 `LINE INPUT #`, `EOF` and `CLOSE`. Sequential files use UTF-8 and support both
 plain text and recoverable CSV records. Start with the compact examples for
@@ -195,7 +211,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 151-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 154-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -253,7 +269,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-150 sample programs and their visual gallery are optional companion material.
+154 sample programs and their visual gallery are optional companion material.
 
 ## Matrices and standalone programs
 
@@ -398,7 +414,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 150 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 154 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

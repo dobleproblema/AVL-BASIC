@@ -64,6 +64,7 @@ WEND
 LIST
 RUN
 CONT
+CONTINUE
 RESUME
 TRON
 TROFF
@@ -166,12 +167,13 @@ statement	both	IF		IF condition GOTO line [ELSE clause] || IF condition THEN cla
 statement	both	ELSEIF	ELSE IF	ELSEIF condition THEN || ELSE IF condition THEN	condition: Numeric expression	Starts another conditional branch in a block IF.	IF,ELSE,END IF	-
 statement	both	ELSE		ELSE	-	Starts the fallback branch of a block IF.	IF,ELSEIF,END IF	-
 statement	both	END IF	ENDIF	END IF || ENDIF	-	Ends a block IF.	IF,ELSEIF,ELSE	-
-statement	both	FOR		FOR variable = start TO end [STEP increment]	variable: Numeric control variable; start: Initial value; end: Final value; increment: Optional step value	Starts a counted loop.	NEXT,EXIT FOR	-
+statement	both	FOR		FOR variable = start TO end [STEP increment]	variable: Numeric control variable; start: Initial value; end: Final value; increment: Optional step value	Starts a counted loop.	NEXT,EXIT FOR,CONTINUE	-
 statement	both	NEXT		NEXT [variable]	variable: Optional control variable	Advances or ends the current FOR loop.	FOR,EXIT FOR	-
 statement	both	EXIT FOR		EXIT FOR	-	Leaves the current FOR loop.	FOR,NEXT	-
-statement	both	WHILE		WHILE condition	condition: Numeric expression	Starts a loop that continues while the condition is nonzero.	WEND,EXIT WHILE	-
+statement	both	WHILE		WHILE condition	condition: Numeric expression	Starts a loop that continues while the condition is nonzero.	WEND,EXIT WHILE,CONTINUE	-
 statement	both	WEND		WEND	-	Ends the current WHILE loop.	WHILE,EXIT WHILE	-
 statement	both	EXIT WHILE		EXIT WHILE	-	Leaves the current WHILE loop.	WHILE,WEND	-
+statement	both	CONTINUE		CONTINUE	-	Skips the rest of the current iteration of the innermost active FOR or WHILE loop.	FOR,NEXT,WHILE,WEND	-
 statement	both	GOTO		GOTO line	line: Target line number or label in the current scope	Jumps to a program line by number or scope-local label.	GOSUB,ON GOTO	-
 statement	program	GOSUB		GOSUB line	line: Subroutine line number or label in the current scope	Calls a line-numbered subroutine by number or scope-local label.	RETURN,ON GOSUB	-
 statement	program	RETURN		RETURN	-	Returns from the most recent GOSUB or interrupt routine.	GOSUB	-
@@ -196,7 +198,7 @@ statement	both	SWAP		SWAP variable1,variable2	variable1: First variable; variabl
 statement	both	CLEAR		CLEAR	-	Clears runtime data while keeping the stored program.	CLEAR INPUT,NEW	-
 statement	both	CLEAR INPUT		CLEAR INPUT	-	Empties the keyboard and input-event buffers.	CLEAR,INKEY$	-
 statement	immediate	NEW		NEW	-	Clears the program and fully resets the interpreter.	CLEAR,LOAD	-
-statement	both	MAT		MAT destination = expression | MAT destination[(selectors)] = source[(selectors)] | MAT destination = MAP(function,array)	destination: Numeric or string array; expression: Matrix or scalar expression with BASIC precedence; selectors: Index, first:last range, or omitted row/column axis; function: Unary numeric function name; array: Numeric vector, matrix, or matrix expression	Assigns a scalar, array, or matrix result and copies subarrays. MAP applies a numeric function to active elements, keeping index 0 borders of the evaluated array with MAT BASE 1. MAT A=RND fills each active numeric cell with a separate random draw in row-major order. Use R=RND followed by MAT A=R to repeat one draw.	MAT BASE,@,MAT PRINT,MAT INPUT,MAT READ,RND	-
+statement	both	MAT		MAT destination = expression | MAT destination[(selectors)] = source[(selectors)] | MAT destination = MAP(function,array)	destination: Numeric or string array; expression: Matrix or scalar expression with BASIC precedence; selectors: Index, first:last range, or omitted row/column axis; function: Unary numeric function name; array: Numeric vector, matrix, or matrix expression	Assigns a scalar, array, or matrix result and copies subarrays. MAP applies a numeric function to active elements, keeping index 0 borders of the evaluated array with MAT BASE 1. MAT A=RND fills each active numeric cell with a separate random draw in row-major order. Use R=RND followed by MAT A=R to repeat one draw.	MAT BASE,@,MAT PRINT,MAT INPUT,MAT READ,RND,SOLVE	-
 statement	both	MAT BASE		MAT BASE base	base: Matrix traversal base 0 or 1	Selects the starting index used by MAT operations.	MAT,MAT PRINT,MAT INPUT,MAT READ	-
 statement	both	MAT PRINT		MAT PRINT item[;|,item...] || MAT PRINT A(,2:4) || MAT PRINT left | right || MAT PRINT left | "text" | right || MAT PRINT left | (expr$) | right	item: Array or slice reference, ROW reference, COL reference, USING format$; or COLOR(fg[,bg]) or COLOR(); ROW: Normal orientation; COL: Transposed display orientation; left and right: Arrays or slices with the same number of displayed rows; text or expr$: Optional separator string	Prints arrays and slices by rows or columns. The vertical bar joins blocks side by side using the normal spacing between cells. An explicit string replaces that spacing. USING and COLOR may appear between arrays and affect subsequent arrays. A comma after an array selects 22-character fields.	MAT PRINT USING,MAT PRINT COLOR,MAT	-
 statement	both	MAT PRINT USING		MAT PRINT [array;] USING format$; [ROW|COL] array[;|, ...]	format$: Numeric format mask or empty string; array: Array to print	Selects the numeric format for subsequent arrays in the MAT PRINT list. An empty string restores the default numeric format. The format expression requires a semicolon.	MAT PRINT,MAT PRINT COLOR,PRINT USING	-
@@ -287,7 +289,7 @@ statement	both	COLMODE		COLMODE mode	mode: Collision mode from 0 to 3	Selects co
 statement	both	COLCOLOR		COLCOLOR [color]	color: Optional color to detect	Selects a collision color or any non-background color.	COLMODE,SPRITE HITTEST	-
 statement	both	COLRESET		COLRESET	-	Clears collision results and the sprite ownership map.	COLMODE,SPRITE DEL	-
 statement	both	MOUSE		MOUSE ON|OFF|1|0	state: ON or 1 to show and OFF or 0 to hide	Shows or hides the graphics-window pointer. OFF also confines it to the canvas during fullscreen execution with graphics focus, if supported. ON, windowed mode, focus loss or console control releases it. Mouse coordinates, buttons and events remain active. MODE, SCREEN and fullscreen preserve visibility; SCREEN CLOSE resets it.	ON MOUSE,MOUSEX,MOUSEY,SCREEN FULL,SCREEN CLOSE	-
-statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: Mouse event name; line: Handler line number or root label	Registers a global mouse-event subroutine, or disables it with 0; labels always use the root scope, including registration inside a subroutine.	MOUSE,RETURN,DI,EI	-
+statement	program	ON MOUSE		ON MOUSE event GOSUB line || ON MOUSE event GOSUB 0	event: MOVE, LEFTDOWN, LEFTUP, LEFTDRAG, RIGHTDOWN, RIGHTUP, RIGHTDRAG or WHEEL; line: Handler line number or root label	Registers a global mouse-event subroutine, or disables it with 0; labels always use the root scope, including registration inside a subroutine.	MOUSE,MOUSEWHEEL,RETURN,DI,EI	-
 
 # Sound and audio files
 statement	both	SOUND		SOUND state,period[,duration[,volume[,env[,ent[,noise]]]]]	state: Channels 1/2/4, rendezvous 8/16/32, hold 64, flush 128; period: 0..4095; duration: -32768..32767 centiseconds, default 20; volume: 0..15, default 12; env/ent: 0..15; noise: 0..31	Queues asynchronous classic tones/noise on three channels; a full queue waits interruptibly. Numeric arguments round to nearest integers, halves away from zero. Duration 0 uses one volume envelope; negative duration repeats it.	ENV,ENT,RELEASE,SQ,ON SQ,AUDIO	-
@@ -327,16 +329,17 @@ statement	immediate	LIST		LIST [range]	range: Optional line or inclusive/open li
 statement	immediate	EDIT		EDIT || EDIT line	line: Optional stored line number or root label	Opens the full-screen program editor or edits the identified line, including a label's own declaration.	DEBUG,LIST,RENUM	-
 statement	immediate	DELETE		DELETE [range]	range: Optional line or inclusive/open line range; each endpoint is a number or root label	Resolves endpoints before deleting selected program lines or the entire program.	LIST,NEW	-
 statement	immediate	RENUM		RENUM [start[,step[,from[,to]]]]	start: Positive first new line number; step: Positive numeric increment; from: First old number or root label; to: Last old number or root label	Resolves old bounds before renumbering program lines and their references; label names are preserved.	LIST,EDIT	-
-statement	immediate	SAVE		SAVE "filename"	filename: BASIC program path	Saves the stored program.	LOAD	-
+statement	immediate	SAVE		SAVE "filename"	filename: BASIC program path	Saves a nonempty program by replacing the destination atomically. A changed existing file is backed up as .bak.	LOAD	-
 metacommand	immediate	PACK		PACK "program.bas" TO "game.exe" ID "game-id" [INCLUDE "path"] [PERSIST "path"] [GUI]	program.bas: Entry program on disk; game.exe: Output executable; game-id: Stable identifier for the player's data; INCLUDE: Resource file or folder relative to the entry program, repeatable; PERSIST: Writable file or folder relative to the entry program, repeatable; GUI: Launch a graphical program without a console window	Checks the program and resources and packages them with the current AVL BASIC executable into a standalone Windows x64 executable. End a PERSIST folder with a slash.	SAVE,LOAD,IMPORT,OPEN	-
-statement	immediate	LOAD		LOAD "filename"	filename: BASIC program path	Replaces the stored program with a file.	SAVE,RUN,NEW	-
+statement	immediate	LOAD		LOAD "filename"	filename: BASIC program path or explicit .bak backup	Replaces the stored program with a file. Specify the .bak extension to recover a backup.	SAVE,RUN,NEW	-
 statement	program	IMPORT		IMPORT "filename" AS alias	filename: BASIC library relative to the main program; alias: Name used to qualify routine calls	Makes functions and subroutines from a separate file available to the main program.	DEF FN,DEF SUB,CALL	contextual
 statement	both	MERGE		MERGE "filename"	filename: BASIC program path	Merges a file into the stored program while preserving runtime values.	CHAIN,CHAIN MERGE,LOAD	-
 statement	both	CHAIN		CHAIN "filename"[,line]	filename: BASIC program path; line: Optional numeric entry expression or root label of the loaded program	A resulting root label wins after loading; otherwise uses the numeric entry expression evaluated before loading. Replaces source and continues with preserved runtime values.	CHAIN MERGE,MERGE,RUN	-
 statement	both	CHAIN MERGE		CHAIN MERGE "filename"[,line][,DELETE first-last]	filename: BASIC program path; line: Numeric entry expression or resulting root label; first/last: Numbers or original-program root labels	Resolves DELETE bounds in the original source, merges the file, then resolves symbolic entry in the resulting root scope and continues.	CHAIN,MERGE	-
-statement	immediate	FILES	CAT	FILES ["pattern"] || CAT ["pattern"]	pattern: Optional wildcard pattern	Lists matching files and all directories in the current virtual directory.	CD,LOAD	-
+statement	immediate	FILES	CAT	FILES ["pattern"] || CAT ["pattern"]	pattern: Optional wildcard pattern, defaults to *.bas	Lists matching files and all directories in the current virtual directory.	CD,LOAD	-
 statement	immediate	CD		CD "path"	path: Virtual directory path	Changes the current virtual directory.	FILES	-
 statement	immediate	EXIT	QUIT,SYSTEM	EXIT || QUIT || SYSTEM	-	Leaves the AVL-BASIC interpreter.	EXIT FOR,EXIT WHILE,EXIT FN,EXIT SUB	-
+metacommand	immediate	PROFILE		PROFILE	-	Runs the stored program and reports exact line visits and sampled elapsed time by line and routine, including FRAME waits.	RUN,DEBUG	-
 metacommand	immediate	HELP		HELP [topic]	topic: Optional instruction or function name	Shows a brief syntax reminder for a language topic.	-	-
 
 # AVL-BASIC built-in functions, constants, MAT helpers, and named operators.
@@ -412,7 +415,8 @@ function	expression	ZER		MAT target = ZER	target: previously dimensioned numeric
 function	expression	CON		MAT target = CON	target: previously dimensioned numeric array	Fills a MAT destination with ones.	ZER,IDN,MAT	mat-only
 function	expression	IDN		MAT target = IDN	target: previously dimensioned square numeric array	Fills a MAT destination with the identity matrix.	ZER,CON,MAT BASE	mat-only
 function	expression	TRN		MAT target = TRN(array)	target: destination array; array: numeric vector, matrix or matrix expression	Assigns the matrix transpose. A vector is treated as a column and becomes a one-row matrix.	INV,MAT	builtin
-function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix, matrix expression or numeric vector with one active element	Assigns the matrix inverse. A vector with one active element is treated as a 1 by 1 matrix.	DET,TRN,MAT	builtin
+function	expression	INV		MAT target = INV(array)	target: destination array; array: square numeric matrix, matrix expression or numeric vector with one active element	Assigns the matrix inverse. A vector with one active element is treated as a 1 by 1 matrix.	DET,TRN,MAT,SOLVE	builtin
+function	expression	SOLVE		MAT target = SOLVE(A,B)	target: solution array; A: square numeric matrix or vector with one active element; B: numeric vector or matrix with the same active row count as A	Solves A*X=B by elimination with partial pivoting. Arguments can be matrix expressions. The result follows the dimensionality of B. Uses the active MAT BASE block and initializes the base-1 border to zero.	INV,MAT,MAT BASE	mat-only,contextual
 
 # Graphics, screen, and sprite functions
 function	expression	WIDTH		WIDTH	-	Returns the graphics canvas width in pixels, independent of presentation scaling.	HEIGHT	builtin,zero-arg
@@ -452,6 +456,7 @@ function	expression	MOUSEX		MOUSEX	-	Returns the mouse pointer's logical X coord
 function	expression	MOUSEY		MOUSEY	-	Returns the mouse pointer's logical Y coordinate.	MOUSEX,ON MOUSE	builtin,zero-arg
 function	expression	MOUSELEFT		MOUSELEFT	-	Returns -1 while the left mouse button is pressed, otherwise 0.	MOUSERIGHT,ON MOUSE	builtin,zero-arg
 function	expression	MOUSERIGHT		MOUSERIGHT	-	Returns -1 while the right mouse button is pressed, otherwise 0.	MOUSELEFT,ON MOUSE	builtin,zero-arg
+function	expression	MOUSEWHEEL		MOUSEWHEEL	-	Returns the vertical wheel delta in a WHEEL handler, positive up and negative down, or 0 outside it.	ON MOUSE,MOUSEEVENT$,MOUSEX,MOUSEY	builtin,zero-arg
 function	expression	MOUSEEVENT$		MOUSEEVENT$	-	Returns the name of the last received mouse event.	ON MOUSE,MOUSEX,MOUSEY	builtin,zero-arg
 function	expression	REMAIN		REMAIN(timer)	timer: timer number from 0 to 3	Returns the remaining timer count in 1/50-second ticks.	AFTER,EVERY,CANCEL	builtin
 function	expression	ERR		ERR	-	Returns the retained runtime error number, or 0; implicit error recovery keeps it available.	ERL,ON ERROR,RESUME	builtin,zero-arg

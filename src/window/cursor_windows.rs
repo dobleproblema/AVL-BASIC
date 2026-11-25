@@ -3,9 +3,11 @@
 //! The same HWND-owned callback queues maximize requests and exposes the
 //! keyboard repeat bit while minifb dispatches input.
 use minifb::Window;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "confinement_windows.rs"]
@@ -19,6 +21,7 @@ const WM_CHAR: u32 = 0x0102;
 const WM_SYSKEYDOWN: u32 = 0x0104;
 const WM_SYSCHAR: u32 = 0x0106;
 const WM_SYSCOMMAND: u32 = 0x0112;
+const WM_MOUSEWHEEL: u32 = 0x020a;
 const PREVIOUS_KEY_STATE: isize = 1 << 30;
 const SC_MAXIMIZE: usize = 0xf030;
 const WM_MOUSEMOVE: isize = 0x0200;
@@ -55,6 +58,7 @@ static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
 
 thread_local! {
     static KEYBOARD_MESSAGE_REPEATED: Cell<bool> = const { Cell::new(false) };
+    static WHEEL_DELTAS: RefCell<HashMap<usize, Rc<Cell<i32>>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn keyboard_message_is_repeat() -> bool {
@@ -238,6 +242,18 @@ unsafe extern "system" fn cursor_subclass(
     lparam: isize,
 ) -> isize {
     let previous = GetPropW(window, PREVIOUS_PROC.as_ptr());
+    if matches!(message, WM_MOUSEWHEEL | WM_NCDESTROY) {
+        let owner = GetPropW(window, OWNER.as_ptr()) as usize;
+        WHEEL_DELTAS.with(|deltas| {
+            let mut deltas = deltas.borrow_mut();
+            if message == WM_NCDESTROY {
+                deltas.remove(&owner);
+            } else if let Some(delta) = deltas.get(&owner) {
+                // minifb reports only the last wheel message of each update.
+                delta.set(delta.get().saturating_add((wparam >> 16) as i16 as i32));
+            }
+        });
+    }
     if message == WM_SYSCOMMAND
         && wparam & 0xfff0 == SC_MAXIMIZE
         && !GetPropW(window, MAXIMIZE_ENABLED.as_ptr()).is_null()
@@ -327,10 +343,12 @@ unsafe extern "system" fn cursor_subclass(
 }
 
 /// The owning GraphicsWindow drops this before its minifb Window. Callback
-/// state lives in HWND properties, never in pointers into Rust-owned state.
+/// dispatch uses the owner identifier from the HWND, never a pointer into
+/// Rust-owned state.
 pub(super) struct CursorController {
     window: *mut c_void,
     owner: usize,
+    wheel_delta: Rc<Cell<i32>>,
 }
 
 impl CursorController {
@@ -371,10 +389,20 @@ impl CursorController {
         }
         // Construct the owner first so a failed class update unwinds our
         // properties and subclass through the ordinary controller cleanup.
-        let controller = Self { window, owner };
+        let wheel_delta = Rc::new(Cell::new(0));
+        let controller = Self {
+            window,
+            owner,
+            wheel_delta: wheel_delta.clone(),
+        };
         disable_default_class_cursor(window)?;
+        WHEEL_DELTAS.with(|deltas| deltas.borrow_mut().insert(owner, wheel_delta));
         enable_maximize_shortcut(window);
         Ok(controller)
+    }
+
+    pub(super) fn take_wheel_delta(&self) -> f64 {
+        f64::from(self.wheel_delta.replace(0)) / 120.0
     }
 
     pub(super) fn take_maximize_request(&mut self) -> bool {
@@ -438,6 +466,7 @@ impl CursorController {
     }
 
     pub(super) fn release(&mut self) {
+        WHEEL_DELTAS.with(|deltas| deltas.borrow_mut().remove(&self.owner));
         // WM_NCDESTROY may already have removed us. Do not restore a callback
         // on an unrelated window if Windows has since reused that HWND.
         if self.installed() {
@@ -550,6 +579,37 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "opens a Windows graphics window under the stationary pointer"]
+    fn native_mouse_wheel_retains_bursts_across_window_updates() {
+        let graphics = Graphics::default();
+        let mut window = GraphicsWindow::new(&graphics).unwrap();
+        put_window_under_stationary_pointer(&mut window);
+        window.clear_transient_input();
+        let handle = window.window.get_window_handle();
+
+        for delta in [120i16, 120, -60] {
+            let wparam = usize::from(delta as u16) << 16;
+            unsafe { SendMessageW(handle, WM_MOUSEWHEEL, wparam, 0) };
+        }
+        let pointer = window.pump_events();
+        window.present(&graphics).unwrap();
+        let events = window.take_wheel_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].delta, 1.5);
+        assert_eq!((events[0].x, events[0].y), (pointer.x, pointer.y));
+
+        let wparam = usize::from(-120i16 as u16) << 16;
+        unsafe { SendMessageW(handle, WM_MOUSEWHEEL, wparam, 0) };
+        window.pump_events();
+        assert_eq!(window.take_wheel_events()[0].delta, -1.0);
+
+        unsafe { SendMessageW(handle, WM_MOUSEWHEEL, wparam, 0) };
+        window.clear_transient_input();
+        window.pump_events();
+        assert!(window.take_wheel_events().is_empty());
+    }
+
+    #[test]
     #[ignore = "opens a Windows window under the stationary mouse and toggles fullscreen"]
     fn native_mouse_visibility_is_local_idempotent_and_survives_fullscreen() {
         let graphics = Graphics::default();
@@ -630,6 +690,7 @@ mod tests {
         let mut stale = CursorController {
             window: handle,
             owner: 0,
+            wheel_delta: Rc::default(),
         };
         stale.release();
         assert!(window.cursor.installed());

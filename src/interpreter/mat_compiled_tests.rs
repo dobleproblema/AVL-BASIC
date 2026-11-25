@@ -542,14 +542,18 @@ fn cached_mat_indexed_elements_use_normal_scalar_evaluation_and_fill_existing_ta
         "<MiXeD>"
     );
     for source in ["V=A+A(0:1,0)", "V=A+A(,0)", "V=A+A(0,)"] {
+        let compiled = CompiledMatAssignment::compile(source).unwrap();
         assert_eq!(
-            cached.execute_mat_assignment(source).unwrap_err().code,
-            ErrorCode::ForbiddenExpression,
+            cached
+                .execute_compiled_mat_assignment(&compiled)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidDimensions,
             "{source}"
         );
         assert_eq!(
             raw.execute_mat_assignment(source).unwrap_err().code,
-            ErrorCode::ForbiddenExpression,
+            ErrorCode::InvalidDimensions,
             "{source}"
         );
         assert_same_array(&cached, &raw, "V");
@@ -946,9 +950,8 @@ fn scalar_mat_numeric_errors_keep_erl_and_resume_next_in_cached_and_raw_programs
                 ))))];
                 let line_index = interpreter.line_index(30).unwrap();
                 let mut lines = interpreter.compiled_line_cache.as_ref().to_vec();
-                lines[line_index] = Rc::from(raw.clone().into_boxed_slice());
+                lines[line_index] = Rc::from(raw.into_boxed_slice());
                 interpreter.compiled_line_cache = Rc::from(lines.into_boxed_slice());
-                interpreter.compiled_command_cache.insert(30, raw);
             }
             interpreter
                 .run_from(Cursor {

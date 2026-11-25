@@ -7,6 +7,27 @@ fn headless_interpreter() -> Interpreter {
 }
 
 #[test]
+fn screen_rejects_gpu_switches_and_accepts_an_image_named_gpu() {
+    let mut interpreter = headless_interpreter();
+    for command in ["SCREEN GPU ON", "SCREEN gpu OFF"] {
+        let error = interpreter.process_immediate(command).expect_err(command);
+        assert_eq!(error.code, ErrorCode::Syntax, "{command}");
+    }
+    interpreter
+        .program
+        .load_text(
+            "10 GPU=7:MODE 640:PLOT 1,2,GPU:GPU$=SCREEN$\n\
+             20 CLG OFFSCREEN:SCREEN gpu$:END",
+        )
+        .unwrap();
+    interpreter.run_loaded().unwrap();
+    assert_eq!(
+        interpreter.string_variables.get("GPU$"),
+        Some(&interpreter.graphics.capture_screen())
+    );
+}
+
+#[test]
 fn sync_preserves_canvas_and_survives_resets_until_close() {
     let mut interpreter = headless_interpreter();
     assert!(!interpreter.graphics_sync_enabled);
@@ -471,6 +492,7 @@ fn native_program_presentation_preserves_mode_and_reveals_console_on_exit() {
                 line_idx: 0,
                 cmd_idx: 0,
             },
+            (),
         )
         .unwrap();
     assert_native_state(&mut interpreter, true);

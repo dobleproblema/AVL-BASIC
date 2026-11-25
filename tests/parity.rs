@@ -2499,6 +2499,35 @@ fn testchr_reads_recognizable_text_cells_without_moving_cursor() {
 }
 
 #[test]
+fn gprint_and_testchr_round_trip_the_bitmap_repertoire_in_both_fonts() {
+    use avl_basic::fonts::{glyph_chars, FontKind};
+
+    let mut interp = Interpreter::new();
+    for (font, command) in [
+        (FontKind::Small, "SMALLFONT OPAQUE"),
+        (FontKind::Big, "BIGFONT OPAQUE"),
+    ] {
+        interp.process_immediate(command).unwrap();
+        for &ch in glyph_chars(font) {
+            let code = u32::from(ch);
+            interp
+                .process_immediate(&format!("LOCATE 0,0 : GPRINT CHR$({code});"))
+                .unwrap();
+            interp.process_immediate("PRINT TESTCHR$(0,0)").unwrap();
+            let expected = match ch {
+                '\u{00a0}' | '\u{00ad}' => ' ',
+                _ => ch,
+            };
+            assert_eq!(
+                interp.take_output(),
+                format!("{expected}\n"),
+                "{font:?} U+{code:04X}"
+            );
+        }
+    }
+}
+
+#[test]
 fn gprint_uses_print_lists_using_zones_and_graphics_newlines() {
     let output = run_rust(
         r#"10 SCREEN : MODE 640 : PAPER 0 : CLG : ZONE 22

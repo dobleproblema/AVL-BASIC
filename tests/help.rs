@@ -53,6 +53,11 @@ fn help_describes_canvas_fullscreen_and_sync_separately() {
     assert!(full.contains("XWayland"));
     assert!(full.contains("physical display mode"));
 
+    interpreter.process_immediate("HELP SCREEN GPU").unwrap();
+    assert!(interpreter
+        .take_output()
+        .starts_with("No HELP entry for SCREEN GPU\n"));
+
     interpreter.process_immediate("HELP SCREEN SYNC").unwrap();
     let sync = interpreter
         .take_output()

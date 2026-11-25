@@ -130,12 +130,16 @@ mod tests {
     }
 
     #[test]
-    fn generated_word_classes_are_disjoint_and_reserved() {
+    fn generated_word_classes_reserve_noncontextual_names() {
         let keywords: HashSet<&str> = KEYWORD_WORDS.iter().copied().collect();
         let others: HashSet<&str> = OTHER_WORDS.iter().copied().collect();
         assert!(keywords.is_disjoint(&others));
         for word in keywords.union(&others) {
-            assert!(is_reserved_base_name(word.trim_end_matches('$')), "{word}");
+            assert_eq!(
+                is_reserved_base_name(word.trim_end_matches('$')),
+                !crate::expr::is_contextual_mat_function(word),
+                "{word}"
+            );
         }
     }
 
@@ -193,7 +197,7 @@ mod tests {
             .map(|topic| topic.topic)
             .collect::<Vec<_>>();
         metacommands.sort_unstable();
-        assert_eq!(metacommands, ["HELP", "PACK"]);
+        assert_eq!(metacommands, ["HELP", "PACK", "PROFILE"]);
         assert!(!is_known_word("HELP"));
         assert!(!is_known_word("PACK"));
         assert!(!is_known_word("TOUR"));

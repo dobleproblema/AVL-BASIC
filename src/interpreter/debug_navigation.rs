@@ -194,7 +194,7 @@ impl Interpreter {
         let Some(state) = self.debugger_state.as_ref() else {
             return;
         };
-        if state.debugger.is_none() {
+        if state.debugger().is_none() {
             return;
         }
         if state
@@ -578,6 +578,7 @@ mod tests {
             var_slot: 0,
             end: 2.0,
             step: 1.0,
+            call_depth: 0,
             resume: Cursor {
                 line_idx: header.line_idx,
                 cmd_idx: header.cmd_idx + 1,

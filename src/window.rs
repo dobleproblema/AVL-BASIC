@@ -23,8 +23,6 @@ mod fullscreen;
 use fullscreen::FullscreenController;
 #[cfg(target_os = "linux")]
 mod confinement_linux;
-#[cfg(target_os = "linux")]
-mod input_repeat_linux;
 #[cfg(all(windows, test))]
 mod confinement_tests;
 #[cfg(target_os = "linux")]
@@ -33,6 +31,8 @@ mod console_monitor_linux;
 mod console_monitor_windows;
 #[cfg(windows)]
 mod cursor_windows;
+#[cfg(target_os = "linux")]
+mod input_repeat_linux;
 #[cfg(target_os = "linux")]
 mod linux_present;
 #[cfg(windows)]
@@ -250,9 +250,10 @@ impl InputCallback for GraphicsInputCallback {
         }
         if pressed {
             if let Some(code) = special_key_code(key) {
-                self.input
-                    .borrow_mut()
-                    .push(GraphicsInputEvent::Special(code), keyboard_message_is_repeat());
+                self.input.borrow_mut().push(
+                    GraphicsInputEvent::Special(code),
+                    keyboard_message_is_repeat(),
+                );
             }
         }
     }
@@ -276,6 +277,7 @@ pub struct GraphicsWindow {
     width: usize,
     height: usize,
     mouse: MouseSnapshot,
+    wheel_events: Vec<MouseWheelEvent>,
     mouse_cursor_visible: bool,
     pointer_confinement_suspended: bool,
     // Whether the optional native request is armed, including a refused grab.
@@ -299,6 +301,13 @@ pub struct MouseSnapshot {
     pub event: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MouseWheelEvent {
+    pub x: i32,
+    pub y: i32,
+    pub delta: f64,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct CtrlCState {
     foreground: bool,
@@ -317,6 +326,8 @@ impl fmt::Debug for GraphicsWindow {
 
 impl GraphicsWindow {
     pub fn new(graphics: &Graphics) -> BasicResult<Self> {
+        #[cfg(windows)]
+        Self::validate_windows_frame(graphics)?;
         let mut window = Window::new(
             "AVL BASIC Graphics",
             graphics.width,
@@ -357,6 +368,7 @@ impl GraphicsWindow {
             width: graphics.width,
             height: graphics.height,
             mouse: MouseSnapshot::default(),
+            wheel_events: Vec::new(),
             mouse_cursor_visible: true,
             pointer_confinement_suspended: false,
             pointer_confinement_requested: false,
@@ -369,10 +381,7 @@ impl GraphicsWindow {
             last_physical_size: (graphics.width, graphics.height),
             fullscreen_shortcut,
         };
-        graphics_window
-            .window
-            .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
-            .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))?;
+        graphics_window.blit(graphics)?;
         graphics_window.clear_transient_input();
         Ok(graphics_window)
     }
@@ -392,7 +401,7 @@ impl GraphicsWindow {
     pub(crate) fn restore_position(&mut self, position: (isize, isize)) -> BasicResult<()> {
         FullscreenController::set_position(&self.window, position)
             .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
-        self.window.update();
+        self.poll_native_events();
         Ok(())
     }
 
@@ -423,12 +432,12 @@ impl GraphicsWindow {
     fn apply_fullscreen_transition(&mut self, enabled: bool) -> BasicResult<()> {
         self.release_pointer_confinement();
         // Process pending native events before changing window styles or size.
-        self.window.update();
+        self.poll_native_events();
         self.fullscreen
             .set(&self.window, enabled)
             .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
         self.presentation_dirty = true;
-        self.window.update();
+        self.poll_native_events();
         self.last_physical_size = self.window.get_size();
         #[cfg(windows)]
         self.cursor.refresh();
@@ -453,7 +462,7 @@ impl GraphicsWindow {
     }
 
     pub fn set_title(&mut self, title: &str) {
-        self.window.update();
+        self.poll_native_events();
         self.window.set_title(title);
     }
 
@@ -479,6 +488,27 @@ impl GraphicsWindow {
         }
     }
 
+    fn blit(&mut self, graphics: &Graphics) -> BasicResult<()> {
+        #[cfg(windows)]
+        Self::validate_windows_frame(graphics)?;
+        self.window
+            .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
+            .map_err(|err| BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string()))
+    }
+
+    #[cfg(windows)]
+    fn validate_windows_frame(graphics: &Graphics) -> BasicResult<()> {
+        let (width, height) = (graphics.width, graphics.height);
+        if graphics.buffer().is_empty()
+            || height > i32::MAX as usize
+            || width > (u32::MAX as usize) / size_of::<u32>()
+            || width.checked_mul(height) != Some(graphics.buffer().len())
+        {
+            return Err(BasicError::new(ErrorCode::InvalidArgument));
+        }
+        Ok(())
+    }
+
     pub fn present(&mut self, graphics: &Graphics) -> BasicResult<MouseSnapshot> {
         if !self.window.is_open() {
             return Ok(self.mouse.clone());
@@ -486,11 +516,8 @@ impl GraphicsWindow {
         let physical_size = self.window.get_size();
         self.presentation_dirty |= physical_size != self.last_physical_size;
         if graphics.buffer_dirty() || self.presentation_dirty {
-            self.window
-                .update_with_buffer(graphics.buffer(), graphics.width, graphics.height)
-                .map_err(|err| {
-                    BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
-                })?;
+            self.blit(graphics)?;
+            self.capture_wheel();
             #[cfg(target_os = "linux")]
             {
                 self.linux_blit_pending = true;
@@ -500,7 +527,7 @@ impl GraphicsWindow {
             self.presentation_dirty = self.window.get_size() != physical_size;
             self.last_physical_size = physical_size;
         } else {
-            self.window.update();
+            self.poll_native_events();
         }
         self.update_keyboard();
         Ok(self.update_mouse())
@@ -537,8 +564,9 @@ impl GraphicsWindow {
     pub(crate) fn present_synchronized(
         &mut self,
         graphics: &Graphics,
+        wait: impl crate::interpreter::profile::FrameWait,
     ) -> BasicResult<MouseSnapshot> {
-        self.window.update();
+        self.poll_native_events();
         if !self.window.is_open() {
             return Ok(self.mouse.clone());
         }
@@ -548,6 +576,7 @@ impl GraphicsWindow {
             graphics.buffer(),
             (graphics.width, graphics.height),
             physical_size,
+            wait,
         );
         match result {
             Ok(()) => (),
@@ -558,7 +587,7 @@ impl GraphicsWindow {
                 return Err(BasicError::new(ErrorCode::Unsupported).with_detail(message));
             }
         }
-        self.window.update();
+        self.poll_native_events();
         self.presentation_dirty = self.window.get_size() != physical_size;
         self.last_physical_size = physical_size;
         self.update_keyboard();
@@ -578,9 +607,13 @@ impl GraphicsWindow {
     pub(crate) fn present_synchronized(
         &mut self,
         graphics: &Graphics,
+        wait: impl crate::interpreter::profile::FrameWait,
     ) -> BasicResult<MouseSnapshot> {
+        if !self.window.is_open() {
+            return Ok(self.mouse.clone());
+        }
         let mouse = self.present(graphics)?;
-        sync_windows::wait(&self.window)
+        sync_windows::wait(&self.window, wait)
             .map_err(|message| BasicError::new(ErrorCode::Unsupported).with_detail(message))?;
         Ok(mouse)
     }
@@ -595,6 +628,7 @@ impl GraphicsWindow {
     pub(crate) fn present_synchronized(
         &mut self,
         _graphics: &Graphics,
+        _wait: impl crate::interpreter::profile::FrameWait,
     ) -> BasicResult<MouseSnapshot> {
         self.prepare_sync()?;
         unreachable!()
@@ -602,10 +636,25 @@ impl GraphicsWindow {
 
     pub fn pump_events(&mut self) -> MouseSnapshot {
         if self.window.is_open() {
-            self.window.update();
+            self.poll_native_events();
             self.update_keyboard();
         }
         self.update_mouse()
+    }
+
+    pub(crate) fn take_wheel_events(&mut self) -> Vec<MouseWheelEvent> {
+        std::mem::take(&mut self.wheel_events)
+    }
+
+    pub(crate) fn discard_wheel_events(&mut self) {
+        self.wheel_events.clear();
+        #[cfg(windows)]
+        self.cursor.take_wheel_delta();
+    }
+
+    fn poll_native_events(&mut self) {
+        self.window.update();
+        self.capture_wheel();
     }
 
     pub fn pump_lifecycle(&mut self, graphics: &Graphics) -> BasicResult<bool> {
@@ -615,11 +664,7 @@ impl GraphicsWindow {
             self.update_pointer_confinement();
             let physical_size = self.window.get_size();
             if self.presentation_dirty || physical_size != self.last_physical_size {
-                self.window
-                    .update_with_buffer(graphics.buffer(), self.width, self.height)
-                    .map_err(|err| {
-                        BasicError::new(ErrorCode::Unsupported).with_detail(err.to_string())
-                    })?;
+                self.blit(graphics)?;
                 #[cfg(target_os = "linux")]
                 {
                     self.linux_blit_pending = true;
@@ -730,7 +775,7 @@ impl GraphicsWindow {
 
     pub fn focus(&mut self) {
         // Process pending native events before activation and paint messages.
-        self.window.update();
+        self.poll_native_events();
         focus_window_handle(self.window.get_window_handle());
         self.update_pointer_confinement();
     }
@@ -756,6 +801,7 @@ impl GraphicsWindow {
             self.window.update();
             self.ctrl_c_down = self.ctrl_c_state().down;
         }
+        self.discard_wheel_events();
         self.clear_key_queue();
     }
 
@@ -783,10 +829,13 @@ impl GraphicsWindow {
     }
 
     pub fn take_key_char(&mut self) -> Option<char> {
-        self.input.borrow_mut().take_press().map(|event| match event {
-            GraphicsInputEvent::Character(character) => character,
-            GraphicsInputEvent::Special(code) => char::from(code),
-        })
+        self.input
+            .borrow_mut()
+            .take_press()
+            .map(|event| match event {
+                GraphicsInputEvent::Character(character) => character,
+                GraphicsInputEvent::Special(code) => char::from(code),
+            })
     }
 
     pub fn take_input_event(&mut self) -> Option<GraphicsInputEvent> {
@@ -811,28 +860,51 @@ impl GraphicsWindow {
         self.window.is_open()
     }
 
+    fn mouse_canvas_point(&self) -> Option<(i32, i32)> {
+        self.window
+            .get_unscaled_mouse_pos(MouseMode::Pass)
+            .and_then(|point| {
+                let viewport = self.presentation_viewport()?;
+                let pixel = viewport.canvas_pixel(point, (self.width, self.height));
+                #[cfg(windows)]
+                if pixel.is_none() {
+                    // A relative packet at a DPI-scaled clip boundary can
+                    // virtualize to -1/width. Retry from the physical pointer;
+                    // keep the ordinary mapping and real margins unchanged.
+                    return self
+                        .cursor
+                        .canonical_client_pointer()
+                        .and_then(|point| viewport.canvas_pixel(point, (self.width, self.height)));
+                }
+                pixel
+            })
+            .map(|(x, y)| (x, self.height as i32 - 1 - y))
+    }
+
+    fn capture_wheel(&mut self) {
+        #[cfg(windows)]
+        let delta = self.cursor.take_wheel_delta();
+        #[cfg(not(windows))]
+        let delta = self.window.get_scroll_wheel().map_or(0.0, |(_, y)| {
+            // minifb's X11 backend reports both the press and release of a
+            // wheel button. Either half can arrive in a separate update.
+            #[cfg(target_os = "linux")]
+            let y = y * 0.5;
+            f64::from(y)
+        });
+        if delta.is_finite() && delta != 0.0 && self.window.is_open() {
+            if let Some((x, y)) = self.mouse_canvas_point() {
+                self.wheel_events.push(MouseWheelEvent { x, y, delta });
+            }
+        }
+    }
+
     fn update_mouse(&mut self) -> MouseSnapshot {
         let previous = self.mouse.clone();
-        let point =
-            self.window
-                .get_unscaled_mouse_pos(MouseMode::Pass)
-                .and_then(|point| {
-                    let viewport = self.presentation_viewport()?;
-                    let pixel = viewport.canvas_pixel(point, (self.width, self.height));
-                    #[cfg(windows)]
-                    if pixel.is_none() {
-                        // A relative packet at a DPI-scaled clip boundary can
-                        // virtualize to -1/width. Retry from the physical pointer;
-                        // keep the ordinary mapping and real margins unchanged.
-                        return self.cursor.canonical_client_pointer().and_then(|point| {
-                            viewport.canvas_pixel(point, (self.width, self.height))
-                        });
-                    }
-                    pixel
-                });
+        let point = self.mouse_canvas_point();
         if let Some((x, y)) = point {
             self.mouse.x = x;
-            self.mouse.y = self.height as i32 - 1 - y;
+            self.mouse.y = y;
         } else {
             self.mouse.x = -1;
             self.mouse.y = -1;

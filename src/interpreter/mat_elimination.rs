@@ -9,6 +9,8 @@ const MIN_AVX_ORDER: usize = 32;
 const MIN_PARALLEL_DET_ORDER: usize = 768;
 const MIN_PARALLEL_INV_ORDER: usize = 384;
 const MIN_PARALLEL_TRAILING_ORDER: usize = 363;
+const MIN_PARALLEL_SOLVE_ORDER: usize = 768;
+const MIN_PARALLEL_SOLVE_TRAILING_ORDER: usize = 512;
 
 pub(super) fn enabled(order: usize) -> bool {
     if order < MIN_AVX_ORDER {
@@ -32,12 +34,35 @@ pub(super) fn inverse_threads(matrix: &[f64], order: usize) -> usize {
     if order < MIN_PARALLEL_INV_ORDER {
         return 1;
     }
-    let threads = available_threads(if order < 768 { 4 } else { 8 });
+    dense_elimination_threads(matrix, order, if order < 768 { 4 } else { 8 })
+}
+
+pub(super) fn solve_threads(matrix: &[f64], order: usize) -> usize {
+    if order < MIN_PARALLEL_SOLVE_ORDER {
+        return 1;
+    }
+    // WSL's per-pivot synchronization was more expensive with four workers.
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| {
+        if cfg!(target_os = "linux")
+            && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+                || std::env::var_os("WSL_INTEROP").is_some())
+        {
+            2
+        } else {
+            4
+        }
+    });
+    dense_elimination_threads(matrix, order, limit)
+}
+
+fn dense_elimination_threads(matrix: &[f64], order: usize, limit: usize) -> usize {
+    let threads = available_threads(limit);
     if threads == 1 {
         return 1;
     }
 
-    // INV skips zero elimination coefficients. For sparse inputs, avoid
+    // INV and SOLVE skip zero elimination coefficients. For sparse inputs, avoid
     // starting workers based on the worst-case dense work per pivot.
     let stride = order / 16;
     let nonzero = matrix
@@ -61,9 +86,16 @@ fn available_threads(limit: usize) -> usize {
 }
 
 #[derive(Clone, Copy)]
+enum PivotTarget {
+    Determinant,
+    Inverse(*mut f64),
+    Solve { rhs: *mut f64, cols: usize },
+}
+
+#[derive(Clone, Copy)]
 struct Pivot {
     matrix: *mut f64,
-    inverse: Option<*mut f64>,
+    target: PivotTarget,
     order: usize,
     column: usize,
 }
@@ -76,11 +108,13 @@ impl Pivot {
     fn update(self, worker: usize, threads: usize) {
         let Self {
             matrix,
-            inverse,
+            target,
             order,
             column,
         } = self;
-        if let Some(inverse) = inverse {
+        if let PivotTarget::Solve { rhs, cols } = target {
+            self.update_solve(rhs, cols, worker, threads);
+        } else if let PivotTarget::Inverse(inverse) = target {
             let begin = order * worker / threads;
             let end = order * (worker + 1) / threads;
             // SAFETY: Workers never write either pivot row and their writable
@@ -127,6 +161,44 @@ impl Pivot {
                         factor,
                     );
                     *a_row = 0.0;
+                }
+            }
+        }
+    }
+
+    fn update_solve(self, rhs: *mut f64, cols: usize, worker: usize, threads: usize) {
+        let Self {
+            matrix,
+            order,
+            column,
+            ..
+        } = self;
+        let trailing = order - column - 1;
+        let begin = column + 1 + trailing * worker / threads;
+        let end = column + 1 + trailing * (worker + 1) / threads;
+        // SAFETY: Matrix and RHS come from distinct, exclusively borrowed
+        // buffers. Both pivot rows are read-only, each worker writes disjoint
+        // rows, and run() has checked AVX before any worker starts.
+        unsafe {
+            let pivot = matrix.add(column * order + column);
+            let divisor = *pivot;
+            let pivot_tail = std::slice::from_raw_parts(pivot.add(1), trailing);
+            let pivot_rhs = std::slice::from_raw_parts(rhs.add(column * cols), cols);
+            for row in begin..end {
+                let a_row = matrix.add(row * order + column);
+                let factor = *a_row / divisor;
+                if factor == 0.0 {
+                    continue;
+                }
+                let a_tail = std::slice::from_raw_parts_mut(a_row.add(1), trailing);
+                subtract_scaled(a_tail, pivot_tail, factor);
+                let rhs_row = std::slice::from_raw_parts_mut(rhs.add(row * cols), cols);
+                if cols >= 4 {
+                    subtract_scaled(rhs_row, pivot_rhs, factor);
+                } else {
+                    for (value, &pivot_value) in rhs_row.iter_mut().zip(pivot_rhs) {
+                        *value -= factor * pivot_value;
+                    }
                 }
             }
         }
@@ -201,19 +273,53 @@ impl Workers<'_> {
     ) {
         assert!(column < order);
         assert_eq!(order.checked_mul(order), Some(matrix.len()));
-        if let Some(inverse) = &inverse {
-            assert_eq!(matrix.len(), inverse.len());
-        }
-        let shared = self.0;
-        let parallel = shared.threads > 1
-            && (inverse.is_some() || order - column - 1 >= MIN_PARALLEL_TRAILING_ORDER);
+        let target = match inverse {
+            Some(inverse) => {
+                assert_eq!(matrix.len(), inverse.len());
+                PivotTarget::Inverse(inverse.as_mut_ptr())
+            }
+            None => PivotTarget::Determinant,
+        };
+        let parallel = matches!(target, PivotTarget::Inverse(_))
+            || order - column - 1 >= MIN_PARALLEL_TRAILING_ORDER;
         let pivot = Pivot {
             matrix: matrix.as_mut_ptr(),
-            inverse: inverse.map(<[f64]>::as_mut_ptr),
+            target,
             order,
             column,
         };
-        if parallel {
+        self.dispatch(pivot, parallel);
+    }
+
+    pub(super) fn update_solve(
+        &mut self,
+        matrix: &mut [f64],
+        rhs: &mut [f64],
+        order: usize,
+        rhs_cols: usize,
+        column: usize,
+    ) {
+        assert!(column < order);
+        assert_eq!(order.checked_mul(order), Some(matrix.len()));
+        assert_eq!(order.checked_mul(rhs_cols), Some(rhs.len()));
+        let pivot = Pivot {
+            matrix: matrix.as_mut_ptr(),
+            target: PivotTarget::Solve {
+                rhs: rhs.as_mut_ptr(),
+                cols: rhs_cols,
+            },
+            order,
+            column,
+        };
+        self.dispatch(
+            pivot,
+            order - column - 1 >= MIN_PARALLEL_SOLVE_TRAILING_ORDER,
+        );
+    }
+
+    fn dispatch(&mut self, pivot: Pivot, parallel: bool) {
+        let shared = self.0;
+        if shared.threads > 1 && parallel {
             *shared.pivot.lock().unwrap() = Some(pivot);
             shared.barrier.wait();
             pivot.update(0, shared.threads);

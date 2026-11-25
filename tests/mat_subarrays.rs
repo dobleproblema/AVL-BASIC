@@ -42,6 +42,25 @@ fn hp_blocks_rebase_and_vectors_bridge_rows_and_columns() {
 }
 
 #[test]
+fn a_numbered_string_slice_copy_preserves_the_destination_rank() {
+    let mut interpreter = Interpreter::new();
+    interpreter
+        .program
+        .load_text("10 DIM A$(1,2),V$(0)\n20 A$(0,0)=\"First\":A$(0,2)=\"Last\"\n30 MAT V$=A$(0,)")
+        .unwrap();
+    interpreter.run_loaded().unwrap();
+    assert_eq!(number(&mut interpreter, "UBOUND(V$)"), 2.0);
+    assert!(eval_expression(&mut interpreter, "UBOUND(V$,2)").is_err());
+    assert_eq!(
+        eval_expression(&mut interpreter, "V$(0)+V$(2)")
+            .unwrap()
+            .into_string()
+            .unwrap(),
+        "FirstLast"
+    );
+}
+
+#[test]
 fn overlapping_copies_snapshot_source_before_resize_or_write() {
     let mut interpreter = Interpreter::new();
     command(&mut interpreter, "DIM V(5)");
@@ -99,7 +118,7 @@ fn invalid_copies_do_not_resize_or_partially_change_destination() {
         "MAT B=A(0:1)",
         "MAT B=S$(0:1,0:1)",
         "MAT B=A(1:0,0:1)",
-        "MAT B=A(0:1,0:1)+A(0:1,0:1)",
+        "MAT B=A(0:1,0:1)+A(0:2,0:1)",
     ] {
         assert!(interpreter.process_immediate(source).is_err(), "{source}");
         assert_eq!(number(&mut interpreter, "UBOUND(B,1)"), 2.0);

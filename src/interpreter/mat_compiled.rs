@@ -5,7 +5,7 @@
 //! evaluator, while TRN/INV, MAP and arithmetic operate on whole matrices.
 use super::mat_subarrays::CopyReference;
 use super::*;
-use crate::expr::compile_mat_expression;
+use crate::expr::{compile_mat_expression, SliceSelector};
 
 mod map_affine;
 
@@ -73,6 +73,11 @@ pub(super) enum CompiledMatExpr {
         right: Box<Self>,
     },
     Scalar(Expr),
+    ArraySlice {
+        name: String,
+        selectors: Vec<SliceSelector>,
+    },
+    Solve(Vec<Self>),
 }
 
 impl CompiledMatAssignment {
@@ -81,13 +86,18 @@ impl CompiledMatAssignment {
         let lhs = source[..equal].trim();
         let rhs = source[equal + 1..].trim();
         if let (Some(left), Some(right)) = (CopyReference::parse(lhs), CopyReference::parse(rhs)) {
-            if !left.name.ends_with('$')
-                && !right.name.ends_with('$')
-                && !left.name.starts_with("FN")
-                && !right.name.starts_with("FN")
-                && !right.is_map_call()
+            if !right.name.starts_with("FN")
+                && !right.is_mat_function_call()
                 && (left.selectors.is_some() || right.explicit_slice())
             {
+                if left.name.ends_with('$')
+                    || right.name.ends_with('$')
+                    || left.name.starts_with("FN")
+                {
+                    // Preserve the existing copy path for text arrays and
+                    // function destinations, including destination rank.
+                    return None;
+                }
                 return Some(Self {
                     operation: CompiledMatOperation::Copy {
                         left,
@@ -137,6 +147,7 @@ impl CompiledMatExpr {
     fn from_expr(expr: Expr) -> Self {
         match expr {
             Expr::Number(number) => Self::Number(number),
+            Expr::ArraySlice { name, selectors } => Self::ArraySlice { name, selectors },
             Expr::Var(name) if !name.starts_with("FN") => Self::Name {
                 scalar: Expr::Var(name.clone()),
                 name,
@@ -184,6 +195,9 @@ impl CompiledMatExpr {
                     name,
                     args: args.into_iter().map(Self::from_expr).collect(),
                 }
+            }
+            Expr::ArrayOrCall { name, args, .. } if name == "SOLVE" => {
+                Self::Solve(args.into_iter().map(Self::from_expr).collect())
             }
             Expr::ArrayOrCall { name, args, .. } if name == "MAP" => {
                 let Ok([selector, array]) = <[Expr; 2]>::try_from(args) else {
@@ -537,6 +551,19 @@ impl CompiledMatExpr {
                     .map_err(|error| interpreter.with_current_line(error))
             }
             Self::Scalar(scalar) => Self::eval_scalar_value(interpreter, scalar),
+            Self::ArraySlice { name, selectors } => interpreter
+                .eval_mat_array_slice(name, selectors)
+                .map(MatExprValue::Matrix),
+            Self::Solve(args) => {
+                let [coefficients, rhs] = args.as_slice() else {
+                    return Err(interpreter.err(ErrorCode::ArgumentMismatch));
+                };
+                let coefficients = coefficients.eval_numeric_array(interpreter)?;
+                let rhs = rhs.eval_numeric_array(interpreter)?;
+                interpreter
+                    .solve_mat_arrays(coefficients, rhs)
+                    .map(MatExprValue::Matrix)
+            }
             _ => unreachable!("ordinary MAT nodes are evaluated by the inline path"),
         }
     }
@@ -572,51 +599,6 @@ fn value_as_expr(value: Value) -> Expr {
         Value::Str(text) => Expr::Str(text),
         Value::ArrayRef(_) => unreachable!("MAT resolves array references before scalar operators"),
     }
-}
-
-// Slice selectors belong exclusively to the copy grammar. Keep their MAT
-// expression diagnostic without teaching the scalar parser slice syntax.
-pub(super) fn has_array_slice(source: &str, interpreter: &Interpreter) -> bool {
-    use crate::lexer::{Lexer, Token};
-    let Ok(tokens) = Lexer::new(source).tokenize() else {
-        return false;
-    };
-    for (position, token) in tokens.iter().enumerate() {
-        let Token::Ident(name) = token else {
-            continue;
-        };
-        if name == "MAP"
-            || !interpreter.array_exists(name)
-            || !matches!(tokens.get(position + 1), Some(Token::LParen))
-        {
-            continue;
-        }
-        let mut depth = 0;
-        let mut previous: Option<&Token> = None;
-        for token in &tokens[position + 1..] {
-            match token {
-                Token::LParen => depth += 1,
-                Token::RParen => {
-                    if depth == 1 && matches!(previous, Some(&Token::Comma)) {
-                        return true;
-                    }
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                Token::Colon if depth == 1 => return true,
-                Token::Comma
-                    if depth == 1 && matches!(previous, Some(&Token::LParen | &Token::Comma)) =>
-                {
-                    return true
-                }
-                _ => {}
-            }
-            previous = Some(token);
-        }
-    }
-    false
 }
 
 impl Interpreter {

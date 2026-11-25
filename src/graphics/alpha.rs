@@ -9,7 +9,7 @@ pub(super) fn validate_alpha(alpha: f64) -> BasicResult<()> {
     Ok(())
 }
 
-pub(super) fn blend_rgb(source: u32, destination: u32, alpha: f64) -> u32 {
+pub(crate) fn blend_rgb(source: u32, destination: u32, alpha: f64) -> u32 {
     let channel = |shift: u32| {
         let source = ((source >> shift) & 255u32) as f64;
         let destination = ((destination >> shift) & 255u32) as f64;
@@ -44,27 +44,47 @@ impl Graphics {
         }
         let (u0, v0, u1, v1) =
             uv.unwrap_or((0.0, 0.0, texture.width as f64, texture.height as f64));
-        self.textured_quad_with_alpha(
-            texture,
-            x0,
-            y0,
-            u0,
-            v0,
-            x1,
-            y0,
-            u1,
-            v0,
-            x1,
-            y1,
-            u1,
-            v1,
-            x0,
-            y1,
-            u0,
-            v1,
-            transparent,
-            alpha,
-        )
+        validate_values(&[x0, y0, x1, y1, u0, v0, u1, v1])?;
+        let (ax, ay) = self.user_to_canvas(x0, y0);
+        let (bx, by) = self.user_to_canvas(x1, y1);
+        if alpha > 0.0 {
+            let uv_bounds = [u0, v0, u1, v1];
+            let key = transparent.map(resolve_color_number);
+            if key.is_some() || !self.blend_mapped_rect(texture, [ax, ay, bx, by], uv_bounds, alpha)
+            {
+                let a = TexturedVertex {
+                    x: ax,
+                    y: ay,
+                    u: u0,
+                    v: v0,
+                };
+                let b = TexturedVertex {
+                    x: bx,
+                    y: ay,
+                    u: u1,
+                    v: v0,
+                };
+                let c = TexturedVertex {
+                    x: bx,
+                    y: by,
+                    u: u1,
+                    v: v1,
+                };
+                let d = TexturedVertex {
+                    x: ax,
+                    y: by,
+                    u: u0,
+                    v: v1,
+                };
+                self.textured_triangle_alpha_canvas(texture, [a, b, c], key, alpha);
+                self.textured_triangle_alpha_canvas(texture, [a, c, d], key, alpha);
+            }
+        }
+        self.cursor_x = ax;
+        self.cursor_y = self.canvas_y_to_logical(by);
+        self.cursor_user_x = x0;
+        self.cursor_user_y = y1;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

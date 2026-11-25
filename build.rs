@@ -265,9 +265,13 @@ fn validate_language_catalog(catalog: &LanguageSource) {
             }
         }
         if topic_flags.remove("contextual")
-            && (topic.kind != "statement" || topic.context != "program")
+            && !((topic.kind == "statement" && topic.context == "program")
+                || (topic.kind == "function" && topic_flags.contains("mat-only")))
         {
-            panic!("{} cannot be a contextual program statement", topic.topic);
+            panic!(
+                "{} cannot be a contextual statement or MAT function",
+                topic.topic
+            );
         }
         if matches!(
             topic.kind.as_str(),
@@ -440,8 +444,12 @@ fn render_language_catalog(catalog: &LanguageSource) -> String {
         ) {
             for name in names.clone() {
                 if !name.chars().any(char::is_whitespace) {
-                    other_words.insert(name.clone());
-                    reserved_base_names.insert(name.trim_end_matches('$').to_string());
+                    if !topic.flags.iter().any(|flag| flag == "contextual") {
+                        other_words.insert(name.clone());
+                    }
+                    if !topic.flags.iter().any(|flag| flag == "contextual") {
+                        reserved_base_names.insert(name.trim_end_matches('$').to_string());
+                    }
                 }
             }
         }

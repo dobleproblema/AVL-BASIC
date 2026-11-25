@@ -1,6 +1,7 @@
 //! HP-style subarray copies. Selections copy only their own elements and leave
 //! the destination unchanged until all bounds and shape checks have succeeded.
 use super::*;
+use crate::expr::{is_contextual_mat_function, SliceSelector};
 
 #[derive(Debug, Clone)]
 pub(super) struct CopyReference {
@@ -86,8 +87,8 @@ impl CopyReference {
         })
     }
 
-    pub(super) fn is_map_call(&self) -> bool {
-        self.name == "MAP" && self.selectors.is_some()
+    pub(super) fn is_mat_function_call(&self) -> bool {
+        self.selectors.is_some() && is_contextual_mat_function(&self.name)
     }
 }
 
@@ -351,7 +352,10 @@ impl Interpreter {
             return Ok(false);
         }
         let right = CopyReference::parse(rhs);
-        if right.as_ref().is_some_and(CopyReference::is_map_call) {
+        if right
+            .as_ref()
+            .is_some_and(CopyReference::is_mat_function_call)
+        {
             if left_selected {
                 return Err(self.err(ErrorCode::ForbiddenExpression));
             }
@@ -481,5 +485,76 @@ impl Interpreter {
         }
         self.return_array_for_active_function(&left.name);
         Ok(())
+    }
+
+    #[inline(never)]
+    pub(super) fn eval_mat_array_slice(
+        &mut self,
+        name: &str,
+        selectors: &[SliceSelector],
+    ) -> BasicResult<ArrayValue> {
+        let mut index = |expr: &Expr| -> BasicResult<i64> {
+            let value = eval_compiled_number(self, expr)?;
+            if !value.is_finite() {
+                return Err(BasicError::new(ErrorCode::InvalidIndex));
+            }
+            if value < i32::MIN as f64 || value > i32::MAX as f64 {
+                return Err(BasicError::new(ErrorCode::IndexOutOfRange));
+            }
+            Ok(value.trunc() as i64)
+        };
+        let mut evaluated = Vec::with_capacity(selectors.len());
+        for selector in selectors {
+            evaluated.push(match selector {
+                SliceSelector::All => CopySelector::All,
+                SliceSelector::Single(expr) => CopySelector::Single(index(expr)?),
+                SliceSelector::Range(first, last) => {
+                    CopySelector::Range(index(first)?, index(last)?)
+                }
+            });
+        }
+        // Like a subarray copy, resolve the binding and base after index effects.
+        let source = self
+            .array_ref(name)
+            .ok_or_else(|| self.err(ErrorCode::Undefined))?;
+        let base = self.mat_base as usize;
+        let block = CopyBlock::resolve(&source.dims, Some(&evaluated), base)?;
+        let lengths = [block.rows.len, block.cols.len];
+        let dims = lengths[..block.rank]
+            .iter()
+            .map(|length| {
+                (length + base)
+                    .checked_sub(1)
+                    .ok_or_else(|| BasicError::new(ErrorCode::InvalidDimensions))
+            })
+            .collect::<BasicResult<Vec<_>>>()?;
+
+        if base == 0 {
+            ArrayValue::checked_data_len(&dims)?;
+            let data = match &source.data {
+                ArrayData::Number(values) => ArrayData::Number(block.gather(values)),
+                ArrayData::Str(values) => ArrayData::Str(block.gather(values)),
+            };
+            return Ok(ArrayValue {
+                dims,
+                data,
+                last_debug_write: None,
+                debug_before: Default::default(),
+                debug_binding_id: Cell::new(0),
+            });
+        }
+
+        let target = CopyBlock::resolve(&dims, None, base)?;
+        let mut result = ArrayValue::try_new(name, dims)?;
+        match (&source.data, &mut result.data) {
+            (ArrayData::Number(source), ArrayData::Number(destination)) => {
+                target.scatter(destination, &block.gather(source));
+            }
+            (ArrayData::Str(source), ArrayData::Str(destination)) => {
+                target.scatter(destination, &block.gather(source));
+            }
+            _ => unreachable!(),
+        }
+        Ok(result)
     }
 }
