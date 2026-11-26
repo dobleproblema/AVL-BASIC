@@ -250,6 +250,7 @@ pub(super) struct BackendSettings {
 #[derive(Default)]
 struct Failure {
     failed: AtomicBool,
+    mix_active: AtomicBool,
     frames: AtomicU64,
     drain_nanos: AtomicU64,
     message: Mutex<Option<String>>,
@@ -293,6 +294,12 @@ pub(super) struct OutputBackend {
 }
 
 impl OutputBackend {
+    pub(super) fn set_mix_active(&self, active: bool) {
+        if cfg!(windows) {
+            self.failure.mix_active.store(active, Ordering::Release);
+        }
+    }
+
     /// Time allowed for already rendered PCM to reach the output device.
     /// This is polled by BASIC's natural-completion path; cancellation never
     /// waits here. Remember the largest observed delay for this output so a
@@ -341,6 +348,8 @@ impl OutputBackend {
         let mut scratch = vec![0.0_f32; channels * 1024];
         let failure = self.failure.clone();
         let callback_failure = failure.clone();
+        let mut warming = cfg!(windows);
+        let mut first_block_end = None;
         self.device
             .as_ref()
             .ok_or_else(|| "No CPAL device was selected".to_string())?
@@ -351,19 +360,37 @@ impl OutputBackend {
                     if failure.failed.load(Ordering::Acquire) {
                         return;
                     }
-                    let Ok(mut renderer) = renderer.try_lock() else {
-                        return;
-                    };
                     let timestamp = info.timestamp();
-                    let delay = output_drain_delay(
-                        timestamp.playback.duration_since(timestamp.callback),
-                        frames_duration(out.len() / channels, sample_rate),
-                    );
+                    let frames = out.len() / channels;
+                    let block = frames_duration(frames, sample_rate);
+                    let latency = timestamp.playback.duration_since(timestamp.callback);
+                    let delay = output_drain_delay(latency, block);
                     // Publish before rendering: the synthesizer can report an
                     // empty queue to BASIC from inside this very callback.
                     failure
                         .drain_nanos
                         .fetch_max(delay.as_nanos() as u64, Ordering::Relaxed);
+                    if warming {
+                        // Let the first silent output block reach playback
+                        // before consuming any CPC notes or sample voices.
+                        let end = *first_block_end.get_or_insert_with(|| {
+                            timestamp.callback
+                                + latency.saturating_add(block).min(CALLBACK_TIMEOUT)
+                        });
+                        if timestamp.callback < end {
+                            failure.frames.fetch_add(frames as u64, Ordering::Relaxed);
+                            return;
+                        }
+                        warming = false;
+                    }
+                    if cfg!(windows) && !failure.mix_active.load(Ordering::Acquire) {
+                        // Keep the endpoint clock moving while Kira is idle.
+                        failure.frames.fetch_add(frames as u64, Ordering::Relaxed);
+                        return;
+                    }
+                    let Ok(mut renderer) = renderer.try_lock() else {
+                        return;
+                    };
                     renderer.on_start_processing();
                     for chunk in out.chunks_mut(scratch.len()) {
                         let aligned = chunk.len() / channels * channels;

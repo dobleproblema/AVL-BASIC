@@ -1,6 +1,7 @@
 //! Audio shared by BASIC's CPC-style synthesizer and modern sampled sounds.
 //!
-//! Opening an output device is lazy. Without an output device, the same commands
+//! Windows interactive sessions prepare their output in the background.
+//! Other entry points open it on demand. Without an output device, the same commands
 //! keep their timing and queue semantics, so a sound never freezes a program.
 
 mod backend;
@@ -16,8 +17,13 @@ use shared_cpc::SharedCpc;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
+#[cfg(windows)]
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+type PendingOutput = Receiver<Result<AudioManager<OutputBackend>, String>>;
 
 const CHANNELS: usize = 32;
 const ASSETS: u8 = 64;
@@ -115,6 +121,9 @@ pub struct AudioSystem {
     sample_voices_seen: bool,
     last_tick: Instant,
     idle_since: Option<Instant>,
+    keep_drained_output: bool,
+    #[cfg(windows)]
+    pending_output: Option<PendingOutput>,
 }
 
 impl fmt::Debug for AudioSystem {
@@ -170,6 +179,9 @@ impl AudioSystem {
             sample_voices_seen: false,
             last_tick: Instant::now(),
             idle_since: None,
+            keep_drained_output: false,
+            #[cfg(windows)]
+            pending_output: None,
         }
     }
 
@@ -178,7 +190,7 @@ impl AudioSystem {
             return;
         }
         self.attempted = true;
-        match open_output() {
+        match self.take_or_open_output() {
             Ok(mut manager) => match manager.play(self.synth.begin_output()) {
                 Ok(()) => {
                     self.manager = Some(manager);
@@ -194,6 +206,37 @@ impl AudioSystem {
         // Device setup may take time. It is not elapsed playback time for the
         // first note, and must not be applied again by the silent clock.
         self.last_tick = Instant::now();
+    }
+
+    fn take_or_open_output(&mut self) -> Result<AudioManager<OutputBackend>, String> {
+        #[cfg(windows)]
+        if let Some(pending) = self.pending_output.take() {
+            match pending.recv_timeout(Duration::from_secs(2)) {
+                Ok(Ok(mut manager)) => {
+                    if manager.backend_mut().error().is_none() {
+                        return Ok(manager);
+                    }
+                }
+                Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // A device may have become available since startup.
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("Background audio opening timed out".into());
+                }
+            }
+        }
+        open_output()
+    }
+
+    fn pending_background_output(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.pending_output.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     fn engage(&mut self) {
@@ -215,6 +258,23 @@ impl AudioSystem {
         self.enabled = enabled;
         self.attempted = self.manager.is_some();
         self.last_tick = Instant::now();
+    }
+
+    #[cfg(windows)]
+    pub fn prepare_interactive_audio(&mut self) {
+        self.keep_drained_output = true;
+        if !self.enabled || self.attempted || self.pending_output.is_some() {
+            return;
+        }
+        let (send, receive) = mpsc::channel();
+        let background = std::thread::Builder::new()
+            .name("avl-audio-prewarm".into())
+            .spawn(move || {
+                let _ = send.send(open_output());
+            });
+        if background.is_ok() {
+            self.pending_output = Some(receive);
+        }
     }
 
     pub fn available(&mut self) -> bool {
@@ -245,9 +305,9 @@ impl AudioSystem {
 
     /// Advances playback after BASIC has finished and reports pending sounds.
     /// Paused samples and held or rendezvous notes remain pending until resumed,
-    /// released or stopped. Once everything finishes, the output is retired after
-    /// its buffered frames drain. Loaded assets, envelope definitions and final
-    /// sample positions survive.
+    /// released or stopped. The output can be closed or kept idle once its
+    /// buffered frames drain. Loaded assets, envelopes and final sample
+    /// positions survive.
     pub fn poll_after_program(&mut self) -> bool {
         self.tick();
         if !self.engaged && self.manager.is_some() {
@@ -265,6 +325,13 @@ impl AudioSystem {
             let delay = manager.backend_mut().drain_delay();
             if !self.output_has_drained(Instant::now(), delay) {
                 return true;
+            }
+            if self.keep_drained_output {
+                if let Some(manager) = &mut self.manager {
+                    manager.backend_mut().set_mix_active(false);
+                }
+                self.engaged = false;
+                return false;
             }
         }
         if self.manager.is_some() || self.attempted {
@@ -327,8 +394,13 @@ impl AudioSystem {
         self.engage();
         self.tick();
         self.engaged = true;
+        // Have the first note in place before the new output can render a block.
+        let queued = self.synth.enqueue(note);
         self.ensure_output();
-        self.synth.enqueue(note)
+        if let Some(manager) = &mut self.manager {
+            manager.backend_mut().set_mix_active(true);
+        }
+        queued
     }
 
     pub fn define_volume(&mut self, id: u8, sections: Vec<Section>) {
@@ -354,6 +426,11 @@ impl AudioSystem {
 
     /// Stops playback while retaining loaded samples and envelope definitions.
     pub fn stop_all(&mut self) {
+        #[cfg(windows)]
+        {
+            // A late result can no longer reach this interpreter.
+            self.pending_output = None;
+        }
         self.stop(None);
         self.idle_since = None;
         self.synth.end_output();
@@ -367,7 +444,15 @@ impl AudioSystem {
 
     /// Program reset: settings survive, while sounds, assets and envelopes do not.
     pub fn reset(&mut self) {
-        self.stop_all();
+        let retain = self.keep_drained_output
+            && self.manager.is_some()
+            && !self.poll_after_program()
+            && self.manager.is_some();
+        if retain || self.pending_background_output() {
+            self.stop(None);
+        } else {
+            self.stop_all();
+        }
         self.sample_voices_seen = false;
         self.synth.clear();
         self.assets.clear();
@@ -460,7 +545,11 @@ impl AudioSystem {
         self.tick();
         self.ensure_output();
         let handle = match &mut self.manager {
-            Some(manager) => Some(manager.play(data).map_err(|error| error.to_string())?),
+            Some(manager) => {
+                let handle = manager.play(data).map_err(|error| error.to_string())?;
+                manager.backend_mut().set_mix_active(true);
+                Some(handle)
+            }
             None => None,
         };
         if let Some(old) = &mut self.voices[index] {
@@ -667,6 +756,19 @@ fn instant_tween() -> Tween {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn reset_preserves_background_opening_and_audio_off_cancels_it() {
+        let mut audio = AudioSystem::with_enabled(true);
+        let (send, receive) = mpsc::channel();
+        audio.pending_output = Some(receive);
+        audio.reset();
+        assert!(audio.pending_output.is_some());
+        audio.set_enabled(false);
+        assert!(send.send(Err("late device failure".into())).is_err());
+        assert!(!audio.available());
+    }
 
     fn assert_sample_latch_sound(audio: &AudioSystem) {
         assert_eq!(audio.voices.len(), CHANNELS);

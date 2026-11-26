@@ -318,7 +318,7 @@ statement	both	DI		DI	-	Inhibits timer, mouse and sound-queue interrupts; sound 
 statement	both	EI		EI	-	Enables timer, mouse and sound-queue interrupts.	DI,AFTER,EVERY,ON MOUSE,ON SQ	-
 statement	both	RANDOMIZE		RANDOMIZE [seed]	seed: Optional random-number seed	Seeds the random-number generator.	RND	-
 statement	both	PAUSE		PAUSE [milliseconds]	milliseconds: Optional maximum wait time	Waits for a key or until the optional timeout expires.	INKEY$	-
-statement	both	BEEP		BEEP	-	Queues a short asynchronous tone, equivalent to SOUND 1,142,10,10.	SOUND	-
+statement	both	BEEP		BEEP	-	Queues the same short asynchronous tone as SOUND 1,142,10,10.	SOUND	-
 statement	both	TRON		TRON	-	Enables program line tracing.	TROFF	-
 statement	both	TROFF		TROFF	-	Disables program line tracing.	TRON	-
 statement	both	DEG		DEG	-	Selects degrees for trigonometry and drawing angles.	RAD	-
@@ -444,7 +444,7 @@ function	expression	HITID		HITID	-	Returns the first collided sprite identifier,
 
 # Audio queries
 function	expression	SQ		SQ(channel)	channel: 1, 2 or 4	Returns classic queue status: bits 0..2 free slots, 3..5 rendezvous, 6 held, 7 playing; an empty idle channel returns 4.	SOUND,ON SQ,RELEASE	builtin
-function	expression	AUDIOAVAILABLE		AUDIOAVAILABLE	-	Returns -1 if real audio output is available, otherwise 0; initializes output on first use.	AUDIO,AUDIOERROR$	builtin,zero-arg
+function	expression	AUDIOAVAILABLE		AUDIOAVAILABLE	-	Returns -1 if real audio output is available, otherwise 0. Interactive Windows consoles prepare output in the background; other entry points open it on demand.	AUDIO,AUDIOERROR$	builtin,zero-arg
 function	expression	AUDIOERROR$		AUDIOERROR$	-	Returns a diagnostic when audio output cannot be opened.	AUDIO,AUDIOAVAILABLE	builtin,zero-arg
 function	expression	AUDIOSTATE		AUDIOSTATE(channel)	channel: Sample channel 1..32	Returns 0 for stopped, 1 for playing, or 2 for paused.	AUDIO PLAY,AUDIO STOP,AUDIO PAUSE,AUDIOPOS	builtin
 function	expression	AUDIOPOS		AUDIOPOS(channel)	channel: Sample channel 1..32	Returns the sample playback position in seconds.	AUDIO PLAY,AUDIO PAUSE,AUDIOSTATE	builtin

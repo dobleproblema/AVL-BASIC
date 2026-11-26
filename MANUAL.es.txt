@@ -1675,7 +1675,8 @@ Ver `samples/s-melody.bas` para envolventes y un acorde retenido, y `samples/s-q
 - `AUDIO STOP`, `AUDIO PAUSE` y `AUDIO RESUME` afectan a un canal o, si se omite, a todos los canales de muestras. Pausar conserva la posición actual y reanudar continúa desde ella. `AUDIO UNLOAD` detiene las voces que usan una muestra y libera esa posición; si se omite el número, detiene todas las voces de muestras y libera todas las muestras cargadas.
 - `AUDIO VOLUME`, `AUDIO PAN` y `AUDIO RATE` modifican un canal en reproducción. El parámetro opcional `fade_ms` es un número entero de milisegundos (0..600000) durante los que se alcanza gradualmente el nuevo valor; omitirlo o usar 0 lo aplica inmediatamente.
 - `AUDIOSTATE(canal)` devuelve 0 si está detenido, 1 si se reproduce o 2 si está pausado. `AUDIOPOS(canal)` devuelve su posición de reproducción en segundos. Ambas utilizan canales 1..32.
-- `AUDIOAVAILABLE` devuelve -1 si hay salida de audio real disponible y 0 en caso contrario. Inicializa la salida de forma diferida al consultarla por primera vez. `AUDIOERROR$` proporciona un diagnóstico cuando no se puede abrir el audio. Ninguna lleva argumentos ni paréntesis.
+- En una consola interactiva de Windows, AVL BASIC prepara la salida de audio en segundo plano al arrancar. Una vez terminada la reproducción y vaciado el búfer, la consola puede reutilizar esa salida en el siguiente `RUN`. Si aún hay audio pendiente al reiniciar, se cierra la salida anterior.
+- `AUDIOAVAILABLE` devuelve -1 si hay salida de audio real disponible y 0 en caso contrario. Usa la salida preparada o la abre en ese momento. `AUDIOERROR$` proporciona un diagnóstico cuando no se puede abrir el audio. Ninguna lleva argumentos ni paréntesis.
 - `AUDIO OFF` detiene los sonidos actuales y desactiva la salida, conservando las muestras cargadas. Los siguientes `SOUND` y `AUDIO PLAY` siguen avanzando en silencio, incluidos los eventos de cola, las posiciones y el final de reproducción. `AUDIO ON` habilita la salida para nuevas reproducciones y permite otro intento de abrir un dispositivo. Las voces de muestras que ya empezaron en silencio siguen en silencio; usa un nuevo `AUDIO PLAY` para escucharlas. Si no se puede abrir un dispositivo, se utiliza la misma temporización silenciosa y el programa BASIC puede continuar sin sonido. Los argumentos incorrectos y los archivos ilegibles siguen produciendo los errores normales.
 - Establece la variable de entorno `AVL_BASIC_AUDIO=off` antes de iniciar el intérprete para forzar el funcionamiento en silencio, por ejemplo en pruebas automáticas. La síntesis y la decodificación son internas; no se ejecuta ningún reproductor externo.
 - `RUN`, `NEW`, `CLEAR` y `CHAIN` reinician las colas, las envolventes, las muestras cargadas y los manejadores de eventos de sonido. `STOP`, un error de ejecución no capturado o `CTRL+C` durante la ejecución de BASIC detienen las voces y descartan las notas pendientes. `CONT` reanuda el programa sin recuperar esos sonidos.
@@ -1700,7 +1701,7 @@ Ejecuta `samples/s-audio.bas` para probar bucles, cambios de balance y velocidad
 
 + RANDOMIZE [semilla]    Inicializa la semilla del generador de números aleatorios
 + PAUSE [ms]            Espera el número de milisegundos especificado o hasta que se pulsa una tecla
-+ BEEP                  Tono asíncrono corto, equivalente a `SOUND 1,142,10,10`
++ BEEP                  Reproduce el mismo tono asíncrono corto que `SOUND 1,142,10,10`
 + TRON | TROFF          Activa/desactiva el trazado clásico por líneas
 + DEG | RAD             Trigonometría en grados/radianes
 + EXIT | QUIT | SYSTEM  Abandonar intérprete

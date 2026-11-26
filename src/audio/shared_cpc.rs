@@ -188,6 +188,9 @@ impl CpcSound {
         if !self.epoch.valid.load(Ordering::Acquire) {
             return;
         }
+        if out.is_empty() || (cfg!(windows) && self.shared.is_idle()) {
+            return;
+        }
         let mut state = match self.shared.state.try_lock() {
             Ok(state) => state,
             Err(TryLockError::Poisoned(error)) => error.into_inner(),

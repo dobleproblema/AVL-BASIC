@@ -1662,7 +1662,8 @@ See `samples/s-melody.bas` for envelopes and a held chord, and `samples/s-queue.
 - `AUDIO STOP`, `AUDIO PAUSE`, and `AUDIO RESUME` affect one channel, or all sample channels when omitted. Pause keeps the current position; resume continues it. `AUDIO UNLOAD` stops voices using one sample slot and frees that slot, or stops all sample voices and frees all loaded samples when omitted.
 - `AUDIO VOLUME`, `AUDIO PAN`, and `AUDIO RATE` change a playing channel. Optional `fade_ms` is an integer number of milliseconds (0..600000) over which the new value is reached smoothly; omission or 0 applies it immediately.
 - `AUDIOSTATE(channel)` returns 0 for stopped, 1 for playing, or 2 for paused. `AUDIOPOS(channel)` returns its playback position in seconds. Both use channels 1..32.
-- `AUDIOAVAILABLE` returns -1 when real audio output is available, otherwise 0. It initializes output lazily on first use. `AUDIOERROR$` gives a diagnostic when audio cannot be opened. Neither function takes arguments or parentheses.
+- In an interactive Windows console, AVL BASIC prepares the audio output in the background as the interpreter starts. After playback and its buffered audio finish, the console can reuse the output for the next `RUN`. A restart with audio still pending closes the previous output.
+- `AUDIOAVAILABLE` returns -1 when real audio output is available, otherwise 0. It uses the prepared output or opens one on demand. `AUDIOERROR$` gives a diagnostic when audio cannot be opened. Neither function takes arguments or parentheses.
 - `AUDIO OFF` stops current sounds and disables output while retaining loaded samples. Later `SOUND` and `AUDIO PLAY` still advance silently, including queue events, positions and completion. `AUDIO ON` enables output for future playback and permits another attempt to open a device. Sample voices that already started silently remain silent; use a new `AUDIO PLAY` to hear them. The same silent timing is used when no output device can be opened, so a BASIC program can continue without sound. Invalid arguments or unreadable audio files still produce normal errors.
 - Set the environment variable `AVL_BASIC_AUDIO=off` before launching the interpreter to force silent operation, for example in automated tests. Audio synthesis and decoding are internal; no external player is launched.
 - `RUN`, `NEW`, `CLEAR`, and `CHAIN` reset sound queues, envelopes, loaded samples, and sound-event handlers. `STOP`, an unhandled execution error, or `CTRL+C` during BASIC execution stop voices and discard queued notes. `CONT` resumes the program without restoring those sounds.
@@ -1687,7 +1688,7 @@ Run `samples/s-audio.bas` for looping, pan/rate changes, fades, pause and resume
 
 + RANDOMIZE [seed]      Seeds the random-number generator
 + PAUSE [ms]            Waits the specified number of milliseconds or until a key is pressed
-+ BEEP                  Short asynchronous tone, equivalent to `SOUND 1,142,10,10`
++ BEEP                  Plays the same short asynchronous tone as `SOUND 1,142,10,10`
 + TRON | TROFF          Enable/disable legacy line tracing
 + DEG | RAD             Trigonometry in degrees/radians
 + EXIT | QUIT | SYSTEM  Leave the interpreter

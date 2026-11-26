@@ -3116,6 +3116,13 @@ impl Interpreter {
     }
 
     pub fn repl(&mut self) -> i32 {
+        #[cfg(windows)]
+        {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+                self.audio.prepare_interactive_audio();
+            }
+        }
         let _ = console::install_ctrl_c_handler();
         self.set_stream_output(true);
         self.print_banner();
