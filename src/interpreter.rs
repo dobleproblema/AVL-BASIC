@@ -2337,9 +2337,8 @@ impl CompiledColorExpr {
 impl FastNumberExpr {
     #[inline(always)]
     fn eval_operand(&self, interpreter: &mut Interpreter) -> BasicResult<f64> {
-        // The Windows x64 PGO benefits from resolving these children directly.
-        // Other targets continue through the recursive evaluator.
-        #[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
+        // Evaluate common scalar operands directly before recursing on compound expressions.
+        #[cfg(all(target_arch = "x86_64", any(target_os = "linux", all(windows, target_env = "msvc"))))]
         match self {
             Self::Var { name, slot } => return interpreter.get_fast_number_variable(name, slot),
             Self::Number(value) => return Ok(*value),
@@ -4590,18 +4589,14 @@ impl Interpreter {
     ) -> BasicResult<RunOutcome> {
         let mut lines = self.line_numbers_cache.clone();
         let mut compiled_lines = self.compiled_line_cache.clone();
-        #[cfg(windows)]
         let mut refresh_compiled_lines = false;
         let mut runtime_poll_skip = 0u8;
         'run_loop: loop {
-            #[cfg(windows)]
-            {
-                // A MERGE can replace the catalog while the current line still
-                // borrows its original commands. Refresh after that borrow ends.
-                if refresh_compiled_lines {
-                    compiled_lines = self.compiled_line_cache.clone();
-                    refresh_compiled_lines = false;
-                }
+            // A MERGE can replace the catalog while the current line still
+            // borrows its original commands. Refresh after that borrow ends.
+            if refresh_compiled_lines {
+                compiled_lines = self.compiled_line_cache.clone();
+                refresh_compiled_lines = false;
             }
             let returning = self.return_line_plan.take();
             if cursor.line_idx >= lines.len() && returning.is_none() {
@@ -4610,26 +4605,13 @@ impl Interpreter {
             let line_no = returning
                 .as_ref()
                 .map_or_else(|| lines[cursor.line_idx], |plan| plan.line);
-            #[cfg(windows)]
             let line_commands = returning.as_ref().map_or_else(
                 || compiled_lines[cursor.line_idx].as_ref(),
                 |plan| plan.commands.as_ref(),
             );
-            #[cfg(not(windows))]
-            let line_commands = returning.as_ref().map_or_else(
-                || compiled_lines[cursor.line_idx].clone(),
-                |plan| plan.commands.clone(),
-            );
             let commands_len = line_commands.len();
             let mut merged_line = returning.is_some();
-            #[cfg(windows)]
-            {
-                self.active_line_plan = returning.clone();
-            }
-            #[cfg(not(windows))]
-            {
-                self.active_line_plan = returning;
-            }
+            self.active_line_plan = returning.clone();
             if cursor.cmd_idx >= commands_len {
                 cursor.line_idx = if merged_line {
                     lines.partition_point(|number| *number <= line_no)
@@ -4652,12 +4634,9 @@ impl Interpreter {
                     || console::interrupt_requested();
                 if poll_now {
                     if self.poll_interrupts_and_timers(&mut cursor)? {
-                        #[cfg(windows)]
-                        {
-                            // Polling may run a mouse handler before dispatching
-                            // a timer, so its MERGE must reach the next line too.
-                            refresh_compiled_lines = true;
-                        }
+                        // Polling may run a mouse handler before dispatching
+                        // a timer, so its MERGE must reach the next line too.
+                        refresh_compiled_lines = true;
                         continue 'run_loop;
                     }
                     runtime_poll_skip = RUNTIME_POLL_COMMAND_SKIP;
@@ -4684,14 +4663,7 @@ impl Interpreter {
                     cmd_idx: cursor.cmd_idx + 1,
                 };
                 let mut failure = if inline_if {
-                    #[cfg(windows)]
-                    {
-                        self.execute_cached_inline_if_fast(line_commands, &mut cursor, &observer)?
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        self.execute_cached_inline_if_fast(&line_commands, &mut cursor, &observer)?
-                    }
+                    self.execute_cached_inline_if_fast(line_commands, &mut cursor, &observer)?
                 } else {
                     observer
                         .execute(self, command, &mut cursor)
@@ -4712,14 +4684,7 @@ impl Interpreter {
                     }
                     lines = self.line_numbers_cache.clone();
                     observer.set_catalog(self);
-                    #[cfg(windows)]
-                    {
-                        refresh_compiled_lines = true;
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        compiled_lines = self.compiled_line_cache.clone();
-                    }
+                    refresh_compiled_lines = true;
                 }
                 if let Some(failure) = failure {
                     let CachedExecutionFailure {
@@ -4755,14 +4720,7 @@ impl Interpreter {
                     self.restart_run_loop = false;
                     lines = self.line_numbers_cache.clone();
                     observer.set_catalog(self);
-                    #[cfg(windows)]
-                    {
-                        refresh_compiled_lines = true;
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        compiled_lines = self.compiled_line_cache.clone();
-                    }
+                    refresh_compiled_lines = true;
                     continue 'run_loop;
                 }
                 if self.return_line_plan.is_some() {
