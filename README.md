@@ -271,6 +271,11 @@ catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
 154 sample programs and their visual gallery are optional companion material.
 
+The [Arkanoid tutorial folder](samples/tutorials/arkanoid/) contains four programs
+that take you from moving a paddle to breaking bricks. Follow the guide in
+[English](samples/tutorials/arkanoid/README.md) or
+[español](samples/tutorials/arkanoid/README.es.md).
+
 ## Matrices and standalone programs
 
 `MAT A=RND` fills every active cell with its own random value. Use

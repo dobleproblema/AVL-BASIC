@@ -50,7 +50,7 @@ g-voxel.bas	3D, lighting, and texture mapping	8	Voxel World	Fly over a procedura
 g-cellular-automata.bas	Fractals, curves, and procedural geometry		Cellular Automata	Draws Rule 90 at startup. Press Space to switch between Rules 30 and 90 or Esc to quit.	IMPORT;array references;cellular automata;graphics
 g-chords.bas	Fractals, curves, and procedural geometry		Circle Chords	Complete chord graph drawn around a circle.	polar coordinates;DRAW;FRAME
 g-fdragon.bas	Fractals, curves, and procedural geometry		Dragon Curve	Dragon curve drawn with simulated recursive calls.	simulated recursion;DRAWR;arrays
-g-fhilbert.bas	Fractals, curves, and procedural geometry		Hilbert Curve	Scroll to change the order of the Hilbert curve from 0 to 9 and see how long it takes to draw. Press Esc to exit.	string rewriting;MID$;DRAWR;ON MOUSE WHEEL;LABEL;TIME
+g-fhilbert.bas	Fractals, curves, and procedural geometry		Hilbert Curve	Start at order 0 and use the mouse wheel to explore the Hilbert curve up to order 7. Each redraw shows how long it took. Press Esc to exit.	string rewriting;MID$;DRAWR;ON MOUSE WHEEL;LABEL;TIME
 g-flevy.bas	Fractals, curves, and procedural geometry		Lévy Curve State Machine	Lévy curve uses an explicit recursion state machine.	recursion state machine;arrays;DRAW
 g-flevy2.bas	Fractals, curves, and procedural geometry		Iterative Lévy C Curve	Iterative L-system draws a Lévy C curve.	L-system;string expansion;DRAWR
 g-fmandelbrot.bas	Fractals, curves, and procedural geometry	10	Mandelbrot Explorer	Scroll up or down to zoom around the pointer, or left-click to zoom in and recenter.	complex iteration;ON MOUSE WHEEL;MOUSEWHEEL;SCALE
