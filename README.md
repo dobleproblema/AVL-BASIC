@@ -211,7 +211,7 @@ not mockups or engine screenshots:
 </tr>
 </table>
 
-**[Explore all 20 visual highlights and the complete 154-program catalog →](samples/README.md)**
+**[Explore all 20 visual highlights and the complete 156-program catalog →](samples/README.md)**
 
 ## Download
 
@@ -269,7 +269,7 @@ RUN "samples/g-old-school.bas"
 `HELP topic` gives a compact syntax and parameter reminder. Its complete
 catalog is compiled into the executable: the interpreter never needs the
 source catalog, this README, the manuals, or the sample tree at runtime. The
-154 sample programs and their visual gallery are optional companion material.
+156 sample programs and their visual gallery are optional companion material.
 
 The [Arkanoid tutorial folder](samples/tutorials/arkanoid/) contains four programs
 that take you from moving a paddle to breaking bricks. Follow the guide in
@@ -419,7 +419,7 @@ connection.
 
 - [`src/`](src/): interpreter, parser helpers, graphics, console, and window backend
 - [`tests/`](tests/): Rust unit and integration tests
-- [`samples/`](samples/): 154 BASIC programs and their browsable catalog
+- [`samples/`](samples/): 156 BASIC programs and their browsable catalog
 - [`samples/showcase/`](samples/showcase/): runtime captures of the examples
 - [`samples/assets/`](samples/assets/): image and audio assets used by examples
 - [`assets/fonts/`](assets/fonts/): editable embedded bitmap font source

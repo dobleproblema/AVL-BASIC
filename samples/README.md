@@ -1,11 +1,11 @@
 # AVL BASIC sample gallery
 
-AVL BASIC ships with **154 runnable programs**. They are not filler or API
+AVL BASIC ships with **156 runnable programs**. They are not filler or API
 snippets: the collection includes complete visual pieces, playable programs,
 numerical algorithms, interactive explorers, and focused teaching examples.
 
 The 20 visual highlights below are followed by the complete
-154-program catalog. On GitHub, select any image or program name
+156-program catalog. On GitHub, select any image or program name
 to inspect its BASIC source.
 
 ## Start here
@@ -244,23 +244,25 @@ Every image above was captured from the real Rust runtime.
 - **Save and recover data:** `f-scores.bas` → `f-text.bas` → `f-records.bas`.
 - **Reuse routines across programs.** Run [`rule30.bas`](rule30.bas) for a text pattern, then [`g-cellular-automata.bas`](g-cellular-automata.bas) for an interactive comparison of Rules 30 and 90. Both import [`lib/automata.bas`](lib/automata.bas). `Automata.FNCell(L,C,R,RuleNo)` computes one cell, and `CALL Automata.NextGeneration(Cells,RuleNo)` updates the caller's whole array.
 
-## Full catalog — 154 programs
+## Full catalog — 156 programs
 
 The catalog separates polished pieces from small, purposeful probes. That
 makes the latter easier to find without pretending every test is a headline
 demo.
 
-### Showcase animations and retro effects (18)
+### Showcase animations and retro effects (20)
 
 | Sample | What it demonstrates | Techniques |
 |---|---|---|
 | <a id="sample-g-bernoulli"></a>[`g-bernoulli.bas`](g-bernoulli.bas) | Animated five-lobed radial point curve. | PLOT, ORIGIN, FRAME |
 | <a id="sample-g-bernoulli2"></a>[`g-bernoulli2.bas`](g-bernoulli2.bas) | Time-varying radial lobes with cycling colors. | PLOT, trigonometry, FRAME |
 | <a id="sample-g-bigbang"></a>[`g-bigbang.bas`](g-bigbang.bas) [★](#highlight-g-bigbang) | Thousands of pixels explode into particles and reassemble as a second image. | BLOAD, TEST, particle morphing |
+| <a id="sample-g-black-hole"></a>[`g-black-hole.bas`](g-black-hole.bas) | A moving star field bends around a Schwarzschild black hole, revealing its shadow and Einstein rings. Esc exits. | gravitational lensing, ray geometry, lookup tables, procedural sky |
 | <a id="sample-g-bobs"></a>[`g-bobs.bas`](g-bobs.bas) | Six depth-sorted circles orbit in simulated 3D. | 3D projection, depth sorting, FCIRCLE |
 | <a id="sample-g-cooperative"></a>[`g-cooperative.bas`](g-cooperative.bas) | Two animations redraw sequentially on each timer pulse. | EVERY, ORIGIN, sequential redraw |
 | <a id="sample-g-dot-tunnel"></a>[`g-dot-tunnel.bas`](g-dot-tunnel.bas) | Twisting 3D dot tunnel with star backdrop. | 3D projection, procedural animation, FRAME |
 | <a id="sample-g-jelly"></a>[`g-jelly.bas`](g-jelly.bas) [★](#highlight-g-jelly) | Ten thousand points fold into a living neon form. | parametric plotting, offscreen rendering, FRAME |
+| <a id="sample-g-liquid"></a>[`g-liquid.bas`](g-liquid.bas) | An isometric glass fills from below. Once full, click the water to send a drop falling and watch the waves reflect. Space refills the glass and Esc exits. | shallow-water model, isometric projection, mouse input, FTRIANGLE, TQUAD |
 | <a id="sample-g-old-school"></a>[`g-old-school.bas`](g-old-school.bas) [★](#highlight-g-old-school) | A demoscene postcard with a starfield, copper bars, sine scroller and original looping music. | 3D starfield, SPRITE$, sine scroller, AUDIO, WAV |
 | <a id="sample-g-roulette"></a>[`g-roulette.bas`](g-roulette.bas) | Rotating colored circle sectors create a pinwheel. | FCIRCLE, animation, DEG |
 | <a id="sample-g-scroll"></a>[`g-scroll.bas`](g-scroll.bas) | Diagonal rotating-text scroll with offscreen redraw. | LDIR, LABEL, offscreen rendering |
